@@ -1,0 +1,15 @@
+{
+  "id": "case-004",
+  "instruction": "Read the attached material and return the expected plain-text result exactly, with no explanation.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "sample rule"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.txt",
+    "mode": "text_exact"
+  },
+  "tags": ["generated", "text"]
+}

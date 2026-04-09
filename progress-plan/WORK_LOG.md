@@ -1,0 +1,181 @@
+# Work Log
+
+## 2026-04-07
+
+- cloned and analyzed the `opencode` latest source tree
+- investigated snapshot, session, tool, subagent, workspace, and sandbox-related behavior
+- confirmed that built-in snapshotting is file/workspace oriented, not Python full-memory checkpointing
+- confirmed that worktree-based sandboxing exists, but true secure sandboxing does not
+- created the first `auto-evolve` scaffold inside this repo
+- added:
+  - `auto-evolve/cli.ts`
+  - `auto-evolve/config.json`
+  - dataset / knowledge / runs / templates layout
+- connected `auto-evolve` to OpenCode CLI JSON event mode
+- set local override config so the project runs with:
+  - `minimax-cn-coding-plan/MiniMax-M2.7`
+  - `claude-code` MCP disabled for this workflow
+- imported the first dataset cases
+
+## 2026-04-08
+
+- replaced the early fake bootstrap with a real OpenCode-driven bootstrap
+- split the prompt system into three explicit phases:
+  - bootstrap
+  - solve
+  - refine
+- changed the loop so a failed solve triggers a separate refine pass that edits `expert_rules.md`
+- added run artifact logging for each attempt
+- removed unnecessary per-case fixed `build` agent settings so our own prompt system drives behavior more directly
+- added additional generated cases so the dataset reached 10 cases
+- added `run-round` to traverse the dataset in order
+- observed that serial rounds can be slow because each case may require multiple solve/refine attempts
+
+## 2026-04-09
+
+- confirmed that refine originally used only:
+  - current expert rules
+  - current material
+  - expected output
+  - actual output
+  - evaluation result
+- added simplified solve action trace generation:
+  - `auto-evolve/orchestrator/action-trace.ts`
+- attached the solve action trace to refine input as `action_trace.md`
+- added `action_trace.md` to every solve artifact directory, even for successful cases
+- created this `progress-plan` folder to maintain planning, ideas, decisions, and project state in-repo
+- captured new architectural intent in the planning docs:
+  - future knowledge packs should support Git-tree-like branching
+  - expert rules should stay Markdown-first
+  - `scripts/` should remain as a separate execution/tooling layer
+  - `scripts/` should ideally evolve toward skill-compatible folders with Markdown descriptors and YAML frontmatter
+- upgraded the persistent expert-memory system from a single-file target to a Markdown knowledge pack:
+  - `auto-evolve/knowledge-pack/manifest.md`
+  - `auto-evolve/knowledge-pack/core/expert_rules.md`
+  - `auto-evolve/knowledge-pack/core/output_contract.md`
+  - `auto-evolve/knowledge-pack/core/execution_checklist.md`
+  - `auto-evolve/knowledge-pack/patterns/general_rules.md`
+  - `auto-evolve/knowledge-pack/patterns/exceptions.md`
+  - `auto-evolve/knowledge-pack/lessons/failure_lessons.md`
+  - `auto-evolve/knowledge-pack/change_log.md`
+- updated bootstrap / solve / refine prompt assembly to read and write the knowledge pack instead of only one file
+- updated solve-phase protection so any knowledge-pack mutation during solve is treated as a failure and restored
+- updated run artifacts to snapshot the knowledge pack before and after phases
+- ran `bun run auto-evolve/cli.ts init`
+- ran `bun run auto-evolve/cli.ts validate`
+- ran `bun run auto-evolve/cli.ts run-case --case case-001`
+- confirmed the upgraded knowledge-pack flow passed a real smoke test on `case-001`
+- added a timestamped high-level system overview document in `progress-plan` to explain the whole auto-evolve workflow and prompt system without requiring code reading
+- added a second timestamped plain-language overview document focused on the end-to-end system flow and the three-stage prompt loop, so future discussion can reference one easy-to-read file instead of code
+- completed a deeper architecture-design pass without changing code:
+  - formalized the current system as the baseline method `sequential-refine`
+  - proposed a future second method `adversarial-test`
+  - proposed a Markdown-first method system plus a knowledge-only Git-tree v1
+  - added two timestamped draft docs in `progress-plan`: an easy-to-read system narrative and a professional plan
+- started implementation of the method-system foundation without breaking the existing workflow:
+  - added `methods/` scaffolding under `auto-evolve/`
+  - externalized the baseline prompt set into `methods/sequential-refine/prompts/*.md`
+  - scaffolded a future `methods/adversarial-test/` method pack
+  - updated config to include `methodsDir`, `defaultMethod`, and `roundCaseLimit`
+  - updated CLI and runners to accept an explicit method
+  - changed round testing to default to 5 cases instead of traversing the full dataset
+- verification after the method-system changes:
+  - ran `bun run auto-evolve/cli.ts validate`
+  - ran `bun run auto-evolve/cli.ts run-case --case case-001 --method sequential-refine`
+  - ran `bun run auto-evolve/cli.ts run-round --method sequential-refine --limit 1`
+  - confirmed the baseline method still works after prompt externalization
+- added two new design docs for:
+  - fixed train/test split
+  - user baseline file decoupled from system control logic
+- implemented the next layer on top of the existing system:
+  - added `auto-evolve/baseline.md`
+  - added `auto-evolve/dataset/SPLIT.md`
+  - added config fields for `baselineFile` and `splitFile`
+  - bootstrap now uses the train split only
+  - prompts now expose the baseline file as user-authored optional guidance
+  - added `learn` vs `eval` execution modes
+  - `run-round --split test` now evaluates without refining the knowledge pack
+- found and fixed a run-directory collision bug:
+  - run IDs now include milliseconds so parallel train/test runs do not overwrite each other
+- verification after the split/baseline changes:
+  - ran `bun run auto-evolve/cli.ts validate`
+  - ran `bun run auto-evolve/cli.ts bootstrap --force --method sequential-refine`
+  - ran `bun run auto-evolve/cli.ts run-round --method sequential-refine --split train`
+  - ran `bun run auto-evolve/cli.ts run-round --method sequential-refine --split test`
+  - ran parallel smoke tests:
+    - `bun run auto-evolve/cli.ts run-round --method sequential-refine --split train --limit 1`
+    - `bun run auto-evolve/cli.ts run-round --method sequential-refine --split test --limit 1`
+- switched the default runtime model away from SiliconFlow DeepSeek and into the `.com` MiniMax route:
+  - `minimax-cn-coding-plan/MiniMax-M2.7`
+- verified the model switch with a real smoke test:
+  - ran `bun run auto-evolve/cli.ts validate`
+  - ran `bun run auto-evolve/cli.ts run-case --case case-001 --method sequential-refine`
+  - confirmed the new solve artifact recorded:
+    - `model = minimax-cn-coding-plan/MiniMax-M2.7`
+    - `attachedFiles = []`
+    - `referencedPaths` remained path-only
+- hardened runtime permissions so each auto-evolve session now carries dynamic path-scoped access:
+  - solve / eval / verification runs get read/list only for the prompt-exposed paths
+  - solve / eval / verification runs get no edit permission
+  - bootstrap gets edit permission only for knowledge-pack files
+  - refine gets edit permission only for routing-allowed knowledge-pack files
+- added a dedicated permission switch file:
+  - `auto-evolve/permission-config.json`
+- switched the current runtime permission mode to:
+  - `open`
+- updated runtime override generation so:
+  - `open` mode writes `permission: { "*": "allow" }`
+  - `restricted` mode preserves the existing path-scoped enforcement logic
+- verified that the generated runtime override now resolves to:
+  - unrestricted OpenCode permissions in `auto-evolve/.runtime/opencode-config/opencode.json`
+- added a minimal live session monitor to the OpenCode CLI:
+  - command: `opencode session monitor`
+  - supports `--watch`, `--interval`, `--limit`, and `--format json`
+  - summarizes current session state from:
+    - session list
+    - session status map
+    - latest message / latest parts
+  - derives readable states such as:
+    - running
+    - retry
+    - done
+    - error
+    - archived
+  - derives current step such as:
+    - `tool:<name>`
+    - `reasoning`
+    - `text`
+    - `step`
+    - `done:<finishReason>`
+# 2026-04-09
+
+- 新增基线评分板命令：
+  - `bun run auto-evolve/cli.ts run-baseline`
+- 基线评分板当前会统一输出：
+  - train round 结果
+  - test round 结果
+  - `baseline.md` 快照
+  - `model-config.json` 快照
+  - `dataset-split.md` 快照
+  - 知识库初始 / 训练后 / 最终快照
+- 最小烟测已通过：
+  - `bun run auto-evolve/cli.ts run-baseline --method sequential-refine --train-limit 1 --test-limit 1 --skip-bootstrap`
+  - 产物目录：`auto-evolve/runs/20260409-190106686-baseline`
+
+- 新增 `auto-evolve/model-config.json`，作为默认模型与阶段模型配置的单一入口。
+- `auto-evolve/config.json` 现在只通过 `modelConfigFile` 指向模型配置文件，不再直接保存默认模型字符串。
+- 新增阶段化模型解析逻辑，`bootstrap / solve / refine / verify / regression` 全部通过统一解析器取模型、agent、variant。
+- 已验证：
+  - `bun run auto-evolve/cli.ts validate`
+  - `bun run auto-evolve/cli.ts run-case --case case-001 --method sequential-refine`
+- 验证结果确认：
+  - 默认模型仍为 `minimax-cn-coding-plan/MiniMax-M2.7`
+  - 当前运行仍为纯路径模式，`attachedFiles` 为空
+  - solve 阶段仍无知识库写权限
+# 2026-04-10
+
+- 设计并开始实现“实验自动监控接入”。
+- 新增 `auto-evolve/monitor-config.json` 作为单独监控配置入口。
+- 新增 `auto-evolve/orchestrator/monitor.ts`，用于自动拉起或复用外部 session dashboard。
+- `bootstrap / run-case / run-round / run-baseline` 现在会在启动前先确保监控面板在线。
+- 增强了 `packages/opencode/src/cli/cmd/session.ts` 的 dashboard 细节展示：优先显示工具标题或最新文本片段。

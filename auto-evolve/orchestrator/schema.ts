@@ -1,0 +1,536 @@
+import path from "node:path"
+import { autoEvolvePath, caseMetadataPath, listCaseDirectories, pathExists, readJsonFile, readTextFile } from "./fs"
+import { loadDatasetSplit } from "./dataset-split"
+import { knowledgePackPaths } from "./knowledge-pack"
+
+export type CompareMode = "text_exact" | "text_contains" | "json_exact"
+export type ModelPhase = "bootstrap" | "solve" | "refine" | "verify" | "regression"
+
+export interface ModelSelection {
+  model?: string
+  agent?: string
+  variant?: string
+}
+
+export interface LoadedModelConfig {
+  version: number
+  defaults: ModelSelection
+  limits: {
+    requestsPerMinute?: number
+  }
+  phases: Record<ModelPhase, ModelSelection>
+}
+
+export type PermissionMode = "open" | "restricted"
+
+export interface LoadedPermissionConfig {
+  version: number
+  mode: PermissionMode
+}
+
+export interface LoadedMonitorConfig {
+  version: number
+  enabled: boolean
+  autoStart: boolean
+  hostname: string
+  port: number
+  intervalSeconds: number
+  defaultLimit: number
+  openBrowserOnStart: boolean
+}
+
+export interface AutoEvolveConfig {
+  version: number
+  datasetDir: string
+  knowledgeDir: string
+  methodsDir: string
+  baselineFile: string
+  splitFile: string
+  scriptsDir: string
+  runsDir: string
+  modelConfigFile: string
+  permissionConfigFile: string
+  monitorConfigFile: string
+  defaultAgent?: string
+  defaultModel?: string
+  defaultVariant?: string
+  defaultMethod: string
+  maxRetriesPerCase: number
+  roundCaseLimit: number
+  regressionSampleSize: number
+  modelConfigPath: string
+  modelConfig: LoadedModelConfig
+  permissionConfigPath: string
+  permissionConfig: LoadedPermissionConfig
+  monitorConfigPath: string
+  monitorConfig: LoadedMonitorConfig
+}
+
+export interface CaseMaterial {
+  path: string
+  label?: string
+}
+
+export interface ExpectedSpec {
+  path: string
+  mode: CompareMode
+}
+
+export interface ExecutionSpec {
+  agent?: string
+  model?: string
+  variant?: string
+  system?: string
+}
+
+export interface CaseSpec {
+  id: string
+  instruction: string
+  materials: CaseMaterial[]
+  expected: ExpectedSpec
+  execution?: ExecutionSpec
+  tags?: string[]
+  notes?: string
+}
+
+export interface LoadedCase {
+  caseDir: string
+  casePath: string
+  spec: CaseSpec
+}
+
+export interface ValidationReport {
+  caseCount: number
+  errors: string[]
+}
+
+export const DEFAULT_CONFIG: AutoEvolveConfig = {
+  version: 1,
+  datasetDir: "dataset/cases",
+  knowledgeDir: "knowledge-pack",
+  methodsDir: "methods",
+  baselineFile: "baseline.md",
+  splitFile: "dataset/SPLIT.md",
+  scriptsDir: "scripts",
+  runsDir: "runs",
+  modelConfigFile: "model-config.json",
+  permissionConfigFile: "permission-config.json",
+  monitorConfigFile: "monitor-config.json",
+  defaultAgent: undefined,
+  defaultModel: "minimax-cn-coding-plan/MiniMax-M2.7",
+  defaultVariant: undefined,
+  defaultMethod: "sequential-refine",
+  maxRetriesPerCase: 3,
+  roundCaseLimit: 5,
+  regressionSampleSize: 3,
+  modelConfigPath: "",
+  modelConfig: {
+    version: 1,
+    defaults: {
+      model: "minimax-cn-coding-plan/MiniMax-M2.7",
+      agent: undefined,
+      variant: undefined,
+    },
+    limits: {},
+    phases: {
+      bootstrap: {},
+      solve: {},
+      refine: {},
+      verify: {},
+      regression: {},
+    },
+  },
+  permissionConfigPath: "",
+  permissionConfig: {
+    version: 1,
+    mode: "open",
+  },
+  monitorConfigPath: "",
+  monitorConfig: {
+    version: 1,
+    enabled: true,
+    autoStart: true,
+    hostname: "127.0.0.1",
+    port: 4219,
+    intervalSeconds: 2,
+    defaultLimit: 50,
+    openBrowserOnStart: true,
+  },
+}
+
+function isObject(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input)
+}
+
+function isCompareMode(input: string): input is CompareMode {
+  return input === "text_exact" || input === "text_contains" || input === "json_exact"
+}
+
+function isModelPhase(input: string): input is ModelPhase {
+  return input === "bootstrap" || input === "solve" || input === "refine" || input === "verify" || input === "regression"
+}
+
+function isPermissionMode(input: string): input is PermissionMode {
+  return input === "open" || input === "restricted"
+}
+
+function inferCompareModeFromPath(filePath: string): CompareMode {
+  return filePath.toLowerCase().endsWith(".json") ? "json_exact" : "text_exact"
+}
+
+function normalizeOptionalString(input: unknown) {
+  return typeof input === "string" && input.trim() ? input : undefined
+}
+
+function normalizeModelSelection(input: unknown, fallback: ModelSelection = {}): ModelSelection {
+  if (!isObject(input)) {
+    return { ...fallback }
+  }
+  return {
+    model: normalizeOptionalString(input.model) ?? fallback.model,
+    agent: normalizeOptionalString(input.agent) ?? fallback.agent,
+    variant: normalizeOptionalString(input.variant) ?? fallback.variant,
+  }
+}
+
+function buildDefaultModelConfig(legacyDefaults: ModelSelection): LoadedModelConfig {
+  return {
+    version: 1,
+    defaults: {
+      model: legacyDefaults.model ?? DEFAULT_CONFIG.defaultModel,
+      agent: legacyDefaults.agent ?? DEFAULT_CONFIG.defaultAgent,
+      variant: legacyDefaults.variant ?? DEFAULT_CONFIG.defaultVariant,
+    },
+    limits: {},
+    phases: {
+      bootstrap: {},
+      solve: {},
+      refine: {},
+      verify: {},
+      regression: {},
+    },
+  }
+}
+
+function normalizeMaterials(raw: unknown): CaseMaterial[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter(isObject)
+    .map((item) => ({
+      path: typeof item.path === "string" ? item.path : "",
+      label: typeof item.label === "string" ? item.label : undefined,
+    }))
+    .filter((item) => item.path.length > 0)
+}
+
+function normalizeCaseSpec(raw: unknown, fallbackCaseID: string): CaseSpec {
+  if (!isObject(raw)) throw new Error("Case file must be a JSON object.")
+
+  const expectedRaw = isObject(raw.expected) ? raw.expected : {}
+  const compareRuleRaw = isObject(raw.compare_rule) ? raw.compare_rule : {}
+  const expectedPath =
+    typeof expectedRaw.path === "string"
+      ? expectedRaw.path
+      : typeof raw.expected_path === "string"
+        ? raw.expected_path
+        : ""
+  if (!expectedPath) throw new Error("Case is missing expected.path.")
+
+  const modeCandidate =
+    typeof expectedRaw.mode === "string"
+      ? expectedRaw.mode
+      : typeof compareRuleRaw.mode === "string"
+        ? compareRuleRaw.mode
+        : inferCompareModeFromPath(expectedPath)
+
+  if (!isCompareMode(modeCandidate)) {
+    throw new Error(`Unsupported compare mode: ${String(modeCandidate)}`)
+  }
+
+  const executionRaw = isObject(raw.execution) ? raw.execution : {}
+
+  return {
+    id: typeof raw.id === "string" ? raw.id : fallbackCaseID,
+    instruction:
+      typeof raw.instruction === "string"
+        ? raw.instruction
+        : "Solve the case with the attached materials and return only the final answer.",
+    materials: normalizeMaterials(raw.materials),
+    expected: {
+      path: expectedPath,
+      mode: modeCandidate,
+    },
+    execution: {
+      agent: typeof executionRaw.agent === "string" ? executionRaw.agent : undefined,
+      model: typeof executionRaw.model === "string" ? executionRaw.model : undefined,
+      variant: typeof executionRaw.variant === "string" ? executionRaw.variant : undefined,
+      system: typeof executionRaw.system === "string" ? executionRaw.system : undefined,
+    },
+    tags: Array.isArray(raw.tags) ? raw.tags.filter((item): item is string => typeof item === "string") : undefined,
+    notes: typeof raw.notes === "string" ? raw.notes : undefined,
+  }
+}
+
+function validateCaseShape(spec: CaseSpec): string[] {
+  const errors: string[] = []
+  if (!spec.id.trim()) errors.push("Case id cannot be empty.")
+  if (!spec.instruction.trim()) errors.push(`Case ${spec.id}: instruction cannot be empty.`)
+  if (!spec.materials.length) errors.push(`Case ${spec.id}: at least one material is required.`)
+  if (!spec.expected.path.trim()) errors.push(`Case ${spec.id}: expected.path cannot be empty.`)
+  return errors
+}
+
+export async function loadConfig(cwd: string) {
+  const configPath = autoEvolvePath(cwd, "config.json")
+  const raw = await readJsonFile<Record<string, unknown>>(configPath)
+  const legacyDefaults: ModelSelection = {
+    model: normalizeOptionalString(raw.defaultModel) ?? DEFAULT_CONFIG.defaultModel,
+    agent: normalizeOptionalString(raw.defaultAgent) ?? DEFAULT_CONFIG.defaultAgent,
+    variant: normalizeOptionalString(raw.defaultVariant) ?? DEFAULT_CONFIG.defaultVariant,
+  }
+  const modelConfigFile =
+    typeof raw.modelConfigFile === "string" && raw.modelConfigFile.trim()
+      ? raw.modelConfigFile
+      : DEFAULT_CONFIG.modelConfigFile
+  const permissionConfigFile =
+    typeof raw.permissionConfigFile === "string" && raw.permissionConfigFile.trim()
+      ? raw.permissionConfigFile
+      : DEFAULT_CONFIG.permissionConfigFile
+  const monitorConfigFile =
+    typeof raw.monitorConfigFile === "string" && raw.monitorConfigFile.trim()
+      ? raw.monitorConfigFile
+      : DEFAULT_CONFIG.monitorConfigFile
+  const modelConfigPath = autoEvolvePath(cwd, modelConfigFile)
+  const permissionConfigPath = autoEvolvePath(cwd, permissionConfigFile)
+  const monitorConfigPath = autoEvolvePath(cwd, monitorConfigFile)
+  let modelConfig = buildDefaultModelConfig(legacyDefaults)
+  if (await pathExists(modelConfigPath)) {
+    const rawModelConfig = await readJsonFile<Record<string, unknown>>(modelConfigPath)
+    const rawDefaults = normalizeModelSelection(rawModelConfig.defaults, modelConfig.defaults)
+    const rawPhases = isObject(rawModelConfig.phases) ? rawModelConfig.phases : {}
+    const rawLimits = isObject(rawModelConfig.limits) ? rawModelConfig.limits : {}
+    const phases = { ...modelConfig.phases }
+    for (const [phaseName, value] of Object.entries(rawPhases)) {
+      if (!isModelPhase(phaseName)) continue
+      phases[phaseName] = normalizeModelSelection(value)
+    }
+    modelConfig = {
+      version: typeof rawModelConfig.version === "number" ? rawModelConfig.version : modelConfig.version,
+      defaults: rawDefaults,
+      limits: {
+        requestsPerMinute:
+          typeof rawLimits.requestsPerMinute === "number" && rawLimits.requestsPerMinute > 0
+            ? rawLimits.requestsPerMinute
+            : undefined,
+      },
+      phases,
+    }
+  }
+  let permissionConfig: LoadedPermissionConfig = {
+    version: 1,
+    mode: "open",
+  }
+  if (await pathExists(permissionConfigPath)) {
+    const rawPermissionConfig = await readJsonFile<Record<string, unknown>>(permissionConfigPath)
+    permissionConfig = {
+      version:
+        typeof rawPermissionConfig.version === "number"
+          ? rawPermissionConfig.version
+          : permissionConfig.version,
+      mode:
+        typeof rawPermissionConfig.mode === "string" && isPermissionMode(rawPermissionConfig.mode)
+          ? rawPermissionConfig.mode
+          : permissionConfig.mode,
+    }
+  }
+  let monitorConfig: LoadedMonitorConfig = {
+    version: 1,
+    enabled: true,
+    autoStart: true,
+    hostname: "127.0.0.1",
+    port: 4219,
+    intervalSeconds: 2,
+    defaultLimit: 50,
+    openBrowserOnStart: true,
+  }
+  if (await pathExists(monitorConfigPath)) {
+    const rawMonitorConfig = await readJsonFile<Record<string, unknown>>(monitorConfigPath)
+    monitorConfig = {
+      version:
+        typeof rawMonitorConfig.version === "number"
+          ? rawMonitorConfig.version
+          : monitorConfig.version,
+      enabled: typeof rawMonitorConfig.enabled === "boolean" ? rawMonitorConfig.enabled : monitorConfig.enabled,
+      autoStart:
+        typeof rawMonitorConfig.autoStart === "boolean" ? rawMonitorConfig.autoStart : monitorConfig.autoStart,
+      hostname:
+        typeof rawMonitorConfig.hostname === "string" && rawMonitorConfig.hostname.trim()
+          ? rawMonitorConfig.hostname
+          : monitorConfig.hostname,
+      port:
+        typeof rawMonitorConfig.port === "number" && rawMonitorConfig.port > 0
+          ? rawMonitorConfig.port
+          : monitorConfig.port,
+      intervalSeconds:
+        typeof rawMonitorConfig.intervalSeconds === "number" && rawMonitorConfig.intervalSeconds > 0
+          ? rawMonitorConfig.intervalSeconds
+          : monitorConfig.intervalSeconds,
+      defaultLimit:
+        typeof rawMonitorConfig.defaultLimit === "number" && rawMonitorConfig.defaultLimit > 0
+          ? rawMonitorConfig.defaultLimit
+          : monitorConfig.defaultLimit,
+      openBrowserOnStart:
+        typeof rawMonitorConfig.openBrowserOnStart === "boolean"
+          ? rawMonitorConfig.openBrowserOnStart
+          : monitorConfig.openBrowserOnStart,
+    }
+  }
+  const config: AutoEvolveConfig = {
+    version: typeof raw.version === "number" ? raw.version : DEFAULT_CONFIG.version,
+    datasetDir: typeof raw.datasetDir === "string" ? raw.datasetDir : DEFAULT_CONFIG.datasetDir,
+    knowledgeDir: typeof raw.knowledgeDir === "string" ? raw.knowledgeDir : DEFAULT_CONFIG.knowledgeDir,
+    methodsDir: typeof raw.methodsDir === "string" ? raw.methodsDir : DEFAULT_CONFIG.methodsDir,
+    baselineFile: typeof raw.baselineFile === "string" ? raw.baselineFile : DEFAULT_CONFIG.baselineFile,
+    splitFile: typeof raw.splitFile === "string" ? raw.splitFile : DEFAULT_CONFIG.splitFile,
+    scriptsDir: typeof raw.scriptsDir === "string" ? raw.scriptsDir : DEFAULT_CONFIG.scriptsDir,
+    runsDir: typeof raw.runsDir === "string" ? raw.runsDir : DEFAULT_CONFIG.runsDir,
+    modelConfigFile,
+    permissionConfigFile,
+    monitorConfigFile,
+    defaultAgent: modelConfig.defaults.agent,
+    defaultModel: modelConfig.defaults.model,
+    defaultVariant: modelConfig.defaults.variant,
+    defaultMethod:
+      typeof raw.defaultMethod === "string" && raw.defaultMethod.trim() ? raw.defaultMethod : DEFAULT_CONFIG.defaultMethod,
+    maxRetriesPerCase:
+      typeof raw.maxRetriesPerCase === "number" ? raw.maxRetriesPerCase : DEFAULT_CONFIG.maxRetriesPerCase,
+    roundCaseLimit: typeof raw.roundCaseLimit === "number" ? raw.roundCaseLimit : DEFAULT_CONFIG.roundCaseLimit,
+    regressionSampleSize:
+      typeof raw.regressionSampleSize === "number" ? raw.regressionSampleSize : DEFAULT_CONFIG.regressionSampleSize,
+    modelConfigPath,
+    modelConfig,
+    permissionConfigPath,
+    permissionConfig,
+    monitorConfigPath,
+    monitorConfig,
+  }
+
+  return { ...config, configPath }
+}
+
+export async function loadAllCases(cwd: string, config: AutoEvolveConfig) {
+  const caseDirs = await listCaseDirectories(cwd, config)
+  const cases: LoadedCase[] = []
+
+  for (const caseDir of caseDirs) {
+    const casePath = caseMetadataPath(caseDir)
+    const raw = await readJsonFile(casePath)
+    const spec = normalizeCaseSpec(raw, path.basename(caseDir))
+    cases.push({ caseDir, casePath, spec })
+  }
+
+  return cases.sort((left, right) => left.spec.id.localeCompare(right.spec.id))
+}
+
+export async function loadCaseByID(cwd: string, config: AutoEvolveConfig, caseID: string) {
+  const cases = await loadAllCases(cwd, config)
+  const match = cases.find((item) => item.spec.id === caseID)
+  if (!match) throw new Error(`Case not found: ${caseID}`)
+  return match
+}
+
+export async function validateAllCases(cwd: string, config: AutoEvolveConfig): Promise<ValidationReport> {
+  const errors: string[] = []
+  const datasetRoot = autoEvolvePath(cwd, config.datasetDir)
+  if (!(await pathExists(datasetRoot))) errors.push(`Dataset directory is missing: ${datasetRoot}`)
+  const knowledgePack = knowledgePackPaths(cwd, config)
+  if (!(await pathExists(knowledgePack.root))) errors.push(`Knowledge-pack directory is missing: ${knowledgePack.root}`)
+  for (const file of knowledgePack.files) {
+    if (!(await pathExists(file))) {
+      errors.push(`Knowledge-pack file is missing: ${file}`)
+    }
+  }
+  const baselinePath = autoEvolvePath(cwd, config.baselineFile)
+  if (!(await pathExists(baselinePath))) errors.push(`Baseline file is missing: ${baselinePath}`)
+  const splitPath = autoEvolvePath(cwd, config.splitFile)
+  if (!(await pathExists(splitPath))) errors.push(`Dataset split file is missing: ${splitPath}`)
+  const methodsRoot = autoEvolvePath(cwd, config.methodsDir)
+  if (!(await pathExists(methodsRoot))) errors.push(`Methods directory is missing: ${methodsRoot}`)
+  if (!(await pathExists(config.modelConfigPath))) errors.push(`Model config file is missing: ${config.modelConfigPath}`)
+  if (!(await pathExists(config.permissionConfigPath))) {
+    errors.push(`Permission config file is missing: ${config.permissionConfigPath}`)
+  }
+  if (!(await pathExists(config.monitorConfigPath))) {
+    errors.push(`Monitor config file is missing: ${config.monitorConfigPath}`)
+  }
+  const defaultMethodRoot = autoEvolvePath(cwd, config.methodsDir, config.defaultMethod)
+  if (!(await pathExists(defaultMethodRoot))) {
+    errors.push(`Default method directory is missing: ${defaultMethodRoot}`)
+  }
+  for (const file of [
+    autoEvolvePath(cwd, config.methodsDir, config.defaultMethod, "METHOD.md"),
+    autoEvolvePath(cwd, config.methodsDir, config.defaultMethod, "prompts", "bootstrap.md"),
+    autoEvolvePath(cwd, config.methodsDir, config.defaultMethod, "prompts", "solve.md"),
+    autoEvolvePath(cwd, config.methodsDir, config.defaultMethod, "prompts", "refine.md"),
+  ]) {
+    if (!(await pathExists(file))) errors.push(`Method file is missing: ${file}`)
+  }
+
+  let cases: LoadedCase[] = []
+  try {
+    cases = await loadAllCases(cwd, config)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    errors.push(message)
+  }
+
+  for (const item of cases) {
+    const shapeErrors = validateCaseShape(item.spec)
+    errors.push(...shapeErrors)
+
+    for (const material of item.spec.materials) {
+      const resolved = path.join(item.caseDir, material.path)
+      if (!(await pathExists(resolved))) {
+        errors.push(`Case ${item.spec.id}: material file is missing: ${resolved}`)
+      }
+    }
+
+    const expectedPath = path.join(item.caseDir, item.spec.expected.path)
+    if (!(await pathExists(expectedPath))) {
+      errors.push(`Case ${item.spec.id}: expected file is missing: ${expectedPath}`)
+    } else if (item.spec.expected.mode === "json_exact") {
+      try {
+        JSON.parse(await readTextFile(expectedPath))
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        errors.push(`Case ${item.spec.id}: expected JSON is invalid: ${message}`)
+      }
+    }
+  }
+
+  if (!errors.length || cases.length) {
+    try {
+      const split = await loadDatasetSplit(cwd, config)
+      const caseIDs = new Set(cases.map((item) => item.spec.id))
+      const duplicates = split.train.filter((id) => split.test.includes(id))
+      for (const id of duplicates) {
+        errors.push(`Dataset split duplicates case in both train and test: ${id}`)
+      }
+      for (const id of [...split.train, ...split.test]) {
+        if (!caseIDs.has(id)) {
+          errors.push(`Dataset split references unknown case: ${id}`)
+        }
+      }
+      if (!split.train.length) errors.push(`Dataset split has no train cases: ${split.splitPath}`)
+      if (!split.test.length) errors.push(`Dataset split has no test cases: ${split.splitPath}`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      errors.push(message)
+    }
+  }
+
+  return {
+    caseCount: cases.length,
+    errors,
+  }
+}

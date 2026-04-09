@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "datasetDir": "dataset/cases",
+  "knowledgeDir": "knowledge-pack",
+  "methodsDir": "methods",
+  "baselineFile": "baseline.md",
+  "splitFile": "dataset/SPLIT.md",
+  "scriptsDir": "scripts",
+  "runsDir": "runs",
+  "modelConfigFile": "model-config.json",
+  "permissionConfigFile": "permission-config.json",
+  "monitorConfigFile": "monitor-config.json",
+  "defaultMethod": "sequential-refine",
+  "maxRetriesPerCase": 3,
+  "roundCaseLimit": 5,
+  "regressionSampleSize": 3
+}

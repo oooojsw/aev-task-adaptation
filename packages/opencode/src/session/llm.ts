@@ -21,6 +21,35 @@ import { Installation } from "@/installation"
 export namespace LLM {
   const log = Log.create({ service: "llm" })
   export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
+  let rateLimitChain = Promise.resolve()
+  let lastRateLimitedRequestAt = 0
+
+  function parseRequestsPerMinute() {
+    const raw = process.env.OPENCODE_REQUESTS_PER_MINUTE
+    if (!raw) return undefined
+    const value = Number.parseFloat(raw)
+    if (!Number.isFinite(value) || value <= 0) return undefined
+    return value
+  }
+
+  async function throttleBeforeRequest() {
+    const requestsPerMinute = parseRequestsPerMinute()
+    if (!requestsPerMinute) return
+    const minIntervalMs = Math.ceil(60_000 / requestsPerMinute)
+    const previous = rateLimitChain
+    let release!: () => void
+    rateLimitChain = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await previous
+    const now = Date.now()
+    const wait = Math.max(0, lastRateLimitedRequestAt + minIntervalMs - now)
+    if (wait > 0) {
+      await new Promise((resolve) => setTimeout(resolve, wait))
+    }
+    lastRateLimitedRequestAt = Date.now()
+    release()
+  }
 
   export type StreamInput = {
     user: MessageV2.User
@@ -77,6 +106,7 @@ export namespace LLM {
   export const defaultLayer = layer
 
   export async function stream(input: StreamRequest) {
+    await throttleBeforeRequest()
     const l = log
       .clone()
       .tag("providerID", input.model.providerID)

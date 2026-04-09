@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "defaults": {
+    "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+  },
+  "limits": {
+    "requestsPerMinute": 14
+  },
+  "phases": {
+    "bootstrap": {},
+    "solve": {},
+    "refine": {},
+    "verify": {},
+    "regression": {}
+  }
+}

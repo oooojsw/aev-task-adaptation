@@ -6,6 +6,8 @@ node_modules
 .idea
 .vscode
 .codex
+.opencode/
+.bun-install-cache/
 *~
 playground
 tmp
@@ -29,3 +31,8 @@ UPCOMING_CHANGELOG.md
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+
+# Auto-evolve runtime artifacts
+auto-evolve/.runtime/
+auto-evolve/runs/
+auto-evolve/knowledge/
