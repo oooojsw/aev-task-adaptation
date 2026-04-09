@@ -204,6 +204,27 @@ Status: active baseline
 - Future methods should be added beside this one rather than replacing it.
 `
 
+const DEFAULT_SEQUENTIAL_FLOW = `# Flow: Sequential Refine
+
+## Primitive Ops
+
+- solve_case
+- finish_if_passed
+- finish_if_eval_mode
+- finish_if_max_retries_reached
+- prepare_refine_feedback
+- run_regression_before_refine
+- refine_knowledge
+- reject_if_refine_failed
+- reject_if_no_knowledge_change
+- reject_if_out_of_policy_files
+- verify_current_case
+- reject_if_current_case_not_fixed
+- run_regression_after_refine
+- accept_or_reject_change
+- finish_after_accept
+`
+
 const DEFAULT_SEQUENTIAL_BOOTSTRAP_PROMPT = `You are initializing the persistent expert experience for the auto-evolve system.
 
 Your target is a Markdown knowledge pack.
@@ -357,6 +378,16 @@ Status: scaffold only
 - Runtime support is not wired yet.
 `
 
+const DEFAULT_ADVERSARIAL_FLOW = `# Flow: Adversarial Test
+
+## Primitive Ops
+
+- solve_case
+- finish_if_passed
+- finish_if_eval_mode
+- finish_if_max_retries_reached
+`
+
 const DEFAULT_ADVERSARIAL_PROMPT = `# Prompt Placeholder
 
 Status: scaffold only
@@ -423,7 +454,7 @@ const DEFAULT_CONFIG_JSON = `{
 const DEFAULT_MODEL_CONFIG_JSON = `{
   "version": 1,
   "defaults": {
-    "model": "google/gemma-3-4b-it"
+    "model": "minimax-cn-coding-plan/MiniMax-M2.7"
   },
   "limits": {
     "requestsPerMinute": 14
@@ -543,6 +574,7 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
     autoEvolvePath(cwd, "knowledge", "change_log.md"),
   )
   await writeIfMissing(path.join(methodsRoot, "sequential-refine", "METHOD.md"), DEFAULT_SEQUENTIAL_METHOD, created)
+  await writeIfMissing(path.join(methodsRoot, "sequential-refine", "FLOW.md"), DEFAULT_SEQUENTIAL_FLOW, created)
   await writeIfMissing(
     path.join(methodsRoot, "sequential-refine", "prompts", "bootstrap.md"),
     DEFAULT_SEQUENTIAL_BOOTSTRAP_PROMPT,
@@ -559,6 +591,7 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
     created,
   )
   await writeIfMissing(path.join(methodsRoot, "adversarial-test", "METHOD.md"), DEFAULT_ADVERSARIAL_METHOD, created)
+  await writeIfMissing(path.join(methodsRoot, "adversarial-test", "FLOW.md"), DEFAULT_ADVERSARIAL_FLOW, created)
   await writeIfMissing(
     path.join(methodsRoot, "adversarial-test", "prompts", "bootstrap.md"),
     DEFAULT_ADVERSARIAL_PROMPT,
