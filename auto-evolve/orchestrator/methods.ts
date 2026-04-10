@@ -3,7 +3,15 @@ import { autoEvolvePath, pathExists, readTextFile } from "./fs"
 import type { AutoEvolveConfig } from "./schema"
 import { isMethodPrimitiveOp, type MethodPrimitiveOp } from "./primitives"
 
-export type MethodPromptPhase = "bootstrap" | "solve" | "refine" | "adversarial_probe" | "select"
+export type MethodPromptPhase =
+  | "bootstrap"
+  | "solve"
+  | "refine"
+  | "maintain_experience"
+  | "maintain_extension"
+  | "judge_extension"
+  | "adversarial_probe"
+  | "select"
 
 export interface MethodPaths {
   id: string

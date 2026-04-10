@@ -1,6 +1,10 @@
 import path from "node:path"
 import { autoEvolvePath, readTextFile, runDirectory, ensureDirectory, writeJsonFile, writeTextFile } from "./fs"
-import { knowledgePackPaths, readKnowledgePack, writeKnowledgePackSnapshot } from "./knowledge-pack"
+import {
+  experienceWorkspacePaths,
+  readExperienceWorkspace,
+  writeExperienceWorkspaceSnapshot,
+} from "./experience-workspace"
 import { loadConfig } from "./schema"
 import { runBootstrap } from "./bootstrap"
 import { runRound, type RunRoundResult } from "./round-runner"
@@ -47,11 +51,14 @@ export async function runBaseline(cwd: string, options?: RunBaselineOptions): Pr
   const testLimit = Math.max(1, options?.testLimit ?? config.roundCaseLimit)
   const bootstrapUsed = !options?.skipBootstrap
   const bootstrapForced = !!options?.forceBootstrap
-  const knowledgePack = knowledgePackPaths(cwd, config)
+  const workspace = experienceWorkspacePaths(cwd, config)
   const baselineDir = runDirectory(cwd, config, makeBaselineID())
 
   await ensureDirectory(baselineDir)
-  await writeKnowledgePackSnapshot(path.join(baselineDir, "knowledge_pack.initial"), await readKnowledgePack(knowledgePack))
+  await writeExperienceWorkspaceSnapshot(
+    path.join(baselineDir, "experience_workspace.initial"),
+    await readExperienceWorkspace(workspace),
+  )
   await writeTextFile(path.join(baselineDir, "baseline.md"), await readTextFile(autoEvolvePath(cwd, config.baselineFile)))
   await writeTextFile(path.join(baselineDir, "dataset-split.md"), await readTextFile(autoEvolvePath(cwd, config.splitFile)))
   await writeTextFile(path.join(baselineDir, "model-config.json"), await readTextFile(config.modelConfigPath))
@@ -63,7 +70,10 @@ export async function runBaseline(cwd: string, options?: RunBaselineOptions): Pr
       methodID,
     })
     bootstrapRunDir = bootstrapResult.runDir
-    await writeKnowledgePackSnapshot(path.join(baselineDir, "knowledge_pack.after_bootstrap"), await readKnowledgePack(knowledgePack))
+    await writeExperienceWorkspaceSnapshot(
+      path.join(baselineDir, "experience_workspace.after_bootstrap"),
+      await readExperienceWorkspace(workspace),
+    )
   }
 
   const trainRound = await runRound(cwd, {
@@ -72,7 +82,10 @@ export async function runBaseline(cwd: string, options?: RunBaselineOptions): Pr
     split: "train",
     mode: "learn",
   })
-  await writeKnowledgePackSnapshot(path.join(baselineDir, "knowledge_pack.after_train"), await readKnowledgePack(knowledgePack))
+  await writeExperienceWorkspaceSnapshot(
+    path.join(baselineDir, "experience_workspace.after_train"),
+    await readExperienceWorkspace(workspace),
+  )
 
   const testRound = await runRound(cwd, {
     methodID,
@@ -80,7 +93,10 @@ export async function runBaseline(cwd: string, options?: RunBaselineOptions): Pr
     split: "test",
     mode: "eval",
   })
-  await writeKnowledgePackSnapshot(path.join(baselineDir, "knowledge_pack.final"), await readKnowledgePack(knowledgePack))
+  await writeExperienceWorkspaceSnapshot(
+    path.join(baselineDir, "experience_workspace.final"),
+    await readExperienceWorkspace(workspace),
+  )
 
   await writeJsonFile(path.join(baselineDir, "scorecard.json"), {
     methodID,
@@ -135,10 +151,10 @@ export async function runBaseline(cwd: string, options?: RunBaselineOptions): Pr
       "",
       "## Snapshots",
       "",
-      `- initial: ${path.join(baselineDir, "knowledge_pack.initial")}`,
-      ...(bootstrapUsed ? [`- after bootstrap: ${path.join(baselineDir, "knowledge_pack.after_bootstrap")}`] : []),
-      `- after train: ${path.join(baselineDir, "knowledge_pack.after_train")}`,
-      `- final: ${path.join(baselineDir, "knowledge_pack.final")}`,
+      `- initial: ${path.join(baselineDir, "experience_workspace.initial")}`,
+      ...(bootstrapUsed ? [`- after bootstrap: ${path.join(baselineDir, "experience_workspace.after_bootstrap")}`] : []),
+      `- after train: ${path.join(baselineDir, "experience_workspace.after_train")}`,
+      `- final: ${path.join(baselineDir, "experience_workspace.final")}`,
       "",
     ].join("\n"),
   )

@@ -179,3 +179,26 @@
 - 新增 `auto-evolve/orchestrator/monitor.ts`，用于自动拉起或复用外部 session dashboard。
 - `bootstrap / run-case / run-round / run-baseline` 现在会在启动前先确保监控面板在线。
 - 增强了 `packages/opencode/src/cli/cmd/session.ts` 的 dashboard 细节展示：优先显示工具标题或最新文本片段。
+# 2026-04-10
+
+- 补充了“Session 执行报告 + 经修 Agent 分层提示系统”的两份正式设计文档。
+- 明确新增原则：每个关键 session 都应有一个单文件顺序执行报告，供方法层和经修 agent 使用。
+- 明确经修 agent 提示词后续应拆成三层：通用内核、方法专属维护扩展、运行时上下文块。
+- 明确“给经修 agent 提供哪些 session 报告”应由每种反向传播方法自行定义，而不是系统写死。
+# 2026-04-10
+
+- added two new design docs for the next architecture step:
+  - taskized bootstrap
+  - unified task model
+  - session dual records:
+    - `session_execution_report.md`
+    - `session_learning_log.md`
+- clarified that future runs should no longer hard-split "initialization" and "training" at the system level
+- clarified that `bootstrap` should become a method-dispatched task / primitive op
+- clarified that the knowledge maintainer should later read both:
+  - ordered execution reports
+  - incremental per-session learning logs
+- clarified that each reverse-propagation method should choose which session records are provided to the knowledge maintainer
+- added a deeper design recommendation for a third lightweight artifact:
+  - `session_task_manifest.md`
+  - to capture what a session was originally supposed to do, separate from what it actually did

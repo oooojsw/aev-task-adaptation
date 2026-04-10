@@ -1,7 +1,7 @@
 import path from "node:path"
 import { autoEvolvePath, caseMetadataPath, listCaseDirectories, pathExists, readJsonFile, readTextFile } from "./fs"
 import { loadDatasetSplit } from "./dataset-split"
-import { knowledgePackPaths } from "./knowledge-pack"
+import { experienceWorkspacePaths, resolveExperienceWorkspaceLayout, validateExperienceWorkspaceLayout } from "./experience-workspace"
 
 export type CompareMode = "text_exact" | "text_contains" | "json_exact"
 export type ModelPhase = "bootstrap" | "solve" | "refine" | "verify" | "regression"
@@ -28,6 +28,14 @@ export interface LoadedPermissionConfig {
   mode: PermissionMode
 }
 
+export type JudgeMode = "soft_only" | "soft_plus_hard"
+
+export interface LoadedJudgeConfig {
+  version: number
+  mode: JudgeMode
+  autoRunSkillIDs: string[]
+}
+
 export interface LoadedMonitorConfig {
   version: number
   enabled: boolean
@@ -43,12 +51,19 @@ export interface AutoEvolveConfig {
   version: number
   datasetDir: string
   knowledgeDir: string
+  experienceEntryFile: string
+  templateLibraryDir: string
+  reversePropagationModulesDir: string
+  maintenanceOpsDir: string
+  judgeSkillsDir: string
+  systemPromptsDir: string
   methodsDir: string
   baselineFile: string
   splitFile: string
   scriptsDir: string
   runsDir: string
   modelConfigFile: string
+  judgeConfigFile: string
   permissionConfigFile: string
   monitorConfigFile: string
   defaultAgent?: string
@@ -56,10 +71,13 @@ export interface AutoEvolveConfig {
   defaultVariant?: string
   defaultMethod: string
   maxRetriesPerCase: number
+  maxMaintenanceRoundsPerAttempt: number
   roundCaseLimit: number
   regressionSampleSize: number
   modelConfigPath: string
   modelConfig: LoadedModelConfig
+  judgeConfigPath: string
+  judgeConfig: LoadedJudgeConfig
   permissionConfigPath: string
   permissionConfig: LoadedPermissionConfig
   monitorConfigPath: string
@@ -108,12 +126,19 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   version: 1,
   datasetDir: "dataset/cases",
   knowledgeDir: "knowledge-pack",
+  experienceEntryFile: "manifest.md",
+  templateLibraryDir: "experience-templates",
+  reversePropagationModulesDir: "reverse-propagation-modules",
+  maintenanceOpsDir: "maintenance-ops",
+  judgeSkillsDir: "judge-skills",
+  systemPromptsDir: "prompts",
   methodsDir: "methods",
   baselineFile: "baseline.md",
   splitFile: "dataset/SPLIT.md",
   scriptsDir: "scripts",
   runsDir: "runs",
   modelConfigFile: "model-config.json",
+  judgeConfigFile: "judge-config.json",
   permissionConfigFile: "permission-config.json",
   monitorConfigFile: "monitor-config.json",
   defaultAgent: undefined,
@@ -121,6 +146,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   defaultVariant: undefined,
   defaultMethod: "sequential-refine",
   maxRetriesPerCase: 3,
+  maxMaintenanceRoundsPerAttempt: 3,
   roundCaseLimit: 5,
   regressionSampleSize: 3,
   modelConfigPath: "",
@@ -139,6 +165,12 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
       verify: {},
       regression: {},
     },
+  },
+  judgeConfigPath: "",
+  judgeConfig: {
+    version: 1,
+    mode: "soft_plus_hard",
+    autoRunSkillIDs: ["exact-output", "tool-failures", "session-behavior"],
   },
   permissionConfigPath: "",
   permissionConfig: {
@@ -172,6 +204,10 @@ function isModelPhase(input: string): input is ModelPhase {
 
 function isPermissionMode(input: string): input is PermissionMode {
   return input === "open" || input === "restricted"
+}
+
+function isJudgeMode(input: string): input is JudgeMode {
+  return input === "soft_only" || input === "soft_plus_hard"
 }
 
 function inferCompareModeFromPath(filePath: string): CompareMode {
@@ -209,6 +245,21 @@ function buildDefaultModelConfig(legacyDefaults: ModelSelection): LoadedModelCon
       verify: {},
       regression: {},
     },
+  }
+}
+
+async function loadJudgeConfig(configPath: string): Promise<LoadedJudgeConfig> {
+  if (!(await pathExists(configPath))) {
+    return { ...DEFAULT_CONFIG.judgeConfig }
+  }
+
+  const raw = await readJsonFile<Record<string, unknown>>(configPath)
+  return {
+    version: typeof raw.version === "number" ? raw.version : DEFAULT_CONFIG.judgeConfig.version,
+    mode: typeof raw.mode === "string" && isJudgeMode(raw.mode) ? raw.mode : DEFAULT_CONFIG.judgeConfig.mode,
+    autoRunSkillIDs: Array.isArray(raw.autoRunSkillIDs)
+      ? raw.autoRunSkillIDs.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : DEFAULT_CONFIG.judgeConfig.autoRunSkillIDs,
   }
 }
 
@@ -296,12 +347,17 @@ export async function loadConfig(cwd: string) {
     typeof raw.permissionConfigFile === "string" && raw.permissionConfigFile.trim()
       ? raw.permissionConfigFile
       : DEFAULT_CONFIG.permissionConfigFile
+  const judgeConfigFile =
+    typeof raw.judgeConfigFile === "string" && raw.judgeConfigFile.trim()
+      ? raw.judgeConfigFile
+      : DEFAULT_CONFIG.judgeConfigFile
   const monitorConfigFile =
     typeof raw.monitorConfigFile === "string" && raw.monitorConfigFile.trim()
       ? raw.monitorConfigFile
       : DEFAULT_CONFIG.monitorConfigFile
   const modelConfigPath = autoEvolvePath(cwd, modelConfigFile)
   const permissionConfigPath = autoEvolvePath(cwd, permissionConfigFile)
+  const judgeConfigPath = autoEvolvePath(cwd, judgeConfigFile)
   const monitorConfigPath = autoEvolvePath(cwd, monitorConfigFile)
   let modelConfig = buildDefaultModelConfig(legacyDefaults)
   if (await pathExists(modelConfigPath)) {
@@ -343,6 +399,7 @@ export async function loadConfig(cwd: string) {
           : permissionConfig.mode,
     }
   }
+  const judgeConfig = await loadJudgeConfig(judgeConfigPath)
   let monitorConfig: LoadedMonitorConfig = {
     version: 1,
     enabled: true,
@@ -389,12 +446,35 @@ export async function loadConfig(cwd: string) {
     version: typeof raw.version === "number" ? raw.version : DEFAULT_CONFIG.version,
     datasetDir: typeof raw.datasetDir === "string" ? raw.datasetDir : DEFAULT_CONFIG.datasetDir,
     knowledgeDir: typeof raw.knowledgeDir === "string" ? raw.knowledgeDir : DEFAULT_CONFIG.knowledgeDir,
+    experienceEntryFile:
+      typeof raw.experienceEntryFile === "string" && raw.experienceEntryFile.trim()
+        ? raw.experienceEntryFile
+        : DEFAULT_CONFIG.experienceEntryFile,
+    templateLibraryDir:
+      typeof raw.templateLibraryDir === "string" ? raw.templateLibraryDir : DEFAULT_CONFIG.templateLibraryDir,
+    reversePropagationModulesDir:
+      typeof raw.reversePropagationModulesDir === "string" && raw.reversePropagationModulesDir.trim()
+        ? raw.reversePropagationModulesDir
+        : DEFAULT_CONFIG.reversePropagationModulesDir,
+    maintenanceOpsDir:
+      typeof raw.maintenanceOpsDir === "string" && raw.maintenanceOpsDir.trim()
+        ? raw.maintenanceOpsDir
+        : DEFAULT_CONFIG.maintenanceOpsDir,
+    judgeSkillsDir:
+      typeof raw.judgeSkillsDir === "string" && raw.judgeSkillsDir.trim()
+        ? raw.judgeSkillsDir
+        : DEFAULT_CONFIG.judgeSkillsDir,
+    systemPromptsDir:
+      typeof raw.systemPromptsDir === "string" && raw.systemPromptsDir.trim()
+        ? raw.systemPromptsDir
+        : DEFAULT_CONFIG.systemPromptsDir,
     methodsDir: typeof raw.methodsDir === "string" ? raw.methodsDir : DEFAULT_CONFIG.methodsDir,
     baselineFile: typeof raw.baselineFile === "string" ? raw.baselineFile : DEFAULT_CONFIG.baselineFile,
     splitFile: typeof raw.splitFile === "string" ? raw.splitFile : DEFAULT_CONFIG.splitFile,
     scriptsDir: typeof raw.scriptsDir === "string" ? raw.scriptsDir : DEFAULT_CONFIG.scriptsDir,
     runsDir: typeof raw.runsDir === "string" ? raw.runsDir : DEFAULT_CONFIG.runsDir,
     modelConfigFile,
+    judgeConfigFile,
     permissionConfigFile,
     monitorConfigFile,
     defaultAgent: modelConfig.defaults.agent,
@@ -404,11 +484,17 @@ export async function loadConfig(cwd: string) {
       typeof raw.defaultMethod === "string" && raw.defaultMethod.trim() ? raw.defaultMethod : DEFAULT_CONFIG.defaultMethod,
     maxRetriesPerCase:
       typeof raw.maxRetriesPerCase === "number" ? raw.maxRetriesPerCase : DEFAULT_CONFIG.maxRetriesPerCase,
+    maxMaintenanceRoundsPerAttempt:
+      typeof raw.maxMaintenanceRoundsPerAttempt === "number" && raw.maxMaintenanceRoundsPerAttempt > 0
+        ? raw.maxMaintenanceRoundsPerAttempt
+        : DEFAULT_CONFIG.maxMaintenanceRoundsPerAttempt,
     roundCaseLimit: typeof raw.roundCaseLimit === "number" ? raw.roundCaseLimit : DEFAULT_CONFIG.roundCaseLimit,
     regressionSampleSize:
       typeof raw.regressionSampleSize === "number" ? raw.regressionSampleSize : DEFAULT_CONFIG.regressionSampleSize,
     modelConfigPath,
     modelConfig,
+    judgeConfigPath,
+    judgeConfig,
     permissionConfigPath,
     permissionConfig,
     monitorConfigPath,
@@ -443,12 +529,37 @@ export async function validateAllCases(cwd: string, config: AutoEvolveConfig): P
   const errors: string[] = []
   const datasetRoot = autoEvolvePath(cwd, config.datasetDir)
   if (!(await pathExists(datasetRoot))) errors.push(`Dataset directory is missing: ${datasetRoot}`)
-  const knowledgePack = knowledgePackPaths(cwd, config)
-  if (!(await pathExists(knowledgePack.root))) errors.push(`Knowledge-pack directory is missing: ${knowledgePack.root}`)
-  for (const file of knowledgePack.files) {
-    if (!(await pathExists(file))) {
-      errors.push(`Knowledge-pack file is missing: ${file}`)
+  const workspace = experienceWorkspacePaths(cwd, config)
+  if (!(await pathExists(workspace.root))) {
+    errors.push(`Experience workspace directory is missing: ${workspace.root}`)
+  } else {
+    try {
+      const layout = await resolveExperienceWorkspaceLayout(workspace)
+      if (!(await pathExists(layout.entryPath))) {
+        errors.push(`Experience workspace entry file is missing: ${layout.entryPath}`)
+      }
+      const workspaceValidation = validateExperienceWorkspaceLayout(layout)
+      errors.push(...workspaceValidation.errors.map((item) => `Experience workspace is invalid: ${item}`))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      errors.push(`Experience workspace layout is invalid: ${message}`)
     }
+  }
+  const templateLibraryRoot = autoEvolvePath(cwd, config.templateLibraryDir)
+  if (!(await pathExists(templateLibraryRoot))) {
+    errors.push(`Template library directory is missing: ${templateLibraryRoot}`)
+  }
+  const reversePropagationModulesRoot = autoEvolvePath(cwd, config.reversePropagationModulesDir)
+  if (!(await pathExists(reversePropagationModulesRoot))) {
+    errors.push(`Reverse-propagation modules directory is missing: ${reversePropagationModulesRoot}`)
+  }
+  const maintenanceOpsRoot = autoEvolvePath(cwd, config.maintenanceOpsDir)
+  if (!(await pathExists(maintenanceOpsRoot))) {
+    errors.push(`Maintenance-ops directory is missing: ${maintenanceOpsRoot}`)
+  }
+  const judgeSkillsRoot = autoEvolvePath(cwd, config.judgeSkillsDir)
+  if (!(await pathExists(judgeSkillsRoot))) {
+    errors.push(`Judge-skills directory is missing: ${judgeSkillsRoot}`)
   }
   const baselinePath = autoEvolvePath(cwd, config.baselineFile)
   if (!(await pathExists(baselinePath))) errors.push(`Baseline file is missing: ${baselinePath}`)
@@ -456,7 +567,12 @@ export async function validateAllCases(cwd: string, config: AutoEvolveConfig): P
   if (!(await pathExists(splitPath))) errors.push(`Dataset split file is missing: ${splitPath}`)
   const methodsRoot = autoEvolvePath(cwd, config.methodsDir)
   if (!(await pathExists(methodsRoot))) errors.push(`Methods directory is missing: ${methodsRoot}`)
+  const systemPromptsRoot = autoEvolvePath(cwd, config.systemPromptsDir)
+  if (!(await pathExists(systemPromptsRoot))) {
+    errors.push(`System prompts directory is missing: ${systemPromptsRoot}`)
+  }
   if (!(await pathExists(config.modelConfigPath))) errors.push(`Model config file is missing: ${config.modelConfigPath}`)
+  if (!(await pathExists(config.judgeConfigPath))) errors.push(`Judge config file is missing: ${config.judgeConfigPath}`)
   if (!(await pathExists(config.permissionConfigPath))) {
     errors.push(`Permission config file is missing: ${config.permissionConfigPath}`)
   }
@@ -471,7 +587,20 @@ export async function validateAllCases(cwd: string, config: AutoEvolveConfig): P
     autoEvolvePath(cwd, config.methodsDir, config.defaultMethod, "METHOD.md"),
     autoEvolvePath(cwd, config.methodsDir, config.defaultMethod, "prompts", "bootstrap.md"),
     autoEvolvePath(cwd, config.methodsDir, config.defaultMethod, "prompts", "solve.md"),
-    autoEvolvePath(cwd, config.methodsDir, config.defaultMethod, "prompts", "refine.md"),
+    autoEvolvePath(cwd, config.methodsDir, config.defaultMethod, "prompts", "maintain_extension.md"),
+    autoEvolvePath(cwd, config.methodsDir, config.defaultMethod, "prompts", "judge_extension.md"),
+    autoEvolvePath(cwd, config.systemPromptsDir, "knowledge-maintainer-core.md"),
+    autoEvolvePath(cwd, config.systemPromptsDir, "soft-judge-core.md"),
+    autoEvolvePath(cwd, config.reversePropagationModulesDir, "direct-rewrite.md"),
+    autoEvolvePath(cwd, config.reversePropagationModulesDir, "add-only-memory.md"),
+    autoEvolvePath(cwd, config.maintenanceOpsDir, "inspect_workspace.md"),
+    autoEvolvePath(cwd, config.maintenanceOpsDir, "append_to_existing_module.md"),
+    autoEvolvePath(cwd, config.judgeSkillsDir, "INDEX.md"),
+    autoEvolvePath(cwd, config.methodsDir, "add-only", "METHOD.md"),
+    autoEvolvePath(cwd, config.methodsDir, "add-only", "prompts", "bootstrap.md"),
+    autoEvolvePath(cwd, config.methodsDir, "add-only", "prompts", "solve.md"),
+    autoEvolvePath(cwd, config.methodsDir, "add-only", "prompts", "maintain_extension.md"),
+    autoEvolvePath(cwd, config.methodsDir, "add-only", "prompts", "judge_extension.md"),
   ]) {
     if (!(await pathExists(file))) errors.push(`Method file is missing: ${file}`)
   }

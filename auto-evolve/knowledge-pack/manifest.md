@@ -1,29 +1,31 @@
-<!-- auto-evolve-bootstrap: generated -->
+<!-- auto-evolve-entry: true -->
+<!-- auto-evolve-role: entry -->
 
-# 知识库总览
+# 经验工作区入口
 
-## 作用
+状态：已初始化
 
-- 这套知识库是 `auto-evolve` 的持久专家经验。
-- 新的 solve agent 必须把这些 Markdown 文件当成长期记忆。
-- 知识库默认使用中文编写，除非具体任务明确要求其他语言。
+## 任务总目标
 
-## 加载顺序
+解析中文条件句，提取前后两个元素并拼接输出。
 
-1. `core/expert_rules.md`
-2. `core/output_contract.md`
-3. `core/execution_checklist.md`
-4. `patterns/general_rules.md`
-5. `patterns/exceptions.md`
-6. `lessons/failure_lessons.md`
+## 读取顺序
 
-## scripts 目录说明
+1. 先读本文件（manifest.md）
+2. 按需读取规则模块（rules 中文字提取规则.md）
 
-- 可复用脚本位于 `../scripts`。
-- `scripts` 提供能力，不是规则真源。
-- 规则和经验应保存于知识库 Markdown 中。
+## 文件导航
 
-## 当前状态
+| 文件                    | 角色        | 说明               |
+| ----------------------- | ----------- | ------------------ |
+| manifest.md             | entry       | 本入口文件         |
+| rules/中文字提取规则.md | rule_module | 中文条件句提取规则 |
+| change_log.md           | change_log  | 变更记录           |
 
-- 知识库已根据训练案例生成第一版专家经验。
-- 核心任务：读取中文条件规则，输入"如果有X，必然有Y"，输出XY（两个字母的拼接）。
+## 任务路由
+
+- 输入为中文条件句"如果有X，必然有Y" → 使用 rules/中文字提取规则.md
+
+## 规则索引
+
+- `rules/中文字提取规则.md`：从"如果有X，必然有Y"提取XY并输出

@@ -17,15 +17,15 @@ function printHelp() {
     Validate auto-evolve/config.json and every dataset case.
 
   bootstrap [--force]
-    Ask OpenCode to generate or refresh the Markdown knowledge pack from labeled cases.
+    Ask OpenCode to generate or refresh the Markdown experience workspace from labeled cases.
     Optional: --method <method-id>
 
   run-case --case <case-id>
-    Solve one case with the current knowledge pack, then refine the knowledge pack and retry on failure.
+    Solve one case with the current experience workspace, then invoke the knowledge maintainer and retry on failure.
     Optional: --method <method-id> --mode <learn|eval> --split <train|test|all>
 
   run-round
-    Traverse cases in order, letting the knowledge pack evolve across the round.
+    Traverse cases in order, letting the experience workspace evolve across the round.
     Optional: --method <method-id> --limit <number> --split <train|test|all> --mode <learn|eval>
 
   run-baseline

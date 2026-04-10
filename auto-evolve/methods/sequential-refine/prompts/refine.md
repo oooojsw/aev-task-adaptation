@@ -1,7 +1,10 @@
-You are updating the persistent expert experience after a failed solve attempt.
+You are the knowledge maintainer agent for the auto-evolve system.
 
-Your target is the Markdown knowledge pack:
-{{knowledge_pack_block}}
+Your target is the persistent experience workspace:
+{{experience_workspace_block}}
+
+You may also inspect the reference template library:
+{{template_library_block}}
 
 Also read the user baseline file:
 {{baseline_block}}
@@ -19,34 +22,32 @@ Failure context for attempt {{attempt}}:
 - structured evaluation summary: {{evaluation_path}}
 - simplified solve action trace: {{action_trace_path}}
 
-{{refine_routing_block}}
+Method-specific maintenance contract:
+{{method_contract_block}}
 
 Task:
-1. Read the current knowledge pack files.
-2. Read the failure context.
-3. Read the simplified solve action trace so you understand what the agent actually tried.
-4. Update one or more knowledge-pack files in place by using file-editing tools.
+1. Read the current experience workspace.
+2. Read the failure context and action trace.
+3. If helpful, read the template library as a reference for structure ideas.
+4. Update the experience workspace by editing Markdown files inside the workspace.
 
-Refinement rules:
+Maintenance rules:
 - Only file paths are provided in this prompt. File contents are not preloaded.
 - You must explicitly use `read` and `list` to inspect the files and directories you need.
+- Keep the experience workspace in Chinese by default unless the task explicitly requires another language.
 - Preserve still-useful knowledge.
-- Keep the knowledge-pack content in Chinese by default unless the task explicitly requires another language.
+- Improve the workspace so a future blank solve agent can solve similar tasks with stronger generalization.
+- The workspace must keep one single entry file. The current entry path is shown above.
+- You may split files, merge files, add partitions, add task routers, add task/tool guides, or simplify layout if that helps long-term maintainability.
+- Every Markdown file you keep in the workspace should include an `auto-evolve-role` marker near the top.
+- The template library is only a reference source. The final experience workspace should contain only the resulting expert experience, not copied template clutter.
 - Treat the baseline file as user-provided context, not as proof.
-- Add or revise only the lessons that help a fresh future solve agent avoid this failure.
 - Prefer small, generalizable corrections over case-specific memorization.
-- If the previous knowledge pack already contains the right rule, strengthen or clarify it instead of duplicating it.
-- If the failure happened because the solve agent printed explanations instead of only the answer, strengthen the output-discipline section so exact-match cases return only the bare answer.
 - Use the action trace to capture the solve agent's real behavior, not just the final mismatch.
-- Prefer targeted file updates:
-  - mission-level reusable guidance -> `core/expert_rules.md`
-  - exact output discipline -> `core/output_contract.md`
-  - repeatable procedure -> `core/execution_checklist.md`
-  - reusable transformation rules -> `patterns/general_rules.md`
-  - justified narrow special cases -> `patterns/exceptions.md`
-  - recurring anti-patterns and lessons -> `lessons/failure_lessons.md`
-- Update `manifest.md` only if the structure, load order, or file responsibilities need clarification.
 - Do not use `bash`, web tools, or subagents for this task.
 - Do not edit dataset files or the scripts library.
 
-After updating the knowledge pack, reply with 3 to 6 short bullet points summarizing the failure lesson you added or revised and which files you changed. Do not paste the full files into chat.
+After updating the experience workspace, reply with 3 to 6 short bullet points summarizing:
+- what failure pattern you addressed
+- how you changed the workspace structure or files
+- what a future solve agent should do differently

@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, stat as statFile, writeFile } from "fs/promises"
+import { chmod, mkdir, readFile, rename, stat as statFile, writeFile, unlink } from "fs/promises"
 import { createWriteStream, existsSync, statSync } from "fs"
 import { lookup } from "mime-types"
 import { realpathSync } from "fs"
@@ -58,22 +58,37 @@ export namespace Filesystem {
     return typeof e === "object" && e !== null && "code" in e && (e as { code: string }).code === "ENOENT"
   }
 
+  function tmpPathFor(p: string): string {
+    const dir = dirname(p)
+    const base = `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random()
+      .toString(16)
+      .slice(2)}`
+    return join(dir, base)
+  }
+
   export async function write(p: string, content: string | Buffer | Uint8Array, mode?: number): Promise<void> {
+    const dir = dirname(p)
+    const tmp = tmpPathFor(p)
+
     try {
+      if (!existsSync(dir)) await mkdir(dir, { recursive: true })
+
+      // Atomic replace: write to temp file then rename.
+      // This avoids readers seeing partially-written JSON (important for models cache refresh on Windows).
+      if (mode) await writeFile(tmp, content, { mode })
+      else await writeFile(tmp, content)
+
+      await rename(tmp, p)
+
       if (mode) {
-        await writeFile(p, content, { mode })
-      } else {
-        await writeFile(p, content)
+        // Ensure mode also applies after rename on platforms/filesystems that ignore mode at create time.
+        await chmod(p, mode).catch(() => {})
       }
     } catch (e) {
+      await unlink(tmp).catch(() => {})
       if (isEnoent(e)) {
-        await mkdir(dirname(p), { recursive: true })
-        if (mode) {
-          await writeFile(p, content, { mode })
-        } else {
-          await writeFile(p, content)
-        }
-        return
+        await mkdir(dir, { recursive: true })
+        return write(p, content, mode)
       }
       throw e
     }
@@ -93,9 +108,16 @@ export namespace Filesystem {
       await mkdir(dir, { recursive: true })
     }
 
+    const tmp = tmpPathFor(p)
     const nodeStream = stream instanceof ReadableStream ? Readable.fromWeb(stream as any) : stream
-    const writeStream = createWriteStream(p)
-    await pipeline(nodeStream, writeStream)
+    const out = createWriteStream(tmp)
+    try {
+      await pipeline(nodeStream, out)
+      await rename(tmp, p)
+    } catch (e) {
+      await unlink(tmp).catch(() => {})
+      throw e
+    }
 
     if (mode) {
       await chmod(p, mode)

@@ -137,6 +137,47 @@ The next phase should focus on:
 - strategy modularization
 - parallel experiment support
 - preserving Markdown as the source of truth for rules while keeping `scripts/` as a separate capability layer
+
+## Current Status (2026-04-10 update)
+
+- The system is no longer conceptually tied only to a fixed `knowledge-pack`.
+- A first `Experience Workspace` abstraction now exists in code.
+- A separate template library now exists at:
+  - `auto-evolve/experience-templates/`
+- The template library is reference-only and is not part of the final expert experience by default.
+- The baseline sequential method now treats failed refinement as a dedicated `knowledge maintainer agent` task.
+- The knowledge maintainer currently operates under prompt-only constraints:
+  - no hard structural permissions yet
+  - no hard file-authority matrix yet
+  - risk is currently controlled by:
+    - acceptance checks
+    - current-case verification
+    - regression verification
+    - rollback on rejection
+- Method execution has started shifting from `FLOW.md` runtime control to code-defined method strategies.
+- `FLOW.md` remains useful as human-readable documentation, but the intended long-term runtime source is code strategies calling primitive ops.
+
+## Verified This Round
+
+- `bun run auto-evolve/cli.ts validate`
+  - passed
+- `bun run auto-evolve/cli.ts run-case --case case-001 --method sequential-refine --mode eval --split test`
+  - executed successfully through the new strategy path
+- `bun run auto-evolve/cli.ts run-case --case case-001 --method sequential-refine --mode learn --split train`
+  - executed successfully through the new strategy path
+- `bun run auto-evolve/cli.ts run-case --case case-006 --method sequential-refine --mode learn --split test`
+  - executed successfully through the new strategy path
+
+## What Is True Right Now
+
+- The new architecture is partially implemented and runnable.
+- The system already knows about:
+  - experience workspace
+  - template library
+  - knowledge maintainer prompt
+  - code-defined method strategy for `sequential-refine`
+- The next important gap is that the primitive-op layer still lives mostly inside `case-runner.ts`.
+- The second important gap is that only the baseline method has a real strategy implementation.
 # 当前状态更新（2026-04-09）
 
 - 已有统一的“基线评分板”入口：

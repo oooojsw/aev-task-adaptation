@@ -1,8 +1,11 @@
 You are initializing the persistent expert experience for the auto-evolve system.
 
-Your target is a Markdown knowledge pack.
+Your target is an experience workspace of Markdown documents.
 
-{{knowledge_pack_block}}
+{{experience_workspace_block}}
+
+You may also inspect the reference template library:
+{{template_library_block}}
 
 Also read the user baseline file:
 {{baseline_block}}
@@ -13,29 +16,27 @@ You may inspect reusable helper scripts here if they are relevant:
 Task:
 1. Study the listed labeled training cases by reading them from their paths.
 2. Distill stable, reusable expert experience from those material/result pairs.
-3. Create or replace the knowledge-pack files above by using file-editing tools inside this repository.
+3. Replace the minimal seed with a final experience workspace structure that you judge to be appropriate.
 
-Requirements for the knowledge pack:
+Requirements for the experience workspace:
 - The file paths listed in this prompt are paths only. Their contents are not preloaded for you.
 - You must explicitly use `read` and `list` to inspect the files and directories you need.
 - Write Markdown only.
-- Write the knowledge-pack content in Chinese by default unless a case explicitly requires another language.
-- Keep the rules in the knowledge-pack documents, not in TypeScript and not in the scripts library.
-- Do not blindly copy the baseline file into the knowledge pack; only keep ideas that survive the labeled evidence.
-- Preserve a clear separation of responsibility across files:
-  - `manifest.md` explains purpose and load order.
-  - `core/expert_rules.md` holds mission-level reusable expert guidance.
-  - `core/output_contract.md` defines exact output discipline.
-  - `core/execution_checklist.md` defines repeatable solve steps.
-  - `patterns/general_rules.md` holds reusable transformation rules.
-  - `patterns/exceptions.md` holds narrow, justified exceptions.
-  - `lessons/failure_lessons.md` holds stable anti-patterns and failure lessons.
+- Write the experience workspace in Chinese by default unless a case explicitly requires another language.
+- The workspace must have one single entry file. The current entry path is shown above.
+- A future blank solve agent should start from the entry file, then selectively read downstream files instead of reading every file blindly.
+- You are free to replace the minimal seed layout. Do not preserve old placeholder structure just because it already exists.
+- You may create rule modules, output-contract files, execution guides, exception modules, partition indexes, task routers, and tool guides only if they help the final structure.
+- Every Markdown file you keep in the final workspace should include an `auto-evolve-role` marker near the top.
+- The template library is only a reference source. Do not copy it mechanically into the final workspace.
+- Keep the actual rules and expert experience in Markdown documents, not in TypeScript and not in the scripts library.
+- Do not blindly copy the baseline file into the workspace; only keep ideas that survive the labeled evidence.
 - Do not merely memorize raw answers or case IDs unless that information is genuinely reusable.
-- Make the output-contract file explicit enough that a future solve agent understands that exact-match cases fail if it prints any explanation or extra characters.
+- Make the output-discipline guidance explicit enough that a future solve agent understands exact-match tasks fail if it prints explanations or extra characters.
 - Keep the guidance practical enough that a fresh future solve agent can follow it without seeing prior chats.
 - Do not edit dataset files or the scripts library.
 
 Labeled training cases by path:
 {{case_blocks}}
 
-After updating the knowledge pack, reply with 3 to 6 short bullet points summarizing what you wrote and which files you changed. Do not paste the full files into chat.
+After updating the experience workspace, reply with 3 to 6 short bullet points summarizing what you wrote, how you organized the workspace, and which files you changed. Do not paste the full files into chat.

@@ -1,6 +1,8 @@
 import path from "node:path"
 import process from "node:process"
+import { randomUUID } from "node:crypto"
 import { stat } from "node:fs/promises"
+import { setTimeout as sleep } from "node:timers/promises"
 import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
 import type { ToolFailure } from "./evaluator"
 import { autoEvolvePath, ensureDirectory, pathExists, writeJsonFile } from "./fs"
@@ -174,8 +176,9 @@ async function ensureOverrideConfig(
   model: string | undefined,
   permissionConfig: LoadedPermissionConfig,
   permissions: { readPaths: string[]; editPaths: string[] },
+  runLabel: string,
 ) {
-  const dir = autoEvolvePath(cwd, ".runtime", "opencode-config")
+  const dir = autoEvolvePath(cwd, ".runtime", "opencode-config", runLabel)
   const override: Record<string, unknown> = {
     $schema: "https://opencode.ai/config.json",
     ...(model
@@ -202,6 +205,27 @@ async function ensureOverrideConfig(
   return dir
 }
 
+function slugifyTitle(input: string) {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "task"
+}
+
+function buildRunLabel(title: string, attempt: number) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+  return `${stamp}-${slugifyTitle(title)}-attempt-${attempt}-${randomUUID().slice(0, 8)}`
+}
+
+function isInfrastructureCrash(result: Pick<OpencodeRunResult, "exitCode" | "stderr" | "events">) {
+  const stderr = result.stderr.toLowerCase()
+  if (stderr.includes("oh no: bun has crashed")) return true
+  if (stderr.includes("panic(main thread)")) return true
+  if (stderr.includes("segmentation fault")) return true
+  return result.exitCode !== 0 && result.events.length === 0 && stderr.includes("bun")
+}
+
 function uniqueFiles(files: string[]) {
   const seen = new Set<string>()
   const ordered: string[] = []
@@ -214,22 +238,20 @@ function uniqueFiles(files: string[]) {
   return ordered
 }
 
-export async function runOpencodeTask(input: OpencodeTaskInput): Promise<OpencodeTaskRun> {
-  const dependenciesInstalled = await pathExists(path.join(input.cwd, "node_modules"))
-  if (!dependenciesInstalled) {
-    throw new Error("Repository dependencies are not installed. Run `bun install` in the repo root before running auto-evolve tasks.")
-  }
-
-  const selectedModel = input.model ?? input.config.defaultModel
-  const selectedAgent = input.agent ?? input.config.defaultAgent
-  const referencedPaths = uniqueFiles(input.referencePaths ?? [])
-  const attachedFiles = uniqueFiles(input.attachedFiles ?? [])
-  const permissionReadPaths = uniqueFiles(input.permissionReadPaths ?? referencedPaths)
-  const permissionEditPaths = uniqueFiles(input.permissionEditPaths ?? [])
+async function runOpencodeTaskOnce(
+  input: OpencodeTaskInput,
+  selectedModel: string | undefined,
+  selectedAgent: string | undefined,
+  referencedPaths: string[],
+  attachedFiles: string[],
+  permissionReadPaths: string[],
+  permissionEditPaths: string[],
+  attempt: number,
+) {
   const overrideConfigDir = await ensureOverrideConfig(input.cwd, selectedModel, input.config.permissionConfig, {
     readPaths: permissionReadPaths,
     editPaths: permissionEditPaths,
-  })
+  }, buildRunLabel(input.title, attempt))
 
   const args = [
     process.execPath,
@@ -285,6 +307,68 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
   const events = parseEvents(stdout)
 
   return {
+    sessionID: events.find((event) => typeof event.sessionID === "string")?.sessionID,
+    exitCode,
+    stdout,
+    stderr,
+    events,
+    responseText: collectResponseText(events),
+    toolFailures: collectToolFailures(events),
+  } satisfies OpencodeRunResult
+}
+
+export async function runOpencodeTask(input: OpencodeTaskInput): Promise<OpencodeTaskRun> {
+  const dependenciesInstalled = await pathExists(path.join(input.cwd, "node_modules"))
+  if (!dependenciesInstalled) {
+    throw new Error("Repository dependencies are not installed. Run `bun install` in the repo root before running auto-evolve tasks.")
+  }
+
+  const selectedModel = input.model ?? input.config.defaultModel
+  const selectedAgent = input.agent ?? input.config.defaultAgent
+  const referencedPaths = uniqueFiles(input.referencePaths ?? [])
+  const attachedFiles = uniqueFiles(input.attachedFiles ?? [])
+  const permissionReadPaths = uniqueFiles(input.permissionReadPaths ?? referencedPaths)
+  const permissionEditPaths = uniqueFiles(input.permissionEditPaths ?? [])
+
+  const infrastructureNotes: string[] = []
+  let result: OpencodeRunResult | undefined
+  const maxAttempts = 3
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const current = await runOpencodeTaskOnce(
+      input,
+      selectedModel,
+      selectedAgent,
+      referencedPaths,
+      attachedFiles,
+      permissionReadPaths,
+      permissionEditPaths,
+      attempt,
+    )
+
+    if (!isInfrastructureCrash(current) || attempt === maxAttempts) {
+      result = current
+      break
+    }
+
+    infrastructureNotes.push(
+      `Infrastructure crash detected on OpenCode launch attempt ${attempt}; retrying automatically.`,
+    )
+    await sleep(750 * attempt)
+  }
+
+  if (!result) {
+    throw new Error("OpenCode task execution did not produce a result.")
+  }
+
+  if (infrastructureNotes.length > 0) {
+    result = {
+      ...result,
+      stderr: `${infrastructureNotes.join("\n")}\n\n${result.stderr}`.trim(),
+    }
+  }
+
+  return {
     title: input.title,
     prompt: input.prompt,
     selectedModel,
@@ -294,14 +378,6 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
     attachedFiles,
     permissionReadPaths,
     permissionEditPaths,
-    result: {
-      sessionID: events.find((event) => typeof event.sessionID === "string")?.sessionID,
-      exitCode,
-      stdout,
-      stderr,
-      events,
-      responseText: collectResponseText(events),
-      toolFailures: collectToolFailures(events),
-    },
+    result,
   }
 }
