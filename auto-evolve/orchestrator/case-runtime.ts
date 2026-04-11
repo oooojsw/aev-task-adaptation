@@ -17,6 +17,8 @@ export interface LoadedAutoEvolveConfig extends AutoEvolveConfig {
   configPath: string
 }
 
+export type CaseExecutionProfile = "full" | "light_shard"
+
 export interface MaintenanceRoundSummary {
   round: number
   maintainSessionID?: string
@@ -86,6 +88,7 @@ export interface RunCaseResult {
   methodID: string
   mode: "learn" | "eval"
   split: DatasetSplitName
+  executionProfile?: CaseExecutionProfile
   evaluation: EvaluationResult
   attempts: AttemptSummary[]
 }
@@ -173,6 +176,7 @@ export interface CaseRuntimeContext {
   allCases: LoadedCase[]
   mode: "learn" | "eval"
   split: DatasetSplitName
+  executionProfile: CaseExecutionProfile
   runDir: string
   attempt: number
   currentAttemptDir: string
@@ -239,6 +243,7 @@ export function createAttemptContext(input: {
   allCases: LoadedCase[]
   mode: "learn" | "eval"
   split: DatasetSplitName
+  executionProfile?: CaseExecutionProfile
   runDir: string
   attempt: number
   attempts: AttemptSummary[]
@@ -261,6 +266,7 @@ export function createAttemptContext(input: {
 
   return {
     ...input,
+    executionProfile: input.executionProfile ?? "full",
     currentAttemptDir,
     solveDir,
     judgeDir,

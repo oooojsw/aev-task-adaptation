@@ -252,6 +252,19 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
     if (retries !== "continue") return { decision: retries, trace }
 
     await runTracedStep(trace, "prepare_feedback_packet", () => ops.prepareFeedbackPacket())
+
+    if (context.executionProfile === "light_shard") {
+      const judgePlan = await this.buildJudgePlan(context)
+      await runTracedStep(trace, "run_pre_judge", () => ops.runPreJudge(judgePlan))
+      const judgeDecision = await runTracedStep(trace, "finish_if_judge_skipped_maintenance", () =>
+        ops.finishIfJudgeSkippedMaintenance(),
+      )
+      if (judgeDecision !== "continue") return { decision: judgeDecision, trace }
+      context.stopReason = "light shard collected learning packet"
+      trace.push({ op: "finish_after_light_shard_packetization", decision: "finish_run" })
+      return { decision: "finish_run", trace }
+    }
+
     await runTracedStep(trace, "run_regression_before_maintenance", () => ops.runRegressionBeforeMaintenance())
     const judgePlan = await this.buildJudgePlan(context)
     await runTracedStep(trace, "run_pre_judge", () => ops.runPreJudge(judgePlan))
@@ -346,6 +359,48 @@ class AddOnlyStrategy extends BaseMaintenanceMethodStrategy {
   }
 }
 
+class ParallelBatchAddOnlyStrategy extends BaseMaintenanceMethodStrategy {
+  id = "parallel-batch-5-add-only"
+  reversePropagationModuleID = "add-only-memory"
+  protected contractBlock = ADD_ONLY_METHOD_CONTRACT
+
+  protected maintenanceRounds(context: CaseRuntimeContext) {
+    return context.config.maxMaintenanceRoundsPerAttempt
+  }
+
+  protected buildPostJudgePlan(_context: CaseRuntimeContext, _round: number): PostJudgePlan {
+    return {
+      strategyID: "add-only-conservative-guard",
+    }
+  }
+
+  protected async buildKnowledgeMaintainerPlan(
+    context: CaseRuntimeContext,
+    round: number,
+  ): Promise<KnowledgeMaintainerPlan> {
+    const paths = methodPaths(context.cwd, context.config, this.id)
+    const maintainExtensionTemplate = await readMethodPrompt(paths, "maintain_extension")
+    const methodExtensionBlock = applyTemplateVariables(
+      maintainExtensionTemplate,
+      this.buildRoutingVariables(context, {
+        maintenance_round: String(round),
+        maintenance_retry_feedback: buildMaintenanceRetryFeedback(context.attemptSummary.maintenanceRounds, round),
+      }),
+    )
+
+    return {
+      contractBlock: this.contractBlock,
+      methodExtensionBlock,
+      reversePropagationModuleID: this.reversePropagationModuleID,
+      maintenanceRound: round,
+      sessionReports: this.collectSessionReports(context, {
+        includePreviousAttempts: true,
+        includePreviousRounds: true,
+      }),
+    }
+  }
+}
+
 export function resolveMethodStrategy(cwd: string, config: AutoEvolveConfig, methodID: string): MethodStrategy {
   const strategyDocPath = autoEvolvePath(cwd, config.methodsDir, methodID, "FLOW.md")
 
@@ -354,6 +409,8 @@ export function resolveMethodStrategy(cwd: string, config: AutoEvolveConfig, met
       return new SequentialRefineStrategy(strategyDocPath)
     case "add-only":
       return new AddOnlyStrategy(strategyDocPath)
+    case "parallel-batch-5-add-only":
+      return new ParallelBatchAddOnlyStrategy(strategyDocPath)
     default:
       throw new Error(`No code-defined method strategy is registered for method: ${methodID}`)
   }

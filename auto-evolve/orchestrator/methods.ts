@@ -7,6 +7,7 @@ export type MethodPromptPhase =
   | "bootstrap"
   | "solve"
   | "maintain_extension"
+  | "batch_maintain_extension"
   | "judge_extension"
   | "adversarial_probe"
   | "select"

@@ -9,11 +9,13 @@ import {
   writeExperienceWorkspaceSnapshot,
 } from "./experience-workspace"
 import { autoEvolvePath, ensureDirectory, readTextFile, runDirectory, writeJsonFile } from "./fs"
+import { resolveLocalLearningRecipe } from "./local-learning-recipes"
 import { resolveMethodStrategy } from "./method-strategies"
 import { buildCaseMethodOps } from "./primitive-ops/build-case-method-ops"
 import { loadAllCases, loadCaseByID, loadConfig, type RuntimePathOverrides } from "./schema"
 import { buildAttemptTaskIndex } from "./task-index"
 import {
+  type CaseExecutionProfile,
   createAttemptContext,
   makeRunID,
   type LoadedAutoEvolveConfig,
@@ -23,7 +25,13 @@ import {
 export async function runCase(
   cwd: string,
   caseID: string,
-  options?: { methodID?: string; mode?: "learn" | "eval"; split?: DatasetSplitName; runtimePaths?: RuntimePathOverrides },
+  options?: {
+    methodID?: string
+    mode?: "learn" | "eval"
+    split?: DatasetSplitName
+    runtimePaths?: RuntimePathOverrides
+    executionProfile?: CaseExecutionProfile
+  },
 ): Promise<RunCaseResult> {
   const config = (await loadConfig(cwd, options?.runtimePaths)) as LoadedAutoEvolveConfig
   const loaded = await loadCaseByID(cwd, config, caseID)
@@ -36,7 +44,8 @@ export async function runCase(
   const datasetSplit = await loadDatasetSplit(cwd, config)
   const allCases = await loadAllCases(cwd, config)
   const methodID = options?.methodID ?? config.defaultMethod
-  const strategy = resolveMethodStrategy(cwd, config, methodID)
+  const recipe = resolveLocalLearningRecipe(methodID)
+  const strategy = resolveMethodStrategy(cwd, config, recipe.caseMethodID)
   const mode = options?.mode ?? "learn"
   const split = options?.split ?? "all"
 
@@ -69,6 +78,7 @@ export async function runCase(
       allCases,
       mode,
       split,
+      executionProfile: options?.executionProfile ?? "full",
       runDir,
       attempt,
       attempts,
@@ -113,6 +123,7 @@ export async function runCase(
     methodID,
     mode,
     split,
+    executionProfile: options?.executionProfile ?? "full",
     attempts,
     finalPassed: finalEvaluation.passed,
     stopReason: stopReason ?? null,

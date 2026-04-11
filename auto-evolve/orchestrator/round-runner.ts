@@ -2,7 +2,9 @@ import path from "node:path"
 import { ensureDirectory, runDirectory, writeJsonFile, writeTextFile } from "./fs"
 import { loadDatasetSplit, selectCasesBySplit, type DatasetSplitName } from "./dataset-split"
 import { runCase } from "./case-runner"
+import { isParallelBatchExecutionStrategy, resolveLocalLearningRecipe } from "./local-learning-recipes"
 import { loadAllCases, loadConfig, type RuntimePathOverrides } from "./schema"
+import { runBatchRound } from "./batch-kernel"
 
 export interface RoundCaseSummary {
   caseID: string
@@ -46,6 +48,10 @@ export async function runRound(
 ): Promise<RunRoundResult> {
   const config = await loadConfig(cwd, options?.runtimePaths)
   const methodID = options?.methodID ?? config.defaultMethod
+  const recipe = resolveLocalLearningRecipe(methodID)
+  if (isParallelBatchExecutionStrategy(recipe.executionStrategyID)) {
+    return runBatchRound(cwd, options)
+  }
   const splitName = options?.split ?? "train"
   const mode = options?.mode ?? (splitName === "test" ? "eval" : "learn")
   const caseLimit = Math.max(1, options?.caseLimit ?? config.roundCaseLimit)

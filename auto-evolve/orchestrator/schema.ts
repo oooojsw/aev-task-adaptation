@@ -631,6 +631,7 @@ export async function validateAllCases(cwd: string, config: AutoEvolveConfig): P
     autoEvolvePath(cwd, config.methodsDir, config.defaultMethod, "prompts", "maintain_extension.md"),
     autoEvolvePath(cwd, config.methodsDir, config.defaultMethod, "prompts", "judge_extension.md"),
     autoEvolvePath(cwd, config.systemPromptsDir, "knowledge-maintainer-core.md"),
+    autoEvolvePath(cwd, config.systemPromptsDir, "batch-knowledge-maintainer-core.md"),
     autoEvolvePath(cwd, config.systemPromptsDir, "soft-judge-core.md"),
     autoEvolvePath(cwd, config.reversePropagationModulesDir, "direct-rewrite.md"),
     autoEvolvePath(cwd, config.reversePropagationModulesDir, "add-only-memory.md"),
@@ -642,6 +643,12 @@ export async function validateAllCases(cwd: string, config: AutoEvolveConfig): P
     autoEvolvePath(cwd, config.methodsDir, "add-only", "prompts", "solve.md"),
     autoEvolvePath(cwd, config.methodsDir, "add-only", "prompts", "maintain_extension.md"),
     autoEvolvePath(cwd, config.methodsDir, "add-only", "prompts", "judge_extension.md"),
+    autoEvolvePath(cwd, config.methodsDir, "parallel-batch-5-add-only", "METHOD.md"),
+    autoEvolvePath(cwd, config.methodsDir, "parallel-batch-5-add-only", "FLOW.md"),
+    autoEvolvePath(cwd, config.methodsDir, "parallel-batch-5-add-only", "prompts", "bootstrap.md"),
+    autoEvolvePath(cwd, config.methodsDir, "parallel-batch-5-add-only", "prompts", "solve.md"),
+    autoEvolvePath(cwd, config.methodsDir, "parallel-batch-5-add-only", "prompts", "judge_extension.md"),
+    autoEvolvePath(cwd, config.methodsDir, "parallel-batch-5-add-only", "prompts", "batch_maintain_extension.md"),
   ]) {
     if (!(await pathExists(file))) errors.push(`Method file is missing: ${file}`)
   }

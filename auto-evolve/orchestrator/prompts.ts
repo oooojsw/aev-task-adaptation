@@ -280,6 +280,46 @@ export async function buildKnowledgeMaintainerPrompt(input: {
   })
 }
 
+export async function buildBatchKnowledgeMaintainerPrompt(input: {
+  cwd: string
+  config: AutoEvolveConfig
+  methodID?: string
+  runDir: string
+  workspace: ExperienceWorkspaceLayout
+  templateLibrary: TemplateLibraryPaths
+  baselinePath: string
+  scriptsDir: string
+  batchIndex: number
+  packetPath: string
+  packetSummaryPath: string
+  methodContractBlock: string
+  methodExtensionBlock: string
+  reversePropagationModuleBlock: string
+  loadingStrategyBlock: string
+  maintenanceScopeBlock: string
+  maintenanceOpsBlock: string
+  sessionReports: KnowledgeMaintainerSessionReportRef[]
+}) {
+  const template = await readSystemPrompt(input.cwd, input.config, "batch-knowledge-maintainer-core.md")
+
+  return renderTemplate(template, {
+    experience_workspace_block: experienceWorkspaceBlock(input.workspace),
+    template_library_block: templateLibraryBlock(input.templateLibrary),
+    baseline_block: baselineBlock(input.baselinePath),
+    scripts_dir: input.scriptsDir,
+    batch_index: String(input.batchIndex),
+    batch_learning_packet_path: input.packetPath,
+    batch_learning_packet_summary_path: input.packetSummaryPath,
+    session_reports_block: sessionReportsBlock(input.runDir, input.sessionReports),
+    method_contract_block: input.methodContractBlock,
+    reverse_propagation_module_block: input.reversePropagationModuleBlock,
+    loading_strategy_block: input.loadingStrategyBlock,
+    maintenance_scope_block: input.maintenanceScopeBlock,
+    maintenance_ops_block: input.maintenanceOpsBlock,
+    method_extension_block: input.methodExtensionBlock,
+  })
+}
+
 export async function buildSoftJudgePrompt(input: {
   cwd: string
   config: AutoEvolveConfig
