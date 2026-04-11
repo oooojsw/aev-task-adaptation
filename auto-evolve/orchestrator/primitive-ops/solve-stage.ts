@@ -72,8 +72,10 @@ export async function executeSolveStage(input: {
 
   const artifactPaths = await writeTaskArtifacts(input.stageDir, solveTask, {
     phase: input.phase,
+    taskKind: input.phase,
     caseID: context.loaded.spec.id,
     attempt: context.attempt,
+    maintenanceRound: context.currentMaintenanceRound,
     methodID: context.methodID,
     evaluation,
   })

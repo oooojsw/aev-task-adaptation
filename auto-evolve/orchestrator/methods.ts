@@ -6,8 +6,6 @@ import { isMethodPrimitiveOp, type MethodPrimitiveOp } from "./primitives"
 export type MethodPromptPhase =
   | "bootstrap"
   | "solve"
-  | "refine"
-  | "maintain_experience"
   | "maintain_extension"
   | "judge_extension"
   | "adversarial_probe"

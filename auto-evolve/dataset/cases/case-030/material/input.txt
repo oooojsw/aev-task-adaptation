@@ -1,0 +1,10 @@
+RULE:
+Return JSON with:
+- critical: count of severity=critical
+- open: count of status=open
+
+INCIDENTS:
+severity=critical,status=open
+severity=high,status=closed
+severity=critical,status=closed
+severity=medium,status=open

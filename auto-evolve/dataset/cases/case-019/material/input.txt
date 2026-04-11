@@ -1,0 +1,8 @@
+REQUEST:
+Choose the highest score. If score >= 95, tier is gold. If score >= 90, tier is silver.
+Return JSON with keys: name, score, tier.
+
+SCORES:
+Rui,score=97
+Mina,score=93
+Kai,score=88

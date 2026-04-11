@@ -17,6 +17,7 @@ Status: active baseline module
 
 - You may rewrite existing modules.
 - You may create new Markdown modules if they improve long-term maintainability.
+- You may create or update workspace-local helper assets under `tools/` or `skills/` when future solve agents genuinely need reusable local tooling or skill definitions.
 - You may split or merge modules if the current structure is overloaded or duplicated.
 - You may rewrite the entry navigation when the downstream structure changes.
 

@@ -1,0 +1,8 @@
+REQUEST:
+Return the shipment ID with destination=Osaka, customs=ready, and weight<20.
+
+SHIPMENTS:
+S-11,destination=Osaka,customs=hold,weight=12
+S-18,destination=Osaka,customs=ready,weight=18
+S-21,destination=Seoul,customs=ready,weight=16
+S-27,destination=Osaka,customs=ready,weight=24

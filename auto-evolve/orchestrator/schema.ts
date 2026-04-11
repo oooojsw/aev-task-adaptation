@@ -6,6 +6,11 @@ import { experienceWorkspacePaths, resolveExperienceWorkspaceLayout, validateExp
 export type CompareMode = "text_exact" | "text_contains" | "json_exact"
 export type ModelPhase = "bootstrap" | "solve" | "refine" | "verify" | "regression"
 
+export interface RuntimePathOverrides {
+  knowledgeDir?: string
+  runsDir?: string
+}
+
 export interface ModelSelection {
   model?: string
   agent?: string
@@ -58,6 +63,8 @@ export interface AutoEvolveConfig {
   judgeSkillsDir: string
   systemPromptsDir: string
   methodsDir: string
+  propagationDir: string
+  propagationMethodsDir: string
   baselineFile: string
   splitFile: string
   scriptsDir: string
@@ -70,6 +77,7 @@ export interface AutoEvolveConfig {
   defaultModel?: string
   defaultVariant?: string
   defaultMethod: string
+  defaultPropagationMethod: string
   maxRetriesPerCase: number
   maxMaintenanceRoundsPerAttempt: number
   roundCaseLimit: number
@@ -133,6 +141,8 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   judgeSkillsDir: "judge-skills",
   systemPromptsDir: "prompts",
   methodsDir: "methods",
+  propagationDir: "propagation",
+  propagationMethodsDir: "propagation-methods",
   baselineFile: "baseline.md",
   splitFile: "dataset/SPLIT.md",
   scriptsDir: "scripts",
@@ -145,6 +155,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   defaultModel: "minimax-cn-coding-plan/MiniMax-M2.7",
   defaultVariant: undefined,
   defaultMethod: "sequential-refine",
+  defaultPropagationMethod: "single-branch-baseline",
   maxRetriesPerCase: 3,
   maxMaintenanceRoundsPerAttempt: 3,
   roundCaseLimit: 5,
@@ -331,7 +342,7 @@ function validateCaseShape(spec: CaseSpec): string[] {
   return errors
 }
 
-export async function loadConfig(cwd: string) {
+export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverrides) {
   const configPath = autoEvolvePath(cwd, "config.json")
   const raw = await readJsonFile<Record<string, unknown>>(configPath)
   const legacyDefaults: ModelSelection = {
@@ -445,7 +456,9 @@ export async function loadConfig(cwd: string) {
   const config: AutoEvolveConfig = {
     version: typeof raw.version === "number" ? raw.version : DEFAULT_CONFIG.version,
     datasetDir: typeof raw.datasetDir === "string" ? raw.datasetDir : DEFAULT_CONFIG.datasetDir,
-    knowledgeDir: typeof raw.knowledgeDir === "string" ? raw.knowledgeDir : DEFAULT_CONFIG.knowledgeDir,
+    knowledgeDir:
+      runtimePaths?.knowledgeDir ??
+      (typeof raw.knowledgeDir === "string" ? raw.knowledgeDir : DEFAULT_CONFIG.knowledgeDir),
     experienceEntryFile:
       typeof raw.experienceEntryFile === "string" && raw.experienceEntryFile.trim()
         ? raw.experienceEntryFile
@@ -469,10 +482,18 @@ export async function loadConfig(cwd: string) {
         ? raw.systemPromptsDir
         : DEFAULT_CONFIG.systemPromptsDir,
     methodsDir: typeof raw.methodsDir === "string" ? raw.methodsDir : DEFAULT_CONFIG.methodsDir,
+    propagationDir:
+      typeof raw.propagationDir === "string" && raw.propagationDir.trim()
+        ? raw.propagationDir
+        : DEFAULT_CONFIG.propagationDir,
+    propagationMethodsDir:
+      typeof raw.propagationMethodsDir === "string" && raw.propagationMethodsDir.trim()
+        ? raw.propagationMethodsDir
+        : DEFAULT_CONFIG.propagationMethodsDir,
     baselineFile: typeof raw.baselineFile === "string" ? raw.baselineFile : DEFAULT_CONFIG.baselineFile,
     splitFile: typeof raw.splitFile === "string" ? raw.splitFile : DEFAULT_CONFIG.splitFile,
     scriptsDir: typeof raw.scriptsDir === "string" ? raw.scriptsDir : DEFAULT_CONFIG.scriptsDir,
-    runsDir: typeof raw.runsDir === "string" ? raw.runsDir : DEFAULT_CONFIG.runsDir,
+    runsDir: runtimePaths?.runsDir ?? (typeof raw.runsDir === "string" ? raw.runsDir : DEFAULT_CONFIG.runsDir),
     modelConfigFile,
     judgeConfigFile,
     permissionConfigFile,
@@ -482,6 +503,10 @@ export async function loadConfig(cwd: string) {
     defaultVariant: modelConfig.defaults.variant,
     defaultMethod:
       typeof raw.defaultMethod === "string" && raw.defaultMethod.trim() ? raw.defaultMethod : DEFAULT_CONFIG.defaultMethod,
+    defaultPropagationMethod:
+      typeof raw.defaultPropagationMethod === "string" && raw.defaultPropagationMethod.trim()
+        ? raw.defaultPropagationMethod
+        : DEFAULT_CONFIG.defaultPropagationMethod,
     maxRetriesPerCase:
       typeof raw.maxRetriesPerCase === "number" ? raw.maxRetriesPerCase : DEFAULT_CONFIG.maxRetriesPerCase,
     maxMaintenanceRoundsPerAttempt:
@@ -549,6 +574,14 @@ export async function validateAllCases(cwd: string, config: AutoEvolveConfig): P
   if (!(await pathExists(templateLibraryRoot))) {
     errors.push(`Template library directory is missing: ${templateLibraryRoot}`)
   }
+  const propagationRoot = autoEvolvePath(cwd, config.propagationDir)
+  if (!(await pathExists(propagationRoot))) {
+    errors.push(`Propagation directory is missing: ${propagationRoot}`)
+  }
+  const propagationMethodsRoot = autoEvolvePath(cwd, config.propagationMethodsDir)
+  if (!(await pathExists(propagationMethodsRoot))) {
+    errors.push(`Propagation-methods directory is missing: ${propagationMethodsRoot}`)
+  }
   const reversePropagationModulesRoot = autoEvolvePath(cwd, config.reversePropagationModulesDir)
   if (!(await pathExists(reversePropagationModulesRoot))) {
     errors.push(`Reverse-propagation modules directory is missing: ${reversePropagationModulesRoot}`)
@@ -567,6 +600,14 @@ export async function validateAllCases(cwd: string, config: AutoEvolveConfig): P
   if (!(await pathExists(splitPath))) errors.push(`Dataset split file is missing: ${splitPath}`)
   const methodsRoot = autoEvolvePath(cwd, config.methodsDir)
   if (!(await pathExists(methodsRoot))) errors.push(`Methods directory is missing: ${methodsRoot}`)
+  const defaultPropagationMethodPath = autoEvolvePath(
+    cwd,
+    config.propagationMethodsDir,
+    `${config.defaultPropagationMethod}.md`,
+  )
+  if (!(await pathExists(defaultPropagationMethodPath))) {
+    errors.push(`Default propagation method definition is missing: ${defaultPropagationMethodPath}`)
+  }
   const systemPromptsRoot = autoEvolvePath(cwd, config.systemPromptsDir)
   if (!(await pathExists(systemPromptsRoot))) {
     errors.push(`System prompts directory is missing: ${systemPromptsRoot}`)

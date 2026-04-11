@@ -1,0 +1,11 @@
+RULE:
+Return JSON with:
+- open: count of status=open
+- blocked: count of status=blocked
+- owner: owner of the single blocked task
+
+TASKS:
+T-1,status=open,owner=Mina
+T-2,status=blocked,owner=Rui
+T-3,status=open,owner=Kai
+T-4,status=done,owner=Mina

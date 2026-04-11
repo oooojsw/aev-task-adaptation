@@ -1,0 +1,9 @@
+BASE:
+project-orchid=COO
+project-lotus=CTO
+
+OVERRIDES:
+project-orchid=CFO
+
+QUERY:
+Return the effective approver for project-orchid.

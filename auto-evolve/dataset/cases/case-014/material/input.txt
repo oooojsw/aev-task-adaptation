@@ -1,0 +1,8 @@
+REQUEST:
+Return the room name of the meeting with host=Jia, priority=high, and remote=no.
+
+MEETINGS:
+Maple,host=Jia,priority=high,remote=no
+Lotus,host=Jia,priority=medium,remote=no
+Cedar,host=Lin,priority=high,remote=no
+Cloud,host=Jia,priority=high,remote=yes

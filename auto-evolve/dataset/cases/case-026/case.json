@@ -1,0 +1,15 @@
+{
+  "id": "case-026",
+  "instruction": "Read the attached material and return only the exact aggregate result required by the rule. No explanation.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "expense ledger"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.txt",
+    "mode": "text_exact"
+  },
+  "tags": ["ledger_aggregation", "expenses", "text"]
+}

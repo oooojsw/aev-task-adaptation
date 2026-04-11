@@ -2,6 +2,9 @@
 
 # 变更记录
 
-- 2026-04-11T00:42:00 经验工作区已初始化为最小种子
-- 2026-04-11T00:42:30 经验工作区初始化：构建了完整结构（manifest.md入口、rules/中文字提取规则.md规则模块）
-- 2026-04-10T16:42:50.054Z: bootstrap refreshed the experience workspace from 5 labeled case(s).
+## 2026-04-11 初始化
+
+- 经验工作区已从最小种子展开为正式结构
+- 建立了规则模块、输出契约、执行清单
+- 从 5 个训练案例中提炼出文本提取模式
+- 2026-04-11T07:48:59.391Z: bootstrap refreshed the experience workspace from 5 labeled case(s).

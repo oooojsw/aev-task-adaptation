@@ -45,6 +45,10 @@ export async function runSoftJudge(request: SoftJudgeRequest): Promise<SoftJudge
     judgeSkillsRoot,
     judgeSkillsIndexPath,
     ...request.judgePlan.sessionReports.map((item) => item.absolutePath),
+    ...request.judgePlan.sessionReports.flatMap((item) => [
+      item.learningLogAbsolutePath ?? "",
+      item.taskManifestAbsolutePath ?? "",
+    ]),
     ...request.hardCheckArtifacts.map((item) => item.outputPath),
   ]
 

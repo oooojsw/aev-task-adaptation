@@ -1,0 +1,33 @@
+{
+  "id": "20260411-163330382-268c264b90bf",
+  "treeHash": "268c264b90bf812bb97ecd351e44de78d012f0bf4e503e50515aede40cab897e",
+  "parentCommitID": "20260411-155514814-268c264b90bf",
+  "createdAt": "2026-04-11T08:33:30.382Z",
+  "fileCount": 5,
+  "summary": "Propagation campaign 20260411-162723603-propagation via add-only and add-only",
+  "source": {
+    "kind": "campaign_result",
+    "description": "Candidate produced by propagation campaign",
+    "campaignID": "20260411-162723603-propagation",
+    "branchName": "add-only-add-only-20260411-162723603-propagation",
+    "maintenanceMethodID": "add-only",
+    "propagationMethodID": "add-only",
+    "baselineDir": "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\propagation\\workspaces\\add-only-add-only-20260411-162723603-propagation\\runs\\20260411-162723637-baseline"
+  },
+  "evaluation": {
+    "train": {
+      "total": 1,
+      "passed": 0,
+      "failed": 1,
+      "acceptedRefines": 0,
+      "rejectedRefines": 0
+    },
+    "test": {
+      "total": 1,
+      "passed": 1,
+      "failed": 0,
+      "acceptedRefines": 0,
+      "rejectedRefines": 0
+    }
+  }
+}

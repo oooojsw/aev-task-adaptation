@@ -1,0 +1,53 @@
+{
+  "propagationMethodID": "add-only",
+  "delegatedLayer2MethodID": "add-only",
+  "sourceCommitID": "20260411-151338377-23735dc3ac9b",
+  "branchName": "add-only-add-only-20260411-152825697-propagation",
+  "baselineDir": "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\propagation\\workspaces\\add-only-add-only-20260411-152825697-propagation\\runs\\20260411-152825708-baseline",
+  "trainRound": {
+    "roundDir": "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\propagation\\workspaces\\add-only-add-only-20260411-152825697-propagation\\runs\\20260411-152825720-round",
+    "methodID": "add-only",
+    "caseLimit": 1,
+    "split": "train",
+    "mode": "learn",
+    "totalCases": 1,
+    "passedCases": 0,
+    "failedCases": 1,
+    "acceptedRefines": 0,
+    "rejectedRefines": 0,
+    "cases": [
+      {
+        "caseID": "case-001",
+        "runDir": "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\propagation\\workspaces\\add-only-add-only-20260411-152825697-propagation\\runs\\20260411-152825729-case-001",
+        "passed": false,
+        "attempts": 1,
+        "summary": "Exact text matched expected output.",
+        "acceptedRefines": 0,
+        "rejectedRefines": 0
+      }
+    ]
+  },
+  "testRound": {
+    "roundDir": "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\propagation\\workspaces\\add-only-add-only-20260411-152825697-propagation\\runs\\20260411-153348625-round",
+    "methodID": "add-only",
+    "caseLimit": 1,
+    "split": "test",
+    "mode": "eval",
+    "totalCases": 1,
+    "passedCases": 0,
+    "failedCases": 1,
+    "acceptedRefines": 0,
+    "rejectedRefines": 0,
+    "cases": [
+      {
+        "caseID": "case-006",
+        "runDir": "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\propagation\\workspaces\\add-only-add-only-20260411-152825697-propagation\\runs\\20260411-153348640-case-006",
+        "passed": false,
+        "attempts": 1,
+        "summary": "Exact text comparison failed.",
+        "acceptedRefines": 0,
+        "rejectedRefines": 0
+      }
+    ]
+  }
+}

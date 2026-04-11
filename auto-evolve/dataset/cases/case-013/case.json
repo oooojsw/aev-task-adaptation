@@ -1,0 +1,15 @@
+{
+  "id": "case-013",
+  "instruction": "Read the attached material and return only the badge ID of the employee matching all conditions. No explanation.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "employee roster and filter"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.txt",
+    "mode": "text_exact"
+  },
+  "tags": ["record_selection", "roster", "text"]
+}

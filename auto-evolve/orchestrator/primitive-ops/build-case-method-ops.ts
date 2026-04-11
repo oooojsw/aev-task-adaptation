@@ -15,15 +15,14 @@ import {
   rejectIfOutOfPolicyFilesPrimitive,
 } from "./knowledge-maintenance"
 import {
-  acceptOrRejectChangePrimitive,
   finishAfterAcceptPrimitive,
-  rejectIfCurrentCaseNotFixedPrimitive,
   verifyCurrentCasePrimitive,
 } from "./acceptance-flow"
 import {
   runRegressionAfterMaintenancePrimitive,
   runRegressionBeforeMaintenancePrimitive,
 } from "./regression-suite"
+import { applyPostJudgeDecisionPrimitive, runPostJudgePrimitive } from "./post-judge"
 
 export async function buildCaseMethodOps(context: CaseRuntimeContext): Promise<CaseMethodOps> {
   return {
@@ -40,9 +39,9 @@ export async function buildCaseMethodOps(context: CaseRuntimeContext): Promise<C
     rejectIfNoExperienceChange: async () => rejectIfNoExperienceChangePrimitive(context),
     rejectIfOutOfPolicyFiles: async () => rejectIfOutOfPolicyFilesPrimitive(context),
     verifyCurrentCase: async () => verifyCurrentCasePrimitive(context),
-    rejectIfCurrentCaseNotFixed: async () => rejectIfCurrentCaseNotFixedPrimitive(context),
     runRegressionAfterMaintenance: async () => runRegressionAfterMaintenancePrimitive(context),
-    acceptOrRejectChange: async () => acceptOrRejectChangePrimitive(context),
+    runPostJudge: async (plan) => runPostJudgePrimitive(context, plan),
+    applyPostJudgeDecision: async () => applyPostJudgeDecisionPrimitive(context),
     finishAfterAccept: async () => finishAfterAcceptPrimitive(context),
   }
 }

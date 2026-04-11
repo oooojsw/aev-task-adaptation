@@ -21,7 +21,7 @@ const BUILTIN_MODULE_DESCRIPTORS: ReversePropagationModuleDescriptor[] = [
     id: "direct-rewrite",
     title: "Direct Rewrite",
     summary:
-      "Directly revise the current experience workspace into a better single canonical version. This is the current baseline reverse-propagation module.",
+      "Directly revise the current experience workspace into a better single canonical version, including Markdown knowledge and any workspace-local helper assets that future solve agents should use.",
     defaultLoadingStrategyID: "full-workspace-read-via-entry",
     defaultScopeLevelID: "full-access",
   },
@@ -29,7 +29,7 @@ const BUILTIN_MODULE_DESCRIPTORS: ReversePropagationModuleDescriptor[] = [
     id: "add-only-memory",
     title: "Add-Only Memory",
     summary:
-      "Preserve existing experience and prefer additive maintenance: append clarifications, add lessons, add guides, and create new small modules without broad rewrites.",
+      "Preserve existing experience and prefer additive maintenance: append clarifications, add lessons, add guides, and add narrow helper assets without broad rewrites.",
     defaultLoadingStrategyID: "full-workspace-read-via-entry",
     defaultScopeLevelID: "full-access",
     defaultOperationIDs: [
@@ -39,6 +39,8 @@ const BUILTIN_MODULE_DESCRIPTORS: ReversePropagationModuleDescriptor[] = [
       "inspect_session_records",
       "append_to_existing_module",
       "create_module",
+      "create_helper_asset",
+      "update_helper_asset",
       "add_tool_guide",
       "add_failure_lesson",
       "rewrite_entry_navigation",

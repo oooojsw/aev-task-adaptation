@@ -111,17 +111,42 @@ function previewValue(input: unknown, max = 120) {
 function actionFromPart(part: MessageV2.Part): MonitorAction | undefined {
   if (part.type === "tool") {
     const title =
-      ("title" in part.state && typeof part.state.title === "string" && part.state.title) || previewValue(part.state.input)
-    const result =
-      part.state.status === "completed"
-        ? previewValue(part.state.output)
-        : part.state.status === "error"
-          ? previewText(part.state.error)
-          : undefined
+      ("title" in part.state && typeof part.state.title === "string" && part.state.title)
+        ? part.state.title
+        : undefined
+    const inputPreview = previewValue(part.state.input, 80)
+
+    let detail: string | undefined
+    if (part.state.status === "completed") {
+      // For write/edit: title (file path) is more informative than "Wrote/Edited successfully."
+      // For read: title is the file path, already good.
+      // For grep/codesearch/glob: title is the pattern/query, already good.
+      // For other tools: use title if available, otherwise input preview.
+      detail = title ?? inputPreview
+    } else if (part.state.status === "error") {
+      // Show error message for failed tools
+      detail = previewText(part.state.error, 120)
+    } else {
+      // pending / running: show what's being operated on
+      detail = title ?? inputPreview
+    }
+
+    // Build label: include tool name and a meaningful status indicator
+    let label = part.tool
+    if (part.state.status === "completed") {
+      label += ":done"
+    } else if (part.state.status === "running") {
+      label += ":running"
+    } else if (part.state.status === "pending") {
+      label += ":pending"
+    } else if (part.state.status === "error") {
+      label += ":error"
+    }
+
     return {
       kind: "tool",
-      label: `${part.tool}:${part.state.status}`,
-      detail: result ?? title,
+      label,
+      detail,
       timestamp: partTimestamp(part),
     }
   }
@@ -167,7 +192,7 @@ function actionFromPart(part: MessageV2.Part): MonitorAction | undefined {
   }
 }
 
-function collectRecentActions(messages: MessageV2.WithParts[], limit = 6) {
+function collectRecentActions(messages: MessageV2.WithParts[], limit = 20) {
   const actions: MonitorAction[] = []
 
   for (const message of messages) {
@@ -195,12 +220,13 @@ function summarizeSession(
   session: Session.GlobalInfo,
   status: SessionStatus.Info,
   messages: MessageV2.WithParts[],
+  actionsLimit = 20,
 ): MonitorRow {
   const assistant = latestAssistant(messages)
   const user = latestUser(messages)
   const parts = assistant?.parts ?? []
   const activeTool = findActiveTool(parts)
-  const recentActions = collectRecentActions(messages)
+  const recentActions = collectRecentActions(messages, actionsLimit)
 
   let monitorStatus: MonitorStatus = "idle"
   let step = "idle"
@@ -272,7 +298,7 @@ async function collectMonitorRows(limit: number) {
 
   for (const session of sessions) {
     const messages = await Session.messages({ sessionID: session.id, limit: 20 }).catch(() => [] as MessageV2.WithParts[])
-    rows.push(summarizeSession(session, statuses.get(session.id) ?? { type: "idle" }, messages))
+    rows.push(summarizeSession(session, statuses.get(session.id) ?? { type: "idle" }, messages, 20))
   }
 
   return rows
@@ -352,10 +378,14 @@ function renderDashboardHtml(options: { limit: number; intervalSeconds: number }
     .detail { color: var(--muted); font-size: 12px; margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
     .mono { font-family: Consolas, "SFMono-Regular", monospace; font-size: 12px; }
     .empty { padding: 28px; text-align: center; color: var(--muted); }
-    .actions { display: grid; gap: 6px; min-width: 340px; }
-    .action-item { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: rgba(255,255,255,0.02); }
+    .actions-cell { padding: 8px 14px !important; vertical-align: top !important; }
+    .actions-cell > .detail { display: block; }
+    .actions { display: flex; flex-direction: column; gap: 6px; min-width: 340px; max-height: 400px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+    .actions::-webkit-scrollbar { width: 4px; }
+    .actions::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+    .action-item { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: rgba(255,255,255,0.02); flex-shrink: 0; }
     .action-label { font-size: 12px; font-family: Consolas, "SFMono-Regular", monospace; color: #b8c9d7; }
-    .action-detail { margin-top: 4px; font-size: 12px; color: var(--muted); word-break: break-word; }
+    .action-detail { margin-top: 4px; font-size: 12px; color: var(--muted); word-break: break-word; white-space: pre-wrap; }
   </style>
 </head>
 <body>
@@ -455,7 +485,7 @@ function renderDashboardHtml(options: { limit: number; intervalSeconds: number }
             '<td class="mono">' + esc(row.id) + '</td>' +
             '<td><span class="pill ' + statusClass(row.status) + '">' + esc(row.status) + '</span></td>' +
             '<td class="mono">' + esc(row.step) + '</td>' +
-            '<td>' + actions + '</td>' +
+            '<td class="actions-cell">' + actions + '</td>' +
             '<td>' + esc(timeText(row.updated)) + '</td>' +
             '<td class="mono">' + esc(row.directory) + '</td>' +
             '<td><div>' + esc(row.title) + '</div>' + detail + parent + user + '</td>' +

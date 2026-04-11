@@ -17,7 +17,8 @@ import {
 import { resolveModelSelection } from "./model-selection"
 import { runOpencodeTask } from "./opencode"
 import { buildBootstrapPrompt } from "./prompts"
-import { loadAllCases, loadConfig } from "./schema"
+import { writeTaskArtifacts } from "./task-artifacts"
+import { loadAllCases, loadConfig, type RuntimePathOverrides } from "./schema"
 
 export interface BootstrapResult {
   message: string
@@ -26,14 +27,20 @@ export interface BootstrapResult {
   changedFiles?: string[]
 }
 
+export interface RunBootstrapOptions {
+  force: boolean
+  methodID?: string
+  runtimePaths?: RuntimePathOverrides
+}
+
 function makeBootstrapRunID() {
   const now = new Date()
   const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}${String(now.getMilliseconds()).padStart(3, "0")}`
   return `${stamp}-bootstrap`
 }
 
-async function appendChangeLog(cwd: string, count: number) {
-  const config = await loadConfig(cwd)
+async function appendChangeLog(cwd: string, count: number, runtimePaths?: RuntimePathOverrides) {
+  const config = await loadConfig(cwd, runtimePaths)
   const workspace = await resolveExperienceWorkspaceLayout(experienceWorkspacePaths(cwd, config))
   const changeLog = findExperienceWorkspaceDocumentByRole(workspace, "change_log")
   const file = changeLog?.absolutePath ?? path.join(workspace.root, "change_log.md")
@@ -43,8 +50,8 @@ async function appendChangeLog(cwd: string, count: number) {
   await writeTextFile(file, next)
 }
 
-export async function runBootstrap(cwd: string, options: { force: boolean; methodID?: string }): Promise<BootstrapResult> {
-  const config = await loadConfig(cwd)
+export async function runBootstrap(cwd: string, options: RunBootstrapOptions): Promise<BootstrapResult> {
+  const config = await loadConfig(cwd, options.runtimePaths)
   const split = await loadDatasetSplit(cwd, config)
   const cases = selectCasesBySplit(await loadAllCases(cwd, config), split, "train")
   const workspacePaths = experienceWorkspacePaths(cwd, config)
@@ -136,12 +143,11 @@ export async function runBootstrap(cwd: string, options: { force: boolean; metho
   const changedFiles = rolledBackInvalidWorkspace ? [] : rawChangedFiles
   const knowledgePackChanged = changedFiles.length > 0
 
-  await writeTextFile(path.join(runDir, "prompt.txt"), prompt + "\n")
-  await writeTextFile(path.join(runDir, "stdout.log"), task.result.stdout)
-  await writeTextFile(path.join(runDir, "stderr.log"), task.result.stderr)
-  await writeTextFile(path.join(runDir, "response.txt"), (task.result.responseText || "").trim() + "\n")
-  await writeJsonFile(path.join(runDir, "events.json"), task.result.events)
-  await writeJsonFile(path.join(runDir, "tool_failures.json"), task.result.toolFailures)
+  const artifactPaths = await writeTaskArtifacts(runDir, task, {
+    phase: "bootstrap",
+    taskKind: "bootstrap",
+    methodID,
+  })
   await writeExperienceWorkspaceSnapshot(path.join(runDir, "experience_workspace.original_before_seed"), originalPack)
   await writeExperienceWorkspaceSnapshot(path.join(runDir, "experience_workspace.seed_before_bootstrap"), currentPack)
   await writeExperienceWorkspaceSnapshot(path.join(runDir, "experience_workspace.after_raw"), rawNextPack)
@@ -160,6 +166,12 @@ export async function runBootstrap(cwd: string, options: { force: boolean; metho
     experienceWorkspaceRoot: workspace.root,
     experienceWorkspaceEntryPath: workspace.entryPath,
     experienceWorkspaceEntryRelativePath: workspace.entryRelativePath,
+    experienceWorkspaceDocumentFiles: workspace.documents.map((item) => item.relativePath),
+    experienceWorkspaceAssetFiles: workspace.assets.map((item) => ({
+      relativePath: item.relativePath,
+      kind: item.kind,
+    })),
+    experienceWorkspaceRuntimeSidecarFiles: workspace.runtimeSidecarFiles,
     seededBeforeBootstrap,
     knowledgePackChanged,
     changedFiles,
@@ -171,9 +183,21 @@ export async function runBootstrap(cwd: string, options: { force: boolean; metho
     permissionReadPaths: task.permissionReadPaths,
     permissionEditPaths: task.permissionEditPaths,
   })
+  await writeJsonFile(path.join(runDir, "task_index.json"), {
+    taskCount: 1,
+    tasks: [
+      {
+        phase: "bootstrap",
+        sessionID: task.result.sessionID || null,
+        executionReportPath: path.basename(artifactPaths.sessionExecutionReportPath),
+        learningLogPath: path.basename(artifactPaths.sessionLearningLogPath),
+        taskManifestPath: path.basename(artifactPaths.sessionTaskManifestPath),
+      },
+    ],
+  })
 
   if (task.result.exitCode === 0 && knowledgePackChanged) {
-    await appendChangeLog(cwd, cases.length)
+    await appendChangeLog(cwd, cases.length, options.runtimePaths)
   }
 
   return {

@@ -1,0 +1,15 @@
+{
+  "id": "case-014",
+  "instruction": "Read the attached material and return only the room name of the meeting that matches the request. No explanation.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "meeting table and request"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.txt",
+    "mode": "text_exact"
+  },
+  "tags": ["record_selection", "meetings", "text"]
+}

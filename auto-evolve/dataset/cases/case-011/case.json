@@ -1,0 +1,15 @@
+{
+  "id": "case-011",
+  "instruction": "Read the attached material bundle and return only the ID of the single order that matches the rule. No explanation.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "orders and rule"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.txt",
+    "mode": "text_exact"
+  },
+  "tags": ["record_selection", "orders", "text"]
+}

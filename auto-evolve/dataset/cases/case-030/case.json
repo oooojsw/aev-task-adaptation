@@ -1,0 +1,15 @@
+{
+  "id": "case-030",
+  "instruction": "Read the attached material and return only the exact JSON object required by the rule.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "incident log"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.json",
+    "mode": "json_exact"
+  },
+  "tags": ["ledger_aggregation", "incidents", "json"]
+}

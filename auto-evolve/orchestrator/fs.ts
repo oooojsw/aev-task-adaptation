@@ -225,6 +225,7 @@ Status: active baseline module
 
 - You may rewrite existing modules.
 - You may create new Markdown modules if they improve long-term maintainability.
+- You may create or update workspace-local helper assets under \`tools/\` or \`skills/\` when future solve agents genuinely need reusable local tooling or skill definitions.
 - You may split or merge modules if the current structure is overloaded or duplicated.
 - You may rewrite the entry navigation when the downstream structure changes.
 
@@ -254,6 +255,7 @@ Status: active secondary module
 
 - You may append to existing Markdown modules.
 - You may create a new small Markdown module when append-only changes would become messy.
+- You may add or update narrow helper assets under \`tools/\` or \`skills/\` if a future solve agent needs reusable local tooling without broad workspace rewrites.
 - You may lightly update the entry navigation so future agents can discover the new additive memory.
 - You should avoid deleting, replacing, or broadly rewriting the existing canonical rule chain unless another method explicitly permits it.
 
@@ -400,20 +402,21 @@ Task:
 Requirements for the experience workspace:
 - The file paths listed in this prompt are paths only. Their contents are not preloaded for you.
 - You must explicitly use \`read\` and \`list\` to inspect the files and directories you need.
-- Write Markdown only.
+- The main expert experience should live in Markdown.
 - Write the experience workspace in Chinese by default unless a case explicitly requires another language.
 - The workspace must have one single entry file. The current entry path is shown above.
 - A future blank solve agent should start from the entry file, then selectively read downstream files instead of reading every file blindly.
 - You are free to replace the minimal seed layout. Do not preserve old placeholder structure just because it already exists.
 - You may create rule modules, output-contract files, execution guides, exception modules, partition indexes, task routers, and tool guides only if they help the final structure.
-- Every Markdown file you keep in the final workspace should include an \`auto-evolve-role\` marker near the top.
+- If future solve behavior would benefit from local reusable helper assets, you may create text-based helper assets under \`tools/\` or \`skills/\`.
+- Every expert-experience Markdown file outside \`tools/\` or \`skills/\` should include an \`auto-evolve-role\` marker near the top.
 - The template library is only a reference source. Do not copy it mechanically into the final workspace.
-- Keep the actual rules and expert experience in Markdown documents, not in TypeScript and not in the scripts library.
+- Keep the actual rules and expert experience in Markdown documents, not in TypeScript and not in the shared scripts library.
 - Do not blindly copy the baseline file into the workspace; only keep ideas that survive the labeled evidence.
 - Do not merely memorize raw answers or case IDs unless that information is genuinely reusable.
 - Make the output-discipline guidance explicit enough that a future solve agent understands exact-match tasks fail if it prints explanations or extra characters.
 - Keep the guidance practical enough that a fresh future solve agent can follow it without seeing prior chats.
-- Do not edit dataset files or the scripts library.
+- Do not edit dataset files or the shared scripts library.
 
 Labeled training cases by path:
 {{case_blocks}}
@@ -445,6 +448,7 @@ Rules for this solve round:
 - Use the experience workspace as your only persistent memory.
 - Start from the single entry file shown above.
 - Do not blindly read every workspace file. Follow the entry file and selectively read only the most relevant downstream files.
+- The experience workspace may also contain workspace-local helper assets under \`tools/\` or \`skills/\`; read them only if the entry file or a linked guide indicates they are relevant.
 - You may use the baseline file as optional user-provided context, but do not treat it as guaranteed truth.
 - Do not use \`bash\`, web tools, or subagents for this task.
 - Do not modify any files.
@@ -599,6 +603,8 @@ const DEFAULT_CONFIG_JSON = `{
   "judgeSkillsDir": "judge-skills",
   "systemPromptsDir": "prompts",
   "methodsDir": "methods",
+  "propagationDir": "propagation",
+  "propagationMethodsDir": "propagation-methods",
   "baselineFile": "baseline.md",
   "splitFile": "dataset/SPLIT.md",
   "scriptsDir": "scripts",
@@ -608,11 +614,37 @@ const DEFAULT_CONFIG_JSON = `{
   "permissionConfigFile": "permission-config.json",
   "monitorConfigFile": "monitor-config.json",
   "defaultMethod": "sequential-refine",
+  "defaultPropagationMethod": "single-branch-baseline",
   "maxRetriesPerCase": 3,
   "maxMaintenanceRoundsPerAttempt": 3,
   "roundCaseLimit": 5,
   "regressionSampleSize": 3
 }
+`
+
+const DEFAULT_PROPAGATION_METHOD_SINGLE_BRANCH_BASELINE = `# Propagation Method: Single Branch Baseline
+
+Status: initial third-layer method
+
+## Purpose
+
+- Create one experimental branch from an existing experience commit.
+- Reuse one second-layer maintenance method on that branch.
+- Evaluate the resulting branch without touching the live canonical workspace.
+
+## What It Proves
+
+- Third-layer experiments can contain second-layer methods instead of replacing them.
+- The system can snapshot canonical experience, materialize a branch workspace, run a delegated maintenance route, and store the resulting candidate commit.
+
+## Current Scope
+
+- One source ref
+- One branch
+- One delegated second-layer maintenance method
+- No merge
+- No promotion
+- No multi-branch comparison yet
 `
 
 const DEFAULT_MODEL_CONFIG_JSON = `{
@@ -744,19 +776,23 @@ Your job is to maintain the final expert experience workspace, not to solve the 
 3. Keep the final experience workspace in Chinese by default unless the task itself requires another language.
 4. Preserve still-useful knowledge. Do not rewrite the workspace from scratch unless the current structure is clearly broken.
 5. The final experience workspace must keep exactly one single entry file for a blank future solve agent.
-6. The final workspace should contain only final expert experience. The reference template library is not part of the final workspace.
-7. A future blank solve agent should start from the entry file and then selectively read downstream files. Do not assume the future agent will read every file.
-8. You may reorganize Markdown structure when needed: split files, merge files, add partitions, add task routers, or add tool guides.
-9. Every Markdown file kept in the final workspace should include an \`auto-evolve-role\` marker near the top.
-10. Treat the user baseline as optional user context, not as proof.
+6. The final workspace may contain both final expert experience and workspace-local helper assets that directly support future solve behavior.
+7. Workspace-local helper assets must stay inside controlled subtrees such as \`tools/\` or \`skills/\`. Do not scatter helper scripts across the workspace root.
+8. A future blank solve agent should start from the entry file and then selectively read downstream files. Do not assume the future agent will read every file.
+9. The reference template library is not part of the final workspace.
+10. Only perform maintenance behaviors that are explicitly supported by the current reverse propagation module, workspace loading strategy, maintenance scope level, and available maintenance operations blocks.
+11. If a behavior is not clearly granted by those blocks, do not assume it is allowed.
+12. Every expert-experience Markdown document outside workspace helper-asset directories should include an \`auto-evolve-role\` marker near the top.
+13. Helper-asset Markdown files inside \`tools/\` or \`skills/\` do not need an \`auto-evolve-role\` marker, but they should remain discoverable from the workspace entry or a linked guide.
+14. Treat the user baseline as optional user context, not as proof.
 11. Use the selected session execution reports to understand real prior behavior:
     - which tools were used
     - which tools failed
     - where exploration was empty or repetitive
     - where output discipline broke
-12. Prefer generalizable fixes over memorizing the current answer.
-13. Do not edit dataset files or the scripts library.
-14. Do not use \`bash\`, web tools, or subagents for this task.
+16. Prefer generalizable fixes over memorizing the current answer.
+17. Do not edit dataset files or the shared scripts library.
+18. Do not use \`bash\`, web tools, or subagents for this task.
 
 ## Output Requirement
 
@@ -1012,6 +1048,8 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
     autoEvolvePath(cwd, "judge-skills", "session-behavior"),
     autoEvolvePath(cwd, "judge-skills", "session-behavior", "scripts"),
     methodsRoot,
+    autoEvolvePath(cwd, "propagation"),
+    autoEvolvePath(cwd, "propagation-methods"),
     path.join(methodsRoot, "sequential-refine"),
     path.join(methodsRoot, "sequential-refine", "prompts"),
     path.join(methodsRoot, "add-only"),
@@ -1042,6 +1080,23 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
   await writeIfMissing(
     autoEvolvePath(cwd, "prompts", "soft-judge-core.md"),
     DEFAULT_SOFT_JUDGE_CORE_PROMPT,
+    created,
+  )
+  await writeIfMissing(
+    autoEvolvePath(cwd, "propagation", "README.md"),
+    `# Propagation Workspace
+
+This directory is reserved for third-layer propagation experiments.
+
+- snapshots, refs, branches, and campaign records are stored here
+- the live canonical workspace remains outside this directory
+- experimental branch workspaces may be materialized here without modifying the canonical workspace
+`,
+    created,
+  )
+  await writeIfMissing(
+    autoEvolvePath(cwd, "propagation-methods", "single-branch-baseline.md"),
+    DEFAULT_PROPAGATION_METHOD_SINGLE_BRANCH_BASELINE,
     created,
   )
 
@@ -1163,6 +1218,29 @@ Summary: Add a new Markdown module when the workspace genuinely needs it.
     `# Maintenance Op: Append To Existing Module
 
 Summary: Append a focused additive patch to an existing Markdown module without replacing its main body.
+`,
+    created,
+  )
+  await writeIfMissing(
+    autoEvolvePath(cwd, "maintenance-ops", "create_helper_asset.md"),
+    `# Maintenance Op: Create Helper Asset
+
+Summary: Create a workspace-local helper asset under \`tools/\` or \`skills/\` when a future solve agent would benefit from reusable local tooling.
+
+- Keep helper assets inside \`tools/\` or \`skills/\` only.
+- Prefer text-based assets such as \`SKILL.md\`, Python scripts, and JSON/TOML/YAML manifests.
+- Make sure the workspace entry or a linked guide tells future agents when the asset should be used.
+`,
+    created,
+  )
+  await writeIfMissing(
+    autoEvolvePath(cwd, "maintenance-ops", "update_helper_asset.md"),
+    `# Maintenance Op: Update Helper Asset
+
+Summary: Update an existing workspace-local helper asset under \`tools/\` or \`skills/\` without breaking its discoverability.
+
+- Keep the update narrow and tied to a real solve-time need.
+- If usage changes, update the entry navigation or related tool guide so future agents can still find the asset correctly.
 `,
     created,
   )
@@ -1354,16 +1432,6 @@ Provide an input JSON path and an output JSON path:
     created,
   )
   await writeIfMissing(
-    path.join(methodsRoot, "sequential-refine", "prompts", "refine.md"),
-    DEFAULT_SEQUENTIAL_REFINE_PROMPT,
-    created,
-  )
-  await writeIfMissing(
-    path.join(methodsRoot, "sequential-refine", "prompts", "maintain_experience.md"),
-    DEFAULT_SEQUENTIAL_REFINE_PROMPT,
-    created,
-  )
-  await writeIfMissing(
     path.join(methodsRoot, "sequential-refine", "prompts", "maintain_extension.md"),
     `This maintenance round follows the sequential-refine baseline.
 
@@ -1423,15 +1491,23 @@ Task:
 Requirements for the experience workspace:
 - The file paths listed in this prompt are paths only. File contents are not preloaded for you.
 - You must explicitly use \`read\` and \`list\` to inspect the files and directories you need.
-- Write Markdown only.
+- The main expert experience should live in Markdown.
 - Write the experience workspace in Chinese by default unless a case explicitly requires another language.
 - The workspace must have one single entry file.
+- The final workspace must still be a valid auto-evolve experience workspace after you finish, not just a useful note collection.
 - A future blank solve agent should start from the entry file, then selectively read downstream files.
 - Organize the initial workspace so future additive maintenance can append lessons, local patches, or tool guidance without broad rewrites.
-- Every Markdown file you keep in the final workspace should include an \`auto-evolve-role\` marker near the top.
+- If future solve behavior would benefit from local reusable helper assets, you may create text-based helper assets under \`tools/\` or \`skills/\`.
+- Every expert-experience Markdown file outside \`tools/\` or \`skills/\` should include an \`auto-evolve-role\` marker near the top.
+- The workspace must keep a \`change_log.md\` expert Markdown file with \`auto-evolve-role: change_log\`.
+- Do not create hidden or internal directories such as \`.opencode\`, \`.git\`, \`.tmp\`, \`.cache\`, or scratch/test-record folders inside the experience workspace.
+- Do not create Markdown files outside the expert workspace structure unless they are intentional expert documents with a clear \`auto-evolve-role\` marker.
+- Do not create helper assets anywhere except \`tools/\` or \`skills/\`.
+- If you create helper assets, the entry file or a linked guide must explain when a future solve agent should use them.
 - The template library is only a reference source. Do not copy it mechanically into the final workspace.
-- Keep the actual rules and expert experience in Markdown documents, not in TypeScript and not in the scripts library.
-- Do not edit dataset files or the scripts library.
+- Keep the actual rules and expert experience in Markdown documents, not in TypeScript and not in the shared scripts library.
+- Do not edit dataset files or the shared scripts library.
+- Before finishing, self-check that the final workspace keeps exactly one entry file, keeps the change log, and would pass the workspace layout validation rules above.
 
 Labeled training cases by path:
 {{case_blocks}}
@@ -1507,16 +1583,6 @@ Add-only judge expectations:
   )
   await writeIfMissing(
     path.join(methodsRoot, "adversarial-test", "prompts", "adversarial_probe.md"),
-    DEFAULT_ADVERSARIAL_PROMPT,
-    created,
-  )
-  await writeIfMissing(
-    path.join(methodsRoot, "adversarial-test", "prompts", "refine.md"),
-    DEFAULT_ADVERSARIAL_PROMPT,
-    created,
-  )
-  await writeIfMissing(
-    path.join(methodsRoot, "adversarial-test", "prompts", "maintain_experience.md"),
     DEFAULT_ADVERSARIAL_PROMPT,
     created,
   )

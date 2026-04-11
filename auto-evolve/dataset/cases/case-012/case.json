@@ -1,0 +1,15 @@
+{
+  "id": "case-012",
+  "instruction": "Read the attached material and return only the station code of the earliest train that satisfies the request. No explanation.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "train table and request"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.txt",
+    "mode": "text_exact"
+  },
+  "tags": ["record_selection", "schedule", "text"]
+}

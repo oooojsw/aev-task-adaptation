@@ -57,8 +57,8 @@ export function evaluateResult(input: {
   const actualText = unwrapCodeFence(input.actualText)
   const expectedText = input.expectedText
   const mismatches: string[] = []
-  let passed = false
-  let summary = ""
+  let contentPassed = false
+  let contentSummary = ""
 
   if (!actualText.trim()) {
     mismatches.push("OpenCode returned an empty final answer.")
@@ -66,29 +66,29 @@ export function evaluateResult(input: {
 
   switch (input.mode) {
     case "text_exact": {
-      passed = normalizeText(actualText) === normalizeText(expectedText)
-      if (!passed) mismatches.push("Normalized text does not exactly match the expected text.")
-      summary = passed ? "Exact text matched expected output." : "Exact text comparison failed."
+      contentPassed = normalizeText(actualText) === normalizeText(expectedText)
+      if (!contentPassed) mismatches.push("Normalized text does not exactly match the expected text.")
+      contentSummary = contentPassed ? "Exact text matched expected output." : "Exact text comparison failed."
       break
     }
     case "text_contains": {
-      passed = normalizeText(actualText).includes(normalizeText(expectedText))
-      if (!passed) mismatches.push("Final answer does not contain the expected text block.")
-      summary = passed ? "Final answer contains the expected text block." : "Containment comparison failed."
+      contentPassed = normalizeText(actualText).includes(normalizeText(expectedText))
+      if (!contentPassed) mismatches.push("Final answer does not contain the expected text block.")
+      contentSummary = contentPassed ? "Final answer contains the expected text block." : "Containment comparison failed."
       break
     }
     case "json_exact": {
       try {
         const actualJson = JSON.parse(actualText)
         const expectedJson = JSON.parse(expectedText)
-        passed = stableStringify(actualJson) === stableStringify(expectedJson)
-        if (!passed) mismatches.push("Normalized JSON structure does not match expected JSON.")
-        summary = passed ? "Exact JSON matched expected output." : "Exact JSON comparison failed."
+        contentPassed = stableStringify(actualJson) === stableStringify(expectedJson)
+        if (!contentPassed) mismatches.push("Normalized JSON structure does not match expected JSON.")
+        contentSummary = contentPassed ? "Exact JSON matched expected output." : "Exact JSON comparison failed."
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        passed = false
+        contentPassed = false
         mismatches.push(`JSON parsing failed: ${message}`)
-        summary = "JSON comparison failed because the final answer is not valid JSON."
+        contentSummary = "JSON comparison failed because the final answer is not valid JSON."
       }
       break
     }
@@ -96,9 +96,19 @@ export function evaluateResult(input: {
 
   if (input.exitCode !== 0) mismatches.push(`OpenCode exited with code ${input.exitCode}.`)
   if (input.toolFailures.length) mismatches.push(`${input.toolFailures.length} tool failure(s) were observed during the run.`)
+  const passed = contentPassed && input.exitCode === 0 && input.toolFailures.length === 0
+
+  let summary = contentSummary
+  if (contentPassed && input.exitCode !== 0 && input.toolFailures.length === 0) {
+    summary = `${contentSummary} However, the run failed because OpenCode exited with code ${input.exitCode}.`
+  } else if (contentPassed && input.exitCode === 0 && input.toolFailures.length > 0) {
+    summary = `${contentSummary} However, the run failed because ${input.toolFailures.length} tool failure(s) were observed.`
+  } else if (contentPassed && input.exitCode !== 0 && input.toolFailures.length > 0) {
+    summary = `${contentSummary} However, the run failed because OpenCode exited with code ${input.exitCode} and ${input.toolFailures.length} tool failure(s) were observed.`
+  }
 
   return {
-    passed: passed && input.exitCode === 0 && input.toolFailures.length === 0,
+    passed,
     mode: input.mode,
     summary,
     mismatches,

@@ -1,0 +1,24 @@
+{
+  "campaignID": "20260411-162723603-propagation",
+  "propagationMethodID": "add-only",
+  "maintenanceMethodID": "add-only",
+  "sourceRef": "canonical",
+  "sourceCommitID": "20260411-155514814-268c264b90bf",
+  "canonicalHeadAtStart": "20260411-155514814-268c264b90bf",
+  "branchName": "add-only-add-only-20260411-162723603-propagation",
+  "runtimePaths": {
+    "knowledgeDir": "propagation/workspaces/add-only-add-only-20260411-162723603-propagation/workspace",
+    "runsDir": "propagation/workspaces/add-only-add-only-20260411-162723603-propagation/runs"
+  },
+  "initialWorkspaceDocuments": [
+    "propagation/workspaces/add-only-add-only-20260411-162723603-propagation/workspace/change_log.md",
+    "propagation/workspaces/add-only-add-only-20260411-162723603-propagation/workspace/execution_checklist.md",
+    "propagation/workspaces/add-only-add-only-20260411-162723603-propagation/workspace/manifest.md",
+    "propagation/workspaces/add-only-add-only-20260411-162723603-propagation/workspace/output_contract.md",
+    "propagation/workspaces/add-only-add-only-20260411-162723603-propagation/workspace/rules.md"
+  ],
+  "initialWorkspaceAssets": [],
+  "initialRuntimeSidecarFiles": [],
+  "trainLimit": 1,
+  "testLimit": 1
+}

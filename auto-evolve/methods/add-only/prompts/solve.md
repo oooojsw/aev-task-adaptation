@@ -22,6 +22,7 @@ Rules for this solve round:
 - Use the experience workspace as your only persistent memory.
 - Start from the single entry file shown above.
 - Do not blindly read every workspace file. Follow the entry file and selectively read only the most relevant downstream files.
+- The experience workspace may also contain workspace-local helper assets under `tools/` or `skills/`; read them only if the entry file or a linked guide indicates they are relevant.
 - You may use the baseline file as optional user-provided context, but do not treat it as guaranteed truth.
 - Do not use `bash`, web tools, or subagents for this task.
 - Do not modify any files.

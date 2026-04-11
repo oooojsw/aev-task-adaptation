@@ -17,6 +17,7 @@ Status: active secondary module
 
 - You may append to existing Markdown modules.
 - You may create a new small Markdown module when append-only changes would become messy.
+- You may add or update narrow helper assets under `tools/` or `skills/` if a future solve agent needs reusable local tooling without broad workspace rewrites.
 - You may lightly update the entry navigation so future agents can discover the new additive memory.
 - You should avoid deleting, replacing, or broadly rewriting the existing canonical rule chain unless another method explicitly permits it.
 

@@ -1,0 +1,15 @@
+{
+  "id": "case-015",
+  "instruction": "Read the attached material and return only the shipment ID that matches the request. No explanation.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "shipment table and request"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.txt",
+    "mode": "text_exact"
+  },
+  "tags": ["record_selection", "shipping", "text"]
+}

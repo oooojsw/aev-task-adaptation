@@ -5,11 +5,13 @@ import type { JudgePlan } from "./judge/contract"
 import { methodPaths, readMethodPrompt } from "./methods"
 import {
   buildMaintenanceRetryFeedback,
+  buildSessionRecordRef,
   pushSessionReportRef,
   relativeToRunDir,
   runMaintenanceRounds,
   runTracedStep,
 } from "./method-strategy-helpers"
+import type { PostJudgePlan } from "./post-judge/contract"
 import type { AutoEvolveConfig } from "./schema"
 
 export type MethodStrategyDecision = "continue" | "next_attempt" | "finish_run"
@@ -38,9 +40,9 @@ export interface CaseMethodOps {
   rejectIfNoExperienceChange(): Promise<Exclude<MethodStrategyDecision, "continue"> | null>
   rejectIfOutOfPolicyFiles(): Promise<Exclude<MethodStrategyDecision, "continue"> | null>
   verifyCurrentCase(): Promise<void>
-  rejectIfCurrentCaseNotFixed(): Promise<Exclude<MethodStrategyDecision, "continue"> | null>
   runRegressionAfterMaintenance(): Promise<void>
-  acceptOrRejectChange(): Promise<Exclude<MethodStrategyDecision, "continue"> | null>
+  runPostJudge(plan: PostJudgePlan): Promise<void>
+  applyPostJudgeDecision(): Promise<Exclude<MethodStrategyDecision, "continue"> | null>
   finishAfterAccept(): Promise<Exclude<MethodStrategyDecision, "continue"> | null>
 }
 
@@ -89,6 +91,12 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
     return 1
   }
 
+  protected buildPostJudgePlan(_context: CaseRuntimeContext, _round: number): PostJudgePlan {
+    return {
+      strategyID: "strict-regression-guard",
+    }
+  }
+
   protected buildRoutingVariables(context: CaseRuntimeContext, extra: Record<string, string> = {}) {
     const routing = context.feedback.routing
     return {
@@ -111,7 +119,7 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
     pushSessionReportRef(
       refs,
       context.attemptSummary.solveSessionExecutionReportPath
-        ? {
+        ? buildSessionRecordRef({
             label: "current_failed_solve",
             absolutePath: context.attemptSummary.solveSessionExecutionReportPath,
             relativePath: relativeToRunDir(context.runDir, context.attemptSummary.solveSessionExecutionReportPath),
@@ -119,13 +127,13 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
             caseID: context.loaded.spec.id,
             attempt: context.attempt,
             sessionID: context.attemptSummary.solveSessionID,
-          }
+          })
         : undefined,
     )
 
     for (const item of context.acceptance.baselineRegression?.cases ?? []) {
       if (!item.sessionExecutionReportPath) continue
-      pushSessionReportRef(refs, {
+      pushSessionReportRef(refs, buildSessionRecordRef({
         label: `regression_before_${item.caseID}`,
         absolutePath: item.sessionExecutionReportPath,
         relativePath: relativeToRunDir(context.runDir, item.sessionExecutionReportPath),
@@ -133,7 +141,7 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
         caseID: item.caseID,
         attempt: context.attempt,
         sessionID: item.solveSessionID,
-      })
+      }))
     }
 
     if (includePreviousRounds) {
@@ -141,7 +149,7 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
       for (const round of context.attemptSummary.maintenanceRounds ?? []) {
         if (round.round >= currentRound) continue
         if (round.maintainSessionExecutionReportPath) {
-          pushSessionReportRef(refs, {
+          pushSessionReportRef(refs, buildSessionRecordRef({
             label: `previous_maintain_round_${round.round}`,
             absolutePath: round.maintainSessionExecutionReportPath,
             relativePath: relativeToRunDir(context.runDir, round.maintainSessionExecutionReportPath),
@@ -149,27 +157,27 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
             caseID: context.loaded.spec.id,
             attempt: context.attempt,
             sessionID: round.maintainSessionID,
-          })
+          }))
         }
         if (round.currentCaseVerificationReportPath) {
-          pushSessionReportRef(refs, {
+          pushSessionReportRef(refs, buildSessionRecordRef({
             label: `previous_verify_round_${round.round}`,
             absolutePath: round.currentCaseVerificationReportPath,
             relativePath: relativeToRunDir(context.runDir, round.currentCaseVerificationReportPath),
             phase: "verify",
             caseID: context.loaded.spec.id,
             attempt: context.attempt,
-          })
+          }))
         }
         for (const report of round.regressionAfterReports ?? []) {
-          pushSessionReportRef(refs, {
+          pushSessionReportRef(refs, buildSessionRecordRef({
             label: `previous_regression_after_round_${round.round}_${report.caseID}`,
             absolutePath: report.path,
             relativePath: relativeToRunDir(context.runDir, report.path),
             phase: "regression_after_maintain",
             caseID: report.caseID,
             attempt: context.attempt,
-          })
+          }))
         }
       }
     }
@@ -177,7 +185,7 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
     if (includePreviousAttempts) {
       for (const previous of context.attempts.filter((item) => item.attempt < context.attempt).slice(-2)) {
         if (previous.solveSessionExecutionReportPath) {
-          pushSessionReportRef(refs, {
+          pushSessionReportRef(refs, buildSessionRecordRef({
             label: `previous_solve_attempt_${previous.attempt}`,
             absolutePath: previous.solveSessionExecutionReportPath,
             relativePath: relativeToRunDir(context.runDir, previous.solveSessionExecutionReportPath),
@@ -185,10 +193,10 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
             caseID: context.loaded.spec.id,
             attempt: previous.attempt,
             sessionID: previous.solveSessionID,
-          })
+          }))
         }
         if (previous.refineSessionExecutionReportPath) {
-          pushSessionReportRef(refs, {
+          pushSessionReportRef(refs, buildSessionRecordRef({
             label: `previous_maintain_attempt_${previous.attempt}`,
             absolutePath: previous.refineSessionExecutionReportPath,
             relativePath: relativeToRunDir(context.runDir, previous.refineSessionExecutionReportPath),
@@ -196,17 +204,17 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
             caseID: context.loaded.spec.id,
             attempt: previous.attempt,
             sessionID: previous.refineSessionID,
-          })
+          }))
         }
         if (previous.currentCaseVerificationReportPath) {
-          pushSessionReportRef(refs, {
+          pushSessionReportRef(refs, buildSessionRecordRef({
             label: `previous_verify_attempt_${previous.attempt}`,
             absolutePath: previous.currentCaseVerificationReportPath,
             relativePath: relativeToRunDir(context.runDir, previous.currentCaseVerificationReportPath),
             phase: "verify",
             caseID: context.loaded.spec.id,
             attempt: previous.attempt,
-          })
+          }))
         }
       }
     }
@@ -258,6 +266,7 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
       trace,
       rounds: this.maintenanceRounds(context),
       buildPlan: (runtimeContext, round) => this.buildKnowledgeMaintainerPlan(runtimeContext, round),
+      buildPostJudgePlan: async (runtimeContext, round) => this.buildPostJudgePlan(runtimeContext, round),
     })
 
     return { decision: maintenanceDecision, trace }
@@ -302,6 +311,12 @@ class AddOnlyStrategy extends BaseMaintenanceMethodStrategy {
 
   protected maintenanceRounds(context: CaseRuntimeContext) {
     return context.config.maxMaintenanceRoundsPerAttempt
+  }
+
+  protected buildPostJudgePlan(_context: CaseRuntimeContext, _round: number): PostJudgePlan {
+    return {
+      strategyID: "add-only-conservative-guard",
+    }
   }
 
   protected async buildKnowledgeMaintainerPlan(

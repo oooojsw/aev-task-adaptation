@@ -1,0 +1,10 @@
+BASE:
+shipping_window=next-day
+support_channel=email
+
+OVERRIDES:
+region:east -> shipping_window=same-day
+region:north -> support_channel=phone
+
+QUERY:
+Return the effective shipping_window for region=east.

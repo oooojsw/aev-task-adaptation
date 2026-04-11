@@ -1,0 +1,9 @@
+POLICY:
+Return the single SKU with stock below threshold.
+needed = threshold - stock.
+Return JSON with keys: sku, needed, warehouse.
+
+STOCK:
+A-17,warehouse=north,stock=8,threshold=20
+B-20,warehouse=south,stock=25,threshold=20
+C-08,warehouse=east,stock=14,threshold=14

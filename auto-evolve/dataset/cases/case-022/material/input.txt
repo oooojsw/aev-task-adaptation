@@ -1,0 +1,10 @@
+BASE:
+analyst=readonly
+manager=write
+
+OVERRIDES:
+analyst_east=restricted
+manager_temp=readonly
+
+QUERY:
+Return the effective access level for analyst_east.

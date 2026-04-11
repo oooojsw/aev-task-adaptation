@@ -2,7 +2,7 @@ import path from "node:path"
 import { ensureDirectory, runDirectory, writeJsonFile, writeTextFile } from "./fs"
 import { loadDatasetSplit, selectCasesBySplit, type DatasetSplitName } from "./dataset-split"
 import { runCase } from "./case-runner"
-import { loadAllCases, loadConfig } from "./schema"
+import { loadAllCases, loadConfig, type RuntimePathOverrides } from "./schema"
 
 export interface RoundCaseSummary {
   caseID: string
@@ -36,9 +36,15 @@ function makeRoundID() {
 
 export async function runRound(
   cwd: string,
-  options?: { methodID?: string; caseLimit?: number; split?: DatasetSplitName; mode?: "learn" | "eval" },
+  options?: {
+    methodID?: string
+    caseLimit?: number
+    split?: DatasetSplitName
+    mode?: "learn" | "eval"
+    runtimePaths?: RuntimePathOverrides
+  },
 ): Promise<RunRoundResult> {
-  const config = await loadConfig(cwd)
+  const config = await loadConfig(cwd, options?.runtimePaths)
   const methodID = options?.methodID ?? config.defaultMethod
   const splitName = options?.split ?? "train"
   const mode = options?.mode ?? (splitName === "test" ? "eval" : "learn")
@@ -51,7 +57,12 @@ export async function runRound(
   const summaries: RoundCaseSummary[] = []
 
   for (const item of cases) {
-    const result = await runCase(cwd, item.spec.id, { methodID, mode, split: splitName })
+    const result = await runCase(cwd, item.spec.id, {
+      methodID,
+      mode,
+      split: splitName,
+      runtimePaths: options?.runtimePaths,
+    })
     const acceptedRefines = result.attempts.filter((attempt) => attempt.acceptancePassed).length
     const rejectedRefines = result.attempts.filter((attempt) => attempt.acceptanceRejected).length
     summaries.push({

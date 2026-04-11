@@ -38,12 +38,20 @@ function describeWorkspaceDocument(input: ExperienceWorkspaceLayout["documents"]
   return flags.length ? `- ${input.absolutePath} (${flags.join(", ")})` : `- ${input.absolutePath}`
 }
 
+function describeWorkspaceAsset(input: ExperienceWorkspaceLayout["assets"][number]) {
+  return `- ${input.absolutePath} (kind=${input.kind})`
+}
+
 function experienceWorkspaceBlock(workspace: ExperienceWorkspaceLayout) {
   return [
     `Experience workspace root: ${workspace.root}`,
     `Single entry file: ${workspace.entryPath}`,
     `Current Markdown files (${workspace.documents.length}):`,
     ...(workspace.documents.length ? workspace.documents.map(describeWorkspaceDocument) : ["- (empty)"]),
+    `Current helper assets (${workspace.assets.length}):`,
+    ...(workspace.assets.length
+      ? workspace.assets.map(describeWorkspaceAsset)
+      : ["- (no workspace-local helper assets under tools/ or skills/)"]),
   ].join("\n")
 }
 
@@ -127,13 +135,13 @@ function sessionReportsBlock(runDir: string, reports: KnowledgeMaintainerSession
   if (!reports.length) {
     return [
       `Run root: ${normalizedRunDir}`,
-      "No session execution reports were selected for this maintenance round.",
+      "No session record bundles were selected for this maintenance round.",
     ].join("\n")
   }
 
   return [
     `Run root: ${normalizedRunDir}`,
-    "Selected session execution reports (use these relative paths to inspect prior behavior):",
+    "Selected session record bundles (read the task manifest first, then the learning log, then the execution report when needed):",
     ...reports.map((report) => {
       const meta = [
         `phase=${report.phase}`,
@@ -141,7 +149,12 @@ function sessionReportsBlock(runDir: string, reports: KnowledgeMaintainerSession
         report.attempt !== undefined ? `attempt=${report.attempt}` : "",
         report.sessionID ? `session=${report.sessionID}` : "",
       ].filter(Boolean)
-      return `- ${report.label}: ${report.relativePath}${meta.length ? ` (${meta.join(", ")})` : ""}`
+      return [
+        `- ${report.label}${meta.length ? ` (${meta.join(", ")})` : ""}`,
+        `  - task manifest: ${report.taskManifestRelativePath ?? "(missing)"}`,
+        `  - learning log: ${report.learningLogRelativePath ?? "(missing)"}`,
+        `  - execution report: ${report.relativePath}`,
+      ].join("\n")
     }),
   ].join("\n")
 }
@@ -266,8 +279,6 @@ export async function buildKnowledgeMaintainerPrompt(input: {
     method_extension_block: input.methodExtensionBlock,
   })
 }
-
-export const buildRefinePrompt = buildKnowledgeMaintainerPrompt
 
 export async function buildSoftJudgePrompt(input: {
   cwd: string

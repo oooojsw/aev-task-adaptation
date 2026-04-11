@@ -1,0 +1,10 @@
+RULE:
+Count rows where status=completed and distance>10.
+Return only the count.
+
+TRIPS:
+status=completed,distance=12
+status=cancelled,distance=14
+status=completed,distance=9
+status=completed,distance=18
+status=completed,distance=11

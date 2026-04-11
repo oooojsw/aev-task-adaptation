@@ -6,6 +6,7 @@ import { runRound } from "./orchestrator/round-runner"
 import { runBaseline } from "./orchestrator/baseline-runner"
 import { loadConfig, validateAllCases } from "./orchestrator/schema"
 import { ensureExperimentMonitor } from "./orchestrator/monitor"
+import { runPropagation } from "./orchestrator/propagation/run"
 
 function printHelp() {
   console.log(`auto-evolve commands:
@@ -31,6 +32,10 @@ function printHelp() {
   run-baseline
     Produce a unified baseline scorecard for the current system, including train/test rounds and knowledge snapshots.
     Optional: --method <method-id> --train-limit <number> --test-limit <number> --skip-bootstrap --force-bootstrap
+
+  run-propagation
+    Run an initial third-layer propagation campaign on an experimental branch without touching the canonical experience workspace.
+    Optional: --method <propagation-method-id|second-layer-method-id> --maintenance-method <method-id> --source-ref <canonical|branch:name|commit:id> --branch <name> --train-limit <number> --test-limit <number>
 `)
 }
 
@@ -218,6 +223,45 @@ async function commandRunBaseline(args: string[]) {
   )
 }
 
+async function commandRunPropagation(args: string[]) {
+  await ensureLayout(process.cwd())
+  const config = await loadConfig(process.cwd())
+  await ensureExperimentMonitor(process.cwd(), config).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(`Monitor warning: ${message}`)
+  })
+
+  const trainLimitValue = getOption(args, "--train-limit")
+  const testLimitValue = getOption(args, "--test-limit")
+  const parsedTrainLimit = trainLimitValue ? Number.parseInt(trainLimitValue, 10) : undefined
+  const parsedTestLimit = testLimitValue ? Number.parseInt(testLimitValue, 10) : undefined
+  if (trainLimitValue && (!Number.isFinite(parsedTrainLimit) || parsedTrainLimit <= 0)) {
+    console.error("Invalid --train-limit value. Use a positive integer.")
+    process.exit(1)
+  }
+  if (testLimitValue && (!Number.isFinite(parsedTestLimit) || parsedTestLimit <= 0)) {
+    console.error("Invalid --test-limit value. Use a positive integer.")
+    process.exit(1)
+  }
+
+  const result = await runPropagation(process.cwd(), {
+    methodID: getOption(args, "--method"),
+    maintenanceMethodID: getOption(args, "--maintenance-method"),
+    sourceRef: getOption(args, "--source-ref"),
+    branchName: getOption(args, "--branch"),
+    trainLimit: parsedTrainLimit,
+    testLimit: parsedTestLimit,
+  })
+  console.log(`Campaign: ${result.campaignDir}`)
+  console.log(`Propagation method: ${result.propagationMethodID}`)
+  console.log(`Maintenance method: ${result.maintenanceMethodID}`)
+  console.log(`Source commit: ${result.sourceCommitID}`)
+  console.log(`Branch: ${result.branchName}`)
+  console.log(`Candidate commit: ${result.candidateCommitID}`)
+  console.log(`Branch head: ${result.branchHeadCommitID}`)
+  console.log(`Baseline: ${result.baselineDir}`)
+}
+
 async function main() {
   const [, , command, ...args] = Bun.argv
 
@@ -239,6 +283,9 @@ async function main() {
       return
     case "run-baseline":
       await commandRunBaseline(args)
+      return
+    case "run-propagation":
+      await commandRunPropagation(args)
       return
     case undefined:
       printHelp()

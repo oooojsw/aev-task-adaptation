@@ -1,0 +1,8 @@
+FILTER:
+Return the badge ID of the active engineer in team Blue with clearance L3.
+
+EMPLOYEES:
+E-411,team=Blue,role=engineer,active=no,clearance=L3
+E-522,team=Blue,role=designer,active=yes,clearance=L3
+E-778,team=Blue,role=engineer,active=yes,clearance=L3
+E-809,team=Green,role=engineer,active=yes,clearance=L3

@@ -11,7 +11,8 @@ import {
 import { autoEvolvePath, ensureDirectory, readTextFile, runDirectory, writeJsonFile } from "./fs"
 import { resolveMethodStrategy } from "./method-strategies"
 import { buildCaseMethodOps } from "./primitive-ops/build-case-method-ops"
-import { loadAllCases, loadCaseByID, loadConfig } from "./schema"
+import { loadAllCases, loadCaseByID, loadConfig, type RuntimePathOverrides } from "./schema"
+import { buildAttemptTaskIndex } from "./task-index"
 import {
   createAttemptContext,
   makeRunID,
@@ -22,9 +23,9 @@ import {
 export async function runCase(
   cwd: string,
   caseID: string,
-  options?: { methodID?: string; mode?: "learn" | "eval"; split?: DatasetSplitName },
+  options?: { methodID?: string; mode?: "learn" | "eval"; split?: DatasetSplitName; runtimePaths?: RuntimePathOverrides },
 ): Promise<RunCaseResult> {
-  const config = (await loadConfig(cwd)) as LoadedAutoEvolveConfig
+  const config = (await loadConfig(cwd, options?.runtimePaths)) as LoadedAutoEvolveConfig
   const loaded = await loadCaseByID(cwd, config, caseID)
   const expectedPath = path.join(loaded.caseDir, loaded.spec.expected.path)
   const expectedText = await readTextFile(expectedPath)
@@ -84,6 +85,10 @@ export async function runCase(
       trace: strategyResult.trace,
       decision: strategyResult.decision,
     })
+    await writeJsonFile(
+      path.join(context.currentAttemptDir, "task_index.json"),
+      buildAttemptTaskIndex(context.attemptSummary, context.runDir),
+    )
 
     if (strategyResult.decision === "finish_run") {
       break
@@ -117,6 +122,12 @@ export async function runCase(
     experienceWorkspaceEntryPath: finalWorkspace.entryPath,
     experienceWorkspaceEntryRelativePath: finalWorkspace.entryRelativePath,
     experienceWorkspaceFiles: await listExperienceWorkspaceFiles(finalWorkspace),
+    experienceWorkspaceDocumentFiles: finalWorkspace.documents.map((item) => item.relativePath),
+    experienceWorkspaceAssetFiles: finalWorkspace.assets.map((item) => ({
+      relativePath: item.relativePath,
+      kind: item.kind,
+    })),
+    experienceWorkspaceRuntimeSidecarFiles: finalWorkspace.runtimeSidecarFiles,
     templateLibraryRoot: templateLibrary.root,
     templateLibraryFiles: templateLibrary.files,
   })

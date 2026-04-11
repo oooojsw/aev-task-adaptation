@@ -1,0 +1,15 @@
+{
+  "id": "case-023",
+  "instruction": "Read the attached material bundle and return only the effective value requested in the query. No explanation.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "approver policy and override"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.txt",
+    "mode": "text_exact"
+  },
+  "tags": ["override_resolution", "approval", "text"]
+}

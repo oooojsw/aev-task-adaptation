@@ -49,6 +49,25 @@ const BUILTIN_MAINTENANCE_OPS: KnowledgeMaintenanceOpDefinition[] = [
     summary: "Append a focused addendum to an existing Markdown module without rewriting its main body.",
   },
   {
+    id: "create_helper_asset",
+    title: "Create Helper Asset",
+    summary:
+      "Create a workspace-local helper asset under tools/ or skills/ when a future solve agent would benefit from a reusable local script or skill bundle.",
+    notes: [
+      "Keep helper assets inside tools/ or skills/ only.",
+      "Prefer small text-based assets such as SKILL.md, Python scripts, and JSON manifests.",
+    ],
+  },
+  {
+    id: "update_helper_asset",
+    title: "Update Helper Asset",
+    summary:
+      "Revise an existing workspace-local helper asset under tools/ or skills/ without breaking its discoverability from the workspace entry.",
+    notes: [
+      "If a helper asset changes, update the entry navigation or related tool guide when needed.",
+    ],
+  },
+  {
     id: "split_module",
     title: "Split Module",
     summary: "Split an overloaded Markdown module into smaller modules when selective reading would improve.",

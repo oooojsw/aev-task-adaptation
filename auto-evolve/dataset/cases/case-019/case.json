@@ -1,0 +1,15 @@
+{
+  "id": "case-019",
+  "instruction": "Read the attached material and return only the exact JSON object required by the request.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "scores and tier rule"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.json",
+    "mode": "json_exact"
+  },
+  "tags": ["structured_json", "scores", "json"]
+}

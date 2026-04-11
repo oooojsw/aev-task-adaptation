@@ -1,0 +1,15 @@
+{
+  "id": "case-017",
+  "instruction": "Read the attached material and return only the exact JSON object required by the rule.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "shipping quotes"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.json",
+    "mode": "json_exact"
+  },
+  "tags": ["structured_json", "quotes", "json"]
+}

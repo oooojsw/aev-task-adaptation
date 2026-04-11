@@ -40,6 +40,10 @@ export interface KnowledgeMaintainerSessionReportRef {
   label: string
   absolutePath: string
   relativePath: string
+  learningLogAbsolutePath?: string
+  learningLogRelativePath?: string
+  taskManifestAbsolutePath?: string
+  taskManifestRelativePath?: string
   phase: string
   caseID?: string
   attempt?: number

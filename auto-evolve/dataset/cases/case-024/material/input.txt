@@ -1,0 +1,10 @@
+BASE:
+sev1=phone
+sev2=email
+sev3=dashboard
+
+OVERRIDES:
+sev2=sms
+
+QUERY:
+Return the effective notification channel for sev2.

@@ -1,6 +1,6 @@
 You are initializing the persistent expert experience for the auto-evolve system.
 
-Your target is an experience workspace of Markdown documents.
+Your target is a final experience workspace that may contain expert Markdown plus controlled local helper assets.
 
 {{experience_workspace_block}}
 
@@ -21,15 +21,23 @@ Task:
 Requirements for the experience workspace:
 - The file paths listed in this prompt are paths only. File contents are not preloaded for you.
 - You must explicitly use `read` and `list` to inspect the files and directories you need.
-- Write Markdown only.
+- The main expert experience should live in Markdown.
 - Write the experience workspace in Chinese by default unless a case explicitly requires another language.
 - The workspace must have one single entry file.
+- The final workspace must still be a valid auto-evolve experience workspace after you finish, not just a useful note collection.
 - A future blank solve agent should start from the entry file, then selectively read downstream files.
 - Organize the initial workspace so future additive maintenance can append lessons, local patches, or tool guidance without broad rewrites.
-- Every Markdown file you keep in the final workspace should include an `auto-evolve-role` marker near the top.
+- If future solve behavior would benefit from local reusable helper assets, you may create text-based helper assets under `tools/` or `skills/`.
+- Every expert-experience Markdown file outside `tools/` or `skills/` should include an `auto-evolve-role` marker near the top.
+- The workspace must keep a `change_log.md` expert Markdown file with `auto-evolve-role: change_log`.
+- Do not create hidden or internal directories such as `.opencode`, `.git`, `.tmp`, `.cache`, or scratch/test-record folders inside the experience workspace.
+- Do not create Markdown files outside the expert workspace structure unless they are intentional expert documents with a clear `auto-evolve-role` marker.
+- Do not create helper assets anywhere except `tools/` or `skills/`.
+- If you create helper assets, the entry file or a linked guide must explain when a future solve agent should use them.
 - The template library is only a reference source. Do not copy it mechanically into the final workspace.
-- Keep the actual rules and expert experience in Markdown documents, not in TypeScript and not in the scripts library.
-- Do not edit dataset files or the scripts library.
+- Keep the actual rules and expert experience in Markdown documents, not in TypeScript and not in the shared scripts library.
+- Do not edit dataset files or the shared scripts library.
+- Before finishing, self-check that the final workspace keeps exactly one entry file, keeps the change log, and would pass the workspace layout validation rules above.
 
 Labeled training cases by path:
 {{case_blocks}}

@@ -79,8 +79,10 @@ export async function invokeKnowledgeMaintainerPrimitive(
   context.attemptSummary.refineSessionID = result.task.result.sessionID
   const artifactPaths = await writeTaskArtifacts(context.maintainDir, result.task, {
     phase: "maintain",
+    taskKind: "maintain",
     caseID: context.loaded.spec.id,
     attempt: context.attempt,
+    maintenanceRound: context.currentMaintenanceRound,
     methodID: context.methodID,
   })
   context.attemptSummary.refineSessionExecutionReportPath = artifactPaths.sessionExecutionReportPath
@@ -117,6 +119,10 @@ export async function invokeKnowledgeMaintainerPrimitive(
       label: item.label,
       relativePath: item.relativePath,
       absolutePath: item.absolutePath,
+      learningLogRelativePath: item.learningLogRelativePath ?? null,
+      learningLogAbsolutePath: item.learningLogAbsolutePath ?? null,
+      taskManifestRelativePath: item.taskManifestRelativePath ?? null,
+      taskManifestAbsolutePath: item.taskManifestAbsolutePath ?? null,
       phase: item.phase,
       caseID: item.caseID ?? null,
       attempt: item.attempt ?? null,
@@ -224,7 +230,12 @@ export async function rejectIfOutOfPolicyFilesPrimitive(
     routing: context.feedback.routing,
     changedFiles: context.maintenance.workspaceChangedFiles,
     workspaceValidationErrors: layoutValidation.errors,
-    nonMarkdownFiles: context.workspace.nonMarkdownFiles,
+    workspaceAssets: context.workspace.assets.map((item) => ({
+      relativePath: item.relativePath,
+      kind: item.kind,
+    })),
+    runtimeSidecarFiles: context.workspace.runtimeSidecarFiles,
+    unsupportedFiles: context.workspace.unsupportedFiles,
   })
   return "next_attempt"
 }

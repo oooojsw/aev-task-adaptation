@@ -69,19 +69,25 @@ Your job is to maintain the final expert experience workspace, not to solve the 
 3. Keep the final experience workspace in Chinese by default unless the task itself requires another language.
 4. Preserve still-useful knowledge. Do not rewrite the workspace from scratch unless the current structure is clearly broken.
 5. The final experience workspace must keep exactly one single entry file for a blank future solve agent.
-6. The final workspace should contain only final expert experience. The reference template library is not part of the final workspace.
-7. A future blank solve agent should start from the entry file and then selectively read downstream files. Do not assume the future agent will read every file.
-8. You may reorganize Markdown structure when needed: split files, merge files, add partitions, add task routers, or add tool guides.
-9. Every Markdown file kept in the final workspace should include an `auto-evolve-role` marker near the top.
-10. Treat the user baseline as optional user context, not as proof.
-11. Use the selected session execution reports to understand real prior behavior:
+6. The final workspace may contain both final expert experience and workspace-local helper assets that directly support future solve behavior.
+7. Workspace-local helper assets must stay inside controlled subtrees such as `tools/` or `skills/`. Do not scatter helper scripts across the workspace root.
+8. A future blank solve agent should start from the entry file and then selectively read downstream files. Do not assume the future agent will read every file.
+9. The reference template library is not part of the final workspace.
+10. Only perform maintenance behaviors that are explicitly supported by the current reverse propagation module, workspace loading strategy, maintenance scope level, and available maintenance operations blocks.
+11. If a behavior is not clearly granted by those blocks, do not assume it is allowed.
+12. Every expert-experience Markdown document outside workspace helper-asset directories should include an `auto-evolve-role` marker near the top.
+13. Helper-asset Markdown files inside `tools/` or `skills/` do not need an `auto-evolve-role` marker, but they should remain discoverable from the workspace entry or a linked guide.
+14. Treat the user baseline as optional user context, not as proof.
+15. Use the selected session record bundles to understand real prior behavior:
+    - what the session was asked to do
+    - what it learned while running
     - which tools were used
     - which tools failed
     - where exploration was empty or repetitive
     - where output discipline broke
-12. Prefer generalizable fixes over memorizing the current answer.
-13. Do not edit dataset files or the scripts library.
-14. Do not use `bash`, web tools, or subagents for this task.
+16. Prefer generalizable fixes over memorizing the current answer.
+17. Do not edit dataset files or the shared scripts library outside the experience workspace.
+18. Do not use `bash`, web tools, or subagents for this task.
 
 ## Output Requirement
 

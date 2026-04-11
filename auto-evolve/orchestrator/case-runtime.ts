@@ -32,6 +32,11 @@ export interface MaintenanceRoundSummary {
   currentCaseVerificationReportPath?: string
   regressionAfterReports?: { caseID: string; path: string }[]
   regressionPassedAfterRefine?: number
+  postJudgeStrategyID?: string
+  postJudgeDecision?: "accept" | "retry"
+  postJudgeSummaryPath?: string
+  postJudgeReportPath?: string
+  postJudgeRiskLevel?: string
 }
 
 export interface AttemptSummary {
@@ -55,6 +60,11 @@ export interface AttemptSummary {
   judgeReportPath?: string
   judgeMode?: string
   judgeShouldStartMaintainer?: boolean
+  postJudgeStrategyID?: string
+  postJudgeDecision?: "accept" | "retry"
+  postJudgeSummaryPath?: string
+  postJudgeReportPath?: string
+  postJudgeRiskLevel?: string
   knowledgePackChangedByRefine?: boolean
   knowledgePackChangedFilesByRefine?: string[]
   acceptancePassed?: boolean
@@ -137,6 +147,15 @@ export interface JudgeState {
   summary?: Record<string, unknown>
 }
 
+export interface PostJudgeState {
+  strategyID?: string
+  decision?: "accept" | "retry"
+  summaryPath?: string
+  reportPath?: string
+  riskLevel?: string
+  summary?: Record<string, unknown>
+}
+
 export interface CaseRuntimeContext {
   cwd: string
   config: LoadedAutoEvolveConfig
@@ -174,6 +193,7 @@ export interface CaseRuntimeContext {
   evaluation?: EvaluationResult
   feedback: FeedbackPacketState
   judge: JudgeState
+  postJudge: PostJudgeState
   maintenance: MaintenanceState
   acceptance: AcceptanceState
 }
@@ -253,6 +273,7 @@ export function createAttemptContext(input: {
     attemptSummary,
     feedback: {},
     judge: {},
+    postJudge: {},
     maintenance: {},
     acceptance: {},
   } satisfies CaseRuntimeContext

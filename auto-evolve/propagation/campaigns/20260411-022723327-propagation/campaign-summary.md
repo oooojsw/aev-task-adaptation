@@ -1,0 +1,29 @@
+# Propagation Campaign Summary
+
+- campaign: 20260411-022723327-propagation
+- propagation method: add-only
+- propagation method doc: C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\methods\add-only\METHOD.md
+- maintenance method: add-only
+- source ref: canonical
+- source commit: 20260411-022723318-a6663a32d66c
+- candidate commit: 20260411-023008520-a6663a32d66c
+- branch: add-only-add-only-20260411-022723327-propagation
+- branch head: 20260411-023008520-a6663a32d66c
+- baseline dir: C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\propagation\workspaces\add-only-add-only-20260411-022723327-propagation\runs\20260411-022723341-baseline
+
+## Train
+
+- passed: 1/1
+- accepted refines: 0
+- rejected refines: 0
+
+## Test
+
+- passed: 1/1
+- accepted refines: 0
+- rejected refines: 0
+
+## Current Scope
+
+- This initial third-layer implementation creates one experimental branch, runs one delegated second-layer method on that branch, and records the resulting candidate commit.
+- It does not yet perform merge, promotion, or multi-branch comparison.

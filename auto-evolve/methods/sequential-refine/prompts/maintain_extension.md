@@ -18,5 +18,6 @@ Specific behavioral guidance:
 - Prefer the smallest durable correction that fixes the current failure pattern.
 - Avoid converting one local mistake into a global rule rewrite unless the evidence clearly supports it.
 - If previous reports show repeated useless exploration or repeated wrong tool habits, encode an explicit warning or execution rule so future solve agents avoid that path.
+- If repeated solve failures point to missing reusable local tooling, you may introduce a narrow helper asset under `tools/` or `skills/` instead of overloading Markdown rules.
 - If regression-before-maintain reports show existing successful behavior, preserve the structure that supports those successes.
 - Do not create multiple competing versions of the same expert knowledge inside the workspace for this baseline method.

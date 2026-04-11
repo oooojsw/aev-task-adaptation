@@ -3,6 +3,9 @@ import { buildActionTrace } from "./action-trace"
 import { ensureDirectory, writeJsonFile, writeTextFile } from "./fs"
 import type { OpencodeTaskRun } from "./opencode"
 import { buildSessionExecutionReport } from "./session-execution-report"
+import { buildSessionLearningLog } from "./session-learning-log"
+import { buildSessionTaskManifest } from "./session-task-manifest"
+import { createTaskDescriptor, type AutoEvolveTaskKind } from "./task-model"
 
 export interface TaskArtifactPaths {
   promptPath: string
@@ -11,6 +14,8 @@ export interface TaskArtifactPaths {
   responsePath: string
   actionTracePath: string
   sessionExecutionReportPath: string
+  sessionLearningLogPath: string
+  sessionTaskManifestPath: string
   eventsPath: string
   toolFailuresPath: string
   runJsonPath: string
@@ -21,8 +26,10 @@ export async function writeTaskArtifacts(
   task: OpencodeTaskRun,
   input?: {
     phase?: string
+    taskKind?: AutoEvolveTaskKind
     caseID?: string
     attempt?: number
+    maintenanceRound?: number
     methodID?: string
     evaluation?: import("./evaluator").EvaluationResult
   },
@@ -34,9 +41,20 @@ export async function writeTaskArtifacts(
   const responsePath = path.join(stageDir, "response.txt")
   const actionTracePath = path.join(stageDir, "action_trace.md")
   const sessionExecutionReportPath = path.join(stageDir, "session_execution_report.md")
+  const sessionLearningLogPath = path.join(stageDir, "session_learning_log.md")
+  const sessionTaskManifestPath = path.join(stageDir, "session_task_manifest.md")
   const eventsPath = path.join(stageDir, "events.json")
   const toolFailuresPath = path.join(stageDir, "tool_failures.json")
   const runJsonPath = path.join(stageDir, "run.json")
+  const descriptor = createTaskDescriptor({
+    kind: input?.taskKind ?? ((input?.phase ?? "solve") as AutoEvolveTaskKind),
+    title: task.title,
+    phase: input?.phase,
+    caseID: input?.caseID,
+    attempt: input?.attempt,
+    maintenanceRound: input?.maintenanceRound,
+    methodID: input?.methodID,
+  })
 
   await writeTextFile(promptPath, task.prompt + "\n")
   await writeTextFile(stdoutPath, task.result.stdout)
@@ -54,10 +72,26 @@ export async function writeTaskArtifacts(
       evaluation: input?.evaluation,
     }),
   )
+  await writeTextFile(
+    sessionLearningLogPath,
+    buildSessionLearningLog({
+      task,
+      descriptor,
+      evaluation: input?.evaluation,
+    }),
+  )
+  await writeTextFile(
+    sessionTaskManifestPath,
+    buildSessionTaskManifest({
+      task,
+      descriptor,
+    }),
+  )
   await writeJsonFile(eventsPath, task.result.events)
   await writeJsonFile(toolFailuresPath, task.result.toolFailures)
   await writeJsonFile(runJsonPath, {
     title: task.title,
+    task: descriptor,
     sessionID: task.result.sessionID,
     exitCode: task.result.exitCode,
     model: task.selectedModel ?? null,
@@ -76,6 +110,8 @@ export async function writeTaskArtifacts(
     responsePath,
     actionTracePath,
     sessionExecutionReportPath,
+    sessionLearningLogPath,
+    sessionTaskManifestPath,
     eventsPath,
     toolFailuresPath,
     runJsonPath,

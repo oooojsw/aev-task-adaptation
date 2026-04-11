@@ -1,0 +1,15 @@
+{
+  "id": "case-027",
+  "instruction": "Read the attached material and return only the requested aggregate result. No explanation.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "sensor readings"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.txt",
+    "mode": "text_exact"
+  },
+  "tags": ["ledger_aggregation", "readings", "text"]
+}

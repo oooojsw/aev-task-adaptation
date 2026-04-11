@@ -8,6 +8,7 @@ import {
 import { loadConfig } from "./schema"
 import { runBootstrap } from "./bootstrap"
 import { runRound, type RunRoundResult } from "./round-runner"
+import type { RuntimePathOverrides } from "./schema"
 
 export interface RunBaselineOptions {
   methodID?: string
@@ -15,6 +16,7 @@ export interface RunBaselineOptions {
   testLimit?: number
   skipBootstrap?: boolean
   forceBootstrap?: boolean
+  runtimePaths?: RuntimePathOverrides
 }
 
 export interface RunBaselineResult {
@@ -45,7 +47,7 @@ function changedFilesSummary(round: RunRoundResult) {
 }
 
 export async function runBaseline(cwd: string, options?: RunBaselineOptions): Promise<RunBaselineResult> {
-  const config = await loadConfig(cwd)
+  const config = await loadConfig(cwd, options?.runtimePaths)
   const methodID = options?.methodID ?? config.defaultMethod
   const trainLimit = Math.max(1, options?.trainLimit ?? config.roundCaseLimit)
   const testLimit = Math.max(1, options?.testLimit ?? config.roundCaseLimit)
@@ -68,6 +70,7 @@ export async function runBaseline(cwd: string, options?: RunBaselineOptions): Pr
     const bootstrapResult = await runBootstrap(cwd, {
       force: bootstrapForced,
       methodID,
+      runtimePaths: options?.runtimePaths,
     })
     bootstrapRunDir = bootstrapResult.runDir
     await writeExperienceWorkspaceSnapshot(
@@ -81,6 +84,7 @@ export async function runBaseline(cwd: string, options?: RunBaselineOptions): Pr
     caseLimit: trainLimit,
     split: "train",
     mode: "learn",
+    runtimePaths: options?.runtimePaths,
   })
   await writeExperienceWorkspaceSnapshot(
     path.join(baselineDir, "experience_workspace.after_train"),
@@ -92,6 +96,7 @@ export async function runBaseline(cwd: string, options?: RunBaselineOptions): Pr
     caseLimit: testLimit,
     split: "test",
     mode: "eval",
+    runtimePaths: options?.runtimePaths,
   })
   await writeExperienceWorkspaceSnapshot(
     path.join(baselineDir, "experience_workspace.final"),

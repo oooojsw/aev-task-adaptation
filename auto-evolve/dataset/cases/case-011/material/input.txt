@@ -1,0 +1,8 @@
+RULE:
+Return the ID of the only order that is both status=pending and urgent=yes.
+
+ORDERS:
+ORD-101,status=done,urgent=yes
+ORD-102,status=pending,urgent=no
+ORD-103,status=done,urgent=no
+ORD-104,status=pending,urgent=yes

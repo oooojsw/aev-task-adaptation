@@ -1,0 +1,8 @@
+QUERY:
+Return the maximum temperature for zone=Zone-B on day=Mon.
+
+READINGS:
+zone=Zone-A,day=Mon,temp=28.4
+zone=Zone-B,day=Mon,temp=31.2
+zone=Zone-B,day=Mon,temp=29.8
+zone=Zone-B,day=Tue,temp=30.5

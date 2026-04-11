@@ -1,0 +1,8 @@
+REQUEST:
+Find the device that should be dispatched. Dispatch the first device with status=offline.
+Return JSON with keys: device, action, reason.
+
+DEVICES:
+cam-01,status=ok
+cam-02,status=offline
+cam-03,status=offline

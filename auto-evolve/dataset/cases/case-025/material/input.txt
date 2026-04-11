@@ -1,0 +1,9 @@
+BASE:
+audit_log=180
+chat_log=30
+
+OVERRIDES:
+audit_log=365
+
+QUERY:
+Return the effective retention days for audit_log.

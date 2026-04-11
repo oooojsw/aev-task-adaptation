@@ -1,0 +1,12 @@
+{
+  "id": "20260411-155514814-268c264b90bf",
+  "treeHash": "268c264b90bf812bb97ecd351e44de78d012f0bf4e503e50515aede40cab897e",
+  "parentCommitID": "20260411-151338377-23735dc3ac9b",
+  "createdAt": "2026-04-11T07:55:14.815Z",
+  "fileCount": 5,
+  "summary": "Snapshot current canonical experience workspace",
+  "source": {
+    "kind": "live_workspace",
+    "description": "Snapshot current canonical experience workspace"
+  }
+}

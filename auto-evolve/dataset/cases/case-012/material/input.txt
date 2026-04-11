@@ -1,0 +1,8 @@
+REQUEST:
+Return the station code of the earliest train to Hangzhou with seats > 0.
+
+TRAINS:
+SH-A1,destination=Hangzhou,depart=09:20,seats=0
+HZ-N2,destination=Hangzhou,depart=08:35,seats=4
+HZ-Q5,destination=Hangzhou,depart=10:10,seats=9
+NJ-K9,destination=Nanjing,depart=07:55,seats=8

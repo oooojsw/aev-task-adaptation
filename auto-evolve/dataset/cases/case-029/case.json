@@ -1,0 +1,15 @@
+{
+  "id": "case-029",
+  "instruction": "Read the attached material and return only the requested count. No explanation.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "trip records"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.txt",
+    "mode": "text_exact"
+  },
+  "tags": ["ledger_aggregation", "trips", "text"]
+}

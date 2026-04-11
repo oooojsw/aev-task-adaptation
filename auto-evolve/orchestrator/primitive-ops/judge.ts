@@ -49,6 +49,7 @@ export async function runPreJudgePrimitive(context: CaseRuntimeContext, judgePla
   context.attemptSummary.judgeSessionExecutionReportPath = (
     await writeTaskArtifacts(context.judgeDir, result.task, {
       phase: "judge",
+      taskKind: "judge",
       caseID: context.loaded.spec.id,
       attempt: context.attempt,
       methodID: context.methodID,

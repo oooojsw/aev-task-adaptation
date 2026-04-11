@@ -16,6 +16,14 @@ export type ExperienceWorkspaceRole =
   | "task_router"
   | string
 
+export type ExperienceWorkspaceAssetKind =
+  | "script"
+  | "skill_definition"
+  | "helper_document"
+  | "tool_manifest"
+  | "data"
+  | string
+
 export interface ExperienceWorkspacePaths {
   root: string
   defaultEntryRelativePath: string
@@ -30,11 +38,19 @@ export interface ExperienceWorkspaceDocument {
   isEntry: boolean
 }
 
+export interface ExperienceWorkspaceAsset {
+  relativePath: string
+  absolutePath: string
+  kind: ExperienceWorkspaceAssetKind
+}
+
 export interface ExperienceWorkspaceLayout extends ExperienceWorkspacePaths {
   entryRelativePath: string
   entryPath: string
   documents: ExperienceWorkspaceDocument[]
-  nonMarkdownFiles: string[]
+  assets: ExperienceWorkspaceAsset[]
+  runtimeSidecarFiles: string[]
+  unsupportedFiles: string[]
 }
 
 export interface ExperienceWorkspaceValidation {
@@ -44,9 +60,17 @@ export interface ExperienceWorkspaceValidation {
 
 export type ExperienceWorkspaceSnapshot = Record<string, string>
 
+export interface TemplateLibraryPaths {
+  root: string
+  files: string[]
+}
+
 const ENTRY_MARKER = /<!--\s*auto-evolve-entry:\s*(true|yes|1)\s*-->/i
 const ROLE_MARKER = /<!--\s*auto-evolve-role:\s*([a-z0-9_\-/]+)\s*-->/i
 const ENTRY_FILE_CANDIDATES = ["manifest.md", "README.md", "index.md", "ENTRY.md"]
+const WORKSPACE_ASSET_ROOTS = ["tools", "skills"] as const
+const WORKSPACE_ASSET_EXTENSIONS = new Set([".md", ".py", ".ps1", ".json", ".txt", ".toml", ".yaml", ".yml", ".csv"])
+const RUNTIME_SIDECAR_ROOTS = [".opencode"] as const
 
 function normalizeSlash(input: string) {
   return input.replace(/\\/g, "/")
@@ -82,6 +106,38 @@ function normalizeRole(rawRole: string | undefined, relativePath: string): Exper
   }
 }
 
+function isWorkspaceAssetPath(relativePath: string) {
+  const normalized = normalizeSlash(relativePath)
+  const firstSegment = normalized.split("/")[0]?.toLowerCase()
+  return WORKSPACE_ASSET_ROOTS.includes(firstSegment as (typeof WORKSPACE_ASSET_ROOTS)[number])
+}
+
+function isRuntimeSidecarPath(relativePath: string) {
+  const normalized = normalizeSlash(relativePath)
+  const firstSegment = normalized.split("/")[0]?.toLowerCase()
+  return RUNTIME_SIDECAR_ROOTS.includes(firstSegment as (typeof RUNTIME_SIDECAR_ROOTS)[number])
+}
+
+function isSupportedWorkspaceAssetPath(relativePath: string) {
+  if (!isWorkspaceAssetPath(relativePath)) return false
+  const extension = path.posix.extname(normalizeSlash(relativePath)).toLowerCase()
+  return WORKSPACE_ASSET_EXTENSIONS.has(extension)
+}
+
+function classifyWorkspaceAsset(relativePath: string): ExperienceWorkspaceAssetKind {
+  const normalized = normalizeSlash(relativePath)
+  const basename = path.posix.basename(normalized)
+  const extension = path.posix.extname(normalized).toLowerCase()
+
+  if (basename === "SKILL.md") return "skill_definition"
+  if (extension === ".py" || extension === ".ps1") return "script"
+  if (extension === ".json" || extension === ".toml" || extension === ".yaml" || extension === ".yml") {
+    return "tool_manifest"
+  }
+  if (extension === ".md") return "helper_document"
+  return "data"
+}
+
 async function collectWorkspaceFiles(root: string, current = root): Promise<string[]> {
   if (!(await pathExists(current))) return []
   const entries = await readdir(current, { withFileTypes: true })
@@ -102,7 +158,25 @@ async function collectWorkspaceFiles(root: string, current = root): Promise<stri
 
 async function collectMarkdownFiles(root: string) {
   const files = await collectWorkspaceFiles(root)
-  return files.filter((relative) => relative.toLowerCase().endsWith(".md"))
+  return files.filter((relative) => relative.toLowerCase().endsWith(".md") && !isRuntimeSidecarPath(relative))
+}
+
+async function collectWorkspaceDocumentFiles(root: string) {
+  const files = await collectWorkspaceFiles(root)
+  return files.filter(
+    (relative) =>
+      relative.toLowerCase().endsWith(".md") && !isWorkspaceAssetPath(relative) && !isRuntimeSidecarPath(relative),
+  )
+}
+
+async function collectWorkspaceAssetFiles(root: string) {
+  const files = await collectWorkspaceFiles(root)
+  return files.filter((relative) => !isRuntimeSidecarPath(relative) && isSupportedWorkspaceAssetPath(relative))
+}
+
+async function collectRuntimeSidecarFiles(root: string) {
+  const files = await collectWorkspaceFiles(root)
+  return files.filter((relative) => isRuntimeSidecarPath(relative))
 }
 
 function inferRoleFromPath(relativePath: string): ExperienceWorkspaceRole | undefined {
@@ -207,13 +281,8 @@ function minimalSeedEntry(relativePath: string) {
 
 - 这是经验工作区的唯一入口文件。
 - 当前工作区还没有形成最终专家经验结构。
-- 第一次 bootstrap 应该先阅读训练案例和模板库，然后自行决定最终结构。
-
-## 当前约束
-
-- 最终工作区必须保留一个且仅一个入口文件。
-- 最终工作区只保存最终专家经验，不直接包含模板库内容。
-- 未来空白 solve agent 应从本文件开始，再按需选择性读取下游文件。
+- 第一次 bootstrap 应先阅读训练案例和模板库，再自行决定最终结构。
+- 后续如果需要给 solve agent 提供本地辅助脚本或技能，可放在 \`tools/\` 或 \`skills/\` 下，并在本入口文件中导航。
 
 ## 当前入口路径
 
@@ -223,7 +292,7 @@ function minimalSeedEntry(relativePath: string) {
 
 - 结构尚未展开
 - 规则尚未提炼
-- 后续 bootstrap 或经修 agent 需要按案例和方法要求生成正式结构
+- 后续 bootstrap 或经修 agent 需要生成正式结构
 `
 }
 
@@ -237,13 +306,7 @@ function minimalSeedChangeLog() {
 
 export function experienceWorkspacePaths(cwd: string, config: AutoEvolveConfig): ExperienceWorkspacePaths {
   const root = autoEvolvePath(cwd, config.knowledgeDir)
-  const defaultEntryRelativePath = normalizeSlash(config.experienceEntryFile)
-
-  return {
-    root,
-    defaultEntryRelativePath,
-    defaultEntryPath: path.join(root, ...defaultEntryRelativePath.split("/")),
-  }
+  return experienceWorkspacePathsFromRoot(root, config.experienceEntryFile)
 }
 
 export function buildMinimalExperienceWorkspaceSeed(paths: ExperienceWorkspacePaths): ExperienceWorkspaceSnapshot {
@@ -253,7 +316,7 @@ export function buildMinimalExperienceWorkspaceSeed(paths: ExperienceWorkspacePa
   }
 }
 
-export async function templateLibraryPaths(cwd: string, config: AutoEvolveConfig) {
+export async function templateLibraryPaths(cwd: string, config: AutoEvolveConfig): Promise<TemplateLibraryPaths> {
   const root = autoEvolvePath(cwd, config.templateLibraryDir)
   return {
     root,
@@ -261,12 +324,26 @@ export async function templateLibraryPaths(cwd: string, config: AutoEvolveConfig
   }
 }
 
-export async function listExperienceWorkspaceFiles(paths: ExperienceWorkspacePaths) {
-  return collectMarkdownFiles(paths.root)
+export async function listExperienceWorkspaceFiles(
+  pathsOrLayout: ExperienceWorkspacePaths | ExperienceWorkspaceLayout,
+) {
+  if ("documents" in pathsOrLayout && "assets" in pathsOrLayout) {
+    return [
+      ...pathsOrLayout.documents.map((item) => item.relativePath),
+      ...pathsOrLayout.assets.map((item) => item.relativePath),
+    ].sort((left, right) => left.localeCompare(right))
+  }
+
+  const [documents, assets] = await Promise.all([
+    collectWorkspaceDocumentFiles(pathsOrLayout.root),
+    collectWorkspaceAssetFiles(pathsOrLayout.root),
+  ])
+
+  return [...documents, ...assets].sort((left, right) => left.localeCompare(right))
 }
 
 export async function listExperienceWorkspaceDocuments(paths: ExperienceWorkspacePaths): Promise<ExperienceWorkspaceDocument[]> {
-  const files = await collectMarkdownFiles(paths.root)
+  const files = await collectWorkspaceDocumentFiles(paths.root)
   const documents: ExperienceWorkspaceDocument[] = []
 
   for (const relative of files) {
@@ -278,10 +355,26 @@ export async function listExperienceWorkspaceDocuments(paths: ExperienceWorkspac
   return documents.sort((left, right) => left.relativePath.localeCompare(right.relativePath))
 }
 
+export async function listExperienceWorkspaceAssets(paths: ExperienceWorkspacePaths): Promise<ExperienceWorkspaceAsset[]> {
+  const files = await collectWorkspaceAssetFiles(paths.root)
+  return files.map((relativePath) => ({
+    relativePath,
+    absolutePath: path.join(paths.root, ...relativePath.split("/")),
+    kind: classifyWorkspaceAsset(relativePath),
+  }))
+}
+
 export async function resolveExperienceWorkspaceLayout(paths: ExperienceWorkspacePaths): Promise<ExperienceWorkspaceLayout> {
   const allFiles = await collectWorkspaceFiles(paths.root)
-  const nonMarkdownFiles = allFiles.filter((relative) => !relative.toLowerCase().endsWith(".md"))
   const documents = await listExperienceWorkspaceDocuments(paths)
+  const assets = await listExperienceWorkspaceAssets(paths)
+  const runtimeSidecarFiles = await collectRuntimeSidecarFiles(paths.root)
+  const supportedFiles = new Set([
+    ...documents.map((item) => item.relativePath),
+    ...assets.map((item) => item.relativePath),
+    ...runtimeSidecarFiles,
+  ])
+  const unsupportedFiles = allFiles.filter((relative) => !supportedFiles.has(relative))
   const entryDocument = selectWorkspaceEntryDocument(paths, documents)
 
   return {
@@ -289,7 +382,9 @@ export async function resolveExperienceWorkspaceLayout(paths: ExperienceWorkspac
     entryRelativePath: entryDocument.relativePath,
     entryPath: entryDocument.absolutePath,
     documents,
-    nonMarkdownFiles,
+    assets,
+    runtimeSidecarFiles,
+    unsupportedFiles,
   }
 }
 
@@ -297,7 +392,7 @@ export function validateExperienceWorkspaceLayout(layout: ExperienceWorkspaceLay
   const errors: string[] = []
 
   if (!layout.documents.length) {
-    errors.push("Experience workspace has no Markdown documents.")
+    errors.push("Experience workspace has no expert Markdown documents.")
   }
 
   if (!layout.documents.some((item) => item.relativePath === layout.entryRelativePath)) {
@@ -314,9 +409,9 @@ export function validateExperienceWorkspaceLayout(layout: ExperienceWorkspaceLay
     }
   }
 
-  if (layout.nonMarkdownFiles.length) {
+  if (layout.unsupportedFiles.length) {
     errors.push(
-      `Experience workspace must remain Markdown-only. Found non-Markdown files: ${layout.nonMarkdownFiles.join(", ")}`,
+      `Experience workspace only supports expert Markdown files plus approved helper assets under tools/ or skills/. Unsupported files: ${layout.unsupportedFiles.join(", ")}`,
     )
   }
 
@@ -326,11 +421,14 @@ export function validateExperienceWorkspaceLayout(layout: ExperienceWorkspaceLay
   }
 }
 
-export async function readExperienceWorkspace(paths: ExperienceWorkspacePaths): Promise<ExperienceWorkspaceSnapshot> {
+export async function readExperienceWorkspace(
+  pathsOrLayout: ExperienceWorkspacePaths | ExperienceWorkspaceLayout,
+): Promise<ExperienceWorkspaceSnapshot> {
   const snapshot: ExperienceWorkspaceSnapshot = {}
-  const files = await listExperienceWorkspaceFiles(paths)
+  const files = await listExperienceWorkspaceFiles(pathsOrLayout)
+  const root = pathsOrLayout.root
   for (const relative of files) {
-    snapshot[relative] = await readTextFile(path.join(paths.root, ...relative.split("/")))
+    snapshot[relative] = await readTextFile(path.join(root, ...relative.split("/")))
   }
   return snapshot
 }
@@ -342,8 +440,14 @@ export function diffExperienceWorkspace(before: ExperienceWorkspaceSnapshot, aft
 }
 
 export async function restoreExperienceWorkspace(paths: ExperienceWorkspacePaths, snapshot: ExperienceWorkspaceSnapshot) {
-  await rm(paths.root, { recursive: true, force: true })
   await ensureDirectory(paths.root)
+  const currentTrackedFiles = await listExperienceWorkspaceFiles(paths)
+  const nextTrackedFiles = new Set(Object.keys(snapshot))
+
+  for (const relative of currentTrackedFiles) {
+    if (nextTrackedFiles.has(relative)) continue
+    await rm(path.join(paths.root, ...relative.split("/")), { force: true })
+  }
 
   for (const [relative, content] of Object.entries(snapshot)) {
     await writeTextFile(path.join(paths.root, ...relative.split("/")), content)
@@ -360,6 +464,15 @@ export async function writeExperienceWorkspaceSnapshot(targetDir: string, snapsh
   await ensureDirectory(targetDir)
   for (const [relative, content] of Object.entries(snapshot)) {
     await writeTextFile(path.join(targetDir, ...relative.split("/")), content)
+  }
+}
+
+export function experienceWorkspacePathsFromRoot(root: string, defaultEntryRelativePath: string): ExperienceWorkspacePaths {
+  const normalizedEntry = normalizeSlash(defaultEntryRelativePath)
+  return {
+    root,
+    defaultEntryRelativePath: normalizedEntry,
+    defaultEntryPath: path.join(root, ...normalizedEntry.split("/")),
   }
 }
 

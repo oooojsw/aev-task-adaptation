@@ -1,0 +1,8 @@
+RULE:
+Choose the cheapest quote with service=express.
+Return JSON with keys: vendor, price, service.
+
+QUOTES:
+LaneX,service=express,price=39
+QuickFox,service=standard,price=18
+NovaJet,service=express,price=44

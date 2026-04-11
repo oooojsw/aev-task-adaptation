@@ -1,0 +1,15 @@
+{
+  "id": "case-028",
+  "instruction": "Read the attached material and return only the requested result in the exact format shown in the rule. No explanation.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "team scores"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.txt",
+    "mode": "text_exact"
+  },
+  "tags": ["ledger_aggregation", "scores", "text"]
+}

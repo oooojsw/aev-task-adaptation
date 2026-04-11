@@ -1,0 +1,9 @@
+RULE:
+Sum the amount of rows where team=marketing, month=Apr, and status=approved.
+Return only the final integer total.
+
+ROWS:
+team=marketing,month=Apr,status=approved,amount=500
+team=marketing,month=Apr,status=rejected,amount=200
+team=marketing,month=Apr,status=approved,amount=780
+team=sales,month=Apr,status=approved,amount=300

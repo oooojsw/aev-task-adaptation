@@ -1,3 +1,4 @@
+import path from "node:path"
 import type { CaseRuntimeContext, MaintenanceRoundSummary } from "./case-runtime"
 import { enterMaintenanceRound } from "./case-runtime"
 import type {
@@ -6,6 +7,7 @@ import type {
   MethodStrategyTraceEntry,
 } from "./method-strategies"
 import type { KnowledgeMaintainerPlan, KnowledgeMaintainerSessionReportRef } from "./knowledge-maintainer/contract"
+import type { PostJudgePlan } from "./post-judge/contract"
 
 export async function runTracedStep(
   trace: MethodStrategyTraceEntry[],
@@ -35,6 +37,23 @@ export function pushSessionReportRef(
 ) {
   if (!ref) return
   refs.set(ref.absolutePath, ref)
+}
+
+export function buildSessionRecordRef(input: KnowledgeMaintainerSessionReportRef) {
+  const directory = path.dirname(input.absolutePath)
+  const sibling = (filename: string) => path.join(directory, filename)
+  const relativeSibling = (baseRelativePath: string, filename: string) =>
+    baseRelativePath.replace(/[^/]+$/, filename)
+
+  return {
+    ...input,
+    learningLogAbsolutePath: input.learningLogAbsolutePath ?? sibling("session_learning_log.md"),
+    learningLogRelativePath:
+      input.learningLogRelativePath ?? relativeSibling(input.relativePath, "session_learning_log.md"),
+    taskManifestAbsolutePath: input.taskManifestAbsolutePath ?? sibling("session_task_manifest.md"),
+    taskManifestRelativePath:
+      input.taskManifestRelativePath ?? relativeSibling(input.relativePath, "session_task_manifest.md"),
+  }
 }
 
 export function buildMaintenanceRetryFeedback(rounds: MaintenanceRoundSummary[] | undefined, nextRound: number) {
@@ -75,6 +94,7 @@ export function buildMaintenanceRetryFeedback(rounds: MaintenanceRoundSummary[] 
 
 function resetRoundScopedState(context: CaseRuntimeContext) {
   context.maintenance = {}
+  context.postJudge = {}
   context.acceptance = {
     regressionCases: context.acceptance.regressionCases,
     baselineRegression: context.acceptance.baselineRegression,
@@ -88,8 +108,9 @@ export async function runMaintenanceRounds(input: {
   trace: MethodStrategyTraceEntry[]
   rounds: number
   buildPlan: (context: CaseRuntimeContext, round: number) => Promise<KnowledgeMaintainerPlan>
+  buildPostJudgePlan: (context: CaseRuntimeContext, round: number) => Promise<PostJudgePlan>
 }) {
-  const { ops, context, trace, rounds, buildPlan } = input
+  const { ops, context, trace, rounds, buildPlan, buildPostJudgePlan } = input
 
   for (let round = 1; round <= rounds; round++) {
     resetRoundScopedState(context)
@@ -126,24 +147,22 @@ export async function runMaintenanceRounds(input: {
 
     await runTracedStep(trace, `verify_current_case(round:${round})`, () => ops.verifyCurrentCase())
 
-    const notFixed = await runTracedStep(trace, `reject_if_current_case_not_fixed(round:${round})`, () =>
-      ops.rejectIfCurrentCaseNotFixed(),
-    )
-    if (notFixed !== "continue") {
-      if (round < rounds) continue
-      return notFixed
+    if (context.acceptance.currentCaseVerification?.evaluation.passed) {
+      await runTracedStep(trace, `run_regression_after_maintenance(round:${round})`, () =>
+        ops.runRegressionAfterMaintenance(),
+      )
     }
 
-    await runTracedStep(trace, `run_regression_after_maintenance(round:${round})`, () =>
-      ops.runRegressionAfterMaintenance(),
+    const postJudgePlan = await buildPostJudgePlan(context, round)
+    await runTracedStep(trace, `run_post_judge(round:${round})`, () =>
+      ops.runPostJudge(postJudgePlan),
     )
-
-    const acceptance = await runTracedStep(trace, `accept_or_reject_change(round:${round})`, () =>
-      ops.acceptOrRejectChange(),
+    const postJudgeDecision = await runTracedStep(trace, `apply_post_judge_decision(round:${round})`, () =>
+      ops.applyPostJudgeDecision(),
     )
-    if (acceptance !== "continue") {
-      if (round < rounds && acceptance === "next_attempt") continue
-      return acceptance
+    if (postJudgeDecision !== "continue") {
+      if (round < rounds && postJudgeDecision === "next_attempt") continue
+      return postJudgeDecision
     }
 
     const accepted = await runTracedStep(trace, `finish_after_accept(round:${round})`, () =>

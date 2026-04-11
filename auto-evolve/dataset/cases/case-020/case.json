@@ -1,0 +1,15 @@
+{
+  "id": "case-020",
+  "instruction": "Read the attached material and return only the exact JSON object required by the policy.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "stock table and reorder rule"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.json",
+    "mode": "json_exact"
+  },
+  "tags": ["structured_json", "inventory", "json"]
+}

@@ -42,6 +42,7 @@ const FULL_WORKSPACE_READ_VIA_ENTRY: KnowledgeMaintainerLoadingStrategy = {
     guidance: [
       "Start from the workspace entry file before exploring downstream modules.",
       "All current workspace Markdown files are readable in this default mode.",
+      "Workspace-local helper assets under tools/ or skills/ are also readable in this default mode.",
       "Selective reading is still preferred even though full read access is available.",
       "Failure-context files, template files, and selected session reports are also readable.",
     ],
@@ -67,6 +68,10 @@ const FULL_WORKSPACE_READ_VIA_ENTRY: KnowledgeMaintainerLoadingStrategy = {
       input.inputPaths.judgeSummaryPath ?? "",
       input.inputPaths.judgeReportPath ?? "",
       ...input.sessionReports.map((item) => item.absolutePath),
+      ...input.sessionReports.flatMap((item) => [
+        item.learningLogAbsolutePath ?? "",
+        item.taskManifestAbsolutePath ?? "",
+      ]),
     ])
 
     return {

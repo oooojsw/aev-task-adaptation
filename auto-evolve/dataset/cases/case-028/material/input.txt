@@ -1,0 +1,8 @@
+RULE:
+Choose the team with the highest score.
+Return it in the format team|score.
+
+SCORES:
+team-red,score=42
+team-blue,score=39
+team-green,score=41
