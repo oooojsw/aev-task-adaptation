@@ -16,6 +16,7 @@ import {
 } from "./repository"
 import { resolvePropagationMethod } from "./methods"
 import { loadConfig } from "../schema"
+import { globalOptimizationPaths, writeOptimizationOutcome } from "../global-optimization/repository"
 
 export interface RunPropagationOptions {
   methodID?: string
@@ -120,7 +121,9 @@ export async function runPropagation(cwd: string, options?: RunPropagationOption
     propagationMethodID,
     maintenanceMethodID,
     sourceRef: source.sourceRef,
+    sourceKind: source.kind,
     sourceCommitID: source.commitID,
+    sourceOptimizationCandidateID: source.optimizationCandidateID ?? null,
     canonicalHeadAtStart: canonical.commit.id,
     branchName,
     runtimePaths,
@@ -180,7 +183,9 @@ export async function runPropagation(cwd: string, options?: RunPropagationOption
     propagationMethodDocPath: propagationMethod.docPath,
     maintenanceMethodID,
     sourceRef: source.sourceRef,
+    sourceKind: source.kind,
     sourceCommitID: source.commitID,
+    sourceOptimizationCandidateID: source.optimizationCandidateID ?? null,
     candidateCommitID: candidateCommit.id,
     branchName,
     branchHeadCommitID: updatedBranchRef.headCommitID,
@@ -208,7 +213,9 @@ export async function runPropagation(cwd: string, options?: RunPropagationOption
       `- propagation method doc: ${propagationMethod.docPath}`,
       `- maintenance method: ${maintenanceMethodID}`,
       `- source ref: ${source.sourceRef}`,
+      `- source kind: ${source.kind}`,
       `- source commit: ${source.commitID}`,
+      ...(source.optimizationCandidateID ? [`- source optimization candidate: ${source.optimizationCandidateID}`] : []),
       `- candidate commit: ${candidateCommit.id}`,
       `- branch: ${branchName}`,
       `- branch head: ${updatedBranchRef.headCommitID}`,
@@ -252,6 +259,21 @@ export async function runPropagation(cwd: string, options?: RunPropagationOption
       "",
     ].join("\n"),
   )
+
+  if (source.kind === "optimization_candidate" && source.optimizationCandidateID) {
+    const optimization = globalOptimizationPaths(cwd, config)
+    await writeOptimizationOutcome(optimization, {
+      id: `${campaignID}-outcome`,
+      candidatePackageID: source.optimizationCandidateID,
+      status: "campaign_completed",
+      campaignID,
+      candidateCommitID: candidateCommit.id,
+      notes: [
+        `Propagation campaign ${campaignID} evaluated optimization candidate ${source.optimizationCandidateID}.`,
+        `Resulting candidate commit: ${candidateCommit.id}.`,
+      ],
+    })
+  }
 
   return {
     campaignDir,

@@ -65,6 +65,7 @@ export interface AutoEvolveConfig {
   methodsDir: string
   propagationDir: string
   propagationMethodsDir: string
+  optimizationDir: string
   baselineFile: string
   splitFile: string
   scriptsDir: string
@@ -143,6 +144,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   methodsDir: "methods",
   propagationDir: "propagation",
   propagationMethodsDir: "propagation-methods",
+  optimizationDir: "optimization",
   baselineFile: "baseline.md",
   splitFile: "dataset/SPLIT.md",
   scriptsDir: "scripts",
@@ -490,6 +492,10 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
       typeof raw.propagationMethodsDir === "string" && raw.propagationMethodsDir.trim()
         ? raw.propagationMethodsDir
         : DEFAULT_CONFIG.propagationMethodsDir,
+    optimizationDir:
+      typeof raw.optimizationDir === "string" && raw.optimizationDir.trim()
+        ? raw.optimizationDir
+        : DEFAULT_CONFIG.optimizationDir,
     baselineFile: typeof raw.baselineFile === "string" ? raw.baselineFile : DEFAULT_CONFIG.baselineFile,
     splitFile: typeof raw.splitFile === "string" ? raw.splitFile : DEFAULT_CONFIG.splitFile,
     scriptsDir: typeof raw.scriptsDir === "string" ? raw.scriptsDir : DEFAULT_CONFIG.scriptsDir,
@@ -581,6 +587,10 @@ export async function validateAllCases(cwd: string, config: AutoEvolveConfig): P
   const propagationMethodsRoot = autoEvolvePath(cwd, config.propagationMethodsDir)
   if (!(await pathExists(propagationMethodsRoot))) {
     errors.push(`Propagation-methods directory is missing: ${propagationMethodsRoot}`)
+  }
+  const optimizationRoot = autoEvolvePath(cwd, config.optimizationDir)
+  if (!(await pathExists(optimizationRoot))) {
+    errors.push(`Optimization directory is missing: ${optimizationRoot}`)
   }
   const reversePropagationModulesRoot = autoEvolvePath(cwd, config.reversePropagationModulesDir)
   if (!(await pathExists(reversePropagationModulesRoot))) {

@@ -18,6 +18,12 @@ import {
   type ExperienceWorkspaceSnapshot,
 } from "../experience-workspace"
 import type { AutoEvolveConfig } from "../schema"
+import {
+  ensureGlobalOptimizationLayout,
+  globalOptimizationPaths,
+  readOptimizationCandidatePackage,
+  readOptimizationCandidateSnapshot,
+} from "../global-optimization/repository"
 
 export interface PropagationPaths {
   root: string
@@ -62,13 +68,15 @@ export interface ExperienceCommitEvaluationSummary {
 }
 
 export interface ExperienceCommitSource {
-  kind: "live_workspace" | "campaign_result"
+  kind: "live_workspace" | "campaign_result" | "optimization_candidate"
   description: string
   campaignID?: string
   branchName?: string
   maintenanceMethodID?: string
   propagationMethodID?: string
   baselineDir?: string
+  optimizationCandidateID?: string
+  optimizationStrategyID?: string
 }
 
 export interface ExperienceCommit {
@@ -97,10 +105,11 @@ export interface PropagationBranchRef {
 }
 
 export interface ResolvedPropagationRef {
-  kind: "canonical" | "branch" | "commit"
+  kind: "canonical" | "branch" | "commit" | "optimization_candidate"
   sourceRef: string
   commitID: string
   branchName?: string
+  optimizationCandidateID?: string
 }
 
 function nowISO() {
@@ -267,6 +276,12 @@ export async function readCommit(paths: PropagationPaths, commitID: string) {
   return readJsonFile<ExperienceCommit>(commitPath(paths, commitID))
 }
 
+async function tryReadCommit(paths: PropagationPaths, commitID: string) {
+  const target = commitPath(paths, commitID)
+  if (!(await pathExists(target))) return undefined
+  return readJsonFile<ExperienceCommit>(target)
+}
+
 export async function createCommitFromWorkspace(
   paths: PropagationPaths,
   workspacePaths: ExperienceWorkspacePaths,
@@ -278,6 +293,27 @@ export async function createCommitFromWorkspace(
   },
 ) {
   const snapshot = await readExperienceWorkspace(workspacePaths)
+  const tree = await storeSnapshotAsTree(paths, snapshot)
+  return writeCommit(paths, {
+    treeHash: tree.treeHash,
+    parentCommitID: input.parentCommitID ?? null,
+    summary: input.summary,
+    source: input.source,
+    evaluation: input.evaluation,
+    fileCount: tree.fileCount,
+  })
+}
+
+export async function createCommitFromSnapshot(
+  paths: PropagationPaths,
+  snapshot: ExperienceWorkspaceSnapshot,
+  input: {
+    parentCommitID?: string | null
+    summary: string
+    source: ExperienceCommitSource
+    evaluation?: ExperienceCommitEvaluationSummary
+  },
+) {
   const tree = await storeSnapshotAsTree(paths, snapshot)
   return writeCommit(paths, {
     treeHash: tree.treeHash,
@@ -316,8 +352,8 @@ export async function ensureCanonicalCommitFromLiveWorkspace(cwd: string, config
   const currentCanonical = await readCanonicalRef(repo)
 
   if (currentCanonical) {
-    const currentCommit = await readCommit(repo, currentCanonical.headCommitID)
-    if (currentCommit.treeHash === tree.treeHash) {
+    const currentCommit = await tryReadCommit(repo, currentCanonical.headCommitID)
+    if (currentCommit?.treeHash === tree.treeHash) {
       return {
         ref: currentCanonical,
         commit: currentCommit,
@@ -326,11 +362,15 @@ export async function ensureCanonicalCommitFromLiveWorkspace(cwd: string, config
 
     const nextCommit = await writeCommit(repo, {
       treeHash: tree.treeHash,
-      parentCommitID: currentCommit.id,
-      summary: "Snapshot current canonical experience workspace",
+      parentCommitID: currentCommit?.id ?? null,
+      summary: currentCommit
+        ? "Snapshot current canonical experience workspace"
+        : "Recover canonical experience snapshot from live workspace",
       source: {
         kind: "live_workspace",
-        description: "Snapshot current canonical experience workspace",
+        description: currentCommit
+          ? "Snapshot current canonical experience workspace"
+          : "Recover canonical experience snapshot from live workspace",
       },
       fileCount: tree.fileCount,
     })
@@ -403,6 +443,31 @@ export async function resolvePropagationRef(
       kind: "commit",
       sourceRef: refText,
       commitID,
+    }
+  }
+
+  if (refText.startsWith("optimization:")) {
+    const candidateID = refText.slice("optimization:".length).trim()
+    if (!candidateID) throw new Error("Optimization candidate ref is empty.")
+    const optimization = globalOptimizationPaths(cwd, config)
+    await ensureGlobalOptimizationLayout(optimization)
+    const candidate = await readOptimizationCandidatePackage(optimization, candidateID)
+    const snapshot = await readOptimizationCandidateSnapshot(optimization, candidateID)
+    const adoptedCommit = await createCommitFromSnapshot(repo, snapshot, {
+      parentCommitID: candidate.baseCommitID,
+      summary: `Adopt optimization candidate ${candidateID} as propagation source`,
+      source: {
+        kind: "optimization_candidate",
+        description: "Adopt an optimization candidate package as a propagation source",
+        optimizationCandidateID: candidateID,
+        optimizationStrategyID: candidate.strategyID,
+      },
+    })
+    return {
+      kind: "optimization_candidate",
+      sourceRef: refText,
+      commitID: adoptedCommit.id,
+      optimizationCandidateID: candidateID,
     }
   }
 

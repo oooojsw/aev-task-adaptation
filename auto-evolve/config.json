@@ -11,6 +11,7 @@
   "methodsDir": "methods",
   "propagationDir": "propagation",
   "propagationMethodsDir": "propagation-methods",
+  "optimizationDir": "optimization",
   "baselineFile": "baseline.md",
   "splitFile": "dataset/SPLIT.md",
   "scriptsDir": "scripts",

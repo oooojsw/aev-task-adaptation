@@ -1,6 +1,9 @@
-export type ExecutionStrategyID = "sequential" | "parallel-batch-5-light-shard"
-
-export type PacketizationPolicyID = "single-case-packet" | "batch-5-aggregate"
+import {
+  isParallelBatchExecutionStrategy,
+  resolveExecutionStrategy,
+  type ExecutionStrategyID,
+} from "./execution-strategies"
+import { resolvePacketizationPolicy, type PacketizationPolicyID } from "./packetization-policies"
 
 export interface LocalLearningRecipe {
   methodID: string
@@ -10,7 +13,6 @@ export interface LocalLearningRecipe {
   executionStrategyID: ExecutionStrategyID
   packetizationPolicyID: PacketizationPolicyID
   batchPostJudgeStrategyID: string
-  batchSize: number
 }
 
 const RECIPES = new Map<string, LocalLearningRecipe>([
@@ -24,7 +26,6 @@ const RECIPES = new Map<string, LocalLearningRecipe>([
       executionStrategyID: "sequential",
       packetizationPolicyID: "single-case-packet",
       batchPostJudgeStrategyID: "strict-batch-improvement-guard",
-      batchSize: 1,
     },
   ],
   [
@@ -37,7 +38,6 @@ const RECIPES = new Map<string, LocalLearningRecipe>([
       executionStrategyID: "sequential",
       packetizationPolicyID: "single-case-packet",
       batchPostJudgeStrategyID: "add-only-batch-conservative-guard",
-      batchSize: 1,
     },
   ],
   [
@@ -50,7 +50,6 @@ const RECIPES = new Map<string, LocalLearningRecipe>([
       executionStrategyID: "parallel-batch-5-light-shard",
       packetizationPolicyID: "batch-5-aggregate",
       batchPostJudgeStrategyID: "add-only-batch-conservative-guard",
-      batchSize: 5,
     },
   ],
 ])
@@ -65,11 +64,14 @@ export function resolveLocalLearningRecipe(methodID: string): LocalLearningRecip
       executionStrategyID: "sequential",
       packetizationPolicyID: "single-case-packet",
       batchPostJudgeStrategyID: "strict-batch-improvement-guard",
-      batchSize: 1,
     }
   )
 }
 
-export function isParallelBatchExecutionStrategy(strategyID: ExecutionStrategyID) {
-  return strategyID === "parallel-batch-5-light-shard"
+export function resolveLocalLearningRecipeBatchSize(recipe: LocalLearningRecipe) {
+  const executionStrategy = resolveExecutionStrategy(recipe.executionStrategyID)
+  const packetizationPolicy = resolvePacketizationPolicy(recipe.packetizationPolicyID)
+  return Math.max(executionStrategy.defaultBatchSize, packetizationPolicy.defaultBatchSize)
 }
+
+export { isParallelBatchExecutionStrategy }

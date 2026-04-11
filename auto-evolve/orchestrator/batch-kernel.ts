@@ -10,7 +10,9 @@ import {
   writeExperienceWorkspaceSnapshot,
 } from "./experience-workspace"
 import { autoEvolvePath, ensureDirectory, runDirectory, writeJsonFile, writeTextFile } from "./fs"
+import { resolveExecutionStrategy } from "./execution-strategies"
 import { resolveLocalLearningRecipe, type LocalLearningRecipe } from "./local-learning-recipes"
+import { resolvePacketizationPolicy } from "./packetization-policies"
 import { loadAllCases, loadConfig, type RuntimePathOverrides } from "./schema"
 import { runCase } from "./case-runner"
 import type { LoadedAutoEvolveConfig } from "./case-runtime"
@@ -491,6 +493,14 @@ export async function runBatchRound(
   const config = (await loadConfig(cwd, options?.runtimePaths)) as LoadedAutoEvolveConfig
   const methodID = options?.methodID ?? config.defaultMethod
   const recipe = resolveLocalLearningRecipe(methodID)
+  const executionStrategy = resolveExecutionStrategy(recipe.executionStrategyID)
+  const packetizationPolicy = resolvePacketizationPolicy(recipe.packetizationPolicyID)
+  if (executionStrategy.kind !== "parallel_batch") {
+    throw new Error(`Batch round requires a parallel-batch execution strategy, got: ${executionStrategy.id}`)
+  }
+  if (packetizationPolicy.kind !== "batch_aggregate") {
+    throw new Error(`Batch round requires a batch-aggregate packetization policy, got: ${packetizationPolicy.id}`)
+  }
   const splitName = options?.split ?? "train"
   const mode = options?.mode ?? (splitName === "test" ? "eval" : "learn")
   const caseLimit = Math.max(1, options?.caseLimit ?? config.roundCaseLimit)
@@ -505,8 +515,10 @@ export async function runBatchRound(
   let acceptedRefines = 0
   let rejectedRefines = 0
 
-  for (let index = 0; index < cases.length; index += recipe.batchSize) {
-    const batchCases = cases.slice(index, index + recipe.batchSize)
+  const batchSize = Math.max(1, executionStrategy.defaultBatchSize, packetizationPolicy.defaultBatchSize)
+
+  for (let index = 0; index < cases.length; index += batchSize) {
+    const batchCases = cases.slice(index, index + batchSize)
     const batchResult = await runSingleBatch({
       cwd,
       config,
@@ -551,6 +563,8 @@ export async function runBatchRound(
       "# Round Summary",
       "",
       `- method: ${methodID}`,
+      `- execution strategy: ${executionStrategy.id} (${executionStrategy.title})`,
+      `- packetization policy: ${packetizationPolicy.id} (${packetizationPolicy.title})`,
       `- split: ${splitName}`,
       `- mode: ${mode}`,
       `- case limit: ${caseLimit}`,

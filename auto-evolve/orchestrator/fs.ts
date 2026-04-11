@@ -605,6 +605,7 @@ const DEFAULT_CONFIG_JSON = `{
   "methodsDir": "methods",
   "propagationDir": "propagation",
   "propagationMethodsDir": "propagation-methods",
+  "optimizationDir": "optimization",
   "baselineFile": "baseline.md",
   "splitFile": "dataset/SPLIT.md",
   "scriptsDir": "scripts",
@@ -1050,6 +1051,10 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
     methodsRoot,
     autoEvolvePath(cwd, "propagation"),
     autoEvolvePath(cwd, "propagation-methods"),
+    autoEvolvePath(cwd, "optimization"),
+    autoEvolvePath(cwd, "optimization", "candidates"),
+    autoEvolvePath(cwd, "optimization", "outcomes"),
+    autoEvolvePath(cwd, "optimization", "memory"),
     path.join(methodsRoot, "sequential-refine"),
     path.join(methodsRoot, "sequential-refine", "prompts"),
     path.join(methodsRoot, "add-only"),
@@ -1099,6 +1104,36 @@ This directory is reserved for third-layer propagation experiments.
     DEFAULT_PROPAGATION_METHOD_SINGLE_BRANCH_BASELINE,
     created,
   )
+  await writeIfMissing(
+    autoEvolvePath(cwd, "optimization", "README.md"),
+    `# Layer 4 Optimization Workspace
+
+This directory is reserved for the fourth layer:
+
+- optimization candidate packages
+- optimization outcomes
+- optimizer memory
+
+The fourth layer may prepare candidate expert-experience versions here, and the third layer may then evaluate those candidates without directly trusting them as canonical.
+`,
+    created,
+  )
+  await writeIfMissing(
+    autoEvolvePath(cwd, "optimization", "memory", "README.md"),
+    `# Optimizer Memory
+
+This directory stores the fourth-layer optimizer's own memory about:
+
+- which anti-overfit ideas helped
+- which compression ideas harmed performance
+- which evaluation suites revealed useful weaknesses
+
+These files are not part of the canonical expert experience workspace.
+`,
+    created,
+  )
+  await writeIfMissing(autoEvolvePath(cwd, "optimization", "candidates", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "optimization", "outcomes", ".gitkeep"), "\n", created)
 
   await writeIfMissing(
     autoEvolvePath(cwd, "experience-templates", "README.md"),

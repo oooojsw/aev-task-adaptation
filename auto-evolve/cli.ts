@@ -35,7 +35,7 @@ function printHelp() {
 
   run-propagation
     Run an initial third-layer propagation campaign on an experimental branch without touching the canonical experience workspace.
-    Optional: --method <propagation-method-id|second-layer-method-id> --maintenance-method <method-id> --source-ref <canonical|branch:name|commit:id> --branch <name> --train-limit <number> --test-limit <number>
+    Optional: --method <propagation-method-id|second-layer-method-id> --maintenance-method <method-id> --source-ref <canonical|branch:name|commit:id|optimization:id> --branch <name> --train-limit <number> --test-limit <number>
 `)
 }
 
