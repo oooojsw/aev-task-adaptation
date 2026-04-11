@@ -596,6 +596,7 @@ const DEFAULT_CONFIG_JSON = `{
   "version": 1,
   "datasetDir": "dataset/cases",
   "knowledgeDir": "knowledge-pack",
+  "experienceArchiveDir": "experience-archive",
   "experienceEntryFile": "manifest.md",
   "templateLibraryDir": "experience-templates",
   "reversePropagationModulesDir": "reverse-propagation-modules",
@@ -683,6 +684,105 @@ const DEFAULT_CASE_EXAMPLE = `{
 }
 `
 
+const DEFAULT_LONG_TASK_EXAMPLE = `{
+  "title": "example-long-task",
+  "goal": "Use the provided materials and validators to complete the long task and leave validator-backed outputs in the target paths.",
+  "taskFamily": "example-domain",
+  "domainTags": ["demo"],
+  "materials": [
+    {
+      "path": "../dataset/cases/case-001/material/input.txt",
+      "label": "source material"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "../tmp-output/example-result.txt",
+      "label": "target output"
+    }
+  ],
+  "editablePaths": [
+    "../tmp-output/example-result.txt"
+  ],
+  "initialExpertContextPaths": [
+    "../knowledge-pack/manifest.md"
+  ],
+  "validators": [
+    {
+      "id": "result-exists",
+      "type": "script",
+      "title": "Result file exists",
+      "path": "../scripts/long-task-validator.example.py",
+      "required": true
+    },
+    {
+      "id": "goal-review",
+      "type": "prompt_json",
+      "title": "Goal-level review",
+      "required": true,
+      "prompt": "Inspect the current target files and judge whether they satisfy the stated long-task goal. Return JSON with passed, summary, details, and blocking."
+    }
+  ],
+  "budgets": {
+    "maxAttemptsPerUnit": 2,
+    "maxTotalUnitAttempts": 8,
+    "maxGraphReplans": 2,
+    "maxValidatorCalls": 20,
+    "maxNoProgressCycles": 3,
+    "maxUnitsPerGraph": 8
+  },
+  "shadowMemoryScope": {
+    "namespace": "example-domain",
+    "tags": ["demo"],
+    "retrievalMode": "isolated"
+  }
+}
+`
+
+const DEFAULT_LONG_TASK_VALIDATOR_EXAMPLE = `import json
+import os
+import sys
+
+def main():
+    if len(sys.argv) < 2:
+        print(json.dumps({
+            "passed": False,
+            "summary": "Missing validator input path.",
+            "details": ["The validator expected a JSON input path as argv[1]."],
+            "blocking": True,
+        }))
+        return 1
+
+    payload_path = sys.argv[1]
+    with open(payload_path, "r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+
+    target_paths = payload.get("targetPaths", [])
+    existing = []
+    missing = []
+    for item in target_paths:
+        path_value = item.get("path") if isinstance(item, dict) else None
+        if isinstance(path_value, str) and os.path.exists(path_value):
+            existing.append(path_value)
+        elif isinstance(path_value, str):
+            missing.append(path_value)
+
+    passed = len(existing) > 0 and len(missing) == 0
+    print(json.dumps({
+        "passed": passed,
+        "summary": "All target files exist." if passed else "Some target files are missing.",
+        "details": [
+            f"existing: {len(existing)}",
+            f"missing: {len(missing)}",
+        ] + [f"missing_path: {item}" for item in missing],
+        "blocking": False,
+    }, ensure_ascii=False))
+    return 0 if passed else 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+`
+
 const DEFAULT_MONITOR_CONFIG_JSON = `{
   "version": 1,
   "enabled": true,
@@ -704,6 +804,19 @@ const DEFAULT_JUDGE_CONFIG_JSON = `{
     "session-behavior"
   ]
 }
+`
+
+const DEFAULT_EXPERIENCE_ARCHIVE_README = `# Experience Archive
+
+This directory stores managed pre-reset snapshots of the tracked expert experience workspace.
+
+- Every reset writes one new history entry and never overwrites prior history.
+- \`latest/\` mirrors only the newest archived version for quick restore.
+- \`history/\` stores the durable archive lineage.
+- \`index.json\` records the archive list.
+- Only the tracked expert-experience plane is archived here.
+- Runtime sidecars such as \`.opencode/\` are excluded from the archive snapshot.
+- The active workspace is reset to the minimal legal seed after archiving.
 `
 
 const DEFAULT_KNOWLEDGE_MAINTAINER_CORE_PROMPT = `You are the dedicated knowledge maintainer agent for the auto-evolve system.
@@ -1028,6 +1141,7 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
   const created: string[] = []
   const root = autoEvolvePath(cwd)
   const knowledgePackRoot = autoEvolvePath(cwd, "knowledge-pack")
+  const experienceArchiveRoot = autoEvolvePath(cwd, "experience-archive")
   const methodsRoot = autoEvolvePath(cwd, "methods")
 
   const directories = [
@@ -1035,6 +1149,9 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
     autoEvolvePath(cwd, "dataset"),
     autoEvolvePath(cwd, "dataset", "cases"),
     knowledgePackRoot,
+    experienceArchiveRoot,
+    autoEvolvePath(cwd, "experience-archive", "history"),
+    autoEvolvePath(cwd, "experience-archive", "latest"),
     autoEvolvePath(cwd, "prompts"),
     autoEvolvePath(cwd, "runs"),
     autoEvolvePath(cwd, "scripts"),
@@ -1055,6 +1172,11 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
     autoEvolvePath(cwd, "optimization", "candidates"),
     autoEvolvePath(cwd, "optimization", "outcomes"),
     autoEvolvePath(cwd, "optimization", "memory"),
+    autoEvolvePath(cwd, "long-task"),
+    autoEvolvePath(cwd, "long-task", "runs"),
+    autoEvolvePath(cwd, "long-task", "archive"),
+    autoEvolvePath(cwd, "long-task", "shadow-memory"),
+    autoEvolvePath(cwd, "long-task", "candidates"),
     path.join(methodsRoot, "sequential-refine"),
     path.join(methodsRoot, "sequential-refine", "prompts"),
     path.join(methodsRoot, "add-only"),
@@ -1087,6 +1209,13 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
     DEFAULT_SOFT_JUDGE_CORE_PROMPT,
     created,
   )
+  await writeIfMissing(
+    autoEvolvePath(cwd, "experience-archive", "README.md"),
+    DEFAULT_EXPERIENCE_ARCHIVE_README,
+    created,
+  )
+  await writeIfMissing(autoEvolvePath(cwd, "experience-archive", "history", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "experience-archive", "latest", ".gitkeep"), "\n", created)
   await writeIfMissing(
     autoEvolvePath(cwd, "propagation", "README.md"),
     `# Propagation Workspace
@@ -1134,6 +1263,36 @@ These files are not part of the canonical expert experience workspace.
   )
   await writeIfMissing(autoEvolvePath(cwd, "optimization", "candidates", ".gitkeep"), "\n", created)
   await writeIfMissing(autoEvolvePath(cwd, "optimization", "outcomes", ".gitkeep"), "\n", created)
+  await writeIfMissing(
+    autoEvolvePath(cwd, "long-task", "README.md"),
+    `# Long-Task Workspace
+
+This directory stores validator-driven long-task runs.
+
+- runs/: one directory per long-running task execution
+- archive/: append-only archive index for all long-task runs
+- shadow-memory/: isolated shadow-memory entries for long-task outcomes
+- candidates/: future handoff area for canonical candidates
+
+The long-task module is a first-layer sibling of the short-task module.
+It is centered on:
+
+- validator contracts
+- graph bootstrap
+- work-unit execution
+- local retry and replan
+- failure packets
+- run-local scratch memory
+- archive and shadow-memory handoff
+`,
+    created,
+  )
+  await writeIfMissing(autoEvolvePath(cwd, "long-task", "runs", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "long-task", "archive", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "long-task", "archive", "index.jsonl"), "", created)
+  await writeIfMissing(autoEvolvePath(cwd, "long-task", "shadow-memory", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "long-task", "shadow-memory", "index.jsonl"), "", created)
+  await writeIfMissing(autoEvolvePath(cwd, "long-task", "candidates", ".gitkeep"), "\n", created)
 
   await writeIfMissing(
     autoEvolvePath(cwd, "experience-templates", "README.md"),
@@ -1645,6 +1804,16 @@ Status: scaffold only
   )
 
   await writeIfMissing(autoEvolvePath(cwd, "templates", "case.example.json"), DEFAULT_CASE_EXAMPLE, created)
+  await writeIfMissing(
+    autoEvolvePath(cwd, "templates", "long-task.example.json"),
+    DEFAULT_LONG_TASK_EXAMPLE,
+    created,
+  )
+  await writeIfMissing(
+    autoEvolvePath(cwd, "scripts", "long-task-validator.example.py"),
+    DEFAULT_LONG_TASK_VALIDATOR_EXAMPLE,
+    created,
+  )
   await writeIfMissing(autoEvolvePath(cwd, "dataset", "cases", ".gitkeep"), "\n", created)
   await writeIfMissing(autoEvolvePath(cwd, "scripts", ".gitkeep"), "\n", created)
   await writeIfMissing(autoEvolvePath(cwd, "runs", ".gitkeep"), "\n", created)

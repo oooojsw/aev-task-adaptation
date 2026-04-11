@@ -18,6 +18,7 @@ export interface OpencodeEvent {
 export interface OpencodeRunResult {
   sessionID?: string
   exitCode: number
+  finishReason?: string
   stdout: string
   stderr: string
   events: OpencodeEvent[]
@@ -309,6 +310,7 @@ async function runOpencodeTaskOnce(
   return {
     sessionID: events.find((event) => typeof event.sessionID === "string")?.sessionID,
     exitCode,
+    finishReason: undefined,
     stdout,
     stderr,
     events,

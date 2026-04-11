@@ -2,6 +2,7 @@
   "version": 1,
   "datasetDir": "dataset/cases",
   "knowledgeDir": "knowledge-pack",
+  "experienceArchiveDir": "experience-archive",
   "experienceEntryFile": "manifest.md",
   "templateLibraryDir": "experience-templates",
   "reversePropagationModulesDir": "reverse-propagation-modules",

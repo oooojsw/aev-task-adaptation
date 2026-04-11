@@ -1,0 +1,325 @@
+import type { ExecutionSpec } from "../schema"
+
+export type LongTaskRunStatus =
+  | "planning"
+  | "running"
+  | "waiting_for_retry"
+  | "verified_success"
+  | "exhausted_failure"
+  | "stagnation_failure"
+  | "blocked_failure"
+  | "archived"
+
+export type LongTaskWorkUnitStatus = "planned" | "active" | "verified" | "failed" | "blocked"
+
+export type LongTaskRetryLevel = "tool_retry" | "work_unit_retry" | "subgraph_retry" | "run_retry"
+
+export type LongTaskValidatorType = "script" | "prompt_json"
+
+export type LongTaskScratchUnitKind =
+  | "claim"
+  | "obs"
+  | "map"
+  | "hyp"
+  | "fail"
+  | "fix"
+  | "rule_candidate"
+  | "verified"
+
+export type LongTaskLearningUnitKind =
+  | "obs"
+  | "map"
+  | "rule"
+  | "exception"
+  | "failure_pattern"
+  | "repair_pattern"
+  | "tooling_hint"
+  | "validator_hint"
+
+export type LongTaskLearningScope = "instance" | "local" | "pattern" | "global_candidate"
+
+export interface LongTaskPathRef {
+  path: string
+  label?: string
+  role?: string
+}
+
+export interface LongTaskBudgets {
+  maxAttemptsPerUnit: number
+  maxTotalUnitAttempts: number
+  maxGraphReplans: number
+  maxValidatorCalls: number
+  maxNoProgressCycles: number
+  maxUnitsPerGraph: number
+}
+
+export interface LongTaskShadowMemoryScope {
+  namespace: string
+  tags: string[]
+  retrievalMode: "isolated" | "related_only" | "manual"
+}
+
+export interface LongTaskReversePropagationHints {
+  recipeID?: string
+  maintenanceModuleID?: string
+  constraintPolicyIDs?: string[]
+}
+
+export interface LongTaskScriptValidatorContract {
+  id: string
+  type: "script"
+  title: string
+  path: string
+  runner?: "python" | "bun" | "node" | "powershell" | "direct"
+  args?: string[]
+  cwd?: string
+  required?: boolean
+  blocking?: boolean
+  inputMode?: "json_file" | "none"
+  successExitCodes?: number[]
+}
+
+export interface LongTaskPromptValidatorContract {
+  id: string
+  type: "prompt_json"
+  title: string
+  prompt: string
+  required?: boolean
+  blocking?: boolean
+  referencePaths?: string[]
+  attachedFiles?: string[]
+  execution?: ExecutionSpec
+}
+
+export type LongTaskValidatorContract = LongTaskScriptValidatorContract | LongTaskPromptValidatorContract
+
+export interface LongTaskSpec {
+  id?: string
+  title: string
+  goal: string
+  taskFamily?: string
+  domainTags?: string[]
+  materials: LongTaskPathRef[]
+  targetPaths?: LongTaskPathRef[]
+  editablePaths?: string[]
+  initialExpertContextPaths?: string[]
+  validators: LongTaskValidatorContract[]
+  planning?: ExecutionSpec
+  execution?: ExecutionSpec
+  validation?: ExecutionSpec
+  budgets?: Partial<LongTaskBudgets>
+  shadowMemoryScope?: LongTaskShadowMemoryScope
+  reversePropagation?: LongTaskReversePropagationHints
+  notes?: string
+}
+
+export interface LongTaskWorkUnit {
+  id: string
+  title: string
+  goal: string
+  inputs: string[]
+  dependsOn: string[]
+  expectedArtifacts: string[]
+  claim: string
+  checkPlan: string
+  validatorIDs: string[]
+  retryBudget: number
+  status: LongTaskWorkUnitStatus
+  attemptCount: number
+  lastAttemptAt?: string
+  lastClaimID?: string
+  lastFailurePacketID?: string
+}
+
+export interface LongTaskWorkGraph {
+  createdAt: string
+  updatedAt: string
+  revision: number
+  plannerSummary?: string
+  completionValidatorIDs: string[]
+  units: LongTaskWorkUnit[]
+}
+
+export interface LongTaskProgressState {
+  runID: string
+  createdAt: string
+  updatedAt: string
+  status: LongTaskRunStatus
+  graphRevision: number
+  activeUnitID?: string
+  activeAttempt?: number
+  completedUnitIDs: string[]
+  blockedUnitIDs: string[]
+  failedUnitIDs: string[]
+  nextPriorityUnitIDs: string[]
+  lastClaimID?: string
+  lastFailurePacketID?: string
+  totalUnitAttempts: number
+  validatorCalls: number
+  graphReplanCount: number
+  noProgressCycles: number
+  lastProgressAt?: string
+  finalSummary?: string
+}
+
+export interface LongTaskVerificationClaim {
+  id: string
+  runID: string
+  unitID: string
+  attempt: number
+  createdAt: string
+  statement: string
+  claimedSuccess: boolean
+  checkTools: string[]
+  blockers: string[]
+  nextPriorityFix?: string
+  evidenceRefs: string[]
+}
+
+export interface LongTaskValidatorResult {
+  id: string
+  runID: string
+  unitID: string
+  attempt: number
+  validatorID: string
+  validatorType: LongTaskValidatorType
+  createdAt: string
+  passed: boolean
+  blocking: boolean
+  summary: string
+  details: string[]
+  evidenceRefs: string[]
+  rawOutputPath?: string
+}
+
+export interface LongTaskFailurePacket {
+  id: string
+  runID: string
+  unitID: string
+  attempt: number
+  createdAt: string
+  failureType:
+    | "validator_failed"
+    | "invalid_execution_output"
+    | "planning_failed"
+    | "replanning_failed"
+    | "blocked"
+    | "budget_exhausted"
+  retryLevel: LongTaskRetryLevel
+  claimedSuccess: boolean
+  verificationPassed: boolean
+  mismatchSummary: string
+  suspectedCauses: string[]
+  nextPriorityFix?: string
+  evidenceRefs: string[]
+  promotionHint: "archive_only" | "shadow_candidate" | "canonical_candidate"
+}
+
+export interface LongTaskScratchUnit {
+  id: string
+  runID: string
+  unitID: string
+  attempt: number
+  createdAt: string
+  kind: LongTaskScratchUnitKind
+  statement: string
+  refs: string[]
+  relatedUnitIDs: string[]
+}
+
+export interface LongTaskLearningRelation {
+  type: "supports" | "conflicts" | "exception_of" | "derived_from" | "blocks"
+  targetID: string
+}
+
+export interface LongTaskLearningUnit {
+  id: string
+  runID: string
+  unitID?: string
+  createdAt: string
+  kind: LongTaskLearningUnitKind
+  statement: string
+  scope: LongTaskLearningScope
+  strength: 1 | 2 | 3
+  refs: string[]
+  relations: LongTaskLearningRelation[]
+}
+
+export interface LongTaskRetryJournalEntry {
+  id: string
+  runID: string
+  createdAt: string
+  level: LongTaskRetryLevel
+  fromUnitID?: string
+  toUnitID?: string
+  reason: string
+}
+
+export interface LongTaskRetryInputBundle {
+  id: string
+  runID: string
+  unitID: string
+  createdAt: string
+  progressState: LongTaskProgressState
+  currentUnit: LongTaskWorkUnit
+  recentClaims: LongTaskVerificationClaim[]
+  recentFailurePackets: LongTaskFailurePacket[]
+  relevantScratchUnits: LongTaskScratchUnit[]
+  relevantLearningUnits: LongTaskLearningUnit[]
+}
+
+export interface LongTaskArchiveRecord {
+  id: string
+  runID: string
+  createdAt: string
+  status: LongTaskRunStatus
+  taskFamily?: string
+  domainTags: string[]
+  title: string
+  goal: string
+  summary: string
+  failurePacketCount: number
+  learningUnitCount: number
+  runRoot: string
+}
+
+export interface LongTaskShadowMemoryRecord {
+  id: string
+  runID: string
+  createdAt: string
+  namespace: string
+  tags: string[]
+  retrievalMode: "isolated" | "related_only" | "manual"
+  status: "hold" | "candidate"
+  summary: string
+  evidenceRef: string
+}
+
+export interface LongTaskRunSummary {
+  runID: string
+  title: string
+  goal: string
+  status: LongTaskRunStatus
+  taskFamily?: string
+  domainTags: string[]
+  graphRevision: number
+  totalUnits: number
+  verifiedUnits: number
+  failedUnits: number
+  blockedUnits: number
+  totalUnitAttempts: number
+  validatorCalls: number
+  failurePacketCount: number
+  learningUnitCount: number
+  summary: string
+}
+
+export const DEFAULT_LONG_TASK_BUDGETS: LongTaskBudgets = {
+  maxAttemptsPerUnit: 3,
+  maxTotalUnitAttempts: 18,
+  maxGraphReplans: 3,
+  maxValidatorCalls: 40,
+  maxNoProgressCycles: 5,
+  maxUnitsPerGraph: 12,
+}
+

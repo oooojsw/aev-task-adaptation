@@ -8,6 +8,10 @@ import { loadConfig, validateAllCases } from "./orchestrator/schema"
 import { ensureExperimentMonitor } from "./orchestrator/monitor"
 import { runPropagation } from "./orchestrator/propagation/run"
 import { validateReversePropagationControlPlane } from "./orchestrator/reverse-propagation-control/validate"
+import { longTaskPaths } from "./orchestrator/long-task/repository"
+import { validateLongTaskLayout } from "./orchestrator/long-task/validate"
+import { runLongTask, resumeLongTask } from "./orchestrator/long-task/runner"
+import { resetExperienceWorkspace, restoreLatestArchivedExperienceWorkspace } from "./orchestrator/experience-archive"
 
 function printHelp() {
   console.log(`auto-evolve commands:
@@ -21,6 +25,19 @@ function printHelp() {
   bootstrap [--force]
     Ask OpenCode to generate or refresh the Markdown experience workspace from labeled cases.
     Optional: --method <method-id>
+
+  reset-experience
+    Archive the current tracked expert experience into history + latest, then reset the live workspace to the minimal legal seed.
+    Optional: --note <text>
+
+  restore-experience
+    Restore the live expert experience workspace from the latest archive snapshot.
+
+  run-long-task --spec <path>
+    Run a validator-driven long-running task. The system bootstraps its own work graph from the task spec and validators.
+
+  resume-long-task --run <run-id>
+    Resume an unfinished long-running task from its existing run directory.
 
   run-case --case <case-id>
     Solve one case with the current experience workspace, then invoke the knowledge maintainer and retry on failure.
@@ -66,14 +83,16 @@ async function commandValidate() {
   const config = await loadConfig(process.cwd())
   const report = await validateAllCases(process.cwd(), config)
   const controlPlaneReport = await validateReversePropagationControlPlane(process.cwd(), config)
+  const longTaskReport = await validateLongTaskLayout(longTaskPaths(process.cwd()))
 
   console.log(`Config: OK (${config.configPath})`)
   console.log(`Cases discovered: ${report.caseCount}`)
   console.log(
     `Reverse-propagation control plane: ${controlPlaneReport.componentCount} components, ${controlPlaneReport.recipeCount} recipes, ${controlPlaneReport.stateChannelCount} state channels`,
   )
+  console.log("Long-task module layout: checked")
 
-  const allErrors = [...report.errors, ...controlPlaneReport.errors]
+  const allErrors = [...report.errors, ...controlPlaneReport.errors, ...longTaskReport.errors]
 
   if (!allErrors.length) {
     console.log("Validation: OK")
@@ -100,6 +119,28 @@ async function commandBootstrap(args: string[]) {
   if (result.runDir) {
     console.log(`Run: ${result.runDir}`)
   }
+}
+
+async function commandResetExperience(args: string[]) {
+  await ensureLayout(process.cwd())
+  const config = await loadConfig(process.cwd())
+  const result = await resetExperienceWorkspace(process.cwd(), config, {
+    note: getOption(args, "--note"),
+  })
+  console.log(`Archived experience: ${result.archived.archive.latestRoot}`)
+  console.log(`Archived files: ${result.archived.metadata.fileCount}`)
+  console.log(`Workspace reset at: ${result.resetAt}`)
+  console.log(`Workspace root: ${result.workspaceRoot}`)
+  console.log(`Seeded files: ${result.seededFiles.join(", ")}`)
+}
+
+async function commandRestoreExperience() {
+  await ensureLayout(process.cwd())
+  const config = await loadConfig(process.cwd())
+  const result = await restoreLatestArchivedExperienceWorkspace(process.cwd(), config)
+  console.log(`Restored from archive: ${result.archive.latestRoot}`)
+  console.log(`Workspace root: ${result.workspaceRoot}`)
+  console.log(`Restored files: ${result.restoredFiles.join(", ")}`)
 }
 
 async function commandRunCase(args: string[]) {
@@ -269,6 +310,54 @@ async function commandRunPropagation(args: string[]) {
   console.log(`Baseline: ${result.baselineDir}`)
 }
 
+async function commandRunLongTask(args: string[]) {
+  await ensureLayout(process.cwd())
+  const config = await loadConfig(process.cwd())
+  await ensureExperimentMonitor(process.cwd(), config).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(`Monitor warning: ${message}`)
+  })
+
+  const specPath = getOption(args, "--spec")
+  if (!specPath) {
+    console.error("Missing required option: --spec <path-to-long-task-spec>")
+    process.exit(1)
+  }
+
+  const result = await runLongTask({
+    cwd: process.cwd(),
+    specPath,
+  })
+  console.log(`Long-task run: ${result.runID}`)
+  console.log(`Run dir: ${result.runDir}`)
+  console.log(`Status: ${result.status}`)
+  console.log(`Summary: ${result.summaryPath}`)
+}
+
+async function commandResumeLongTask(args: string[]) {
+  await ensureLayout(process.cwd())
+  const config = await loadConfig(process.cwd())
+  await ensureExperimentMonitor(process.cwd(), config).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(`Monitor warning: ${message}`)
+  })
+
+  const runID = getOption(args, "--run")
+  if (!runID) {
+    console.error("Missing required option: --run <long-task-run-id>")
+    process.exit(1)
+  }
+
+  const result = await resumeLongTask({
+    cwd: process.cwd(),
+    runID,
+  })
+  console.log(`Long-task run: ${result.runID}`)
+  console.log(`Run dir: ${result.runDir}`)
+  console.log(`Status: ${result.status}`)
+  console.log(`Summary: ${result.summaryPath}`)
+}
+
 async function main() {
   const [, , command, ...args] = Bun.argv
 
@@ -281,6 +370,18 @@ async function main() {
       return
     case "bootstrap":
       await commandBootstrap(args)
+      return
+    case "reset-experience":
+      await commandResetExperience(args)
+      return
+    case "restore-experience":
+      await commandRestoreExperience()
+      return
+    case "run-long-task":
+      await commandRunLongTask(args)
+      return
+    case "resume-long-task":
+      await commandResumeLongTask(args)
       return
     case "run-case":
       await commandRunCase(args)

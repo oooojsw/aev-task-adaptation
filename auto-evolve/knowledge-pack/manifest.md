@@ -1,37 +1,23 @@
+<!-- auto-evolve-bootstrap: replaceable -->
 <!-- auto-evolve-entry: true -->
 <!-- auto-evolve-role: entry -->
-
 # 经验工作区入口
 
-状态：已初始化
+状态：最小种子
 
-## 任务总目标
+## 说明
 
-解析中文条件句"如果有X，必然有Y"，提取指定字符并按要求输出。
+- 这是经验工作区的唯一入口文件。
+- 当前工作区还没有形成最终专家经验结构。
+- 第一次 bootstrap 应先阅读训练案例和模板库，再自行决定最终结构。
+- 后续如果需要给 solve agent 提供本地辅助脚本或技能，可放在 `tools/` 或 `skills/` 下，并在本入口文件中导航。
 
-## 读取顺序
+## 当前入口路径
 
-1. 先读本 manifest.md
-2. 再读 `rules.md` 了解规则模式
-3. 执行前检查 `output_contract.md` 确认输出格式
-4. 参考 `execution_checklist.md` 执行
+- manifest.md
 
-## 文件导航
+## 当前状态
 
-| 文件                   | 角色                | 说明           |
-| ---------------------- | ------------------- | -------------- |
-| manifest.md            | entry               | 本入口文件     |
-| change_log.md          | change_log          | 变更记录       |
-| rules.md               | rule_module         | 规则模式与示例 |
-| output_contract.md     | output_contract     | 输出契约       |
-| execution_checklist.md | execution_checklist | 执行清单       |
-
-## 工具说明
-
-本工作区暂不包含辅助脚本或技能文件。如需工具辅助，可在 `tools/` 或 `skills/` 下添加。
-
-## 适用范围
-
-- 任务类型：文本精确提取
-- 输入语言：中文
-- 比较模式：text_exact（精确匹配）
+- 结构尚未展开
+- 规则尚未提炼
+- 后续 bootstrap 或经修 agent 需要生成正式结构

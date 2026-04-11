@@ -56,6 +56,7 @@ export interface AutoEvolveConfig {
   version: number
   datasetDir: string
   knowledgeDir: string
+  experienceArchiveDir: string
   experienceEntryFile: string
   templateLibraryDir: string
   reversePropagationModulesDir: string
@@ -135,6 +136,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   version: 1,
   datasetDir: "dataset/cases",
   knowledgeDir: "knowledge-pack",
+  experienceArchiveDir: "experience-archive",
   experienceEntryFile: "manifest.md",
   templateLibraryDir: "experience-templates",
   reversePropagationModulesDir: "reverse-propagation-modules",
@@ -461,6 +463,10 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
     knowledgeDir:
       runtimePaths?.knowledgeDir ??
       (typeof raw.knowledgeDir === "string" ? raw.knowledgeDir : DEFAULT_CONFIG.knowledgeDir),
+    experienceArchiveDir:
+      typeof raw.experienceArchiveDir === "string" && raw.experienceArchiveDir.trim()
+        ? raw.experienceArchiveDir
+        : DEFAULT_CONFIG.experienceArchiveDir,
     experienceEntryFile:
       typeof raw.experienceEntryFile === "string" && raw.experienceEntryFile.trim()
         ? raw.experienceEntryFile
@@ -579,6 +585,10 @@ export async function validateAllCases(cwd: string, config: AutoEvolveConfig): P
   const templateLibraryRoot = autoEvolvePath(cwd, config.templateLibraryDir)
   if (!(await pathExists(templateLibraryRoot))) {
     errors.push(`Template library directory is missing: ${templateLibraryRoot}`)
+  }
+  const experienceArchiveRoot = autoEvolvePath(cwd, config.experienceArchiveDir)
+  if (!(await pathExists(experienceArchiveRoot))) {
+    errors.push(`Experience archive directory is missing: ${experienceArchiveRoot}`)
   }
   const propagationRoot = autoEvolvePath(cwd, config.propagationDir)
   if (!(await pathExists(propagationRoot))) {

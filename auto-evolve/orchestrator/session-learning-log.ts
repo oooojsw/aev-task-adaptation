@@ -6,7 +6,8 @@ function countToolUses(events: OpencodeTaskRun["result"]["events"]) {
   const counts = new Map<string, number>()
   for (const event of events) {
     if (event.type !== "tool_use") continue
-    counts.set(event.toolName, (counts.get(event.toolName) ?? 0) + 1)
+    const toolName = typeof event.part?.tool === "string" && event.part.tool.trim() ? event.part.tool : "(unknown)"
+    counts.set(toolName, (counts.get(toolName) ?? 0) + 1)
   }
   return [...counts.entries()].sort((left, right) => right[1] - left[1])
 }
