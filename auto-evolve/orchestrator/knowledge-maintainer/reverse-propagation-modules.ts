@@ -1,5 +1,9 @@
 import { autoEvolvePath, pathExists, readTextFile } from "../fs"
 import type { AutoEvolveConfig } from "../schema"
+import {
+  listRegisteredMaintenanceModules,
+  resolveRegisteredMaintenanceModule,
+} from "../reverse-propagation-control/registry"
 
 export interface ReversePropagationModuleDescriptor {
   id: string
@@ -16,47 +20,30 @@ export interface ResolvedReversePropagationModule {
   promptBody: string
 }
 
-const BUILTIN_MODULE_DESCRIPTORS: ReversePropagationModuleDescriptor[] = [
-  {
-    id: "direct-rewrite",
-    title: "Direct Rewrite",
-    summary:
-      "Directly revise the current experience workspace into a better single canonical version, including Markdown knowledge and any workspace-local helper assets that future solve agents should use.",
-    defaultLoadingStrategyID: "full-workspace-read-via-entry",
-    defaultScopeLevelID: "full-access",
-  },
-  {
-    id: "add-only-memory",
-    title: "Add-Only Memory",
-    summary:
-      "Preserve existing experience and prefer additive maintenance: append clarifications, add lessons, add guides, and add narrow helper assets without broad rewrites.",
-    defaultLoadingStrategyID: "full-workspace-read-via-entry",
-    defaultScopeLevelID: "full-access",
-    defaultOperationIDs: [
-      "inspect_workspace",
-      "inspect_templates",
-      "inspect_failure_context",
-      "inspect_session_records",
-      "append_to_existing_module",
-      "create_module",
-      "create_helper_asset",
-      "update_helper_asset",
-      "add_tool_guide",
-      "add_failure_lesson",
-      "rewrite_entry_navigation",
-      "record_change",
-    ],
-  },
-]
-
 export function listReversePropagationModules() {
-  return [...BUILTIN_MODULE_DESCRIPTORS]
+  return listRegisteredMaintenanceModules().map((item) => ({
+    id: item.id,
+    title: item.title,
+    summary: item.summary,
+    defaultLoadingStrategyID: item.defaultLoadingStrategyID,
+    defaultScopeLevelID: item.defaultScopeLevelID,
+    defaultOperationIDs: item.defaultOperationIDs,
+  }))
 }
 
 function resolveReversePropagationModuleDescriptor(moduleID?: string) {
   const target = moduleID ?? "direct-rewrite"
-  const found = BUILTIN_MODULE_DESCRIPTORS.find((item) => item.id === target)
-  if (found) return found
+  try {
+    const found = resolveRegisteredMaintenanceModule(target)
+    return {
+      id: found.id,
+      title: found.title,
+      summary: found.summary,
+      defaultLoadingStrategyID: found.defaultLoadingStrategyID,
+      defaultScopeLevelID: found.defaultScopeLevelID,
+      defaultOperationIDs: found.defaultOperationIDs,
+    } satisfies ReversePropagationModuleDescriptor
+  } catch {}
   return {
     id: target,
     title: target,

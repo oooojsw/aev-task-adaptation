@@ -12,6 +12,8 @@ import {
   runTracedStep,
 } from "./method-strategy-helpers"
 import type { PostJudgePlan } from "./post-judge/contract"
+import type { ReversePropagationRecipeDescriptor } from "./reverse-propagation-control/contract"
+import { resolveReversePropagationRecipe } from "./reverse-propagation-control/recipes"
 import type { AutoEvolveConfig } from "./schema"
 
 export type MethodStrategyDecision = "continue" | "next_attempt" | "finish_run"
@@ -52,7 +54,7 @@ export interface MethodStrategy {
   runAttempt(ops: CaseMethodOps, context: CaseRuntimeContext): Promise<MethodStrategyResult>
 }
 
-const SEQUENTIAL_METHOD_CONTRACT = [
+const DIRECT_REWRITE_BASELINE_CONTRACT = [
   "Sequential-refine maintenance contract:",
   "- This method is the conservative baseline learning route.",
   "- Prefer the smallest Markdown changes that repair the current failure pattern.",
@@ -64,7 +66,7 @@ const SEQUENTIAL_METHOD_CONTRACT = [
   "- Avoid copying template files verbatim into the final workspace.",
 ].join("\n")
 
-const ADD_ONLY_METHOD_CONTRACT = [
+const ADD_ONLY_CONSERVATIVE_CONTRACT = [
   "Add-only maintenance contract:",
   "- This method is the conservative additive-memory route.",
   "- Preserve still-useful existing workspace content whenever possible.",
@@ -79,25 +81,47 @@ function applyTemplateVariables(template: string, variables: Record<string, stri
   return template.replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_, rawKey: string) => variables[rawKey] ?? "")
 }
 
-abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
-  abstract id: string
-  abstract reversePropagationModuleID: string
+function resolveContractBlock(recipe: ReversePropagationRecipeDescriptor) {
+  switch (recipe.contractStyleID) {
+    case "direct-rewrite-baseline":
+      return DIRECT_REWRITE_BASELINE_CONTRACT
+    case "add-only-conservative":
+      return ADD_ONLY_CONSERVATIVE_CONTRACT
+    default:
+      return [
+        `Maintenance contract for recipe ${recipe.id}:`,
+        `- Follow the maintenance module ${recipe.maintenanceModuleID}.`,
+        `- Follow the acceptance policy ${recipe.acceptancePolicyID}.`,
+        "- Keep one coherent canonical experience workspace and one single entry file.",
+      ].join("\n")
+  }
+}
 
-  constructor(public strategyDocPath: string) {}
+class RecipeDrivenMethodStrategy implements MethodStrategy {
+  id: string
+  strategyDocPath: string
 
-  protected abstract contractBlock: string
-
-  protected maintenanceRounds(_context: CaseRuntimeContext) {
-    return 1
+  constructor(
+    private readonly recipe: ReversePropagationRecipeDescriptor,
+    strategyDocPath: string,
+  ) {
+    this.id = recipe.id
+    this.strategyDocPath = strategyDocPath
   }
 
-  protected buildPostJudgePlan(_context: CaseRuntimeContext, _round: number): PostJudgePlan {
+  private maintenanceRounds(context: CaseRuntimeContext) {
+    return this.recipe.maintenanceRoundsPolicy === "config_max_rounds"
+      ? context.config.maxMaintenanceRoundsPerAttempt
+      : 1
+  }
+
+  private buildPostJudgePlan(_context: CaseRuntimeContext, _round: number): PostJudgePlan {
     return {
-      strategyID: "strict-regression-guard",
+      strategyID: this.recipe.acceptancePolicyID,
     }
   }
 
-  protected buildRoutingVariables(context: CaseRuntimeContext, extra: Record<string, string> = {}) {
+  private buildRoutingVariables(context: CaseRuntimeContext, extra: Record<string, string> = {}) {
     const routing = context.feedback.routing
     return {
       routing_classification: routing?.classification ?? "unknown",
@@ -108,7 +132,7 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
     }
   }
 
-  protected collectSessionReports(
+  private collectSessionReports(
     context: CaseRuntimeContext,
     options?: { includePreviousAttempts?: boolean; includePreviousRounds?: boolean },
   ) {
@@ -222,8 +246,8 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
     return [...refs.values()]
   }
 
-  protected async buildJudgePlan(context: CaseRuntimeContext): Promise<JudgePlan> {
-    const paths = methodPaths(context.cwd, context.config, this.id)
+  private async buildJudgePlan(context: CaseRuntimeContext): Promise<JudgePlan> {
+    const paths = methodPaths(context.cwd, context.config, this.recipe.judgeMethodID)
     const judgeExtensionTemplate = await readMethodPrompt(paths, "judge_extension")
     return {
       attempt: context.attempt,
@@ -232,10 +256,33 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
     }
   }
 
-  protected abstract buildKnowledgeMaintainerPlan(
+  private async buildKnowledgeMaintainerPlan(
     context: CaseRuntimeContext,
     round: number,
-  ): Promise<KnowledgeMaintainerPlan>
+  ): Promise<KnowledgeMaintainerPlan> {
+    const paths = methodPaths(context.cwd, context.config, this.recipe.maintenanceMethodID)
+    const maintainExtensionTemplate = await readMethodPrompt(paths, "maintain_extension")
+    const methodExtensionBlock = applyTemplateVariables(
+      maintainExtensionTemplate,
+      this.buildRoutingVariables(context, {
+        maintenance_round: String(round),
+        maintenance_retry_feedback: buildMaintenanceRetryFeedback(context.attemptSummary.maintenanceRounds, round),
+      }),
+    )
+
+    return {
+      contractBlock: resolveContractBlock(this.recipe),
+      methodExtensionBlock,
+      reversePropagationModuleID: this.recipe.maintenanceModuleID,
+      loadingStrategyID: "full-workspace-read-via-entry",
+      scopeLevelID: "full-access",
+      maintenanceRound: round,
+      sessionReports: this.collectSessionReports(context, {
+        includePreviousAttempts: true,
+        includePreviousRounds: this.recipe.includePreviousRoundsInMaintainer,
+      }),
+    }
+  }
 
   async runAttempt(ops: CaseMethodOps, context: CaseRuntimeContext): Promise<MethodStrategyResult> {
     const trace: MethodStrategyTraceEntry[] = []
@@ -286,132 +333,11 @@ abstract class BaseMaintenanceMethodStrategy implements MethodStrategy {
   }
 }
 
-class SequentialRefineStrategy extends BaseMaintenanceMethodStrategy {
-  id = "sequential-refine"
-  reversePropagationModuleID = "direct-rewrite"
-  protected contractBlock = SEQUENTIAL_METHOD_CONTRACT
-
-  protected async buildKnowledgeMaintainerPlan(
-    context: CaseRuntimeContext,
-    round: number,
-  ): Promise<KnowledgeMaintainerPlan> {
-    const paths = methodPaths(context.cwd, context.config, this.id)
-    const maintainExtensionTemplate = await readMethodPrompt(paths, "maintain_extension")
-    const methodExtensionBlock = applyTemplateVariables(
-      maintainExtensionTemplate,
-      this.buildRoutingVariables(context, {
-        maintenance_round: String(round),
-        maintenance_retry_feedback: buildMaintenanceRetryFeedback(context.attemptSummary.maintenanceRounds, round),
-      }),
-    )
-
-    return {
-      contractBlock: this.contractBlock,
-      methodExtensionBlock,
-      reversePropagationModuleID: this.reversePropagationModuleID,
-      loadingStrategyID: "full-workspace-read-via-entry",
-      scopeLevelID: "full-access",
-      maintenanceRound: round,
-      sessionReports: this.collectSessionReports(context, { includePreviousAttempts: true, includePreviousRounds: false }),
-    }
-  }
-}
-
-class AddOnlyStrategy extends BaseMaintenanceMethodStrategy {
-  id = "add-only"
-  reversePropagationModuleID = "add-only-memory"
-  protected contractBlock = ADD_ONLY_METHOD_CONTRACT
-
-  protected maintenanceRounds(context: CaseRuntimeContext) {
-    return context.config.maxMaintenanceRoundsPerAttempt
-  }
-
-  protected buildPostJudgePlan(_context: CaseRuntimeContext, _round: number): PostJudgePlan {
-    return {
-      strategyID: "add-only-conservative-guard",
-    }
-  }
-
-  protected async buildKnowledgeMaintainerPlan(
-    context: CaseRuntimeContext,
-    round: number,
-  ): Promise<KnowledgeMaintainerPlan> {
-    const paths = methodPaths(context.cwd, context.config, this.id)
-    const maintainExtensionTemplate = await readMethodPrompt(paths, "maintain_extension")
-    const methodExtensionBlock = applyTemplateVariables(
-      maintainExtensionTemplate,
-      this.buildRoutingVariables(context, {
-        maintenance_round: String(round),
-        maintenance_retry_feedback: buildMaintenanceRetryFeedback(context.attemptSummary.maintenanceRounds, round),
-      }),
-    )
-
-    return {
-      contractBlock: this.contractBlock,
-      methodExtensionBlock,
-      reversePropagationModuleID: this.reversePropagationModuleID,
-      maintenanceRound: round,
-      sessionReports: this.collectSessionReports(context, {
-        includePreviousAttempts: true,
-        includePreviousRounds: true,
-      }),
-    }
-  }
-}
-
-class ParallelBatchAddOnlyStrategy extends BaseMaintenanceMethodStrategy {
-  id = "parallel-batch-5-add-only"
-  reversePropagationModuleID = "add-only-memory"
-  protected contractBlock = ADD_ONLY_METHOD_CONTRACT
-
-  protected maintenanceRounds(context: CaseRuntimeContext) {
-    return context.config.maxMaintenanceRoundsPerAttempt
-  }
-
-  protected buildPostJudgePlan(_context: CaseRuntimeContext, _round: number): PostJudgePlan {
-    return {
-      strategyID: "add-only-conservative-guard",
-    }
-  }
-
-  protected async buildKnowledgeMaintainerPlan(
-    context: CaseRuntimeContext,
-    round: number,
-  ): Promise<KnowledgeMaintainerPlan> {
-    const paths = methodPaths(context.cwd, context.config, this.id)
-    const maintainExtensionTemplate = await readMethodPrompt(paths, "maintain_extension")
-    const methodExtensionBlock = applyTemplateVariables(
-      maintainExtensionTemplate,
-      this.buildRoutingVariables(context, {
-        maintenance_round: String(round),
-        maintenance_retry_feedback: buildMaintenanceRetryFeedback(context.attemptSummary.maintenanceRounds, round),
-      }),
-    )
-
-    return {
-      contractBlock: this.contractBlock,
-      methodExtensionBlock,
-      reversePropagationModuleID: this.reversePropagationModuleID,
-      maintenanceRound: round,
-      sessionReports: this.collectSessionReports(context, {
-        includePreviousAttempts: true,
-        includePreviousRounds: true,
-      }),
-    }
-  }
-}
-
 export function resolveMethodStrategy(cwd: string, config: AutoEvolveConfig, methodID: string): MethodStrategy {
   const strategyDocPath = autoEvolvePath(cwd, config.methodsDir, methodID, "FLOW.md")
-
-  switch (methodID) {
-    case "sequential-refine":
-      return new SequentialRefineStrategy(strategyDocPath)
-    case "add-only":
-      return new AddOnlyStrategy(strategyDocPath)
-    case "parallel-batch-5-add-only":
-      return new ParallelBatchAddOnlyStrategy(strategyDocPath)
-    default:
-      throw new Error(`No code-defined method strategy is registered for method: ${methodID}`)
+  const recipe = resolveReversePropagationRecipe(methodID)
+  if (!recipe) {
+    throw new Error(`No recipe-defined method strategy is registered for method: ${methodID}`)
   }
+  return new RecipeDrivenMethodStrategy(recipe, strategyDocPath)
 }

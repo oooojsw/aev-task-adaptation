@@ -7,6 +7,7 @@ import { runBaseline } from "./orchestrator/baseline-runner"
 import { loadConfig, validateAllCases } from "./orchestrator/schema"
 import { ensureExperimentMonitor } from "./orchestrator/monitor"
 import { runPropagation } from "./orchestrator/propagation/run"
+import { validateReversePropagationControlPlane } from "./orchestrator/reverse-propagation-control/validate"
 
 function printHelp() {
   console.log(`auto-evolve commands:
@@ -64,17 +65,23 @@ async function commandValidate() {
   await ensureLayout(process.cwd())
   const config = await loadConfig(process.cwd())
   const report = await validateAllCases(process.cwd(), config)
+  const controlPlaneReport = await validateReversePropagationControlPlane(process.cwd(), config)
 
   console.log(`Config: OK (${config.configPath})`)
   console.log(`Cases discovered: ${report.caseCount}`)
+  console.log(
+    `Reverse-propagation control plane: ${controlPlaneReport.componentCount} components, ${controlPlaneReport.recipeCount} recipes, ${controlPlaneReport.stateChannelCount} state channels`,
+  )
 
-  if (!report.errors.length) {
+  const allErrors = [...report.errors, ...controlPlaneReport.errors]
+
+  if (!allErrors.length) {
     console.log("Validation: OK")
     return
   }
 
   console.error("Validation errors:")
-  for (const error of report.errors) console.error(`- ${error}`)
+  for (const error of allErrors) console.error(`- ${error}`)
   process.exitCode = 1
 }
 

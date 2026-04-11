@@ -24,6 +24,8 @@ export interface PropagationMethodResult {
   methodID: string
   docPath: string
   baseline: RunBaselineResult
+  stageDir: string
+  executionResultPath: string
 }
 
 export interface PropagationMethod {
@@ -54,7 +56,9 @@ class SingleBranchBaselineMethod implements PropagationMethod {
       runtimePaths: context.runtimePaths,
     })
 
-    await writeJsonFile(path.join(stageDir, "method_result.json"), {
+    const executionResultPath = path.join(stageDir, "method_result.json")
+
+    await writeJsonFile(executionResultPath, {
       propagationMethodID: this.id,
       maintenanceMethodID: context.maintenanceMethodID,
       sourceCommitID: context.sourceCommitID,
@@ -94,6 +98,8 @@ class SingleBranchBaselineMethod implements PropagationMethod {
       methodID: this.id,
       docPath: this.docPath,
       baseline,
+      stageDir,
+      executionResultPath,
     }
   }
 }
@@ -116,7 +122,9 @@ class DelegatedLayer2Method implements PropagationMethod {
       runtimePaths: context.runtimePaths,
     })
 
-    await writeJsonFile(path.join(stageDir, "method_result.json"), {
+    const executionResultPath = path.join(stageDir, "method_result.json")
+
+    await writeJsonFile(executionResultPath, {
       propagationMethodID: this.id,
       delegatedLayer2MethodID: this.id,
       sourceCommitID: context.sourceCommitID,
@@ -156,6 +164,8 @@ class DelegatedLayer2Method implements PropagationMethod {
       methodID: this.id,
       docPath: this.docPath,
       baseline,
+      stageDir,
+      executionResultPath,
     }
   }
 }

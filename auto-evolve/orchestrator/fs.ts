@@ -1535,7 +1535,8 @@ Requirements for the experience workspace:
 - If future solve behavior would benefit from local reusable helper assets, you may create text-based helper assets under \`tools/\` or \`skills/\`.
 - Every expert-experience Markdown file outside \`tools/\` or \`skills/\` should include an \`auto-evolve-role\` marker near the top.
 - The workspace must keep a \`change_log.md\` expert Markdown file with \`auto-evolve-role: change_log\`.
-- Do not create hidden or internal directories such as \`.opencode\`, \`.git\`, \`.tmp\`, \`.cache\`, or scratch/test-record folders inside the experience workspace.
+- Do not create new hidden expert-content directories or scratch/test-record folders inside the tracked expert workspace.
+- If root-level \`.opencode/\` already exists, treat it as runtime sidecar state rather than expert experience.
 - Do not create Markdown files outside the expert workspace structure unless they are intentional expert documents with a clear \`auto-evolve-role\` marker.
 - Do not create helper assets anywhere except \`tools/\` or \`skills/\`.
 - If you create helper assets, the entry file or a linked guide must explain when a future solve agent should use them.

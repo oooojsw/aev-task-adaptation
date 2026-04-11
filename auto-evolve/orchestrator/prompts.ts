@@ -75,6 +75,36 @@ function baselineBlock(baselinePath: string) {
   ].join("\n")
 }
 
+type WorkspacePlaneRuleMode = "read_only" | "write"
+
+function workspacePlaneRulesBlock(mode: WorkspacePlaneRuleMode) {
+  const modeSpecificLines =
+    mode === "write"
+      ? [
+          "- You may leave runtime sidecar files untouched.",
+          "- Runtime sidecar changes do not count as expert-experience maintenance results.",
+          "- Do not move tracked expert knowledge into `.opencode/`.",
+        ]
+      : [
+          "- Do not waste time reading `.opencode/**` unless the task explicitly requires runtime-log analysis.",
+          "- Do not treat `.opencode/**` as expert knowledge or as evidence of a successful maintenance update.",
+        ]
+
+  return [
+    "## Workspace Plane Rules",
+    "- The experience workspace has two planes:",
+    "  - `Tracked Experience Plane`: the entry file, expert Markdown modules, and tracked helper assets under controlled roots such as `tools/` and `skills/`.",
+    "  - `Runtime Sidecar Plane`: root-level `.opencode/**` content used by the OpenCode runtime, local logs, or sidecar state.",
+    "- Only the tracked experience plane counts as expert experience.",
+    "- `.opencode/**` is allowed to exist, but it is not part of the maintained expert-memory surface.",
+    ...modeSpecificLines,
+  ].join("\n")
+}
+
+function withWorkspacePlaneRules(prompt: string, mode: WorkspacePlaneRuleMode) {
+  return `${workspacePlaneRulesBlock(mode)}\n\n${prompt}`
+}
+
 function judgeBlock(input: { judgeSummaryPath?: string; judgeReportPath?: string }) {
   if (!input.judgeSummaryPath && !input.judgeReportPath) {
     return "No judge outputs were provided for this maintenance round."
@@ -193,13 +223,14 @@ export async function buildBootstrapPrompt(input: {
     ? input.cases.map((item) => bootstrapCaseBlock(item)).join("\n\n")
     : "No labeled cases were attached."
 
-  return renderTemplate(template, {
+  const rendered = renderTemplate(template, {
     experience_workspace_block: experienceWorkspaceBlock(input.workspace),
     template_library_block: templateLibraryBlock(input.templateLibrary),
     baseline_block: baselineBlock(input.baselinePath),
     scripts_dir: input.scriptsDir,
     case_blocks: caseBlocks,
   })
+  return withWorkspacePlaneRules(rendered, "write")
 }
 
 export async function buildSolvePrompt(input: {
@@ -216,7 +247,7 @@ export async function buildSolvePrompt(input: {
   const template = await readMethodPrompt(paths, "solve")
   const materialPaths = formatMaterialPaths(input.caseSpec, input.caseDir)
 
-  return renderTemplate(template, {
+  const rendered = renderTemplate(template, {
     experience_workspace_block: experienceWorkspaceBlock(input.workspace),
     baseline_block: baselineBlock(input.baselinePath),
     scripts_dir: input.scriptsDir,
@@ -226,6 +257,7 @@ export async function buildSolvePrompt(input: {
     instruction: input.caseSpec.instruction.trim(),
     material_list: bulletList(materialPaths),
   })
+  return withWorkspacePlaneRules(rendered, "read_only")
 }
 
 export async function buildKnowledgeMaintainerPrompt(input: {
@@ -256,7 +288,7 @@ export async function buildKnowledgeMaintainerPrompt(input: {
   const template = await readSystemPrompt(input.cwd, input.config, "knowledge-maintainer-core.md")
   const materialPaths = formatMaterialPaths(input.caseSpec, input.caseDir)
 
-  return renderTemplate(template, {
+  const rendered = renderTemplate(template, {
     experience_workspace_block: experienceWorkspaceBlock(input.workspace),
     template_library_block: templateLibraryBlock(input.templateLibrary),
     baseline_block: baselineBlock(input.baselinePath),
@@ -278,6 +310,7 @@ export async function buildKnowledgeMaintainerPrompt(input: {
     maintenance_ops_block: input.maintenanceOpsBlock,
     method_extension_block: input.methodExtensionBlock,
   })
+  return withWorkspacePlaneRules(rendered, "write")
 }
 
 export async function buildBatchKnowledgeMaintainerPrompt(input: {
@@ -302,7 +335,7 @@ export async function buildBatchKnowledgeMaintainerPrompt(input: {
 }) {
   const template = await readSystemPrompt(input.cwd, input.config, "batch-knowledge-maintainer-core.md")
 
-  return renderTemplate(template, {
+  const rendered = renderTemplate(template, {
     experience_workspace_block: experienceWorkspaceBlock(input.workspace),
     template_library_block: templateLibraryBlock(input.templateLibrary),
     baseline_block: baselineBlock(input.baselinePath),
@@ -318,6 +351,7 @@ export async function buildBatchKnowledgeMaintainerPrompt(input: {
     maintenance_ops_block: input.maintenanceOpsBlock,
     method_extension_block: input.methodExtensionBlock,
   })
+  return withWorkspacePlaneRules(rendered, "write")
 }
 
 export async function buildSoftJudgePrompt(input: {
@@ -345,7 +379,7 @@ export async function buildSoftJudgePrompt(input: {
 }) {
   const template = await readSystemPrompt(input.cwd, input.config, "soft-judge-core.md")
 
-  return renderTemplate(template, {
+  const rendered = renderTemplate(template, {
     judge_mode_block: judgeModeBlock(input.judgeMode),
     experience_workspace_block: experienceWorkspaceBlock(input.workspace),
     baseline_block: baselineBlock(input.baselinePath),
@@ -367,4 +401,5 @@ export async function buildSoftJudgePrompt(input: {
     judge_report_path: input.judgeReportPath,
     judge_extension_block: input.judgeExtensionBlock,
   })
+  return withWorkspacePlaneRules(rendered, "read_only")
 }
