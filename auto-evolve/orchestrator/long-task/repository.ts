@@ -1,5 +1,6 @@
 import path from "node:path"
 import { randomUUID } from "node:crypto"
+import { cp, lstat, rm } from "node:fs/promises"
 import {
   autoEvolvePath,
   ensureDirectory,
@@ -36,6 +37,7 @@ export interface LongTaskPaths {
 
 export interface LongTaskRunPaths {
   root: string
+  preexistingRoot: string
   taskPath: string
   workGraphPath: string
   progressStatePath: string
@@ -126,6 +128,7 @@ export function longTaskRunPaths(paths: LongTaskPaths, runID: string): LongTaskR
   const root = path.join(paths.runsRoot, runID)
   return {
     root,
+    preexistingRoot: path.join(root, "preexisting"),
     taskPath: path.join(root, "task.json"),
     workGraphPath: path.join(root, "work_graph.json"),
     progressStatePath: path.join(root, "progress_state.json"),
@@ -172,6 +175,79 @@ export function longTaskReplanPaths(run: LongTaskRunPaths, revision: number) {
   }
 }
 
+function uniqueLongTaskEditablePaths(spec: LongTaskSpec) {
+  const values = [
+    ...(spec.editablePaths ?? []),
+    ...(spec.targetPaths ?? []).map((item) => item.path),
+  ]
+  const unique = Array.from(new Set(values)).sort((left, right) => left.length - right.length)
+  const filtered: string[] = []
+  for (const candidate of unique) {
+    const normalizedCandidate = path.resolve(candidate)
+    const covered = filtered.some((existing) => {
+      const normalizedExisting = path.resolve(existing)
+      return (
+        normalizedCandidate === normalizedExisting ||
+        normalizedCandidate.startsWith(normalizedExisting + path.sep)
+      )
+    })
+    if (!covered) filtered.push(candidate)
+  }
+  return filtered
+}
+
+async function stageEditablePathsForFreshRun(run: LongTaskRunPaths, spec: LongTaskSpec) {
+  await ensureDirectory(run.preexistingRoot)
+
+  const entries: Array<{
+    originalPath: string
+    archivePath?: string
+    kind?: "file" | "directory"
+    existed: boolean
+  }> = []
+
+  const editablePaths = uniqueLongTaskEditablePaths(spec)
+
+  for (const [index, editablePath] of editablePaths.entries()) {
+    if (!(await pathExists(editablePath))) {
+      entries.push({
+        originalPath: editablePath,
+        existed: false,
+      })
+      continue
+    }
+
+    const stats = await lstat(editablePath)
+    const kind: "file" | "directory" = stats.isDirectory() ? "directory" : "file"
+    const archiveName = `${String(index + 1).padStart(2, "0")}-${path.basename(editablePath) || `target-${index + 1}`}`
+    const archivePath = path.join(run.preexistingRoot, archiveName)
+
+    await cp(editablePath, archivePath, {
+      recursive: kind === "directory",
+      force: true,
+    })
+
+    if (kind === "directory") {
+      await rm(editablePath, { recursive: true, force: true })
+      await ensureDirectory(editablePath)
+    } else {
+      await rm(editablePath, { force: true })
+    }
+
+    entries.push({
+      originalPath: editablePath,
+      archivePath,
+      kind,
+      existed: true,
+    })
+  }
+
+  await writeJsonFile(path.join(run.preexistingRoot, "manifest.json"), {
+    createdAt: nowISO(),
+    entries,
+  })
+}
+
 export async function initializeLongTaskRun(input: {
   cwd: string
   spec: LongTaskSpec
@@ -185,10 +261,13 @@ export async function initializeLongTaskRun(input: {
   const run = longTaskRunPaths(paths, runID)
 
   await ensureDirectory(run.root)
+  await ensureDirectory(run.preexistingRoot)
   await ensureDirectory(run.bundlesRoot)
   await ensureDirectory(run.unitsRoot)
   await ensureDirectory(run.planRoot)
   await ensureDirectory(run.replanRoot)
+
+  await stageEditablePathsForFreshRun(run, input.spec)
 
   await writeJsonFile(run.taskPath, input.spec)
   await writeJsonFile(run.workGraphPath, input.workGraph)
@@ -305,12 +384,15 @@ export async function writeRetryInputBundle(targetPath: string, bundle: LongTask
 }
 
 export async function buildRetryInputBundle(input: {
+  paths: LongTaskPaths
   run: LongTaskRunPaths
+  spec: LongTaskSpec
   unitID: string
   maxClaims?: number
   maxFailurePackets?: number
   maxScratchUnits?: number
   maxLearningUnits?: number
+  maxShadowMemory?: number
 }) {
   const graph = await readLongTaskWorkGraph(input.run)
   const progress = await readLongTaskProgressState(input.run)
@@ -319,14 +401,32 @@ export async function buildRetryInputBundle(input: {
     throw new Error(`Long-task work unit not found: ${input.unitID}`)
   }
 
-  const [claims, failures, scratch, learning] = await Promise.all([
+  const [claims, failures, scratch, learning, shadow] = await Promise.all([
     readVerificationClaims(input.run),
     readFailurePackets(input.run),
     readScratchUnits(input.run),
     readLearningUnits(input.run),
+    readJsonl<LongTaskShadowMemoryRecord>(path.join(input.paths.shadowMemoryRoot, "index.jsonl")),
   ])
 
   const relatedUnitIDs = new Set([unit.id, ...unit.dependsOn])
+  const scope = input.spec.shadowMemoryScope ?? {
+    namespace: input.spec.taskFamily ?? "long-task",
+    tags: input.spec.domainTags ?? [],
+    retrievalMode: "isolated" as const,
+  }
+  const relevantShadowMemory =
+    scope.retrievalMode === "manual"
+      ? []
+      : shadow
+          .filter((record) => record.runID !== progress.runID)
+          .filter((record) => {
+            if (scope.retrievalMode === "isolated") {
+              return record.namespace === scope.namespace
+            }
+            return record.namespace === scope.namespace || record.tags.some((tag) => scope.tags.includes(tag))
+          })
+          .slice(-(input.maxShadowMemory ?? 6))
 
   return {
     id: `retry-${randomUUID().slice(0, 8)}`,
@@ -345,6 +445,7 @@ export async function buildRetryInputBundle(input: {
     relevantLearningUnits: learning
       .filter((item) => !item.unitID || relatedUnitIDs.has(item.unitID))
       .slice(-(input.maxLearningUnits ?? 8)),
+    relevantShadowMemory,
   } satisfies LongTaskRetryInputBundle
 }
 
@@ -453,6 +554,10 @@ export async function appendArchiveRecord(paths: LongTaskPaths, record: LongTask
 
 export async function appendShadowMemoryRecord(paths: LongTaskPaths, record: LongTaskShadowMemoryRecord) {
   await appendJsonl(path.join(paths.shadowMemoryRoot, "index.jsonl"), record)
+}
+
+export async function readShadowMemoryRecords(paths: LongTaskPaths) {
+  return readJsonl<LongTaskShadowMemoryRecord>(path.join(paths.shadowMemoryRoot, "index.jsonl"))
 }
 
 export function defaultArchiveRecord(input: {

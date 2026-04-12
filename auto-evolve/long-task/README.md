@@ -8,10 +8,12 @@ This directory stores validator-driven long-task runs.
 - `candidates/`: future handoff area for canonical candidates
 
 The long-task module is a first-layer sibling of the short-task module.
-It is centered on:
+It is a generic learning framework centered on:
 
+- goal contracts
 - validator contracts
-- graph bootstrap
+- capability contracts
+- graph bootstrap and graph revision
 - work-unit execution
 - local retry and replan
 - failure packets

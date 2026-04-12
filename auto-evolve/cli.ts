@@ -1,4 +1,5 @@
 import process from "node:process"
+import { readdir } from "node:fs/promises"
 import { ensureLayout } from "./orchestrator/fs"
 import { runBootstrap } from "./orchestrator/bootstrap"
 import { runCase } from "./orchestrator/case-runner"
@@ -8,8 +9,8 @@ import { loadConfig, validateAllCases } from "./orchestrator/schema"
 import { ensureExperimentMonitor } from "./orchestrator/monitor"
 import { runPropagation } from "./orchestrator/propagation/run"
 import { validateReversePropagationControlPlane } from "./orchestrator/reverse-propagation-control/validate"
-import { longTaskPaths } from "./orchestrator/long-task/repository"
-import { validateLongTaskLayout } from "./orchestrator/long-task/validate"
+import { longTaskPaths, longTaskRunPaths } from "./orchestrator/long-task/repository"
+import { validateLongTaskLayout, validateLongTaskRun } from "./orchestrator/long-task/validate"
 import { runLongTask, resumeLongTask } from "./orchestrator/long-task/runner"
 import { resetExperienceWorkspace, restoreLatestArchivedExperienceWorkspace } from "./orchestrator/experience-archive"
 
@@ -83,7 +84,24 @@ async function commandValidate() {
   const config = await loadConfig(process.cwd())
   const report = await validateAllCases(process.cwd(), config)
   const controlPlaneReport = await validateReversePropagationControlPlane(process.cwd(), config)
-  const longTaskReport = await validateLongTaskLayout(longTaskPaths(process.cwd()))
+  const longTaskRoot = longTaskPaths(process.cwd())
+  const longTaskReport = await validateLongTaskLayout(longTaskRoot)
+  const longTaskRunErrors: string[] = []
+
+  if (!longTaskReport.errors.length) {
+    const runDirs = (await readdir(longTaskRoot.runsRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+
+    for (const runID of runDirs) {
+      const runReport = await validateLongTaskRun(longTaskRunPaths(longTaskRoot, runID))
+      for (const error of runReport.errors) {
+        longTaskRunErrors.push(`[long-task run ${runID}] ${error}`)
+      }
+    }
+
+    console.log(`Long-task runs validated: ${runDirs.length}`)
+  }
 
   console.log(`Config: OK (${config.configPath})`)
   console.log(`Cases discovered: ${report.caseCount}`)
@@ -92,7 +110,7 @@ async function commandValidate() {
   )
   console.log("Long-task module layout: checked")
 
-  const allErrors = [...report.errors, ...controlPlaneReport.errors, ...longTaskReport.errors]
+  const allErrors = [...report.errors, ...controlPlaneReport.errors, ...longTaskReport.errors, ...longTaskRunErrors]
 
   if (!allErrors.length) {
     console.log("Validation: OK")

@@ -1,6 +1,8 @@
 import path from "node:path"
 import type {
+  LongTaskCapabilityContract,
   LongTaskBudgets,
+  LongTaskInitialGraphDraft,
   LongTaskPathRef,
   LongTaskSpec,
   LongTaskValidatorContract,
@@ -76,6 +78,7 @@ function normalizeValidator(raw: unknown): LongTaskValidatorContract | undefined
       type: "script",
       title: raw.title,
       path: raw.path,
+      placement: raw.placement === "completion_only" ? "completion_only" : "unit",
       runner:
         raw.runner === "python" ||
         raw.runner === "bun" ||
@@ -111,6 +114,7 @@ function normalizeValidator(raw: unknown): LongTaskValidatorContract | undefined
       type: "prompt_json",
       title: raw.title,
       prompt: raw.prompt,
+      placement: raw.placement === "completion_only" ? "completion_only" : "unit",
       required: typeof raw.required === "boolean" ? raw.required : true,
       blocking: typeof raw.blocking === "boolean" ? raw.blocking : false,
       referencePaths: normalizeStringArray(raw.referencePaths),
@@ -124,6 +128,74 @@ function normalizeValidator(raw: unknown): LongTaskValidatorContract | undefined
 function normalizeValidators(raw: unknown) {
   if (!Array.isArray(raw)) return []
   return raw.map(normalizeValidator).filter((item): item is LongTaskValidatorContract => Boolean(item))
+}
+
+function normalizeCapability(raw: unknown): LongTaskCapabilityContract | undefined {
+  if (!isObject(raw)) return undefined
+  if (typeof raw.id !== "string" || !raw.id.trim()) return undefined
+  if (typeof raw.title !== "string" || !raw.title.trim()) return undefined
+  if (
+    raw.kind !== "inspect" &&
+    raw.kind !== "transform" &&
+    raw.kind !== "validate" &&
+    raw.kind !== "compare" &&
+    raw.kind !== "synthesize"
+  ) {
+    return undefined
+  }
+  if (typeof raw.description !== "string" || !raw.description.trim()) return undefined
+  const execution = isObject(raw.execution)
+    ? {
+        model: typeof raw.execution.model === "string" && raw.execution.model.trim() ? raw.execution.model : undefined,
+        agent: typeof raw.execution.agent === "string" && raw.execution.agent.trim() ? raw.execution.agent : undefined,
+        variant:
+          typeof raw.execution.variant === "string" && raw.execution.variant.trim() ? raw.execution.variant : undefined,
+        system: typeof raw.execution.system === "string" && raw.execution.system.trim() ? raw.execution.system : undefined,
+      }
+    : undefined
+
+  return {
+    id: raw.id,
+    title: raw.title,
+    kind: raw.kind,
+    description: raw.description,
+    referencePaths: normalizeStringArray(raw.referencePaths),
+    attachedFiles: normalizeStringArray(raw.attachedFiles),
+    execution,
+  }
+}
+
+function normalizeCapabilities(raw: unknown) {
+  if (!Array.isArray(raw)) return []
+  return raw.map(normalizeCapability).filter((item): item is LongTaskCapabilityContract => Boolean(item))
+}
+
+function normalizeInitialGraph(raw: unknown, baseDir: string): LongTaskInitialGraphDraft | undefined {
+  if (!isObject(raw) || !Array.isArray(raw.units)) return undefined
+  const units = raw.units
+    .filter((item): item is Record<string, unknown> => isObject(item))
+    .map((item) => ({
+      id: typeof item.id === "string" ? item.id : "",
+      title: typeof item.title === "string" ? item.title : "",
+      goal: typeof item.goal === "string" ? item.goal : "",
+      inputs: normalizeStringArray(item.inputs).map((value) => resolveMaybePath(baseDir, value)),
+      depends_on: normalizeStringArray(item.depends_on),
+      expected_artifacts: normalizeStringArray(item.expected_artifacts).map((value) => resolveMaybePath(baseDir, value)),
+      claim: typeof item.claim === "string" ? item.claim : "",
+      check_plan: typeof item.check_plan === "string" ? item.check_plan : "",
+      validator_ids: normalizeStringArray(item.validator_ids),
+      retry_budget: typeof item.retry_budget === "number" && item.retry_budget > 0 ? item.retry_budget : 1,
+    }))
+    .filter((item) => item.id.trim() && item.goal.trim())
+
+  if (!units.length) return undefined
+
+  return {
+    planner_summary:
+      typeof raw.planner_summary === "string" && raw.planner_summary.trim() ? raw.planner_summary : undefined,
+    completion_validator_ids: normalizeStringArray(raw.completion_validator_ids),
+    units,
+  }
 }
 
 function resolveMaybePath(baseDir: string, input: string) {
@@ -160,6 +232,11 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
           attachedFiles: (validator.attachedFiles ?? []).map((item) => resolveMaybePath(baseDir, item)),
         },
   )
+  const capabilities = normalizeCapabilities(raw.capabilities).map((capability) => ({
+    ...capability,
+    referencePaths: (capability.referencePaths ?? []).map((item) => resolveMaybePath(baseDir, item)),
+    attachedFiles: (capability.attachedFiles ?? []).map((item) => resolveMaybePath(baseDir, item)),
+  }))
 
   const planning = isObject(raw.planning)
     ? {
@@ -196,6 +273,7 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
     targetPaths,
     editablePaths: editablePaths.length ? editablePaths : targetPaths.map((item) => item.path),
     initialExpertContextPaths,
+    capabilities,
     validators,
     planning,
     execution,
@@ -231,6 +309,7 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
           constraintPolicyIDs: normalizeStringArray(raw.reversePropagation.constraintPolicyIDs),
         }
       : undefined,
+    initialGraph: normalizeInitialGraph(raw.initialGraph, baseDir),
     notes: typeof raw.notes === "string" && raw.notes.trim() ? raw.notes : undefined,
   }
 
@@ -249,6 +328,13 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
       throw new Error(`Long-task spec references a missing input path: ${ref}`)
     }
   }
+  for (const capability of spec.capabilities ?? []) {
+    for (const ref of [...(capability.referencePaths ?? []), ...(capability.attachedFiles ?? [])]) {
+      if (!(await pathExists(ref))) {
+        throw new Error(`Long-task spec references a missing capability path: ${ref}`)
+      }
+    }
+  }
   for (const validator of spec.validators) {
     if (validator.type === "script" && !(await pathExists(validator.path))) {
       throw new Error(`Long-task spec references a missing validator script: ${validator.path}`)
@@ -260,4 +346,3 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
     specPath: resolvedSpecPath,
   }
 }
-

@@ -26,6 +26,18 @@ function normalizeDetails(input: unknown) {
   return input.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
 }
 
+function uniqueStrings(items: string[]) {
+  return Array.from(new Set(items.filter((item) => item.trim().length > 0)))
+}
+
+function capabilityReferencePaths(spec: LongTaskSpec) {
+  return uniqueStrings((spec.capabilities ?? []).flatMap((capability) => capability.referencePaths ?? []))
+}
+
+function capabilityAttachedFiles(spec: LongTaskSpec) {
+  return uniqueStrings((spec.capabilities ?? []).flatMap((capability) => capability.attachedFiles ?? []))
+}
+
 function extractJsonObject(raw: string) {
   const trimmed = raw.trim()
   if (!trimmed) return undefined
@@ -162,6 +174,8 @@ async function runPromptValidator(input: {
   await writeTextFile(promptPath, prompt)
 
   const selection = resolveModelSelection(input.config, "verify", input.contract.execution ?? input.spec.validation)
+  const capabilityPaths = capabilityReferencePaths(input.spec)
+  const capabilityFiles = capabilityAttachedFiles(input.spec)
   const task = await runOpencodeTask({
     cwd: input.cwd,
     config: input.config,
@@ -172,14 +186,16 @@ async function runPromptValidator(input: {
       ...(input.spec.targetPaths ?? []).map((item) => item.path),
       ...(input.spec.initialExpertContextPaths ?? []),
       ...(input.contract.referencePaths ?? []),
+      ...capabilityPaths,
       input.bundlePath,
     ],
-    attachedFiles: input.contract.attachedFiles ?? [],
+    attachedFiles: uniqueStrings([...(input.contract.attachedFiles ?? []), ...capabilityFiles]),
     permissionReadPaths: [
       ...input.spec.materials.map((item) => item.path),
       ...(input.spec.targetPaths ?? []).map((item) => item.path),
       ...(input.spec.initialExpertContextPaths ?? []),
       ...(input.contract.referencePaths ?? []),
+      ...capabilityPaths,
       input.bundlePath,
     ],
     permissionEditPaths: [],
@@ -256,4 +272,3 @@ export async function runLongTaskValidator(input: {
     bundlePath: input.bundlePath,
   })
 }
-

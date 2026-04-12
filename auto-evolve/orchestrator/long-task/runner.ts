@@ -1,5 +1,6 @@
 import path from "node:path"
 import { randomUUID } from "node:crypto"
+import { readFile } from "node:fs/promises"
 import type {
   LongTaskFailurePacket,
   LongTaskLearningUnit,
@@ -94,6 +95,15 @@ function extractJsonObject(raw: string) {
   return undefined
 }
 
+async function extractJsonObjectFromPath(filePath: string) {
+  try {
+    const content = await readFile(filePath, "utf8")
+    return extractJsonObject(content)
+  } catch {
+    return undefined
+  }
+}
+
 function normalizeStringArray(input: unknown) {
   if (!Array.isArray(input)) return []
   return input
@@ -101,11 +111,25 @@ function normalizeStringArray(input: unknown) {
     .map((item) => item.trim())
 }
 
+function uniqueStrings(items: string[]) {
+  return Array.from(new Set(items.filter((item) => item.trim().length > 0)))
+}
+
+function capabilityReferencePaths(spec: LongTaskSpec) {
+  return uniqueStrings((spec.capabilities ?? []).flatMap((capability) => capability.referencePaths ?? []))
+}
+
+function capabilityAttachedFiles(spec: LongTaskSpec) {
+  return uniqueStrings((spec.capabilities ?? []).flatMap((capability) => capability.attachedFiles ?? []))
+}
+
 function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
   if (!Array.isArray(raw)) return []
   const maxUnits = spec.budgets?.maxUnitsPerGraph ?? DEFAULT_LONG_TASK_BUDGETS.maxUnitsPerGraph
   const usedIDs = new Set<string>()
-  const validatorIDs = new Set(spec.validators.map((item) => item.id))
+  const unitScopedValidatorIDs = new Set(
+    spec.validators.filter((item) => item.placement !== "completion_only").map((item) => item.id),
+  )
   const units: LongTaskWorkUnit[] = []
 
   for (const item of raw) {
@@ -119,7 +143,10 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
       retryBudgetRaw,
       spec.budgets?.maxAttemptsPerUnit ?? DEFAULT_LONG_TASK_BUDGETS.maxAttemptsPerUnit,
     )
-    const proposedValidatorIDs = normalizeStringArray(item.validator_ids).filter((idValue) => validatorIDs.has(idValue))
+    const hasExplicitValidatorIDs = Object.prototype.hasOwnProperty.call(item, "validator_ids")
+    const proposedValidatorIDs = normalizeStringArray(item.validator_ids).filter((idValue) =>
+      unitScopedValidatorIDs.has(idValue),
+    )
     units.push(
       buildLongTaskWorkUnit({
         id,
@@ -136,7 +163,11 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
         validatorIDs:
           proposedValidatorIDs.length > 0
             ? proposedValidatorIDs
-            : spec.validators.filter((validator) => validator.required !== false).map((validator) => validator.id),
+            : hasExplicitValidatorIDs
+              ? []
+              : spec.validators
+                  .filter((validator) => validator.required !== false && validator.placement !== "completion_only")
+                  .map((validator) => validator.id),
         retryBudget,
       }),
     )
@@ -147,6 +178,9 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
 
 function fallbackLongTaskGraph(spec: LongTaskSpec, reason: string) {
   const requiredValidatorIDs = spec.validators.filter((item) => item.required !== false).map((item) => item.id)
+  const unitValidatorIDs = spec.validators
+    .filter((item) => item.required !== false && item.placement !== "completion_only")
+    .map((item) => item.id)
   return createLongTaskWorkGraph({
     plannerSummary: `Fallback graph used: ${reason}`,
     completionValidatorIDs: requiredValidatorIDs,
@@ -160,7 +194,7 @@ function fallbackLongTaskGraph(spec: LongTaskSpec, reason: string) {
         expectedArtifacts: (spec.targetPaths ?? []).map((item) => item.path),
         claim: "The main long-task goal is completed and validator-ready.",
         checkPlan: "Run all required validators against the current task outputs.",
-        validatorIDs: requiredValidatorIDs,
+        validatorIDs: unitValidatorIDs,
         retryBudget: spec.budgets?.maxAttemptsPerUnit ?? DEFAULT_LONG_TASK_BUDGETS.maxAttemptsPerUnit,
       }),
     ],
@@ -377,6 +411,10 @@ function shouldStopForBudgets(input: {
   return undefined
 }
 
+function selectLongTaskPlanningContext(spec: LongTaskSpec) {
+  return (spec.initialExpertContextPaths ?? []).slice(0, 4)
+}
+
 async function runPlanningSession(input: {
   cwd: string
   configPathCwd: string
@@ -389,6 +427,9 @@ async function runPlanningSession(input: {
 }) {
   const config = await loadConfig(input.configPathCwd)
   const selection = resolveModelSelection(config, "solve", input.spec.planning)
+  const planningContextPaths = selectLongTaskPlanningContext(input.spec)
+  const capabilityPaths = capabilityReferencePaths(input.spec)
+  const capabilityFiles = capabilityAttachedFiles(input.spec)
   const draftPaths =
     input.phase === "plan"
       ? longTaskPlanPaths(input.run)
@@ -416,16 +457,14 @@ async function runPlanningSession(input: {
     prompt,
     referencePaths: [
       input.specPath,
-      ...input.spec.materials.map((item) => item.path),
-      ...(input.spec.targetPaths ?? []).map((item) => item.path),
-      ...(input.spec.initialExpertContextPaths ?? []),
+      ...planningContextPaths,
+      ...capabilityPaths,
     ],
-    attachedFiles: [],
+    attachedFiles: capabilityFiles,
     permissionReadPaths: [
       input.specPath,
-      ...input.spec.materials.map((item) => item.path),
-      ...(input.spec.targetPaths ?? []).map((item) => item.path),
-      ...(input.spec.initialExpertContextPaths ?? []),
+      ...planningContextPaths,
+      ...capabilityPaths,
     ],
     permissionEditPaths: [],
     model: selection.model,
@@ -439,7 +478,7 @@ async function runPlanningSession(input: {
     methodID: input.spec.reversePropagation?.recipeID,
   })
 
-  const raw = extractJsonObject(task.result.responseText)
+  const raw = (await extractJsonObjectFromPath(draftPaths.graphDraftPath)) ?? extractJsonObject(task.result.responseText)
   const graph = normalizePlanningGraph(
     raw,
     input.spec,
@@ -478,7 +517,9 @@ async function executeWorkUnit(input: {
   await writeLongTaskProgressState(input.run, progressBefore)
 
   const bundle = await buildRetryInputBundle({
+    paths: longTaskPaths(input.cwd),
     run: input.run,
+    spec: input.spec,
     unitID: activeUnit.id,
   })
   await writeRetryInputBundle(attemptPaths.inputBundlePath, bundle)
@@ -493,6 +534,8 @@ async function executeWorkUnit(input: {
     bundlePath: attemptPaths.inputBundlePath,
     validatorInputPaths,
   })
+  const capabilityPaths = capabilityReferencePaths(input.spec)
+  const capabilityFiles = capabilityAttachedFiles(input.spec)
 
   const task = await runOpencodeTask({
     cwd: input.cwd,
@@ -504,14 +547,16 @@ async function executeWorkUnit(input: {
       ...(input.spec.targetPaths ?? []).map((item) => item.path),
       ...(input.spec.initialExpertContextPaths ?? []),
       attemptPaths.inputBundlePath,
+      ...capabilityPaths,
       ...input.spec.validators.filter((item) => item.type === "script").map((item) => item.path),
     ],
-    attachedFiles: [],
+    attachedFiles: capabilityFiles,
     permissionReadPaths: [
       ...input.spec.materials.map((item) => item.path),
       ...(input.spec.targetPaths ?? []).map((item) => item.path),
       ...(input.spec.initialExpertContextPaths ?? []),
       attemptPaths.inputBundlePath,
+      ...capabilityPaths,
       ...input.spec.validators.filter((item) => item.type === "script").map((item) => item.path),
     ],
     permissionEditPaths: input.spec.editablePaths ?? [],
@@ -578,8 +623,11 @@ async function executeWorkUnit(input: {
         unitID: activeUnit.id,
         attempt,
         goal: input.spec.goal,
+        claim: activeUnit.claim,
+        checkPlan: activeUnit.checkPlan,
         materials: input.spec.materials,
         targetPaths: input.spec.targetPaths ?? [],
+        expectedArtifacts: activeUnit.expectedArtifacts,
         editablePaths: input.spec.editablePaths ?? [],
         bundlePath: attemptPaths.inputBundlePath,
       },
@@ -677,6 +725,7 @@ async function runCompletionValidators(input: {
     recentFailurePackets: [],
     relevantScratchUnits: [],
     relevantLearningUnits: [],
+    relevantShadowMemory: [],
   })
 
   const config = await loadConfig(input.configPathCwd)
@@ -698,8 +747,11 @@ async function runCompletionValidators(input: {
         unitID: syntheticUnit.id,
         attempt: 1,
         goal: input.spec.goal,
+        claim: syntheticUnit.claim,
+        checkPlan: syntheticUnit.checkPlan,
         materials: input.spec.materials,
         targetPaths: input.spec.targetPaths ?? [],
+        expectedArtifacts: syntheticUnit.expectedArtifacts,
         editablePaths: input.spec.editablePaths ?? [],
         bundlePath,
       },
@@ -1027,14 +1079,16 @@ export async function runLongTask(input: { cwd: string; specPath: string }) {
     progressState: progress,
   })
 
-  const graph = await runPlanningSession({
-    cwd: input.cwd,
-    configPathCwd: input.cwd,
-    spec,
-    specPath,
-    run: initialized.run,
-    phase: "plan",
-  })
+  const graph = spec.initialGraph
+    ? normalizePlanningGraph(spec.initialGraph as unknown as Record<string, unknown>, spec, "spec.initialGraph was invalid")
+    : await runPlanningSession({
+        cwd: input.cwd,
+        configPathCwd: input.cwd,
+        spec,
+        specPath,
+        run: initialized.run,
+        phase: "plan",
+      })
 
   const runningProgress = deriveLongTaskProgressState({
     runID: initialized.runID,

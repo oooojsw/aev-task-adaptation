@@ -16,6 +16,8 @@ export type LongTaskRetryLevel = "tool_retry" | "work_unit_retry" | "subgraph_re
 
 export type LongTaskValidatorType = "script" | "prompt_json"
 
+export type LongTaskCapabilityKind = "inspect" | "transform" | "validate" | "compare" | "synthesize"
+
 export type LongTaskScratchUnitKind =
   | "claim"
   | "obs"
@@ -44,6 +46,16 @@ export interface LongTaskPathRef {
   role?: string
 }
 
+export interface LongTaskCapabilityContract {
+  id: string
+  title: string
+  kind: LongTaskCapabilityKind
+  description: string
+  referencePaths?: string[]
+  attachedFiles?: string[]
+  execution?: ExecutionSpec
+}
+
 export interface LongTaskBudgets {
   maxAttemptsPerUnit: number
   maxTotalUnitAttempts: number
@@ -65,11 +77,31 @@ export interface LongTaskReversePropagationHints {
   constraintPolicyIDs?: string[]
 }
 
+export interface LongTaskInitialGraphUnitDraft {
+  id: string
+  title: string
+  goal: string
+  inputs: string[]
+  depends_on: string[]
+  expected_artifacts: string[]
+  claim: string
+  check_plan: string
+  validator_ids: string[]
+  retry_budget: number
+}
+
+export interface LongTaskInitialGraphDraft {
+  planner_summary?: string
+  completion_validator_ids?: string[]
+  units: LongTaskInitialGraphUnitDraft[]
+}
+
 export interface LongTaskScriptValidatorContract {
   id: string
   type: "script"
   title: string
   path: string
+  placement?: "unit" | "completion_only"
   runner?: "python" | "bun" | "node" | "powershell" | "direct"
   args?: string[]
   cwd?: string
@@ -84,6 +116,7 @@ export interface LongTaskPromptValidatorContract {
   type: "prompt_json"
   title: string
   prompt: string
+  placement?: "unit" | "completion_only"
   required?: boolean
   blocking?: boolean
   referencePaths?: string[]
@@ -103,6 +136,7 @@ export interface LongTaskSpec {
   targetPaths?: LongTaskPathRef[]
   editablePaths?: string[]
   initialExpertContextPaths?: string[]
+  capabilities?: LongTaskCapabilityContract[]
   validators: LongTaskValidatorContract[]
   planning?: ExecutionSpec
   execution?: ExecutionSpec
@@ -110,6 +144,7 @@ export interface LongTaskSpec {
   budgets?: Partial<LongTaskBudgets>
   shadowMemoryScope?: LongTaskShadowMemoryScope
   reversePropagation?: LongTaskReversePropagationHints
+  initialGraph?: LongTaskInitialGraphDraft
   notes?: string
 }
 
@@ -266,6 +301,7 @@ export interface LongTaskRetryInputBundle {
   recentFailurePackets: LongTaskFailurePacket[]
   relevantScratchUnits: LongTaskScratchUnit[]
   relevantLearningUnits: LongTaskLearningUnit[]
+  relevantShadowMemory: LongTaskShadowMemoryRecord[]
 }
 
 export interface LongTaskArchiveRecord {
@@ -322,4 +358,3 @@ export const DEFAULT_LONG_TASK_BUDGETS: LongTaskBudgets = {
   maxNoProgressCycles: 5,
   maxUnitsPerGraph: 12,
 }
-

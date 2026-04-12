@@ -1,4 +1,5 @@
 import type {
+  LongTaskCapabilityContract,
   LongTaskRetryInputBundle,
   LongTaskSpec,
   LongTaskValidatorContract,
@@ -35,6 +36,7 @@ function describeValidators(validators: LongTaskValidatorContract[]) {
           `- id: ${validator.id}`,
           `  title: ${validator.title}`,
           `  type: script`,
+          `  placement: ${validator.placement ?? "unit"}`,
           `  required: ${validator.required !== false}`,
           `  blocking: ${validator.blocking === true}`,
           `  path: ${validator.path}`,
@@ -50,11 +52,30 @@ function describeValidators(validators: LongTaskValidatorContract[]) {
         `- id: ${validator.id}`,
         `  title: ${validator.title}`,
         `  type: prompt_json`,
+        `  placement: ${validator.placement ?? "unit"}`,
         `  required: ${validator.required !== false}`,
         `  blocking: ${validator.blocking === true}`,
         `  prompt: ${validator.prompt.trim()}`,
       ].join("\n")
     })
+    .join("\n")
+}
+
+function describeCapabilities(capabilities: LongTaskCapabilityContract[]) {
+  if (!capabilities.length) return "- none"
+  return capabilities
+    .map((capability) =>
+      [
+        `- id: ${capability.id}`,
+        `  title: ${capability.title}`,
+        `  kind: ${capability.kind}`,
+        `  description: ${capability.description.trim()}`,
+        capability.referencePaths?.length ? `  reference_paths: ${capability.referencePaths.join(", ")}` : "",
+        capability.attachedFiles?.length ? `  attached_files: ${capability.attachedFiles.join(", ")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    )
     .join("\n")
 }
 
@@ -88,13 +109,22 @@ export function buildLongTaskPlanningPrompt(input: {
     "Available validators:",
     describeValidators(input.spec.validators),
     "",
+    "Registered capabilities:",
+    describeCapabilities(input.spec.capabilities ?? []),
+    "",
     "Planning rules:",
     "- You must create a small initial work graph without requiring a human-provided work graph.",
     "- Each work unit must be a minimal semantic obligation that can be locally retried.",
+    "- Each work unit must reduce uncertainty against the goal or the validators.",
     "- Prefer 3 to 8 work units unless the task is trivial.",
     `- The graph must end in validator-backed completion using these completion validators: ${completionValidatorIDs.join(", ") || "(none)"}.`,
     "- Do not create units that are just 'read file X' or 'think more'.",
     "- Every unit must include a claim and a check plan.",
+    "- Think in terms of capability gaps, not domain steps. Choose units because they close an inspection, transformation, comparison, synthesis, or validation gap.",
+    "- When intermediate validators are available, attach them to the units that produce the corresponding intermediate artifacts.",
+    "- Exploratory or analysis-only units must not be blocked by final delivery validators before target outputs exist.",
+    "- If a unit is only for reading materials, tracing evidence, or preparing structure, set validator_ids to an empty array.",
+    "- Reserve final delivery validators for units that actually produce or finalize the target outputs.",
     "- Units may reuse the same validator if needed.",
     "",
     "Return JSON only, with this shape:",
@@ -140,6 +170,9 @@ export function buildLongTaskExecutionPrompt(input: {
     `Check plan: ${input.unit.checkPlan}`,
     `Retry budget for this unit: ${input.unit.retryBudget}`,
     "",
+    "Expected artifacts:",
+    input.unit.expectedArtifacts.length ? bullet(input.unit.expectedArtifacts) : "- none",
+    "",
     "Materials:",
     describePathRefs(input.spec.materials),
     "",
@@ -159,6 +192,9 @@ export function buildLongTaskExecutionPrompt(input: {
     "Validators for this unit:",
     describeValidators(relevantValidators),
     "",
+    "Registered capabilities:",
+    describeCapabilities(input.spec.capabilities ?? []),
+    "",
     input.validatorInputPaths.length
       ? ["Prepared validator input payloads (you may inspect them if useful):", bullet(input.validatorInputPaths), ""].join(
           "\n",
@@ -166,8 +202,14 @@ export function buildLongTaskExecutionPrompt(input: {
       : "",
     "Execution rules:",
     "- You may read and modify only the task-relevant paths provided to you.",
+    "- Work backward from the current claim and validators. Every action should either reduce uncertainty or increase validator confidence.",
+    "- Choose capabilities because of the gap they close, not because of domain habit or fixed task recipes.",
+    "- You may create small local helper artifacts inside editable paths when they materially improve verification or retryability, but do not assume any task-specific route is mandatory.",
     "- You may use validator scripts directly when they are available and useful for self-checking.",
     "- Do not invent new validators.",
+    "- Produce the expected artifacts for the current unit whenever the unit calls for explicit intermediate outputs.",
+    "- If the current unit has no formal validators, satisfy the check plan by creating the expected artifacts and leaving concise structured scratch evidence.",
+    "- Read the retry bundle carefully, especially recent failures, relevant learning units, and relevant shadow memory. Repeated mistakes should change your next move.",
     "- Keep scratch notes short and structured.",
     "- If you are blocked, say so explicitly in the JSON output instead of pretending success.",
     "",
@@ -274,11 +316,18 @@ export function buildLongTaskReplanPrompt(input: {
     "Available validators:",
     describeValidators(input.spec.validators),
     "",
+    "Registered capabilities:",
+    describeCapabilities(input.spec.capabilities ?? []),
+    "",
     "Replanning rules:",
     "- Keep already-verified units out of the new draft.",
     "- Only emit remaining or replacement units.",
     "- Prefer the smallest graph change that can escape the current failure pattern.",
+    "- Replan around capability gaps and validator gaps, not around domain recipes.",
     `- Keep completion validator ids aligned with: ${completionValidatorIDs.join(", ") || "(none)"}.`,
+    "- Prefer intermediate validators for intermediate outputs whenever such validators are available.",
+    "- Do not attach final delivery validators to pure analysis or evidence-gathering units.",
+    "- If a replanned unit only reads materials or prepares structure, its validator_ids may be an empty array.",
     "",
     "Return JSON only, with this shape:",
     jsonFence({
@@ -301,4 +350,3 @@ export function buildLongTaskReplanPrompt(input: {
     }),
   ].join("\n")
 }
-
