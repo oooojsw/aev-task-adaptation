@@ -1,0 +1,7 @@
+version: 1
+status: bootstrapped
+compare_modes_seen:
+  - text_exact
+bootstrap_cases:
+  - case-001
+  - case-002

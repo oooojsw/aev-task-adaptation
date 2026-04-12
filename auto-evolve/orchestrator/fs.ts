@@ -595,22 +595,22 @@ const DEFAULT_SPLIT = `# Dataset Split
 const DEFAULT_CONFIG_JSON = `{
   "version": 1,
   "datasetDir": "dataset/cases",
-  "knowledgeDir": "knowledge-pack",
-  "experienceArchiveDir": "experience-archive",
+  "knowledgeDir": "experience/workspace",
+  "experienceArchiveDir": "experience/archive",
   "experienceEntryFile": "manifest.md",
-  "templateLibraryDir": "experience-templates",
-  "reversePropagationModulesDir": "reverse-propagation-modules",
-  "maintenanceOpsDir": "maintenance-ops",
+  "templateLibraryDir": "experience/templates",
+  "reversePropagationModulesDir": "methods/reverse-propagation-modules",
+  "maintenanceOpsDir": "methods/maintenance-ops",
   "judgeSkillsDir": "judge-skills",
   "systemPromptsDir": "prompts",
-  "methodsDir": "methods",
-  "propagationDir": "propagation",
-  "propagationMethodsDir": "propagation-methods",
-  "optimizationDir": "optimization",
+  "methodsDir": "methods/recipes",
+  "propagationDir": "runtime-state/propagation",
+  "propagationMethodsDir": "methods/propagation",
+  "optimizationDir": "runtime-state/optimization",
   "baselineFile": "baseline.md",
   "splitFile": "dataset/SPLIT.md",
   "scriptsDir": "scripts",
-  "runsDir": "runs",
+  "runsDir": "runtime-state/runs",
   "modelConfigFile": "model-config.json",
   "judgeConfigFile": "judge-config.json",
   "permissionConfigFile": "permission-config.json",
@@ -691,28 +691,28 @@ const DEFAULT_LONG_TASK_EXAMPLE = `{
   "domainTags": ["demo"],
   "materials": [
     {
-      "path": "../dataset/cases/case-001/material/input.txt",
+      "path": "../../dataset/cases/case-001/material/input.txt",
       "label": "source material"
     }
   ],
   "targetPaths": [
     {
-      "path": "../tmp-output/example-result.txt",
+      "path": "../../runtime-state/tmp-output/example-result.txt",
       "label": "target output"
     }
   ],
   "editablePaths": [
-    "../tmp-output/example-result.txt"
+    "../../runtime-state/tmp-output/example-result.txt"
   ],
   "initialExpertContextPaths": [
-    "../knowledge-pack/manifest.md"
+    "../../experience/workspace/manifest.md"
   ],
   "validators": [
     {
       "id": "result-exists",
       "type": "script",
       "title": "Result file exists",
-      "path": "../scripts/long-task-validator.example.py",
+      "path": "../../scripts/long-task-validator.example.py",
       "required": true
     },
     {
@@ -1140,24 +1140,41 @@ if __name__ == "__main__":
 export async function ensureLayout(cwd: string): Promise<LayoutResult> {
   const created: string[] = []
   const root = autoEvolvePath(cwd)
-  const knowledgePackRoot = autoEvolvePath(cwd, "knowledge-pack")
-  const experienceArchiveRoot = autoEvolvePath(cwd, "experience-archive")
+  const experienceRoot = autoEvolvePath(cwd, "experience")
+  const knowledgePackRoot = autoEvolvePath(cwd, "experience", "workspace")
+  const experienceArchiveRoot = autoEvolvePath(cwd, "experience", "archive")
+  const experienceTemplatesRoot = autoEvolvePath(cwd, "experience", "templates")
+  const legacyKnowledgeRoot = autoEvolvePath(cwd, "experience", "legacy-knowledge")
   const methodsRoot = autoEvolvePath(cwd, "methods")
+  const methodRecipesRoot = autoEvolvePath(cwd, "methods", "recipes")
+  const reversePropagationModulesRoot = autoEvolvePath(cwd, "methods", "reverse-propagation-modules")
+  const maintenanceOpsRoot = autoEvolvePath(cwd, "methods", "maintenance-ops")
+  const propagationMethodsRoot = autoEvolvePath(cwd, "methods", "propagation")
+  const runtimeStateRoot = autoEvolvePath(cwd, "runtime-state")
+  const runsRoot = autoEvolvePath(cwd, "runtime-state", "runs")
+  const propagationRoot = autoEvolvePath(cwd, "runtime-state", "propagation")
+  const optimizationRoot = autoEvolvePath(cwd, "runtime-state", "optimization")
+  const longTaskRoot = autoEvolvePath(cwd, "runtime-state", "long-task")
+  const tmpOutputRoot = autoEvolvePath(cwd, "runtime-state", "tmp-output")
+  const taskPacksRoot = autoEvolvePath(cwd, "task-packs")
+  const templatesRoot = autoEvolvePath(cwd, "task-packs", "templates")
+  const realLongTasksRoot = autoEvolvePath(cwd, "task-packs", "real-long-tasks")
 
   const directories = [
     root,
     autoEvolvePath(cwd, "dataset"),
     autoEvolvePath(cwd, "dataset", "cases"),
+    experienceRoot,
     knowledgePackRoot,
     experienceArchiveRoot,
-    autoEvolvePath(cwd, "experience-archive", "history"),
-    autoEvolvePath(cwd, "experience-archive", "latest"),
+    autoEvolvePath(cwd, "experience", "archive", "history"),
+    autoEvolvePath(cwd, "experience", "archive", "latest"),
+    experienceTemplatesRoot,
+    legacyKnowledgeRoot,
     autoEvolvePath(cwd, "prompts"),
-    autoEvolvePath(cwd, "runs"),
+    runtimeStateRoot,
+    runsRoot,
     autoEvolvePath(cwd, "scripts"),
-    autoEvolvePath(cwd, "experience-templates"),
-    autoEvolvePath(cwd, "reverse-propagation-modules"),
-    autoEvolvePath(cwd, "maintenance-ops"),
     autoEvolvePath(cwd, "judge-skills"),
     autoEvolvePath(cwd, "judge-skills", "exact-output"),
     autoEvolvePath(cwd, "judge-skills", "exact-output", "scripts"),
@@ -1166,24 +1183,32 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
     autoEvolvePath(cwd, "judge-skills", "session-behavior"),
     autoEvolvePath(cwd, "judge-skills", "session-behavior", "scripts"),
     methodsRoot,
-    autoEvolvePath(cwd, "propagation"),
-    autoEvolvePath(cwd, "propagation-methods"),
-    autoEvolvePath(cwd, "optimization"),
-    autoEvolvePath(cwd, "optimization", "candidates"),
-    autoEvolvePath(cwd, "optimization", "outcomes"),
-    autoEvolvePath(cwd, "optimization", "memory"),
-    autoEvolvePath(cwd, "long-task"),
-    autoEvolvePath(cwd, "long-task", "runs"),
-    autoEvolvePath(cwd, "long-task", "archive"),
-    autoEvolvePath(cwd, "long-task", "shadow-memory"),
-    autoEvolvePath(cwd, "long-task", "candidates"),
-    path.join(methodsRoot, "sequential-refine"),
-    path.join(methodsRoot, "sequential-refine", "prompts"),
-    path.join(methodsRoot, "add-only"),
-    path.join(methodsRoot, "add-only", "prompts"),
-    path.join(methodsRoot, "adversarial-test"),
-    path.join(methodsRoot, "adversarial-test", "prompts"),
-    autoEvolvePath(cwd, "templates"),
+    methodRecipesRoot,
+    reversePropagationModulesRoot,
+    maintenanceOpsRoot,
+    propagationMethodsRoot,
+    propagationRoot,
+    optimizationRoot,
+    autoEvolvePath(cwd, "runtime-state", "optimization", "candidates"),
+    autoEvolvePath(cwd, "runtime-state", "optimization", "outcomes"),
+    autoEvolvePath(cwd, "runtime-state", "optimization", "memory"),
+    longTaskRoot,
+    autoEvolvePath(cwd, "runtime-state", "long-task", "runs"),
+    autoEvolvePath(cwd, "runtime-state", "long-task", "archive"),
+    autoEvolvePath(cwd, "runtime-state", "long-task", "shadow-memory"),
+    autoEvolvePath(cwd, "runtime-state", "long-task", "candidates"),
+    tmpOutputRoot,
+    path.join(methodRecipesRoot, "sequential-refine"),
+    path.join(methodRecipesRoot, "sequential-refine", "prompts"),
+    path.join(methodRecipesRoot, "add-only"),
+    path.join(methodRecipesRoot, "add-only", "prompts"),
+    path.join(methodRecipesRoot, "adversarial-test"),
+    path.join(methodRecipesRoot, "adversarial-test", "prompts"),
+    path.join(methodRecipesRoot, "parallel-batch-5-add-only"),
+    path.join(methodRecipesRoot, "parallel-batch-5-add-only", "prompts"),
+    taskPacksRoot,
+    templatesRoot,
+    realLongTasksRoot,
   ]
 
   for (const directory of directories) {
@@ -1210,14 +1235,14 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "experience-archive", "README.md"),
+    autoEvolvePath(cwd, "experience", "archive", "README.md"),
     DEFAULT_EXPERIENCE_ARCHIVE_README,
     created,
   )
-  await writeIfMissing(autoEvolvePath(cwd, "experience-archive", "history", ".gitkeep"), "\n", created)
-  await writeIfMissing(autoEvolvePath(cwd, "experience-archive", "latest", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "experience", "archive", "history", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "experience", "archive", "latest", ".gitkeep"), "\n", created)
   await writeIfMissing(
-    autoEvolvePath(cwd, "propagation", "README.md"),
+    autoEvolvePath(cwd, "runtime-state", "propagation", "README.md"),
     `# Propagation Workspace
 
 This directory is reserved for third-layer propagation experiments.
@@ -1229,12 +1254,12 @@ This directory is reserved for third-layer propagation experiments.
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "propagation-methods", "single-branch-baseline.md"),
+    autoEvolvePath(cwd, "methods", "propagation", "single-branch-baseline.md"),
     DEFAULT_PROPAGATION_METHOD_SINGLE_BRANCH_BASELINE,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "optimization", "README.md"),
+    autoEvolvePath(cwd, "runtime-state", "optimization", "README.md"),
     `# Layer 4 Optimization Workspace
 
 This directory is reserved for the fourth layer:
@@ -1248,7 +1273,7 @@ The fourth layer may prepare candidate expert-experience versions here, and the 
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "optimization", "memory", "README.md"),
+    autoEvolvePath(cwd, "runtime-state", "optimization", "memory", "README.md"),
     `# Optimizer Memory
 
 This directory stores the fourth-layer optimizer's own memory about:
@@ -1261,10 +1286,10 @@ These files are not part of the canonical expert experience workspace.
 `,
     created,
   )
-  await writeIfMissing(autoEvolvePath(cwd, "optimization", "candidates", ".gitkeep"), "\n", created)
-  await writeIfMissing(autoEvolvePath(cwd, "optimization", "outcomes", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "optimization", "candidates", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "optimization", "outcomes", ".gitkeep"), "\n", created)
   await writeIfMissing(
-    autoEvolvePath(cwd, "long-task", "README.md"),
+    autoEvolvePath(cwd, "runtime-state", "long-task", "README.md"),
     `# Long-Task Workspace
 
 This directory stores validator-driven long-task runs.
@@ -1287,76 +1312,76 @@ It is centered on:
 `,
     created,
   )
-  await writeIfMissing(autoEvolvePath(cwd, "long-task", "runs", ".gitkeep"), "\n", created)
-  await writeIfMissing(autoEvolvePath(cwd, "long-task", "archive", ".gitkeep"), "\n", created)
-  await writeIfMissing(autoEvolvePath(cwd, "long-task", "archive", "index.jsonl"), "", created)
-  await writeIfMissing(autoEvolvePath(cwd, "long-task", "shadow-memory", ".gitkeep"), "\n", created)
-  await writeIfMissing(autoEvolvePath(cwd, "long-task", "shadow-memory", "index.jsonl"), "", created)
-  await writeIfMissing(autoEvolvePath(cwd, "long-task", "candidates", ".gitkeep"), "\n", created)
-  await writeIfMissing(autoEvolvePath(cwd, "long-task", "candidates", "index.jsonl"), "", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "long-task", "runs", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "long-task", "archive", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "long-task", "archive", "index.jsonl"), "", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "long-task", "shadow-memory", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "long-task", "shadow-memory", "index.jsonl"), "", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "long-task", "candidates", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "long-task", "candidates", "index.jsonl"), "", created)
 
   await writeIfMissing(
-    autoEvolvePath(cwd, "experience-templates", "README.md"),
+    autoEvolvePath(cwd, "experience", "templates", "README.md"),
     DEFAULT_TEMPLATE_LIBRARY_README,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "experience-templates", "entry-template.md"),
+    autoEvolvePath(cwd, "experience", "templates", "entry-template.md"),
     DEFAULT_TEMPLATE_ENTRY,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "experience-templates", "rule-module-template.md"),
+    autoEvolvePath(cwd, "experience", "templates", "rule-module-template.md"),
     DEFAULT_TEMPLATE_RULE_MODULE,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "experience-templates", "exception-module-template.md"),
+    autoEvolvePath(cwd, "experience", "templates", "exception-module-template.md"),
     DEFAULT_TEMPLATE_EXCEPTION_MODULE,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "experience-templates", "output-contract-template.md"),
+    autoEvolvePath(cwd, "experience", "templates", "output-contract-template.md"),
     DEFAULT_TEMPLATE_OUTPUT_CONTRACT,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "experience-templates", "execution-checklist-template.md"),
+    autoEvolvePath(cwd, "experience", "templates", "execution-checklist-template.md"),
     DEFAULT_TEMPLATE_EXECUTION_CHECKLIST,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "experience-templates", "failure-lessons-template.md"),
+    autoEvolvePath(cwd, "experience", "templates", "failure-lessons-template.md"),
     DEFAULT_TEMPLATE_FAILURE_LESSONS,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "experience-templates", "tool-guide-template.md"),
+    autoEvolvePath(cwd, "experience", "templates", "tool-guide-template.md"),
     DEFAULT_TEMPLATE_TOOL_GUIDE,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "experience-templates", "partition-index-template.md"),
+    autoEvolvePath(cwd, "experience", "templates", "partition-index-template.md"),
     DEFAULT_TEMPLATE_PARTITION_INDEX,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "experience-templates", "task-router-template.md"),
+    autoEvolvePath(cwd, "experience", "templates", "task-router-template.md"),
     DEFAULT_TEMPLATE_TASK_ROUTER,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "reverse-propagation-modules", "direct-rewrite.md"),
+    autoEvolvePath(cwd, "methods", "reverse-propagation-modules", "direct-rewrite.md"),
     DEFAULT_DIRECT_REWRITE_MODULE,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "reverse-propagation-modules", "add-only-memory.md"),
+    autoEvolvePath(cwd, "methods", "reverse-propagation-modules", "add-only-memory.md"),
     DEFAULT_ADD_ONLY_MEMORY_MODULE,
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "inspect_workspace.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "inspect_workspace.md"),
     `# Maintenance Op: Inspect Workspace
 
 Summary: Read the workspace entry and then inspect the most relevant downstream Markdown modules.
@@ -1367,7 +1392,7 @@ Summary: Read the workspace entry and then inspect the most relevant downstream 
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "inspect_templates.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "inspect_templates.md"),
     `# Maintenance Op: Inspect Templates
 
 Summary: Inspect template-library files for structural ideas without copying them mechanically.
@@ -1377,7 +1402,7 @@ Summary: Inspect template-library files for structural ideas without copying the
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "inspect_failure_context.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "inspect_failure_context.md"),
     `# Maintenance Op: Inspect Failure Context
 
 Summary: Read expected output, actual output, evaluation, and related failure-context files before changing experience.
@@ -1385,7 +1410,7 @@ Summary: Read expected output, actual output, evaluation, and related failure-co
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "inspect_session_records.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "inspect_session_records.md"),
     `# Maintenance Op: Inspect Session Records
 
 Summary: Read selected session execution reports and related run records to understand prior behavior.
@@ -1393,7 +1418,7 @@ Summary: Read selected session execution reports and related run records to unde
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "rewrite_module.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "rewrite_module.md"),
     `# Maintenance Op: Rewrite Module
 
 Summary: Revise an existing Markdown module in place.
@@ -1401,7 +1426,7 @@ Summary: Revise an existing Markdown module in place.
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "create_module.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "create_module.md"),
     `# Maintenance Op: Create Module
 
 Summary: Add a new Markdown module when the workspace genuinely needs it.
@@ -1409,7 +1434,7 @@ Summary: Add a new Markdown module when the workspace genuinely needs it.
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "append_to_existing_module.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "append_to_existing_module.md"),
     `# Maintenance Op: Append To Existing Module
 
 Summary: Append a focused additive patch to an existing Markdown module without replacing its main body.
@@ -1417,7 +1442,7 @@ Summary: Append a focused additive patch to an existing Markdown module without 
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "create_helper_asset.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "create_helper_asset.md"),
     `# Maintenance Op: Create Helper Asset
 
 Summary: Create a workspace-local helper asset under \`tools/\` or \`skills/\` when a future solve agent would benefit from reusable local tooling.
@@ -1429,7 +1454,7 @@ Summary: Create a workspace-local helper asset under \`tools/\` or \`skills/\` w
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "update_helper_asset.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "update_helper_asset.md"),
     `# Maintenance Op: Update Helper Asset
 
 Summary: Update an existing workspace-local helper asset under \`tools/\` or \`skills/\` without breaking its discoverability.
@@ -1440,7 +1465,7 @@ Summary: Update an existing workspace-local helper asset under \`tools/\` or \`s
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "split_module.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "split_module.md"),
     `# Maintenance Op: Split Module
 
 Summary: Split an overloaded module into smaller modules when selective reading would improve.
@@ -1448,7 +1473,7 @@ Summary: Split an overloaded module into smaller modules when selective reading 
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "merge_modules.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "merge_modules.md"),
     `# Maintenance Op: Merge Modules
 
 Summary: Merge duplicate or overlapping modules to keep the workspace coherent.
@@ -1456,7 +1481,7 @@ Summary: Merge duplicate or overlapping modules to keep the workspace coherent.
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "deprecate_module.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "deprecate_module.md"),
     `# Maintenance Op: Deprecate Module
 
 Summary: Mark a module as deprecated when it should no longer drive future solve behavior.
@@ -1464,7 +1489,7 @@ Summary: Mark a module as deprecated when it should no longer drive future solve
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "create_partition.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "create_partition.md"),
     `# Maintenance Op: Create Partition
 
 Summary: Create or extend a navigable partition when the workspace becomes large enough to justify one.
@@ -1472,7 +1497,7 @@ Summary: Create or extend a navigable partition when the workspace becomes large
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "rewrite_entry_navigation.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "rewrite_entry_navigation.md"),
     `# Maintenance Op: Rewrite Entry Navigation
 
 Summary: Update the single workspace entry so a blank future solve agent knows what to read first.
@@ -1480,7 +1505,7 @@ Summary: Update the single workspace entry so a blank future solve agent knows w
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "add_tool_guide.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "add_tool_guide.md"),
     `# Maintenance Op: Add Tool Guide
 
 Summary: Add or refine task-specific tool-usage guidance for future solve agents.
@@ -1488,7 +1513,7 @@ Summary: Add or refine task-specific tool-usage guidance for future solve agents
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "add_failure_lesson.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "add_failure_lesson.md"),
     `# Maintenance Op: Add Failure Lesson
 
 Summary: Record a durable failure lesson that future agents should avoid repeating.
@@ -1496,7 +1521,7 @@ Summary: Record a durable failure lesson that future agents should avoid repeati
     created,
   )
   await writeIfMissing(
-    autoEvolvePath(cwd, "maintenance-ops", "record_change.md"),
+    autoEvolvePath(cwd, "methods", "maintenance-ops", "record_change.md"),
     `# Maintenance Op: Record Change
 
 Summary: Update the change log so the evolution remains understandable.
@@ -1614,20 +1639,20 @@ Provide an input JSON path and an output JSON path:
   await writeIfMissing(path.join(knowledgePackRoot, "manifest.md"), DEFAULT_MANIFEST, created)
   await writeIfMissing(path.join(knowledgePackRoot, "change_log.md"), DEFAULT_CHANGE_LOG, created)
 
-  await writeIfMissing(path.join(methodsRoot, "sequential-refine", "METHOD.md"), DEFAULT_SEQUENTIAL_METHOD, created)
-  await writeIfMissing(path.join(methodsRoot, "sequential-refine", "FLOW.md"), DEFAULT_SEQUENTIAL_FLOW, created)
+  await writeIfMissing(path.join(methodRecipesRoot, "sequential-refine", "METHOD.md"), DEFAULT_SEQUENTIAL_METHOD, created)
+  await writeIfMissing(path.join(methodRecipesRoot, "sequential-refine", "FLOW.md"), DEFAULT_SEQUENTIAL_FLOW, created)
   await writeIfMissing(
-    path.join(methodsRoot, "sequential-refine", "prompts", "bootstrap.md"),
+    path.join(methodRecipesRoot, "sequential-refine", "prompts", "bootstrap.md"),
     DEFAULT_SEQUENTIAL_BOOTSTRAP_PROMPT,
     created,
   )
   await writeIfMissing(
-    path.join(methodsRoot, "sequential-refine", "prompts", "solve.md"),
+    path.join(methodRecipesRoot, "sequential-refine", "prompts", "solve.md"),
     DEFAULT_SEQUENTIAL_SOLVE_PROMPT,
     created,
   )
   await writeIfMissing(
-    path.join(methodsRoot, "sequential-refine", "prompts", "maintain_extension.md"),
+    path.join(methodRecipesRoot, "sequential-refine", "prompts", "maintain_extension.md"),
     `This maintenance round follows the sequential-refine baseline.
 
 Use the selected session execution reports in this order:
@@ -1654,15 +1679,15 @@ Specific behavioral guidance:
     created,
   )
   await writeIfMissing(
-    path.join(methodsRoot, "sequential-refine", "prompts", "judge_extension.md"),
+    path.join(methodRecipesRoot, "sequential-refine", "prompts", "judge_extension.md"),
     DEFAULT_SEQUENTIAL_JUDGE_EXTENSION_PROMPT,
     created,
   )
 
-  await writeIfMissing(path.join(methodsRoot, "add-only", "METHOD.md"), DEFAULT_ADD_ONLY_METHOD, created)
-  await writeIfMissing(path.join(methodsRoot, "add-only", "FLOW.md"), DEFAULT_ADD_ONLY_FLOW, created)
+  await writeIfMissing(path.join(methodRecipesRoot, "add-only", "METHOD.md"), DEFAULT_ADD_ONLY_METHOD, created)
+  await writeIfMissing(path.join(methodRecipesRoot, "add-only", "FLOW.md"), DEFAULT_ADD_ONLY_FLOW, created)
   await writeIfMissing(
-    path.join(methodsRoot, "add-only", "prompts", "bootstrap.md"),
+    path.join(methodRecipesRoot, "add-only", "prompts", "bootstrap.md"),
     `You are initializing the persistent expert experience for the auto-evolve system.
 
 Your target is an experience workspace of Markdown documents.
@@ -1713,12 +1738,12 @@ After updating the experience workspace, reply with 3 to 6 short bullet points s
     created,
   )
   await writeIfMissing(
-    path.join(methodsRoot, "add-only", "prompts", "solve.md"),
+    path.join(methodRecipesRoot, "add-only", "prompts", "solve.md"),
     DEFAULT_SEQUENTIAL_SOLVE_PROMPT,
     created,
   )
   await writeIfMissing(
-    path.join(methodsRoot, "add-only", "prompts", "maintain_extension.md"),
+    path.join(methodRecipesRoot, "add-only", "prompts", "maintain_extension.md"),
     `This maintenance round follows the add-only method.
 
 Routing hints:
@@ -1745,7 +1770,7 @@ Previous maintenance-round feedback:
     created,
   )
   await writeIfMissing(
-    path.join(methodsRoot, "add-only", "prompts", "judge_extension.md"),
+    path.join(methodRecipesRoot, "add-only", "prompts", "judge_extension.md"),
     `This judge run supports the add-only method.
 
 Routing hints:
@@ -1765,25 +1790,25 @@ Add-only judge expectations:
     created,
   )
 
-  await writeIfMissing(path.join(methodsRoot, "adversarial-test", "METHOD.md"), DEFAULT_ADVERSARIAL_METHOD, created)
-  await writeIfMissing(path.join(methodsRoot, "adversarial-test", "FLOW.md"), DEFAULT_ADVERSARIAL_FLOW, created)
+  await writeIfMissing(path.join(methodRecipesRoot, "adversarial-test", "METHOD.md"), DEFAULT_ADVERSARIAL_METHOD, created)
+  await writeIfMissing(path.join(methodRecipesRoot, "adversarial-test", "FLOW.md"), DEFAULT_ADVERSARIAL_FLOW, created)
   await writeIfMissing(
-    path.join(methodsRoot, "adversarial-test", "prompts", "bootstrap.md"),
+    path.join(methodRecipesRoot, "adversarial-test", "prompts", "bootstrap.md"),
     DEFAULT_ADVERSARIAL_PROMPT,
     created,
   )
   await writeIfMissing(
-    path.join(methodsRoot, "adversarial-test", "prompts", "solve.md"),
+    path.join(methodRecipesRoot, "adversarial-test", "prompts", "solve.md"),
     DEFAULT_ADVERSARIAL_PROMPT,
     created,
   )
   await writeIfMissing(
-    path.join(methodsRoot, "adversarial-test", "prompts", "adversarial_probe.md"),
+    path.join(methodRecipesRoot, "adversarial-test", "prompts", "adversarial_probe.md"),
     DEFAULT_ADVERSARIAL_PROMPT,
     created,
   )
   await writeIfMissing(
-    path.join(methodsRoot, "adversarial-test", "prompts", "maintain_extension.md"),
+    path.join(methodRecipesRoot, "adversarial-test", "prompts", "maintain_extension.md"),
     `# Adversarial-Test Maintenance Extension
 
 Status: scaffold only
@@ -1794,19 +1819,19 @@ Status: scaffold only
     created,
   )
   await writeIfMissing(
-    path.join(methodsRoot, "adversarial-test", "prompts", "judge_extension.md"),
+    path.join(methodRecipesRoot, "adversarial-test", "prompts", "judge_extension.md"),
     DEFAULT_ADVERSARIAL_PROMPT,
     created,
   )
   await writeIfMissing(
-    path.join(methodsRoot, "adversarial-test", "prompts", "select.md"),
+    path.join(methodRecipesRoot, "adversarial-test", "prompts", "select.md"),
     DEFAULT_ADVERSARIAL_PROMPT,
     created,
   )
 
-  await writeIfMissing(autoEvolvePath(cwd, "templates", "case.example.json"), DEFAULT_CASE_EXAMPLE, created)
+  await writeIfMissing(autoEvolvePath(cwd, "task-packs", "templates", "case.example.json"), DEFAULT_CASE_EXAMPLE, created)
   await writeIfMissing(
-    autoEvolvePath(cwd, "templates", "long-task.example.json"),
+    autoEvolvePath(cwd, "task-packs", "templates", "long-task.example.json"),
     DEFAULT_LONG_TASK_EXAMPLE,
     created,
   )
@@ -1817,7 +1842,7 @@ Status: scaffold only
   )
   await writeIfMissing(autoEvolvePath(cwd, "dataset", "cases", ".gitkeep"), "\n", created)
   await writeIfMissing(autoEvolvePath(cwd, "scripts", ".gitkeep"), "\n", created)
-  await writeIfMissing(autoEvolvePath(cwd, "runs", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "runs", ".gitkeep"), "\n", created)
 
   return {
     autoEvolveRoot: root,

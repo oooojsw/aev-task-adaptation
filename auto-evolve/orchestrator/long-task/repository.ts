@@ -107,7 +107,7 @@ function short(text: string, limit = 200) {
 }
 
 export function longTaskPaths(cwd: string): LongTaskPaths {
-  const root = autoEvolvePath(cwd, "long-task")
+  const root = autoEvolvePath(cwd, "runtime-state", "long-task")
   return {
     root,
     runsRoot: path.join(root, "runs"),

@@ -1,0 +1,122 @@
+{
+  "title": "try4-machine-equipment-e2w-minimal",
+  "goal": "Read the provided source materials and produce complete target Word outputs that satisfy the stated task goal and current validators, without relying on any fixed prewritten task route.",
+  "taskFamily": "machine-equipment-e2w",
+  "domainTags": [
+    "excel-to-word",
+    "machine-equipment",
+    "valuation"
+  ],
+  "materials": [
+    {
+      "path": "./materials/省口腔拟处置设备评估计算表250808-1104.xlsx",
+      "label": "source workbook",
+      "role": "source-artifact"
+    },
+    {
+      "path": "./materials/机器设备资产评估报告-空数据模板.docx",
+      "label": "report template",
+      "role": "target-template"
+    },
+    {
+      "path": "./materials/机器设备资产评估说明-空数据模板.docx",
+      "label": "explanation template",
+      "role": "target-template"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "./outputs/机器设备资产评估报告-生成稿.docx",
+      "label": "generated report",
+      "role": "target-artifact"
+    },
+    {
+      "path": "./outputs/机器设备资产评估说明-生成稿.docx",
+      "label": "generated explanation",
+      "role": "target-artifact"
+    }
+  ],
+  "editablePaths": [
+    "./outputs",
+    "./workspace"
+  ],
+  "initialExpertContextPaths": [
+    "./00-任务入口.md",
+    "./goal/任务目标.txt"
+  ],
+  "capabilities": [
+    {
+      "id": "inspect-provided-artifacts",
+      "title": "Inspect Provided Artifacts",
+      "kind": "inspect",
+      "description": "Use approved artifact-reading capabilities to inspect provided source or target artifacts and extract structure, content, or comparison-relevant evidence.",
+      "referencePaths": [
+        "./skills/minimax-docx/SKILL.md",
+        "./skills/minimax-xlsx/SKILL.md"
+      ]
+    },
+    {
+      "id": "transform-target-artifacts",
+      "title": "Transform Target Artifacts",
+      "kind": "transform",
+      "description": "Use approved artifact-editing capabilities to create or update target outputs inside editable paths when that reduces the current validator gap.",
+      "referencePaths": [
+        "./skills/minimax-docx/SKILL.md",
+        "./skills/minimax-xlsx/SKILL.md"
+      ]
+    },
+    {
+      "id": "validate-current-outputs",
+      "title": "Validate Current Outputs",
+      "kind": "validate",
+      "description": "Use approved validation or inspection capabilities to check whether current outputs satisfy the current goal contract or any local claim.",
+      "referencePaths": [
+        "./skills/minimax-docx/SKILL.md",
+        "./skills/minimax-xlsx/SKILL.md"
+      ]
+    }
+  ],
+  "validators": [
+    {
+      "id": "targets-exist",
+      "type": "script",
+      "title": "Target files exist",
+      "path": "../../scripts/long-task-validator.example.py",
+      "placement": "unit",
+      "required": true,
+      "blocking": false
+    },
+    {
+      "id": "goal-review",
+      "type": "prompt_json",
+      "title": "Goal-level review",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": false,
+      "referencePaths": [
+        "./00-任务入口.md",
+        "./goal/任务目标.txt"
+      ],
+      "prompt": "Inspect the current target outputs against the task goal. Fail if required outputs are missing, if unresolved placeholder brackets obviously remain, or if the outputs are clearly incomplete relative to the stated goal. Pass only when the current outputs look plausibly complete under the current goal contract."
+    }
+  ],
+  "budgets": {
+    "maxAttemptsPerUnit": 2,
+    "maxTotalUnitAttempts": 10,
+    "maxGraphReplans": 2,
+    "maxValidatorCalls": 24,
+    "maxNoProgressCycles": 4,
+    "maxUnitsPerGraph": 8
+  },
+  "shadowMemoryScope": {
+    "namespace": "machine-equipment-e2w-minimal-reset",
+    "tags": [
+      "excel-to-word",
+      "machine-equipment",
+      "valuation",
+      "minimal-reset"
+    ],
+    "retrievalMode": "manual"
+  },
+  "notes": "This reset package intentionally removes fixed task routes and task-specific generation scripts. The run must bootstrap from goal, materials, capabilities, and minimal validators."
+}
