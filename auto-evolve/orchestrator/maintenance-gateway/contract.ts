@@ -2,7 +2,7 @@ import type { ExperienceWorkspaceRole } from "../experience-workspace"
 
 export type MaintenanceRequestStatus = "hold" | "ready_for_maintainer" | "applied" | "rejected"
 
-export type MaintenanceRequestMode = "short" | "long"
+export type MaintenanceRequestMode = "short" | "long" | "batch"
 
 export type MaintenanceEvidenceKind =
   | "execution_report"

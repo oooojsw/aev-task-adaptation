@@ -4,6 +4,7 @@
   "knowledgeDir": "experience/workspace",
   "experienceArchiveDir": "experience/archive",
   "maintenanceGatewayDir": "runtime-state/maintenance-gateway",
+  "experienceTransactionDir": "runtime-state/experience-transaction",
   "experienceEntryFile": "manifest.md",
   "templateLibraryDir": "experience/templates",
   "reversePropagationModulesDir": "methods/reverse-propagation-modules",

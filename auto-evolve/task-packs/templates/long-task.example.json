@@ -26,7 +26,7 @@
       "id": "result-exists",
       "type": "script",
       "title": "Result file exists",
-      "path": "../../scripts/long-task-validator.example.py",
+      "path": "../../../scripts/long-task-validator.example.py",
       "required": true
     },
     {

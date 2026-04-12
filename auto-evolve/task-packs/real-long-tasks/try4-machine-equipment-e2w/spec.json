@@ -81,7 +81,7 @@
       "id": "targets-exist",
       "type": "script",
       "title": "Target files exist",
-      "path": "../../scripts/long-task-validator.example.py",
+      "path": "../../../scripts/long-task-validator.example.py",
       "placement": "unit",
       "required": true,
       "blocking": false

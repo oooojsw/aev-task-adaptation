@@ -8,21 +8,20 @@ import {
 } from "./solve-stage"
 import { prepareFeedbackPacketPrimitive } from "./feedback-packet"
 import { finishIfJudgeSkippedMaintenancePrimitive, runPreJudgePrimitive } from "./judge"
-import {
-  invokeKnowledgeMaintainerPrimitive,
-  rejectIfMaintenanceFailedPrimitive,
-  rejectIfNoExperienceChangePrimitive,
-  rejectIfOutOfPolicyFilesPrimitive,
-} from "./knowledge-maintenance"
-import {
-  finishAfterAcceptPrimitive,
-  verifyCurrentCasePrimitive,
-} from "./acceptance-flow"
+import { invokeKnowledgeMaintainerPrimitive } from "./knowledge-maintenance"
 import {
   runRegressionAfterMaintenancePrimitive,
   runRegressionBeforeMaintenancePrimitive,
 } from "./regression-suite"
-import { applyPostJudgeDecisionPrimitive, runPostJudgePrimitive } from "./post-judge"
+import { runPostJudgePrimitive } from "./post-judge"
+import {
+  applyPostJudgeDecisionPrimitive,
+  finishAfterAcceptPrimitive,
+  rejectIfMaintenanceFailedPrimitive,
+  rejectIfNoExperienceChangePrimitive,
+  rejectIfOutOfPolicyFilesPrimitive,
+  verifyCurrentCasePrimitive,
+} from "../experience-transaction/short-task"
 
 export async function buildCaseMethodOps(context: CaseRuntimeContext): Promise<CaseMethodOps> {
   return {

@@ -58,6 +58,7 @@ export interface AutoEvolveConfig {
   knowledgeDir: string
   experienceArchiveDir: string
   maintenanceGatewayDir: string
+  experienceTransactionDir: string
   experienceEntryFile: string
   templateLibraryDir: string
   reversePropagationModulesDir: string
@@ -139,6 +140,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   knowledgeDir: "experience/workspace",
   experienceArchiveDir: "experience/archive",
   maintenanceGatewayDir: "runtime-state/maintenance-gateway",
+  experienceTransactionDir: "runtime-state/experience-transaction",
   experienceEntryFile: "manifest.md",
   templateLibraryDir: "experience/templates",
   reversePropagationModulesDir: "methods/reverse-propagation-modules",
@@ -473,6 +475,10 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
       typeof raw.maintenanceGatewayDir === "string" && raw.maintenanceGatewayDir.trim()
         ? raw.maintenanceGatewayDir
         : DEFAULT_CONFIG.maintenanceGatewayDir,
+    experienceTransactionDir:
+      typeof raw.experienceTransactionDir === "string" && raw.experienceTransactionDir.trim()
+        ? raw.experienceTransactionDir
+        : DEFAULT_CONFIG.experienceTransactionDir,
     experienceEntryFile:
       typeof raw.experienceEntryFile === "string" && raw.experienceEntryFile.trim()
         ? raw.experienceEntryFile
@@ -599,6 +605,10 @@ export async function validateAllCases(cwd: string, config: AutoEvolveConfig): P
   const maintenanceGatewayRoot = autoEvolvePath(cwd, config.maintenanceGatewayDir)
   if (!(await pathExists(maintenanceGatewayRoot))) {
     errors.push(`Maintenance gateway directory is missing: ${maintenanceGatewayRoot}`)
+  }
+  const experienceTransactionRoot = autoEvolvePath(cwd, config.experienceTransactionDir)
+  if (!(await pathExists(experienceTransactionRoot))) {
+    errors.push(`Experience transaction directory is missing: ${experienceTransactionRoot}`)
   }
   const propagationRoot = autoEvolvePath(cwd, config.propagationDir)
   if (!(await pathExists(propagationRoot))) {

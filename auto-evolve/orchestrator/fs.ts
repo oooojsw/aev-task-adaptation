@@ -597,6 +597,8 @@ const DEFAULT_CONFIG_JSON = `{
   "datasetDir": "dataset/cases",
   "knowledgeDir": "experience/workspace",
   "experienceArchiveDir": "experience/archive",
+  "maintenanceGatewayDir": "runtime-state/maintenance-gateway",
+  "experienceTransactionDir": "runtime-state/experience-transaction",
   "experienceEntryFile": "manifest.md",
   "templateLibraryDir": "experience/templates",
   "reversePropagationModulesDir": "methods/reverse-propagation-modules",
@@ -712,7 +714,7 @@ const DEFAULT_LONG_TASK_EXAMPLE = `{
       "id": "result-exists",
       "type": "script",
       "title": "Result file exists",
-      "path": "../../scripts/long-task-validator.example.py",
+      "path": "../../../scripts/long-task-validator.example.py",
       "required": true
     },
     {
@@ -1153,6 +1155,7 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
   const runtimeStateRoot = autoEvolvePath(cwd, "runtime-state")
   const runsRoot = autoEvolvePath(cwd, "runtime-state", "runs")
   const maintenanceGatewayRoot = autoEvolvePath(cwd, "runtime-state", "maintenance-gateway")
+  const experienceTransactionRoot = autoEvolvePath(cwd, "runtime-state", "experience-transaction")
   const propagationRoot = autoEvolvePath(cwd, "runtime-state", "propagation")
   const optimizationRoot = autoEvolvePath(cwd, "runtime-state", "optimization")
   const longTaskRoot = autoEvolvePath(cwd, "runtime-state", "long-task")
@@ -1176,7 +1179,9 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
     runtimeStateRoot,
     runsRoot,
     maintenanceGatewayRoot,
+    experienceTransactionRoot,
     autoEvolvePath(cwd, "runtime-state", "maintenance-gateway", "requests"),
+    autoEvolvePath(cwd, "runtime-state", "experience-transaction", "records"),
     autoEvolvePath(cwd, "scripts"),
     autoEvolvePath(cwd, "judge-skills"),
     autoEvolvePath(cwd, "judge-skills", "exact-output"),
@@ -1337,6 +1342,21 @@ The maintainer core should consume normalized requests from here rather than rea
   )
   await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "maintenance-gateway", "requests", ".gitkeep"), "\n", created)
   await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "maintenance-gateway", "index.jsonl"), "", created)
+  await writeIfMissing(
+    autoEvolvePath(cwd, "runtime-state", "experience-transaction", "README.md"),
+    `# Experience Transaction Gate
+
+This directory stores the thin transaction layer between maintenance output and canonical experience.
+
+- records/: append-only transaction audit records
+- index.jsonl: append-only transaction index
+
+The maintainer should produce candidate changes, and this layer should record verification, acceptance, and rollback decisions without becoming the maintainer itself.
+`,
+    created,
+  )
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "experience-transaction", "records", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "experience-transaction", "index.jsonl"), "", created)
 
   await writeIfMissing(
     autoEvolvePath(cwd, "experience", "templates", "README.md"),

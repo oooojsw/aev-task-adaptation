@@ -33,6 +33,10 @@ This directory contains a usable scaffold for a dataset-driven loop that treats 
   - real long-task packages with materials, goals, validators, and task-local runtime sidecars
 - `runtime-state/runs/`
   - run artifacts written by `bootstrap` and `run-case`
+- `runtime-state/maintenance-gateway/`
+  - normalized maintenance requests from runtime kernels
+- `runtime-state/experience-transaction/`
+  - transaction records for verification, acceptance, and rollback decisions
 
 ## Execution Flow
 

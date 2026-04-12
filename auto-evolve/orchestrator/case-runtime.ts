@@ -22,6 +22,7 @@ export type CaseExecutionProfile = "full" | "light_shard"
 export interface MaintenanceRoundSummary {
   round: number
   maintenanceRequestPath?: string
+  transactionRecordPath?: string
   maintainSessionID?: string
   maintainSessionExecutionReportPath?: string
   maintainExitCode?: number
@@ -50,6 +51,7 @@ export interface AttemptSummary {
   scratchMemoryPath?: string
   shadowMemoryCandidatePath?: string
   maintenanceRequestPath?: string
+  transactionRecordPath?: string
   solveSessionID?: string
   solveSessionExecutionReportPath?: string
   solveExitCode: number
@@ -203,6 +205,7 @@ export interface CaseRuntimeContext {
   maintainInputDir: string
   baseAcceptanceDir: string
   acceptanceDir: string
+  transactionDir: string
   currentMaintenanceRound?: number
   evidencePaths: CaseEvidencePaths
   attempts: AttemptSummary[]
@@ -271,6 +274,7 @@ export function createAttemptContext(input: {
   const maintainDir = path.join(currentAttemptDir, "maintain")
   const maintainInputDir = path.join(currentAttemptDir, "maintain-input")
   const acceptanceDir = path.join(currentAttemptDir, "acceptance")
+  const transactionDir = path.join(currentAttemptDir, "transaction")
   const evidenceDir = path.join(currentAttemptDir, "evidence")
   const attemptSummary: AttemptSummary = {
     attempt: input.attempt,
@@ -293,6 +297,7 @@ export function createAttemptContext(input: {
     maintainInputDir,
     baseAcceptanceDir: acceptanceDir,
     acceptanceDir,
+    transactionDir,
     currentMaintenanceRound: undefined,
     evidencePaths: {
       root: evidenceDir,
