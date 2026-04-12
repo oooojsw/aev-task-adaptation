@@ -56,6 +56,7 @@ export interface RoundBatchSummary {
   changedFiles: string[]
   maintenanceRequestPath?: string
   transactionRecordPath?: string
+  acceptanceRecordPath?: string
 }
 
 export interface RunBatchRoundResult {
@@ -303,6 +304,7 @@ async function runSingleBatch(input: {
   let rejectedRounds = 0
   let maintenanceRequestPath: string | undefined
   let transactionRecordPath: string | undefined
+  let acceptanceRecordPath: string | undefined
 
   for (let round = 1; round <= input.config.maxMaintenanceRoundsPerAttempt; round++) {
     const roundDir = path.join(batchDir, "maintenance-rounds", `round-${String(round).padStart(2, "0")}`)
@@ -324,6 +326,7 @@ async function runSingleBatch(input: {
         templateLibraryRoot: templateLibrary.root,
         maintenanceMethodID: input.recipe.maintenanceMethodID,
         reversePropagationModuleID: input.recipe.reversePropagationModuleID,
+        acceptancePolicyID: input.recipe.acceptancePolicyID,
         sessionReports: packetArtifacts.sessionReports,
       }),
       mirrorPath: path.join(maintainDir, "maintenance_request.json"),
@@ -366,8 +369,8 @@ async function runSingleBatch(input: {
 
     if (maintainResult.task.result.exitCode !== 0 || !maintainResult.changed) {
       await restoreExperienceWorkspace(baseWorkspacePaths, beforeRoundSnapshot)
-      transactionRecordPath = (
-        await writeBatchTransactionRecord({
+      {
+        const transactionWrite = await writeBatchTransactionRecord({
           cwd: input.cwd,
           config: input.config,
           roundRunID,
@@ -390,8 +393,16 @@ async function runSingleBatch(input: {
               ? "Batch maintenance transaction rejected because the maintainer failed."
               : "Batch maintenance transaction rejected because the workspace did not change.",
           controlDecision: round === input.config.maxMaintenanceRoundsPerAttempt ? "finish_run" : "next_attempt",
+          acceptancePolicyID: input.recipe.acceptancePolicyID,
+          acceptanceStageID: "transaction_guard",
+          acceptancePassed: false,
+          acceptanceOutcome: "retry",
+          acceptanceEvidenceRefs: [path.join(maintainDir, "maintain_summary.json")],
+          acceptanceNotes: ["Batch transaction stopped before deeper acceptance because maintain exited non-zero or changed nothing."],
         })
-      ).path
+        transactionRecordPath = transactionWrite.path
+        acceptanceRecordPath = transactionWrite.acceptancePath
+      }
       rejectedRounds += 1
       if (round === input.config.maxMaintenanceRoundsPerAttempt) {
         break
@@ -407,8 +418,8 @@ async function runSingleBatch(input: {
         reason: "invalid_workspace_layout",
         workspaceValidationErrors: workspaceValidation.errors,
       })
-      transactionRecordPath = (
-        await writeBatchTransactionRecord({
+      {
+        const transactionWrite = await writeBatchTransactionRecord({
           cwd: input.cwd,
           config: input.config,
           roundRunID,
@@ -424,8 +435,16 @@ async function runSingleBatch(input: {
           controlDecision: round === input.config.maxMaintenanceRoundsPerAttempt ? "finish_run" : "next_attempt",
           changedFiles: maintainResult.changedFiles,
           workspaceValidationErrors: workspaceValidation.errors,
+          acceptancePolicyID: input.recipe.acceptancePolicyID,
+          acceptanceStageID: "transaction_guard",
+          acceptancePassed: false,
+          acceptanceOutcome: "rollback",
+          acceptanceEvidenceRefs: [path.join(maintainDir, "maintain_summary.json")],
+          acceptanceNotes: ["Batch transaction failed because the candidate workspace violated canonical layout rules."],
         })
-      ).path
+        transactionRecordPath = transactionWrite.path
+        acceptanceRecordPath = transactionWrite.acceptancePath
+      }
       await restoreExperienceWorkspace(baseWorkspacePaths, beforeRoundSnapshot)
       rejectedRounds += 1
       if (round === input.config.maxMaintenanceRoundsPerAttempt) {
@@ -477,8 +496,8 @@ async function runSingleBatch(input: {
       regressionBefore,
       regressionAfter,
     })
-    transactionRecordPath = (
-      await writeBatchTransactionRecord({
+    {
+      const transactionWrite = await writeBatchTransactionRecord({
         cwd: input.cwd,
         config: input.config,
         roundRunID,
@@ -506,8 +525,20 @@ async function runSingleBatch(input: {
           accepted: postJudge.decision === "accept",
           reason: postJudge.decision === "accept" ? "accepted" : "retry",
         },
+        acceptancePolicyID: input.recipe.acceptancePolicyID,
+        acceptanceStageID: "transaction_guard",
+        acceptancePassed: postJudge.decision === "accept",
+        acceptanceOutcome: postJudge.decision === "accept" ? "accept" : "retry",
+        acceptanceEvidenceRefs: [
+          path.join(acceptanceDir, "acceptance.json"),
+          path.join(acceptanceDir, "post_judge_summary.json"),
+          path.join(acceptanceDir, "post_judge_report.md"),
+        ],
+        acceptanceNotes: ["Batch transaction acceptance mirrors the shared acceptance framework rather than a batch-only local rule."],
       })
-    ).path
+      transactionRecordPath = transactionWrite.path
+      acceptanceRecordPath = transactionWrite.acceptancePath
+    }
 
     if (postJudge.decision === "accept") {
       accepted = true
@@ -554,6 +585,7 @@ async function runSingleBatch(input: {
     changedFiles,
     maintenanceRequestPath,
     transactionRecordPath,
+    acceptanceRecordPath,
   }
 
   await writeJsonFile(path.join(batchDir, "batch.json"), batchSummary)
@@ -577,6 +609,7 @@ async function runSingleBatch(input: {
       `- changed files: ${batchSummary.changedFiles.length ? batchSummary.changedFiles.join(", ") : "(none)"}`,
       `- maintenance request path: ${batchSummary.maintenanceRequestPath ?? "(none)"}`,
       `- transaction record path: ${batchSummary.transactionRecordPath ?? "(none)"}`,
+      `- acceptance record path: ${batchSummary.acceptanceRecordPath ?? "(none)"}`,
       "",
     ].join("\n"),
   )

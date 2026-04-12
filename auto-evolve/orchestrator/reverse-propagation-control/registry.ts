@@ -148,6 +148,28 @@ const COMPONENTS: ReversePropagationComponentDescriptor[] = [
     pluginFriendly: true,
   },
   {
+    id: "long-task-candidate-guard",
+    title: "Long-Task Candidate Guard",
+    summary:
+      "Preserve long-task runs as candidate experience only when completion validation passed and the candidate is maintainer-ready.",
+    category: "acceptance_policy",
+    layer: "cross_layer",
+    status: "active",
+    stateful: true,
+    pluginFriendly: true,
+  },
+  {
+    id: "blank-agent-single-session-gate",
+    title: "Blank-Agent Single-Session Gate",
+    summary:
+      "Use the highest deployment acceptance standard: a blank agent must complete the task in one uninterrupted session.",
+    category: "acceptance_policy",
+    layer: "cross_layer",
+    status: "experimental",
+    stateful: true,
+    pluginFriendly: true,
+  },
+  {
     id: "single-branch-governance",
     title: "Single-Branch Governance",
     summary:
@@ -238,6 +260,19 @@ const STATE_CHANNELS: ReversePropagationStateChannelDescriptor[] = [
       "Carries before/after regression pass counts and explicit regression losses into post-judge acceptance.",
     producers: ["strict-regression-guard", "add-only-conservative-guard"],
     consumers: ["text-learning-rate", "maintenance-momentum"],
+  },
+  {
+    id: "acceptance_records",
+    title: "Acceptance Records",
+    summary:
+      "Carries high-level acceptance decisions, standards, and harness outcomes across transaction, candidate, and deployment boundaries.",
+    producers: [
+      "strict-regression-guard",
+      "add-only-conservative-guard",
+      "long-task-candidate-guard",
+      "blank-agent-single-session-gate",
+    ],
+    consumers: ["single-branch-governance", "experience-compression", "adversarial-suite-builder"],
   },
   {
     id: "campaign_lineage",

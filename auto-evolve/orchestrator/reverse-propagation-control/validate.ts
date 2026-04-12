@@ -2,6 +2,7 @@ import { resolveExecutionStrategy } from "../execution-strategies"
 import { methodPaths } from "../methods"
 import { resolvePacketizationPolicy } from "../packetization-policies"
 import { resolveBatchPostJudgeStrategy } from "../batch-post-judge"
+import { resolveAcceptancePolicy } from "../acceptance-framework/registry"
 import { listReversePropagationRecipes } from "./recipes"
 import {
   listReversePropagationComponents,
@@ -80,6 +81,13 @@ export async function validateReversePropagationControlPlane(
       validateComponentCategory(componentID, "routing_policy", errors)
     }
     validateComponentCategory(recipe.acceptancePolicyID, "acceptance_policy", errors)
+    try {
+      resolveAcceptancePolicy(recipe.acceptancePolicyID)
+    } catch (error) {
+      errors.push(
+        `Recipe ${recipe.id} references invalid acceptance policy descriptor: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
     if (recipe.governanceStrategyID) {
       validateComponentCategory(recipe.governanceStrategyID, "governance_strategy", errors)
     }

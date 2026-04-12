@@ -59,6 +59,7 @@ export interface AutoEvolveConfig {
   experienceArchiveDir: string
   maintenanceGatewayDir: string
   experienceTransactionDir: string
+  acceptanceFrameworkDir: string
   experienceEntryFile: string
   templateLibraryDir: string
   reversePropagationModulesDir: string
@@ -141,6 +142,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   experienceArchiveDir: "experience/archive",
   maintenanceGatewayDir: "runtime-state/maintenance-gateway",
   experienceTransactionDir: "runtime-state/experience-transaction",
+  acceptanceFrameworkDir: "runtime-state/acceptance-framework",
   experienceEntryFile: "manifest.md",
   templateLibraryDir: "experience/templates",
   reversePropagationModulesDir: "methods/reverse-propagation-modules",
@@ -479,6 +481,10 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
       typeof raw.experienceTransactionDir === "string" && raw.experienceTransactionDir.trim()
         ? raw.experienceTransactionDir
         : DEFAULT_CONFIG.experienceTransactionDir,
+    acceptanceFrameworkDir:
+      typeof raw.acceptanceFrameworkDir === "string" && raw.acceptanceFrameworkDir.trim()
+        ? raw.acceptanceFrameworkDir
+        : DEFAULT_CONFIG.acceptanceFrameworkDir,
     experienceEntryFile:
       typeof raw.experienceEntryFile === "string" && raw.experienceEntryFile.trim()
         ? raw.experienceEntryFile
@@ -609,6 +615,10 @@ export async function validateAllCases(cwd: string, config: AutoEvolveConfig): P
   const experienceTransactionRoot = autoEvolvePath(cwd, config.experienceTransactionDir)
   if (!(await pathExists(experienceTransactionRoot))) {
     errors.push(`Experience transaction directory is missing: ${experienceTransactionRoot}`)
+  }
+  const acceptanceFrameworkRoot = autoEvolvePath(cwd, config.acceptanceFrameworkDir)
+  if (!(await pathExists(acceptanceFrameworkRoot))) {
+    errors.push(`Acceptance framework directory is missing: ${acceptanceFrameworkRoot}`)
   }
   const propagationRoot = autoEvolvePath(cwd, config.propagationDir)
   if (!(await pathExists(propagationRoot))) {

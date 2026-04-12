@@ -28,6 +28,7 @@ export function buildBatchMaintenanceRequest(input: {
   templateLibraryRoot: string
   maintenanceMethodID: string
   reversePropagationModuleID: string
+  acceptancePolicyID?: string
   sessionReports: KnowledgeMaintainerSessionReportRef[]
   loadingStrategyID?: string
   scopeLevelID?: string
@@ -58,6 +59,7 @@ export function buildBatchMaintenanceRequest(input: {
     templateLibraryRoot: input.templateLibraryRoot,
     recipeID: input.maintenanceMethodID,
     maintenanceModuleID: input.reversePropagationModuleID,
+    acceptancePolicyID: input.acceptancePolicyID,
     loadingStrategyID: input.loadingStrategyID,
     scopeLevelID: input.scopeLevelID,
     operationIDs: input.operationIDs ?? [],

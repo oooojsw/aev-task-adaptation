@@ -4,6 +4,7 @@ import type { CaseRuntimeContext } from "../case-runtime"
 import { ensureDirectory, readTextFile, writeJsonFile, writeTextFile } from "../fs"
 import type { KnowledgeMaintainerPlan } from "../knowledge-maintainer/contract"
 import { buildSessionRecordRef, relativeToRunDir } from "../method-strategy-helpers"
+import { resolveReversePropagationRecipe } from "../reverse-propagation-control/recipes"
 import type { MaintenanceEvidenceRef, MaintenanceRequest } from "./contract"
 
 interface ShortTaskFailurePacket {
@@ -283,6 +284,7 @@ export function buildShortTaskMaintenanceRequest(context: CaseRuntimeContext, pl
 
   const createdAt = nowISO()
   const round = context.currentMaintenanceRound
+  const acceptancePolicyID = resolveReversePropagationRecipe(context.methodID)?.acceptancePolicyID
   const evidence: MaintenanceEvidenceRef[] = [
     {
       kind: "execution_report",
@@ -368,6 +370,7 @@ export function buildShortTaskMaintenanceRequest(context: CaseRuntimeContext, pl
     templateLibraryRoot: context.templateLibrary.root,
     recipeID: context.strategy.id,
     maintenanceModuleID: plan.reversePropagationModuleID,
+    acceptancePolicyID,
     loadingStrategyID: plan.loadingStrategyID,
     scopeLevelID: plan.scopeLevelID,
     operationIDs: plan.operationIDs ?? [],

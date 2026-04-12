@@ -51,6 +51,13 @@ export function buildAttemptTaskIndex(attemptSummary: AttemptSummary, runDir: st
       recordPath: attemptSummary.transactionRecordPath.replace(runDir, "").replace(/^[\\/]/, "").replace(/\\/g, "/"),
     })
   }
+  for (const item of attemptSummary.acceptanceRecordPaths ?? []) {
+    tasks.push({
+      phase: "acceptance_framework",
+      sessionID: null,
+      recordPath: item.replace(runDir, "").replace(/^[\\/]/, "").replace(/\\/g, "/"),
+    })
+  }
 
   for (const item of attemptSummary.regressionBeforeReports ?? []) {
     tasks.push(
@@ -87,6 +94,13 @@ export function buildAttemptTaskIndex(attemptSummary: AttemptSummary, runDir: st
         phase: `transaction_gate:round-${String(round.round).padStart(2, "0")}`,
         sessionID: null,
         recordPath: round.transactionRecordPath.replace(runDir, "").replace(/^[\\/]/, "").replace(/\\/g, "/"),
+      })
+    }
+    for (const item of round.acceptanceRecordPaths ?? []) {
+      tasks.push({
+        phase: `acceptance_framework:round-${String(round.round).padStart(2, "0")}`,
+        sessionID: null,
+        recordPath: item.replace(runDir, "").replace(/^[\\/]/, "").replace(/\\/g, "/"),
       })
     }
     for (const report of round.regressionAfterReports ?? []) {

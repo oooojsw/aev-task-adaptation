@@ -4,7 +4,9 @@ import { writeJsonFile } from "../fs"
 import type { CaseRuntimeContext } from "../case-runtime"
 import type { EvaluationResult } from "../evaluator"
 import type { MethodStrategyDecision } from "../method-strategies"
+import { recordAcceptanceResult } from "../acceptance-framework/run"
 import { experienceTransactionPaths, writeExperienceTransactionRecord } from "./repository"
+import { resolveReversePropagationRecipe } from "../reverse-propagation-control/recipes"
 
 function pad(value: number) {
   return String(value).padStart(2, "0")
@@ -16,6 +18,24 @@ function transactionMirrorPath(context: CaseRuntimeContext, stage: string) {
       ? path.join(`round-${pad(context.currentMaintenanceRound)}`)
       : "attempt"
   return path.join(context.transactionDir, roundSegment, `${stage}.json`)
+}
+
+function acceptanceMirrorPath(context: CaseRuntimeContext, stage: string) {
+  const roundSegment =
+    context.currentMaintenanceRound !== undefined
+      ? path.join(`round-${pad(context.currentMaintenanceRound)}`)
+      : "attempt"
+  return path.join(context.acceptanceDir, "framework", roundSegment, `${stage}.json`)
+}
+
+function acceptancePolicyID(context: CaseRuntimeContext) {
+  return resolveReversePropagationRecipe(context.methodID)?.acceptancePolicyID ?? "strict-regression-guard"
+}
+
+function acceptanceTargetID(context: CaseRuntimeContext) {
+  const roundSegment =
+    context.currentMaintenanceRound !== undefined ? `:round-${pad(context.currentMaintenanceRound)}` : ""
+  return `${context.loaded.spec.id}:attempt-${pad(context.attempt)}${roundSegment}`
 }
 
 async function recordTransaction(
@@ -35,6 +55,11 @@ async function recordTransaction(
     regressionAfter?: Record<string, unknown> | null
     postJudge?: Record<string, unknown> | null
     acceptance?: Record<string, unknown> | null
+    acceptanceStageID: string
+    acceptancePassed?: boolean
+    acceptanceOutcome: "observe" | "accept" | "retry" | "rollback" | "hold" | "promote" | "archive_only"
+    acceptanceEvidenceRefs?: string[]
+    acceptanceNotes?: string[]
   },
 ) {
   const currentRound = context.currentMaintenanceRound
@@ -80,6 +105,44 @@ async function recordTransaction(
     roundSummary.transactionRecordPath = result.path
   }
 
+  const acceptanceResult = await recordAcceptanceResult({
+    cwd: context.cwd,
+    config: context.config,
+    sourceRunID: path.basename(context.runDir),
+    mode: "short",
+    policyID: acceptancePolicyID(context),
+    stageID: input.acceptanceStageID,
+    targetKind: "maintenance_transaction",
+    targetID: acceptanceTargetID(context),
+    passed: input.acceptancePassed,
+    outcome: input.acceptanceOutcome,
+    summary: input.summary,
+    reason: input.reason,
+    reasons: input.reasons,
+    evidenceRefs: input.acceptanceEvidenceRefs,
+    details: {
+      changedFiles: input.changedFiles ?? [],
+      workspaceValidationErrors: input.workspaceValidationErrors ?? [],
+      currentCaseVerification: input.currentCaseVerification
+        ? {
+            passed: input.currentCaseVerification.passed,
+            summary: input.currentCaseVerification.summary,
+            mismatches: input.currentCaseVerification.mismatches,
+          }
+        : null,
+      regressionBefore: input.regressionBefore ?? null,
+      regressionAfter: input.regressionAfter ?? null,
+      postJudge: input.postJudge ?? null,
+      acceptance: input.acceptance ?? null,
+    },
+    notes: input.acceptanceNotes ?? [],
+    mirrorPath: acceptanceMirrorPath(context, input.stage),
+  })
+  ;(context.attemptSummary.acceptanceRecordPaths ??= []).push(acceptanceResult.path)
+  if (roundSummary) {
+    ;(roundSummary.acceptanceRecordPaths ??= []).push(acceptanceResult.path)
+  }
+
   return result
 }
 
@@ -106,12 +169,17 @@ export async function verifyCurrentCasePrimitive(context: CaseRuntimeContext) {
 
   await recordTransaction(context, {
     stage: "verify_current_case",
-    decision: currentCaseVerification.evaluation.passed ? "accept" : "retry",
+    decision: currentCaseVerification.evaluation.passed ? "observe" : "retry",
     status: "observed",
     reason: currentCaseVerification.evaluation.passed ? "verification passed" : "verification failed",
     reasons: currentCaseVerification.evaluation.passed ? [] : currentCaseVerification.evaluation.mismatches.slice(0, 8),
     summary: currentCaseVerification.evaluation.summary,
     currentCaseVerification: currentCaseVerification.evaluation,
+    acceptanceStageID: "transaction_guard",
+    acceptancePassed: currentCaseVerification.evaluation.passed,
+    acceptanceOutcome: currentCaseVerification.evaluation.passed ? "observe" : "retry",
+    acceptanceEvidenceRefs: [currentCaseVerification.sessionExecutionReportPath],
+    acceptanceNotes: ["Transaction-level verification evidence recorded before final post-judge decision."],
   })
 }
 
@@ -160,6 +228,13 @@ export async function rejectIfMaintenanceFailedPrimitive(
     reasons: rejectionReasons,
     summary: "Maintainer failed before the transaction could be accepted.",
     controlDecision: "finish_run",
+    acceptanceStageID: "transaction_guard",
+    acceptancePassed: false,
+    acceptanceOutcome: "rollback",
+    acceptanceEvidenceRefs: [context.attemptSummary.solveSessionExecutionReportPath ?? context.solveDir].filter(
+      (item): item is string => Boolean(item),
+    ),
+    acceptanceNotes: ["Transaction failed before candidate experience could enter canonical review."],
   })
   return "finish_run"
 }
@@ -191,6 +266,11 @@ export async function rejectIfNoExperienceChangePrimitive(
     reasons: rejectionReasons,
     summary: "Maintainer changed nothing, so the transaction cannot be accepted.",
     controlDecision: "next_attempt",
+    acceptanceStageID: "transaction_guard",
+    acceptancePassed: false,
+    acceptanceOutcome: "retry",
+    acceptanceEvidenceRefs: [context.evidencePaths.failurePacketPath],
+    acceptanceNotes: ["No tracked expert experience changed, so the transaction remains unaccepted."],
   })
   return "next_attempt"
 }
@@ -251,6 +331,11 @@ export async function rejectIfOutOfPolicyFilesPrimitive(
     changedFiles: context.maintenance.workspaceChangedFiles,
     workspaceValidationErrors: layoutValidation.errors,
     controlDecision: "next_attempt",
+    acceptanceStageID: "transaction_guard",
+    acceptancePassed: false,
+    acceptanceOutcome: "rollback",
+    acceptanceEvidenceRefs: [context.evidencePaths.failurePacketPath],
+    acceptanceNotes: ["Workspace layout validation failed inside the transaction gate."],
   })
   return "next_attempt"
 }
@@ -305,6 +390,14 @@ export async function applyPostJudgeDecisionPrimitive(
       regressionAfter: context.acceptance.afterRegression ?? null,
       postJudge: context.postJudge.summary,
       acceptance: { accepted: true, reason: "accepted" },
+      acceptanceStageID: "transaction_guard",
+      acceptancePassed: true,
+      acceptanceOutcome: "accept",
+      acceptanceEvidenceRefs: [
+        context.attemptSummary.currentCaseVerificationReportPath,
+        context.postJudge.reportPath,
+      ].filter((item): item is string => Boolean(item)),
+      acceptanceNotes: ["Transaction acceptance passed and the modified canonical workspace was kept."],
     })
     return null
   }
@@ -359,6 +452,14 @@ export async function applyPostJudgeDecisionPrimitive(
     regressionAfter: context.acceptance.afterRegression ?? null,
     postJudge: context.postJudge.summary,
     acceptance: { accepted: false, reason: "post_judge_retry" },
+    acceptanceStageID: "transaction_guard",
+    acceptancePassed: false,
+    acceptanceOutcome: "retry",
+    acceptanceEvidenceRefs: [
+      context.attemptSummary.currentCaseVerificationReportPath,
+      context.postJudge.reportPath,
+    ].filter((item): item is string => Boolean(item)),
+    acceptanceNotes: ["Transaction acceptance failed at the post-judge stage and the workspace was rolled back."],
   })
   return "next_attempt"
 }

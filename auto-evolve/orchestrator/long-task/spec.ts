@@ -306,6 +306,11 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
             raw.reversePropagation.maintenanceModuleID.trim()
               ? raw.reversePropagation.maintenanceModuleID
               : undefined,
+          acceptancePolicyID:
+            typeof raw.reversePropagation.acceptancePolicyID === "string" &&
+            raw.reversePropagation.acceptancePolicyID.trim()
+              ? raw.reversePropagation.acceptancePolicyID
+              : undefined,
           constraintPolicyIDs: normalizeStringArray(raw.reversePropagation.constraintPolicyIDs),
         }
       : undefined,

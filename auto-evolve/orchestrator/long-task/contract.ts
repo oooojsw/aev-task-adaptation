@@ -74,6 +74,7 @@ export interface LongTaskShadowMemoryScope {
 export interface LongTaskReversePropagationHints {
   recipeID?: string
   maintenanceModuleID?: string
+  acceptancePolicyID?: string
   constraintPolicyIDs?: string[]
 }
 

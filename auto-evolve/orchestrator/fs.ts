@@ -599,6 +599,7 @@ const DEFAULT_CONFIG_JSON = `{
   "experienceArchiveDir": "experience/archive",
   "maintenanceGatewayDir": "runtime-state/maintenance-gateway",
   "experienceTransactionDir": "runtime-state/experience-transaction",
+  "acceptanceFrameworkDir": "runtime-state/acceptance-framework",
   "experienceEntryFile": "manifest.md",
   "templateLibraryDir": "experience/templates",
   "reversePropagationModulesDir": "methods/reverse-propagation-modules",
@@ -1156,6 +1157,7 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
   const runsRoot = autoEvolvePath(cwd, "runtime-state", "runs")
   const maintenanceGatewayRoot = autoEvolvePath(cwd, "runtime-state", "maintenance-gateway")
   const experienceTransactionRoot = autoEvolvePath(cwd, "runtime-state", "experience-transaction")
+  const acceptanceFrameworkRoot = autoEvolvePath(cwd, "runtime-state", "acceptance-framework")
   const propagationRoot = autoEvolvePath(cwd, "runtime-state", "propagation")
   const optimizationRoot = autoEvolvePath(cwd, "runtime-state", "optimization")
   const longTaskRoot = autoEvolvePath(cwd, "runtime-state", "long-task")
@@ -1180,8 +1182,10 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
     runsRoot,
     maintenanceGatewayRoot,
     experienceTransactionRoot,
+    acceptanceFrameworkRoot,
     autoEvolvePath(cwd, "runtime-state", "maintenance-gateway", "requests"),
     autoEvolvePath(cwd, "runtime-state", "experience-transaction", "records"),
+    autoEvolvePath(cwd, "runtime-state", "acceptance-framework", "records"),
     autoEvolvePath(cwd, "scripts"),
     autoEvolvePath(cwd, "judge-skills"),
     autoEvolvePath(cwd, "judge-skills", "exact-output"),
@@ -1357,6 +1361,23 @@ The maintainer should produce candidate changes, and this layer should record ve
   )
   await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "experience-transaction", "records", ".gitkeep"), "\n", created)
   await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "experience-transaction", "index.jsonl"), "", created)
+  await writeIfMissing(
+    autoEvolvePath(cwd, "runtime-state", "acceptance-framework", "README.md"),
+    `# Acceptance Framework
+
+This directory stores unified acceptance records across:
+
+- local acceptance
+- transaction acceptance
+- candidate acceptance
+- deployment acceptance
+
+These records are higher-level than any one validator or post-judge step.
+`,
+    created,
+  )
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "acceptance-framework", "records", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "acceptance-framework", "index.jsonl"), "", created)
 
   await writeIfMissing(
     autoEvolvePath(cwd, "experience", "templates", "README.md"),

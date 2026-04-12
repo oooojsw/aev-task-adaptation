@@ -23,6 +23,7 @@ export interface MaintenanceRoundSummary {
   round: number
   maintenanceRequestPath?: string
   transactionRecordPath?: string
+  acceptanceRecordPaths?: string[]
   maintainSessionID?: string
   maintainSessionExecutionReportPath?: string
   maintainExitCode?: number
@@ -52,6 +53,7 @@ export interface AttemptSummary {
   shadowMemoryCandidatePath?: string
   maintenanceRequestPath?: string
   transactionRecordPath?: string
+  acceptanceRecordPaths?: string[]
   solveSessionID?: string
   solveSessionExecutionReportPath?: string
   solveExitCode: number

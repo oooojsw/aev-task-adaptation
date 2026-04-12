@@ -49,6 +49,7 @@ import {
   buildLongTaskWorkUnit,
 } from "./repository"
 import { maintenanceGatewayPaths, writeMaintenanceRequest } from "../maintenance-gateway/repository"
+import { recordAcceptanceResult } from "../acceptance-framework/run"
 import {
   activateLongTaskWorkUnit,
   bumpLongTaskWorkUnitAttempt,
@@ -117,6 +118,26 @@ function normalizeStringArray(input: unknown) {
 
 function uniqueStrings(items: string[]) {
   return Array.from(new Set(items.filter((item) => item.trim().length > 0)))
+}
+
+function pad(value: number) {
+  return String(value).padStart(2, "0")
+}
+
+function longTaskAcceptancePolicyID(spec: LongTaskSpec) {
+  return spec.reversePropagation?.acceptancePolicyID ?? "long-task-candidate-guard"
+}
+
+function longTaskLocalAcceptanceTargetID(unit: LongTaskWorkUnit, attempt: number) {
+  return `${unit.id}:attempt-${pad(attempt)}`
+}
+
+function longTaskAttemptAcceptanceMirrorPath(attemptRoot: string, stageID: string) {
+  return path.join(attemptRoot, "acceptance", `${stageID}.json`)
+}
+
+function longTaskRunAcceptanceMirrorPath(runRoot: string, stageID: string) {
+  return path.join(runRoot, "acceptance", `${stageID}.json`)
 }
 
 function capabilityReferencePaths(spec: LongTaskSpec) {
@@ -925,6 +946,48 @@ async function finalizeLongTaskRun(input: {
   await appendArchiveRecord(paths, defaultArchiveRecord({ run: input.run, summary }))
   const shadowRecord = defaultShadowMemoryRecord({ run: input.run, summary, spec: input.spec })
   await appendShadowMemoryRecord(paths, shadowRecord)
+  const candidateAcceptance = await recordAcceptanceResult({
+    cwd: input.cwd,
+    config,
+    sourceRunID: summary.runID,
+    mode: "long",
+    policyID: longTaskAcceptancePolicyID(input.spec),
+    stageID: "candidate_guard",
+    targetKind: "candidate_experience",
+    targetID: `candidate-${summary.runID}`,
+    passed: summary.status === "verified_success",
+    outcome: summary.status === "verified_success" ? "promote" : "hold",
+    summary:
+      summary.status === "verified_success"
+        ? "Long-task candidate satisfied completion validation and is maintainer-ready."
+        : `Long-task candidate is being held after final status ${summary.status}.`,
+    reason:
+      summary.status === "verified_success"
+        ? "Completion validators and candidate preservation checks passed."
+        : `Candidate acceptance held because final status was ${summary.status}.`,
+    reasons:
+      summary.status === "verified_success"
+        ? []
+        : [summary.summary || `Long-task final status: ${summary.status}.`],
+    evidenceRefs: [
+      input.run.summaryJsonPath,
+      input.run.progressStatePath,
+      input.run.workGraphPath,
+      input.run.validatorResultsPath,
+    ],
+    details: {
+      finalStatus: summary.status,
+      verifiedUnits: summary.verifiedUnits,
+      failedUnits: summary.failedUnits,
+      blockedUnits: summary.blockedUnits,
+      totalUnits: summary.totalUnits,
+    },
+    notes: [
+      "This record captures candidate-level acceptance after the long-task run has already completed.",
+      "It preserves long-task output for maintainer or governance without directly committing canonical experience.",
+    ],
+    mirrorPath: longTaskRunAcceptanceMirrorPath(input.run.root, "candidate_guard"),
+  })
   await writeLongTaskCandidatePackage(paths, {
     id: `candidate-${summary.runID}`,
     status: summary.status === "verified_success" ? "ready_for_maintainer" : "hold",
@@ -1008,7 +1071,13 @@ async function finalizeLongTaskRun(input: {
         path: paths.shadowMemoryRoot,
         label: shadowRecord.id,
       },
+      {
+        kind: "candidate_summary",
+        path: candidateAcceptance.path,
+        label: "acceptance_framework_candidate_guard",
+      },
     ],
+    acceptancePolicyID: longTaskAcceptancePolicyID(input.spec),
     notes:
       summary.status === "verified_success"
         ? ["Long-task request is maintainer-ready but still isolated from direct canonical commit."]
@@ -1180,6 +1249,57 @@ async function continueLongTaskLoop(input: {
     progress.lastClaimID = execution.claim.id
 
     const executionSucceeded = execution.claim.claimedSuccess && execution.allValidatorsPassed
+    const localAcceptanceEvidenceRefs = [
+      path.join(execution.attemptPaths.executeDir, "response.txt"),
+      ...execution.validatorResults.flatMap((item) => item.evidenceRefs),
+    ]
+    await recordAcceptanceResult({
+      cwd: input.cwd,
+      config: await loadConfig(input.cwd),
+      sourceRunID: progress.runID,
+      mode: "long",
+      policyID: longTaskAcceptancePolicyID(input.spec),
+      stageID: "local_guard",
+      targetKind: "work_unit",
+      targetID: longTaskLocalAcceptanceTargetID(execution.activeUnit, execution.attempt),
+      passed: executionSucceeded,
+      outcome: executionSucceeded ? "observe" : "retry",
+      summary: executionSucceeded
+        ? `Work unit ${execution.activeUnit.id} satisfied its execution and validator contract.`
+        : buildWorkUnitFailureSummary({
+            claim: execution.claim,
+            validatorResults: execution.validatorResults,
+          }),
+      reason: executionSucceeded
+        ? "Work-unit local acceptance passed."
+        : execution.validatorResults.find((item) => !item.passed)?.summary ??
+          execution.claim.blockers[0] ??
+          "Work-unit local acceptance failed.",
+      reasons: executionSucceeded
+        ? []
+        : uniqueStrings([
+            ...execution.claim.blockers,
+            ...execution.validatorResults.filter((item) => !item.passed).map((item) => item.summary),
+            ...execution.validatorResults.flatMap((item) => item.details),
+          ]).slice(0, 8),
+      evidenceRefs: localAcceptanceEvidenceRefs,
+      details: {
+        unitID: execution.activeUnit.id,
+        attempt: execution.attempt,
+        claimedSuccess: execution.claim.claimedSuccess,
+        validatorsPassed: execution.allValidatorsPassed,
+        validatorResults: execution.validatorResults.map((item) => ({
+          validatorID: item.validatorID,
+          passed: item.passed,
+          summary: item.summary,
+        })),
+      },
+      notes: [
+        "This record captures local acceptance at the work-unit boundary.",
+        "It does not imply candidate promotion or canonical acceptance.",
+      ],
+      mirrorPath: longTaskAttemptAcceptanceMirrorPath(execution.attemptPaths.root, "local_guard"),
+    })
 
     if (executionSucceeded) {
       graph = markLongTaskWorkUnitVerified(graph, execution.activeUnit.id, execution.claim.id)
@@ -1211,10 +1331,7 @@ async function continueLongTaskLoop(input: {
         ...execution.validatorResults.flatMap((item) => item.details),
       ].slice(0, 6),
       nextPriorityFix: execution.claim.nextPriorityFix ?? execution.normalized.nextPriorityFix,
-      evidenceRefs: [
-        path.join(execution.attemptPaths.executeDir, "response.txt"),
-        ...execution.validatorResults.flatMap((item) => item.evidenceRefs),
-      ],
+      evidenceRefs: localAcceptanceEvidenceRefs,
       retryLevel: "work_unit_retry",
       failureType: execution.claim.claimedSuccess ? "validator_failed" : "invalid_execution_output",
     })
