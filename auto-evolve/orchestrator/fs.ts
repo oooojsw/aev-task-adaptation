@@ -1293,6 +1293,7 @@ It is centered on:
   await writeIfMissing(autoEvolvePath(cwd, "long-task", "shadow-memory", ".gitkeep"), "\n", created)
   await writeIfMissing(autoEvolvePath(cwd, "long-task", "shadow-memory", "index.jsonl"), "", created)
   await writeIfMissing(autoEvolvePath(cwd, "long-task", "candidates", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "long-task", "candidates", "index.jsonl"), "", created)
 
   await writeIfMissing(
     autoEvolvePath(cwd, "experience-templates", "README.md"),

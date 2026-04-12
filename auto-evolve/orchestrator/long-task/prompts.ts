@@ -168,6 +168,7 @@ export function buildLongTaskExecutionPrompt(input: {
     `Goal: ${input.unit.goal}`,
     `Claim: ${input.unit.claim}`,
     `Check plan: ${input.unit.checkPlan}`,
+    `Current attempt: ${input.unit.attemptCount}`,
     `Retry budget for this unit: ${input.unit.retryBudget}`,
     "",
     "Expected artifacts:",
@@ -210,6 +211,7 @@ export function buildLongTaskExecutionPrompt(input: {
     "- Produce the expected artifacts for the current unit whenever the unit calls for explicit intermediate outputs.",
     "- If the current unit has no formal validators, satisfy the check plan by creating the expected artifacts and leaving concise structured scratch evidence.",
     "- Read the retry bundle carefully, especially recent failures, relevant learning units, and relevant shadow memory. Repeated mistakes should change your next move.",
+    "- If this is not the first attempt for the current unit, you must explicitly acknowledge the previous same-unit failure, state what strategy changed this time, and list the self-checks you ran before returning your claim.",
     "- Keep scratch notes short and structured.",
     "- If you are blocked, say so explicitly in the JSON output instead of pretending success.",
     "",
@@ -219,6 +221,9 @@ export function buildLongTaskExecutionPrompt(input: {
       claimed_success: true,
       blockers: ["optional blocker"],
       next_priority_fix: "optional next fix",
+      retry_ack: "required on retry attempts: what you understood from the previous same-unit failure",
+      strategy_change: "required on retry attempts: what changed in this attempt",
+      self_checks_run: ["validator or local check you ran before returning the claim"],
       updated_files: ["absolute/path/you/changed"],
       scratch_units: [
         {

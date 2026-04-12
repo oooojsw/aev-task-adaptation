@@ -12,9 +12,11 @@ import {
 } from "../fs"
 import type {
   LongTaskArchiveRecord,
+  LongTaskCandidatePackage,
   LongTaskFailurePacket,
   LongTaskLearningUnit,
   LongTaskProgressState,
+  LongTaskRetryLesson,
   LongTaskRetryInputBundle,
   LongTaskRetryJournalEntry,
   LongTaskRunSummary,
@@ -48,6 +50,7 @@ export interface LongTaskRunPaths {
   scratchIndexPath: string
   scratchSummaryPath: string
   learningUnitsPath: string
+  retryLessonsPath: string
   retryJournalPath: string
   summaryJsonPath: string
   summaryMdPath: string
@@ -122,6 +125,7 @@ export async function ensureLongTaskLayout(paths: LongTaskPaths) {
   await ensureDirectory(paths.candidatesRoot)
   await ensureJsonlFile(path.join(paths.archiveRoot, "index.jsonl"))
   await ensureJsonlFile(path.join(paths.shadowMemoryRoot, "index.jsonl"))
+  await ensureJsonlFile(path.join(paths.candidatesRoot, "index.jsonl"))
 }
 
 export function longTaskRunPaths(paths: LongTaskPaths, runID: string): LongTaskRunPaths {
@@ -139,6 +143,7 @@ export function longTaskRunPaths(paths: LongTaskPaths, runID: string): LongTaskR
     scratchIndexPath: path.join(root, "scratch_index.json"),
     scratchSummaryPath: path.join(root, "scratch_summary.md"),
     learningUnitsPath: path.join(root, "learning_units.jsonl"),
+    retryLessonsPath: path.join(root, "retry_lessons.jsonl"),
     retryJournalPath: path.join(root, "retry_journal.jsonl"),
     summaryJsonPath: path.join(root, "summary.json"),
     summaryMdPath: path.join(root, "summary.md"),
@@ -277,6 +282,7 @@ export async function initializeLongTaskRun(input: {
   await ensureJsonlFile(run.failurePacketsPath)
   await ensureJsonlFile(run.scratchUnitsPath)
   await ensureJsonlFile(run.learningUnitsPath)
+  await ensureJsonlFile(run.retryLessonsPath)
   await ensureJsonlFile(run.retryJournalPath)
   await writeJsonFile(run.scratchIndexPath, {
     updatedAt: nowISO(),
@@ -354,6 +360,10 @@ export async function appendLearningUnit(run: LongTaskRunPaths, unit: LongTaskLe
   await appendJsonl(run.learningUnitsPath, unit)
 }
 
+export async function appendRetryLesson(run: LongTaskRunPaths, lesson: LongTaskRetryLesson) {
+  await appendJsonl(run.retryLessonsPath, lesson)
+}
+
 export async function appendRetryJournalEntry(run: LongTaskRunPaths, entry: LongTaskRetryJournalEntry) {
   await appendJsonl(run.retryJournalPath, entry)
 }
@@ -378,6 +388,10 @@ export async function readLearningUnits(run: LongTaskRunPaths) {
   return readJsonl<LongTaskLearningUnit>(run.learningUnitsPath)
 }
 
+export async function readRetryLessons(run: LongTaskRunPaths) {
+  return readJsonl<LongTaskRetryLesson>(run.retryLessonsPath)
+}
+
 export async function writeRetryInputBundle(targetPath: string, bundle: LongTaskRetryInputBundle) {
   await writeJsonFile(targetPath, bundle)
   return targetPath
@@ -392,6 +406,7 @@ export async function buildRetryInputBundle(input: {
   maxFailurePackets?: number
   maxScratchUnits?: number
   maxLearningUnits?: number
+  maxRetryLessons?: number
   maxShadowMemory?: number
 }) {
   const graph = await readLongTaskWorkGraph(input.run)
@@ -401,15 +416,24 @@ export async function buildRetryInputBundle(input: {
     throw new Error(`Long-task work unit not found: ${input.unitID}`)
   }
 
-  const [claims, failures, scratch, learning, shadow] = await Promise.all([
+  const [claims, failures, scratch, learning, retryLessons, shadow] = await Promise.all([
     readVerificationClaims(input.run),
     readFailurePackets(input.run),
     readScratchUnits(input.run),
     readLearningUnits(input.run),
+    readRetryLessons(input.run),
     readJsonl<LongTaskShadowMemoryRecord>(path.join(input.paths.shadowMemoryRoot, "index.jsonl")),
   ])
 
   const relatedUnitIDs = new Set([unit.id, ...unit.dependsOn])
+  const sameUnitRecentClaims = claims.filter((item) => item.unitID === unit.id).slice(-(input.maxClaims ?? 3))
+  const dependencyClaims = claims
+    .filter((item) => item.unitID !== unit.id && unit.dependsOn.includes(item.unitID))
+    .slice(-(input.maxClaims ?? 4))
+  const sameUnitFailures = failures.filter((item) => item.unitID === unit.id)
+  const sameUnitRetryLessons = retryLessons
+    .filter((item) => item.unitID === unit.id)
+    .slice(-(input.maxRetryLessons ?? 4))
   const scope = input.spec.shadowMemoryScope ?? {
     namespace: input.spec.taskFamily ?? "long-task",
     tags: input.spec.domainTags ?? [],
@@ -436,9 +460,14 @@ export async function buildRetryInputBundle(input: {
     progressState: progress,
     currentUnit: unit,
     recentClaims: claims.filter((item) => relatedUnitIDs.has(item.unitID)).slice(-(input.maxClaims ?? 3)),
-    recentFailurePackets: failures
+    recentFailurePackets: sameUnitFailures
+      .concat(failures.filter((item) => item.unitID !== unit.id && relatedUnitIDs.has(item.unitID)))
       .filter((item) => relatedUnitIDs.has(item.unitID))
       .slice(-(input.maxFailurePackets ?? 4)),
+    sameUnitRecentClaims,
+    dependencyClaims,
+    sameUnitLastFailure: sameUnitFailures.at(-1),
+    sameUnitRetryLessons,
     relevantScratchUnits: scratch
       .filter((item) => relatedUnitIDs.has(item.unitID) || item.relatedUnitIDs.some((id) => relatedUnitIDs.has(id)))
       .slice(-(input.maxScratchUnits ?? 10)),
@@ -489,12 +518,13 @@ export async function writeScratchDerivedViews(run: LongTaskRunPaths) {
 }
 
 export async function buildLongTaskRunSummary(run: LongTaskRunPaths): Promise<LongTaskRunSummary> {
-  const [spec, graph, progress, failures, learning] = await Promise.all([
+  const [spec, graph, progress, failures, learning, retryLessons] = await Promise.all([
     readLongTaskSpec(run),
     readLongTaskWorkGraph(run),
     readLongTaskProgressState(run),
     readFailurePackets(run),
     readLearningUnits(run),
+    readRetryLessons(run),
   ])
 
   const verifiedUnits = graph.units.filter((item) => item.status === "verified").length
@@ -517,6 +547,7 @@ export async function buildLongTaskRunSummary(run: LongTaskRunPaths): Promise<Lo
     validatorCalls: progress.validatorCalls,
     failurePacketCount: failures.length,
     learningUnitCount: learning.length,
+    retryLessonCount: retryLessons.length,
     summary:
       progress.finalSummary ??
       `Long-task ended with status ${progress.status}; verified ${verifiedUnits}/${graph.units.length} work units.`,
@@ -539,6 +570,7 @@ export async function writeLongTaskRunSummary(run: LongTaskRunPaths, summary: Lo
     `- validator calls: ${summary.validatorCalls}`,
     `- failure packets: ${summary.failurePacketCount}`,
     `- learning units: ${summary.learningUnitCount}`,
+    `- retry lessons: ${summary.retryLessonCount}`,
     "",
     "## Summary",
     "",
@@ -554,6 +586,33 @@ export async function appendArchiveRecord(paths: LongTaskPaths, record: LongTask
 
 export async function appendShadowMemoryRecord(paths: LongTaskPaths, record: LongTaskShadowMemoryRecord) {
   await appendJsonl(path.join(paths.shadowMemoryRoot, "index.jsonl"), record)
+}
+
+function candidateDir(paths: LongTaskPaths, candidateID: string) {
+  return path.join(paths.candidatesRoot, candidateID)
+}
+
+function candidateMetadataPath(paths: LongTaskPaths, candidateID: string) {
+  return path.join(candidateDir(paths, candidateID), "candidate.json")
+}
+
+export async function writeLongTaskCandidatePackage(
+  paths: LongTaskPaths,
+  input: Omit<LongTaskCandidatePackage, "createdAt" | "updatedAt"> & {
+    createdAt?: string
+    updatedAt?: string
+  },
+) {
+  await ensureLongTaskLayout(paths)
+  const candidate: LongTaskCandidatePackage = {
+    ...input,
+    createdAt: input.createdAt ?? nowISO(),
+    updatedAt: input.updatedAt ?? nowISO(),
+  }
+  await ensureDirectory(candidateDir(paths, candidate.id))
+  await writeJsonFile(candidateMetadataPath(paths, candidate.id), candidate)
+  await appendJsonl(path.join(paths.candidatesRoot, "index.jsonl"), candidate)
+  return candidate
 }
 
 export async function readShadowMemoryRecords(paths: LongTaskPaths) {

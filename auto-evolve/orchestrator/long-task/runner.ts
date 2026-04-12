@@ -6,6 +6,7 @@ import type {
   LongTaskLearningUnit,
   LongTaskRunStatus,
   LongTaskScratchUnit,
+  LongTaskRetryLesson,
   LongTaskSpec,
   LongTaskVerificationClaim,
   LongTaskWorkGraph,
@@ -17,6 +18,7 @@ import {
   appendFailurePacket,
   appendLearningUnit,
   appendRetryJournalEntry,
+  appendRetryLesson,
   appendScratchUnit,
   appendShadowMemoryRecord,
   appendValidatorResult,
@@ -38,6 +40,7 @@ import {
   readLongTaskSpec,
   readLongTaskWorkGraph,
   resolveExistingLongTaskRun,
+  writeLongTaskCandidatePackage,
   writeLongTaskProgressState,
   writeLongTaskRunSummary,
   writeLongTaskWorkGraph,
@@ -227,6 +230,13 @@ function normalizeExecutionOutput(raw: Record<string, unknown> | undefined, unit
   const nextPriorityFix =
     typeof raw?.next_priority_fix === "string" && raw.next_priority_fix.trim() ? raw.next_priority_fix.trim() : undefined
   const updatedFiles = normalizeStringArray(raw?.updated_files)
+  const retryAck =
+    typeof raw?.retry_ack === "string" && raw.retry_ack.trim().length > 0 ? raw.retry_ack.trim() : undefined
+  const strategyChange =
+    typeof raw?.strategy_change === "string" && raw.strategy_change.trim().length > 0
+      ? raw.strategy_change.trim()
+      : undefined
+  const selfChecksRun = normalizeStringArray(raw?.self_checks_run)
 
   const scratchUnits = Array.isArray(raw?.scratch_units)
     ? raw.scratch_units
@@ -246,6 +256,9 @@ function normalizeExecutionOutput(raw: Record<string, unknown> | undefined, unit
     blockers,
     nextPriorityFix,
     updatedFiles,
+    retryAck,
+    strategyChange,
+    selfChecksRun,
     scratchUnits,
     learningUnits,
   }
@@ -397,6 +410,114 @@ function createFailurePacket(input: {
     nextPriorityFix: input.nextPriorityFix ? short(input.nextPriorityFix, 220) : undefined,
     evidenceRefs: input.evidenceRefs,
     promotionHint: input.promotionHint ?? "shadow_candidate",
+  }
+}
+
+function makeRetryReflectionScratchUnits(input: {
+  runID: string
+  unit: LongTaskWorkUnit
+  attempt: number
+  retryAck?: string
+  strategyChange?: string
+  selfChecksRun: string[]
+}) {
+  const notes: LongTaskScratchUnit[] = []
+  if (input.retryAck) {
+    notes.push({
+      id: `scratch-${randomUUID().slice(0, 8)}`,
+      runID: input.runID,
+      unitID: input.unit.id,
+      attempt: input.attempt,
+      createdAt: nowISO(),
+      kind: "obs",
+      statement: short(`retry_ack: ${input.retryAck}`, 220),
+      refs: [],
+      relatedUnitIDs: [input.unit.id],
+    })
+  }
+  if (input.strategyChange) {
+    notes.push({
+      id: `scratch-${randomUUID().slice(0, 8)}`,
+      runID: input.runID,
+      unitID: input.unit.id,
+      attempt: input.attempt,
+      createdAt: nowISO(),
+      kind: "fix",
+      statement: short(`strategy_change: ${input.strategyChange}`, 220),
+      refs: [],
+      relatedUnitIDs: [input.unit.id],
+    })
+  }
+  for (const check of input.selfChecksRun) {
+    notes.push({
+      id: `scratch-${randomUUID().slice(0, 8)}`,
+      runID: input.runID,
+      unitID: input.unit.id,
+      attempt: input.attempt,
+      createdAt: nowISO(),
+      kind: "obs",
+      statement: short(`self_check_run: ${check}`, 220),
+      refs: [],
+      relatedUnitIDs: [input.unit.id],
+    })
+  }
+  return notes
+}
+
+function buildWorkUnitFailureSummary(input: {
+  claim: LongTaskVerificationClaim
+  validatorResults: Array<{ passed: boolean; summary: string }>
+}) {
+  const parts: string[] = []
+  if (!input.claim.claimedSuccess) {
+    parts.push(`Execution claim failed: ${input.claim.statement}`)
+  }
+  parts.push(...input.validatorResults.filter((item) => !item.passed).map((item) => item.summary))
+  return parts.join(" | ") || "The current work unit did not satisfy its execution or validation contract."
+}
+
+function createRetryLesson(input: {
+  runID: string
+  unit: LongTaskWorkUnit
+  attempt: number
+  claim: LongTaskVerificationClaim
+  failure: LongTaskFailurePacket
+  strategyChange?: string
+  selfChecksRun: string[]
+}): LongTaskRetryLesson {
+  const doNotRepeat = uniqueStrings([
+    input.claim.claimedSuccess ? "" : "Do not claim success while blockers or known gaps still remain.",
+    ...input.failure.suspectedCauses.map((item) => `Do not ignore: ${short(item, 120)}`),
+  ]).slice(0, 4)
+
+  const nextAttemptStrategy = uniqueStrings([
+    input.failure.nextPriorityFix ?? "",
+    input.strategyChange ?? "",
+    `Follow the current unit check plan before returning claimed_success=true: ${short(input.unit.checkPlan, 160)}`,
+  ]).slice(0, 4)
+
+  const requiredSelfChecks = uniqueStrings([
+    ...input.unit.validatorIDs.map((validatorID) => `validator:${validatorID}`),
+    ...input.selfChecksRun.map((item) => `self-check:${short(item, 140)}`),
+    short(input.unit.checkPlan, 160),
+  ]).slice(0, 6)
+
+  return {
+    id: `retry-lesson-${randomUUID().slice(0, 8)}`,
+    runID: input.runID,
+    unitID: input.unit.id,
+    attempt: input.attempt,
+    createdAt: nowISO(),
+    sourceFailurePacketID: input.failure.id,
+    sourceClaimID: input.claim.id,
+    failureType: input.failure.failureType,
+    failureSignature: `${input.unit.id}:${input.failure.failureType}:attempt-${input.attempt}`,
+    whatFailed: short(input.failure.mismatchSummary, 220),
+    whyFailed: input.failure.suspectedCauses.slice(0, 4),
+    doNotRepeat,
+    nextAttemptStrategy,
+    requiredSelfChecks,
+    evidenceRefs: input.failure.evidenceRefs,
   }
 }
 
@@ -600,6 +721,16 @@ async function executeWorkUnit(input: {
     rawUnits: normalized.learningUnits,
   })
   for (const item of learningUnits) await appendLearningUnit(input.run, item)
+
+  const retryReflectionScratchUnits = makeRetryReflectionScratchUnits({
+    runID: progressBefore.runID,
+    unit: activeUnit,
+    attempt,
+    retryAck: normalized.retryAck,
+    strategyChange: normalized.strategyChange,
+    selfChecksRun: normalized.selfChecksRun,
+  })
+  for (const item of retryReflectionScratchUnits) await appendScratchUnit(input.run, item)
   await writeScratchDerivedViews(input.run)
 
   const validatorContracts = input.spec.validators.filter((validator) => activeUnit.validatorIDs.includes(validator.id))
@@ -720,12 +851,15 @@ async function runCompletionValidators(input: {
     unitID: syntheticUnit.id,
     createdAt: nowISO(),
     progressState: progress,
-    currentUnit: syntheticUnit,
-    recentClaims: [],
-    recentFailurePackets: [],
-    relevantScratchUnits: [],
-    relevantLearningUnits: [],
-    relevantShadowMemory: [],
+      currentUnit: syntheticUnit,
+      recentClaims: [],
+      recentFailurePackets: [],
+      sameUnitRecentClaims: [],
+      dependencyClaims: [],
+      sameUnitRetryLessons: [],
+      relevantScratchUnits: [],
+      relevantLearningUnits: [],
+      relevantShadowMemory: [],
   })
 
   const config = await loadConfig(input.configPathCwd)
@@ -787,7 +921,32 @@ async function finalizeLongTaskRun(input: {
 
   const paths = longTaskPaths(input.cwd)
   await appendArchiveRecord(paths, defaultArchiveRecord({ run: input.run, summary }))
-  await appendShadowMemoryRecord(paths, defaultShadowMemoryRecord({ run: input.run, summary, spec: input.spec }))
+  const shadowRecord = defaultShadowMemoryRecord({ run: input.run, summary, spec: input.spec })
+  await appendShadowMemoryRecord(paths, shadowRecord)
+  await writeLongTaskCandidatePackage(paths, {
+    id: `candidate-${summary.runID}`,
+    status: summary.status === "verified_success" ? "ready_for_maintainer" : "hold",
+    mode: "long",
+    runID: summary.runID,
+    title: summary.title,
+    goal: summary.goal,
+    taskFamily: summary.taskFamily,
+    domainTags: summary.domainTags,
+    finalStatus: summary.status,
+    summary: summary.summary,
+    summaryPath: input.run.summaryJsonPath,
+    taskPath: input.run.taskPath,
+    progressStatePath: input.run.progressStatePath,
+    workGraphPath: input.run.workGraphPath,
+    failurePacketsPath: input.run.failurePacketsPath,
+    learningUnitsPath: input.run.learningUnitsPath,
+    retryLessonsPath: input.run.retryLessonsPath,
+    shadowMemoryRecordID: shadowRecord.id,
+    notes:
+      summary.status === "verified_success"
+        ? ["Verified-success long-task run preserved as a maintainer-ready candidate package."]
+        : ["Run preserved for later maintainer review; keep as hold until higher-layer promotion decides otherwise."],
+  })
 
   return {
     runID: summary.runID,
@@ -952,7 +1111,9 @@ async function continueLongTaskLoop(input: {
     progress = await readLongTaskProgressState(input.run)
     progress.lastClaimID = execution.claim.id
 
-    if (execution.allValidatorsPassed) {
+    const executionSucceeded = execution.claim.claimedSuccess && execution.allValidatorsPassed
+
+    if (executionSucceeded) {
       graph = markLongTaskWorkUnitVerified(graph, execution.activeUnit.id, execution.claim.id)
       progress = deriveLongTaskProgressState({
         runID: progress.runID,
@@ -972,9 +1133,11 @@ async function continueLongTaskLoop(input: {
       unitID: execution.activeUnit.id,
       attempt: execution.attempt,
       claimedSuccess: execution.claim.claimedSuccess,
-      verificationPassed: false,
-      mismatchSummary:
-        execution.validatorResults.map((item) => item.summary).join(" | ") || "Validators did not pass for this unit.",
+      verificationPassed: execution.allValidatorsPassed,
+      mismatchSummary: buildWorkUnitFailureSummary({
+        claim: execution.claim,
+        validatorResults: execution.validatorResults,
+      }),
       suspectedCauses: [
         ...execution.claim.blockers,
         ...execution.validatorResults.flatMap((item) => item.details),
@@ -985,9 +1148,21 @@ async function continueLongTaskLoop(input: {
         ...execution.validatorResults.flatMap((item) => item.evidenceRefs),
       ],
       retryLevel: "work_unit_retry",
-      failureType: "validator_failed",
+      failureType: execution.claim.claimedSuccess ? "validator_failed" : "invalid_execution_output",
     })
     await appendFailurePacket(input.run, failure)
+    await appendRetryLesson(
+      input.run,
+      createRetryLesson({
+        runID: progress.runID,
+        unit: execution.activeUnit,
+        attempt: execution.attempt,
+        claim: execution.claim,
+        failure,
+        strategyChange: execution.normalized.strategyChange,
+        selfChecksRun: execution.normalized.selfChecksRun,
+      }),
+    )
     await appendRetryJournalEntry(input.run, {
       id: `retry-${randomUUID().slice(0, 8)}`,
       runID: progress.runID,

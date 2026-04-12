@@ -67,8 +67,14 @@ async function validateValidatorContract(errors: string[], validator: LongTaskVa
   }
 }
 
-export async function validateLongTaskSpec(spec: LongTaskSpec): Promise<LongTaskValidationReport> {
+export async function validateLongTaskSpec(
+  spec: LongTaskSpec,
+  options?: {
+    checkPaths?: boolean
+  },
+): Promise<LongTaskValidationReport> {
   const errors: string[] = []
+  const checkPaths = options?.checkPaths !== false
 
   if (!spec.title.trim()) errors.push("Long-task spec title cannot be empty.")
   if (!spec.goal.trim()) errors.push("Long-task spec goal cannot be empty.")
@@ -82,12 +88,14 @@ export async function validateLongTaskSpec(spec: LongTaskSpec): Promise<LongTask
     errors.push("Long-task spec has duplicate capability ids.")
   }
 
-  for (const ref of [
-    ...spec.materials.map((item) => item.path),
-    ...(spec.initialExpertContextPaths ?? []),
-  ]) {
-    if (!(await pathExists(ref))) {
-      errors.push(`Long-task spec references a missing path: ${ref}`)
+  if (checkPaths) {
+    for (const ref of [
+      ...spec.materials.map((item) => item.path),
+      ...(spec.initialExpertContextPaths ?? []),
+    ]) {
+      if (!(await pathExists(ref))) {
+        errors.push(`Long-task spec references a missing path: ${ref}`)
+      }
     }
   }
 
@@ -98,11 +106,35 @@ export async function validateLongTaskSpec(spec: LongTaskSpec): Promise<LongTask
   }
 
   for (const capability of spec.capabilities ?? []) {
-    await validateCapabilityContract(errors, capability)
+    if (checkPaths) {
+      await validateCapabilityContract(errors, capability)
+    } else {
+      if (!capability.id.trim()) {
+        errors.push("Long-task capability has an empty id.")
+      }
+      if (!capability.title.trim()) {
+        errors.push(`Long-task capability ${capability.id || "(unknown)"} has an empty title.`)
+      }
+      if (!capability.description.trim()) {
+        errors.push(`Long-task capability ${capability.id || "(unknown)"} has an empty description.`)
+      }
+    }
   }
 
   for (const validator of spec.validators) {
-    await validateValidatorContract(errors, validator)
+    if (checkPaths) {
+      await validateValidatorContract(errors, validator)
+    } else {
+      if (!validator.id.trim()) {
+        errors.push("Long-task validator has an empty id.")
+      }
+      if (!validator.title.trim()) {
+        errors.push(`Long-task validator ${validator.id || "(unknown)"} has an empty title.`)
+      }
+      if (validator.type === "prompt_json" && !validator.prompt.trim()) {
+        errors.push(`Long-task validator ${validator.id} has an empty prompt.`)
+      }
+    }
   }
 
   if (spec.shadowMemoryScope) {
@@ -132,6 +164,7 @@ export async function validateLongTaskLayout(paths: LongTaskPaths): Promise<Long
   for (const target of [
     path.join(paths.archiveRoot, "index.jsonl"),
     path.join(paths.shadowMemoryRoot, "index.jsonl"),
+    path.join(paths.candidatesRoot, "index.jsonl"),
   ]) {
     if (!(await pathExists(target))) {
       errors.push(`Long-task index file is missing: ${target}`)
@@ -143,6 +176,7 @@ export async function validateLongTaskLayout(paths: LongTaskPaths): Promise<Long
 
 export async function validateLongTaskRun(run: LongTaskRunPaths): Promise<LongTaskValidationReport> {
   const errors: string[] = []
+  const legacyOptionalTargets = new Set([run.retryLessonsPath])
   for (const target of [
     run.root,
     run.taskPath,
@@ -155,6 +189,7 @@ export async function validateLongTaskRun(run: LongTaskRunPaths): Promise<LongTa
     run.scratchIndexPath,
     run.scratchSummaryPath,
     run.learningUnitsPath,
+    run.retryLessonsPath,
     run.retryJournalPath,
     run.summaryJsonPath,
     run.summaryMdPath,
@@ -164,6 +199,9 @@ export async function validateLongTaskRun(run: LongTaskRunPaths): Promise<LongTa
     run.replanRoot,
   ]) {
     if (!(await pathExists(target))) {
+      if (legacyOptionalTargets.has(target)) {
+        continue
+      }
       errors.push(`Long-task run artifact is missing: ${target}`)
     }
   }
@@ -175,7 +213,7 @@ export async function validateLongTaskRun(run: LongTaskRunPaths): Promise<LongTa
   const spec = await readJsonFile<LongTaskSpec>(run.taskPath)
   const graph = await readJsonFile<LongTaskWorkGraph>(run.workGraphPath)
   const progress = await readJsonFile<LongTaskProgressState>(run.progressStatePath)
-  errors.push(...(await validateLongTaskSpec(spec)).errors)
+  errors.push(...(await validateLongTaskSpec(spec, { checkPaths: false })).errors)
 
   const unitIDs = new Set(graph.units.map((item) => item.id))
   const validatorIDs = new Set(spec.validators.map((item) => item.id))

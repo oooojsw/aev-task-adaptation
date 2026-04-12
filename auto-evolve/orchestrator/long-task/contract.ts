@@ -280,6 +280,30 @@ export interface LongTaskLearningUnit {
   relations: LongTaskLearningRelation[]
 }
 
+export interface LongTaskRetryLesson {
+  id: string
+  runID: string
+  unitID: string
+  attempt: number
+  createdAt: string
+  sourceFailurePacketID?: string
+  sourceClaimID?: string
+  failureType:
+    | "validator_failed"
+    | "invalid_execution_output"
+    | "planning_failed"
+    | "replanning_failed"
+    | "blocked"
+    | "budget_exhausted"
+  failureSignature: string
+  whatFailed: string
+  whyFailed: string[]
+  doNotRepeat: string[]
+  nextAttemptStrategy: string[]
+  requiredSelfChecks: string[]
+  evidenceRefs: string[]
+}
+
 export interface LongTaskRetryJournalEntry {
   id: string
   runID: string
@@ -299,6 +323,10 @@ export interface LongTaskRetryInputBundle {
   currentUnit: LongTaskWorkUnit
   recentClaims: LongTaskVerificationClaim[]
   recentFailurePackets: LongTaskFailurePacket[]
+  sameUnitRecentClaims: LongTaskVerificationClaim[]
+  dependencyClaims: LongTaskVerificationClaim[]
+  sameUnitLastFailure?: LongTaskFailurePacket
+  sameUnitRetryLessons: LongTaskRetryLesson[]
   relevantScratchUnits: LongTaskScratchUnit[]
   relevantLearningUnits: LongTaskLearningUnit[]
   relevantShadowMemory: LongTaskShadowMemoryRecord[]
@@ -347,7 +375,32 @@ export interface LongTaskRunSummary {
   validatorCalls: number
   failurePacketCount: number
   learningUnitCount: number
+  retryLessonCount: number
   summary: string
+}
+
+export interface LongTaskCandidatePackage {
+  id: string
+  createdAt: string
+  updatedAt: string
+  status: "hold" | "ready_for_maintainer"
+  mode: "long"
+  runID: string
+  title: string
+  goal: string
+  taskFamily?: string
+  domainTags: string[]
+  finalStatus: LongTaskRunStatus
+  summary: string
+  summaryPath: string
+  taskPath: string
+  progressStatePath: string
+  workGraphPath: string
+  failurePacketsPath: string
+  learningUnitsPath: string
+  retryLessonsPath: string
+  shadowMemoryRecordID?: string
+  notes: string[]
 }
 
 export const DEFAULT_LONG_TASK_BUDGETS: LongTaskBudgets = {
