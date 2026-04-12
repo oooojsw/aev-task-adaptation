@@ -2,6 +2,7 @@ import path from "node:path"
 import { buildActionTrace } from "../action-trace"
 import { buildRefineRoutingBlock, classifyRefineRouting } from "../acceptance"
 import { ensureDirectory, writeJsonFile, writeTextFile } from "../fs"
+import { recordShortTaskFailureEvidence } from "../maintenance-gateway/short-task"
 import type { CaseRuntimeContext } from "../case-runtime"
 
 export async function prepareFeedbackPacketPrimitive(context: CaseRuntimeContext) {
@@ -35,6 +36,7 @@ export async function prepareFeedbackPacketPrimitive(context: CaseRuntimeContext
   await writeTextFile(actualOutputPath, (context.solveTask.result.responseText || "").trim() + "\n")
   await writeJsonFile(evaluationPath, context.evaluation)
   await writeTextFile(actionTracePath, buildActionTrace(context.solveTask.result.events))
+  await recordShortTaskFailureEvidence(context)
 }
 
 export function buildKnowledgeMaintainerContractBlock(context: CaseRuntimeContext, methodContractBlock: string) {

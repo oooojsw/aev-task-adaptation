@@ -91,8 +91,8 @@ function resolveContractBlock(recipe: ReversePropagationRecipeDescriptor) {
       return [
         `Maintenance contract for recipe ${recipe.id}:`,
         `- Follow the maintenance module ${recipe.maintenanceModuleID}.`,
-        `- Follow the acceptance policy ${recipe.acceptancePolicyID}.`,
         "- Keep one coherent canonical experience workspace and one single entry file.",
+        "- Acceptance and rollback are evaluated later by the transaction gate; do not try to simulate acceptance policy inside the maintainer step.",
       ].join("\n")
   }
 }

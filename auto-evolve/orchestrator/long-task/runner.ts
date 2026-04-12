@@ -48,6 +48,7 @@ import {
   writeScratchDerivedViews,
   buildLongTaskWorkUnit,
 } from "./repository"
+import { maintenanceGatewayPaths, writeMaintenanceRequest } from "../maintenance-gateway/repository"
 import {
   activateLongTaskWorkUnit,
   bumpLongTaskWorkUnitAttempt,
@@ -919,6 +920,7 @@ async function finalizeLongTaskRun(input: {
   const summary = await buildLongTaskRunSummary(input.run)
   await writeLongTaskRunSummary(input.run, summary)
 
+  const config = await loadConfig(input.cwd)
   const paths = longTaskPaths(input.cwd)
   await appendArchiveRecord(paths, defaultArchiveRecord({ run: input.run, summary }))
   const shadowRecord = defaultShadowMemoryRecord({ run: input.run, summary, spec: input.spec })
@@ -946,6 +948,72 @@ async function finalizeLongTaskRun(input: {
       summary.status === "verified_success"
         ? ["Verified-success long-task run preserved as a maintainer-ready candidate package."]
         : ["Run preserved for later maintainer review; keep as hold until higher-layer promotion decides otherwise."],
+  })
+  await writeMaintenanceRequest(maintenanceGatewayPaths(input.cwd, config), {
+    id: `maint-req-long-${summary.runID}`,
+    status: summary.status === "verified_success" ? "ready_for_maintainer" : "hold",
+    mode: "long",
+    sourceRunID: summary.runID,
+    title: summary.title,
+    goal: summary.goal,
+    taskFamily: summary.taskFamily,
+    domainTags: summary.domainTags,
+    summary: summary.summary,
+    runtimeRoot: input.run.root,
+    recipeID: input.spec.reversePropagation?.recipeID,
+    maintenanceModuleID: input.spec.reversePropagation?.maintenanceModuleID,
+    operationIDs: [],
+    sessionReports: [],
+    evidence: [
+      {
+        kind: "candidate_summary",
+        path: input.run.summaryJsonPath,
+        label: "long_task_summary",
+        required: true,
+      },
+      {
+        kind: "task_spec",
+        path: input.run.taskPath,
+        label: "long_task_spec",
+        required: true,
+      },
+      {
+        kind: "progress_state",
+        path: input.run.progressStatePath,
+        label: "long_task_progress_state",
+        required: true,
+      },
+      {
+        kind: "work_graph",
+        path: input.run.workGraphPath,
+        label: "long_task_work_graph",
+      },
+      {
+        kind: "failure_packet",
+        path: input.run.failurePacketsPath,
+        label: "long_task_failure_packets",
+      },
+      {
+        kind: "learning_unit",
+        path: input.run.learningUnitsPath,
+        label: "long_task_learning_units",
+      },
+      {
+        kind: "retry_lesson",
+        path: input.run.retryLessonsPath,
+        label: "long_task_retry_lessons",
+      },
+      {
+        kind: "shadow_memory",
+        path: paths.shadowMemoryRoot,
+        label: shadowRecord.id,
+      },
+    ],
+    notes:
+      summary.status === "verified_success"
+        ? ["Long-task request is maintainer-ready but still isolated from direct canonical commit."]
+        : ["Long-task request is preserved as hold for later governance or maintainer review."],
+    mirrorPath: path.join(input.run.root, "maintenance_request.json"),
   })
 
   return {

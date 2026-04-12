@@ -9,6 +9,7 @@ import {
   writeExperienceWorkspaceSnapshot,
 } from "./experience-workspace"
 import { autoEvolvePath, ensureDirectory, readTextFile, runDirectory, writeJsonFile } from "./fs"
+import { writeShortTaskShadowMemoryCandidate } from "./maintenance-gateway/short-task"
 import { resolveLocalLearningRecipe } from "./local-learning-recipes"
 import { resolveMethodStrategy } from "./method-strategies"
 import { buildCaseMethodOps } from "./primitive-ops/build-case-method-ops"
@@ -141,6 +142,28 @@ export async function runCase(
     experienceWorkspaceRuntimeSidecarFiles: finalWorkspace.runtimeSidecarFiles,
     templateLibraryRoot: templateLibrary.root,
     templateLibraryFiles: templateLibrary.files,
+  })
+
+  await writeShortTaskShadowMemoryCandidate({
+    runDir,
+    caseID,
+    passed: finalEvaluation.passed,
+    summary:
+      stopReason ??
+      (finalEvaluation.passed
+        ? "Short-task run completed and the accepted transaction updated canonical experience."
+        : finalEvaluation.summary),
+    evidenceRefs: attempts
+      .flatMap((attempt) => [
+        attempt.solveSessionExecutionReportPath,
+        attempt.judgeSessionExecutionReportPath,
+        attempt.refineSessionExecutionReportPath,
+        attempt.currentCaseVerificationReportPath,
+        attempt.failurePacketPath,
+      ])
+      .filter((item): item is string => Boolean(item))
+      .slice(0, 24),
+    outputPath: path.join(runDir, "shadow_memory_candidate.json"),
   })
 
   return {

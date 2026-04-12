@@ -10,6 +10,8 @@ import {
 import type { KnowledgeMaintainerPlan } from "../knowledge-maintainer/contract"
 import { runKnowledgeMaintainer } from "../knowledge-maintainer/run"
 import { writeJsonFile } from "../fs"
+import { maintenanceGatewayPaths, writeMaintenanceRequest } from "../maintenance-gateway/repository"
+import { appendShortTaskRetryLessons, buildShortTaskMaintenanceRequest } from "../maintenance-gateway/short-task"
 import { writeTaskArtifacts } from "../task-artifacts"
 import type { CaseRuntimeContext } from "../case-runtime"
 import type { MethodStrategyDecision } from "../method-strategies"
@@ -25,6 +27,21 @@ export async function invokeKnowledgeMaintainerPrimitive(
     !context.feedback.actionTracePath
   ) {
     throw new Error("invokeKnowledgeMaintainer requires prepared feedback artifacts.")
+  }
+
+  await appendShortTaskRetryLessons(context)
+  const maintenanceRequest = buildShortTaskMaintenanceRequest(context, input)
+  const gatewayWrite = await writeMaintenanceRequest(maintenanceGatewayPaths(context.cwd, context.config), {
+    ...maintenanceRequest,
+    mirrorPath: path.join(context.maintainDir, "maintenance_request.json"),
+  })
+  context.attemptSummary.maintenanceRequestPath = gatewayWrite.path
+  const currentRoundSummary =
+    context.currentMaintenanceRound !== undefined
+      ? context.attemptSummary.maintenanceRounds?.find((item) => item.round === context.currentMaintenanceRound)
+      : undefined
+  if (currentRoundSummary) {
+    currentRoundSummary.maintenanceRequestPath = gatewayWrite.path
   }
 
   const result = await runKnowledgeMaintainer({
@@ -52,16 +69,17 @@ export async function invokeKnowledgeMaintainerPrimitive(
       maintenanceRound: input.maintenanceRound,
       contractBlock: buildKnowledgeMaintainerContractBlock(context, input.contractBlock),
       methodExtensionBlock: input.methodExtensionBlock,
-      reversePropagationModuleID: input.reversePropagationModuleID,
-      loadingStrategyID: input.loadingStrategyID,
-      scopeLevelID: input.scopeLevelID,
-      operationIDs: input.operationIDs,
-      preferredFiles: context.feedback.routing.preferredFiles,
-      suggestedRoles: context.feedback.routing.suggestedRoles,
-      allowNewMarkdownFiles: context.feedback.routing.allowNewMarkdownFiles,
-      classification: context.feedback.routing.classification,
-      reasons: context.feedback.routing.reasons,
-      sessionReports: input.sessionReports,
+      reversePropagationModuleID: maintenanceRequest.maintenanceModuleID ?? input.reversePropagationModuleID,
+      loadingStrategyID: maintenanceRequest.loadingStrategyID ?? input.loadingStrategyID,
+      scopeLevelID: maintenanceRequest.scopeLevelID ?? input.scopeLevelID,
+      operationIDs: maintenanceRequest.operationIDs,
+      preferredFiles: maintenanceRequest.routing?.preferredFiles ?? context.feedback.routing.preferredFiles,
+      suggestedRoles: maintenanceRequest.routing?.suggestedRoles ?? context.feedback.routing.suggestedRoles,
+      allowNewMarkdownFiles:
+        maintenanceRequest.routing?.allowNewMarkdownFiles ?? context.feedback.routing.allowNewMarkdownFiles,
+      classification: maintenanceRequest.routing?.classification ?? context.feedback.routing.classification,
+      reasons: maintenanceRequest.routing?.reasons ?? context.feedback.routing.reasons,
+      sessionReports: maintenanceRequest.sessionReports,
     },
   })
 

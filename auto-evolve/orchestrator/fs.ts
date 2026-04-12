@@ -1152,6 +1152,7 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
   const propagationMethodsRoot = autoEvolvePath(cwd, "methods", "propagation")
   const runtimeStateRoot = autoEvolvePath(cwd, "runtime-state")
   const runsRoot = autoEvolvePath(cwd, "runtime-state", "runs")
+  const maintenanceGatewayRoot = autoEvolvePath(cwd, "runtime-state", "maintenance-gateway")
   const propagationRoot = autoEvolvePath(cwd, "runtime-state", "propagation")
   const optimizationRoot = autoEvolvePath(cwd, "runtime-state", "optimization")
   const longTaskRoot = autoEvolvePath(cwd, "runtime-state", "long-task")
@@ -1174,6 +1175,8 @@ export async function ensureLayout(cwd: string): Promise<LayoutResult> {
     autoEvolvePath(cwd, "prompts"),
     runtimeStateRoot,
     runsRoot,
+    maintenanceGatewayRoot,
+    autoEvolvePath(cwd, "runtime-state", "maintenance-gateway", "requests"),
     autoEvolvePath(cwd, "scripts"),
     autoEvolvePath(cwd, "judge-skills"),
     autoEvolvePath(cwd, "judge-skills", "exact-output"),
@@ -1319,6 +1322,21 @@ It is centered on:
   await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "long-task", "shadow-memory", "index.jsonl"), "", created)
   await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "long-task", "candidates", ".gitkeep"), "\n", created)
   await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "long-task", "candidates", "index.jsonl"), "", created)
+  await writeIfMissing(
+    autoEvolvePath(cwd, "runtime-state", "maintenance-gateway", "README.md"),
+    `# Maintenance Gateway
+
+This directory stores the thin boundary objects between runtime kernels and the maintainer core.
+
+- requests/: normalized maintenance requests from short and long task runtimes
+- index.jsonl: append-only request index
+
+The maintainer core should consume normalized requests from here rather than reading raw runtime internals directly.
+`,
+    created,
+  )
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "maintenance-gateway", "requests", ".gitkeep"), "\n", created)
+  await writeIfMissing(autoEvolvePath(cwd, "runtime-state", "maintenance-gateway", "index.jsonl"), "", created)
 
   await writeIfMissing(
     autoEvolvePath(cwd, "experience", "templates", "README.md"),

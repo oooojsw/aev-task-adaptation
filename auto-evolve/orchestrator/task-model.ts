@@ -1,6 +1,10 @@
-export type AutoEvolveTaskLayer = "task_execution" | "judge" | "experience_maintenance"
+export type AutoEvolveTaskLayer =
+  | "task_execution"
+  | "judge"
+  | "experience_maintenance"
+  | "experience_transaction"
 
-export type AutoEvolveTaskRole = "worker" | "judge" | "maintainer" | "acceptance"
+export type AutoEvolveTaskRole = "worker" | "judge" | "maintainer" | "acceptance" | "transaction_gate"
 
 export type AutoEvolveTaskKind =
   | "bootstrap"
@@ -70,19 +74,21 @@ export function createTaskDescriptor(input: {
   const { kind } = input
 
   const layer: AutoEvolveTaskLayer =
-    kind === "judge" || kind === "post_judge"
+    kind === "judge"
       ? "judge"
       : kind === "maintain"
         ? "experience_maintenance"
-        : "task_execution"
+        : kind === "verify" || kind === "regression" || kind === "post_judge"
+          ? "experience_transaction"
+          : "task_execution"
 
   const role: AutoEvolveTaskRole =
-    kind === "judge" || kind === "post_judge"
+    kind === "judge"
       ? "judge"
       : kind === "maintain"
         ? "maintainer"
-        : kind === "verify" || kind === "regression"
-          ? "acceptance"
+        : kind === "verify" || kind === "regression" || kind === "post_judge"
+          ? "transaction_gate"
           : "worker"
 
   return {

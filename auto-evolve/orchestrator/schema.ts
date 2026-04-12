@@ -57,6 +57,7 @@ export interface AutoEvolveConfig {
   datasetDir: string
   knowledgeDir: string
   experienceArchiveDir: string
+  maintenanceGatewayDir: string
   experienceEntryFile: string
   templateLibraryDir: string
   reversePropagationModulesDir: string
@@ -137,6 +138,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   datasetDir: "dataset/cases",
   knowledgeDir: "experience/workspace",
   experienceArchiveDir: "experience/archive",
+  maintenanceGatewayDir: "runtime-state/maintenance-gateway",
   experienceEntryFile: "manifest.md",
   templateLibraryDir: "experience/templates",
   reversePropagationModulesDir: "methods/reverse-propagation-modules",
@@ -467,6 +469,10 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
       typeof raw.experienceArchiveDir === "string" && raw.experienceArchiveDir.trim()
         ? raw.experienceArchiveDir
         : DEFAULT_CONFIG.experienceArchiveDir,
+    maintenanceGatewayDir:
+      typeof raw.maintenanceGatewayDir === "string" && raw.maintenanceGatewayDir.trim()
+        ? raw.maintenanceGatewayDir
+        : DEFAULT_CONFIG.maintenanceGatewayDir,
     experienceEntryFile:
       typeof raw.experienceEntryFile === "string" && raw.experienceEntryFile.trim()
         ? raw.experienceEntryFile
@@ -589,6 +595,10 @@ export async function validateAllCases(cwd: string, config: AutoEvolveConfig): P
   const experienceArchiveRoot = autoEvolvePath(cwd, config.experienceArchiveDir)
   if (!(await pathExists(experienceArchiveRoot))) {
     errors.push(`Experience archive directory is missing: ${experienceArchiveRoot}`)
+  }
+  const maintenanceGatewayRoot = autoEvolvePath(cwd, config.maintenanceGatewayDir)
+  if (!(await pathExists(maintenanceGatewayRoot))) {
+    errors.push(`Maintenance gateway directory is missing: ${maintenanceGatewayRoot}`)
   }
   const propagationRoot = autoEvolvePath(cwd, config.propagationDir)
   if (!(await pathExists(propagationRoot))) {

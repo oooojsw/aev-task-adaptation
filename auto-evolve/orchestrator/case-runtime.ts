@@ -21,6 +21,7 @@ export type CaseExecutionProfile = "full" | "light_shard"
 
 export interface MaintenanceRoundSummary {
   round: number
+  maintenanceRequestPath?: string
   maintainSessionID?: string
   maintainSessionExecutionReportPath?: string
   maintainExitCode?: number
@@ -43,6 +44,12 @@ export interface MaintenanceRoundSummary {
 
 export interface AttemptSummary {
   attempt: number
+  failurePacketPath?: string
+  learningUnitsPath?: string
+  retryLessonsPath?: string
+  scratchMemoryPath?: string
+  shadowMemoryCandidatePath?: string
+  maintenanceRequestPath?: string
   solveSessionID?: string
   solveSessionExecutionReportPath?: string
   solveExitCode: number
@@ -124,6 +131,15 @@ export interface FeedbackPacketState {
   routing?: RefineRouting
 }
 
+export interface CaseEvidencePaths {
+  root: string
+  failurePacketPath: string
+  learningUnitsPath: string
+  retryLessonsPath: string
+  scratchMemoryPath: string
+  shadowMemoryCandidatePath: string
+}
+
 export interface MaintenanceState {
   workspaceBeforeMaintenance?: ExperienceWorkspaceSnapshot
   maintainTask?: OpencodeTaskRun
@@ -188,6 +204,7 @@ export interface CaseRuntimeContext {
   baseAcceptanceDir: string
   acceptanceDir: string
   currentMaintenanceRound?: number
+  evidencePaths: CaseEvidencePaths
   attempts: AttemptSummary[]
   attemptSummary: AttemptSummary
   finalEvaluation?: EvaluationResult
@@ -254,6 +271,7 @@ export function createAttemptContext(input: {
   const maintainDir = path.join(currentAttemptDir, "maintain")
   const maintainInputDir = path.join(currentAttemptDir, "maintain-input")
   const acceptanceDir = path.join(currentAttemptDir, "acceptance")
+  const evidenceDir = path.join(currentAttemptDir, "evidence")
   const attemptSummary: AttemptSummary = {
     attempt: input.attempt,
     solveExitCode: -1,
@@ -276,6 +294,14 @@ export function createAttemptContext(input: {
     baseAcceptanceDir: acceptanceDir,
     acceptanceDir,
     currentMaintenanceRound: undefined,
+    evidencePaths: {
+      root: evidenceDir,
+      failurePacketPath: path.join(evidenceDir, "failure_packet.json"),
+      learningUnitsPath: path.join(evidenceDir, "learning_units.jsonl"),
+      retryLessonsPath: path.join(evidenceDir, "retry_lessons.jsonl"),
+      scratchMemoryPath: path.join(evidenceDir, "scratch_memory.jsonl"),
+      shadowMemoryCandidatePath: path.join(input.runDir, "shadow_memory_candidate.json"),
+    },
     attemptSummary,
     feedback: {},
     judge: {},
