@@ -219,6 +219,7 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
   const initialExpertContextPaths = normalizeStringArray(raw.initialExpertContextPaths).map((item) =>
     resolveMaybePath(baseDir, item),
   )
+  const formalPackageRoots = normalizeStringArray(raw.formalPackageRoots).map((item) => resolveMaybePath(baseDir, item))
   const validators = normalizeValidators(raw.validators).map((validator) =>
     validator.type === "script"
       ? {
@@ -273,6 +274,7 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
     targetPaths,
     editablePaths: editablePaths.length ? editablePaths : targetPaths.map((item) => item.path),
     initialExpertContextPaths,
+    formalPackageRoots,
     capabilities,
     validators,
     planning,

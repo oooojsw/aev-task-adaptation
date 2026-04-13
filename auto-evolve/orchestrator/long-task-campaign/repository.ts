@@ -1,7 +1,11 @@
 import path from "node:path"
 import { appendFile } from "node:fs/promises"
 import { autoEvolvePath, ensureDirectory, readJsonFile, writeJsonFile, writeTextFile } from "../fs"
-import type { LongTaskCampaignRoundRecord, LongTaskCampaignState } from "./contract"
+import type {
+  LongTaskCampaignOperationalMemoryRecord,
+  LongTaskCampaignRoundRecord,
+  LongTaskCampaignState,
+} from "./contract"
 
 export interface LongTaskCampaignPaths {
   root: string
@@ -10,6 +14,8 @@ export interface LongTaskCampaignPaths {
   aggregatedFailurePacketsPath: string
   aggregatedRetryLessonsPath: string
   aggregatedLearningUnitsPath: string
+  campaignOperationalMemoryPath: string
+  campaignSeedContextPath: string
   campaignLessonsPath: string
   roundsRoot: string
 }
@@ -45,6 +51,8 @@ export function longTaskCampaignPaths(cwd: string, campaignID: string): LongTask
     aggregatedFailurePacketsPath: path.join(root, "aggregated-failure-packets.jsonl"),
     aggregatedRetryLessonsPath: path.join(root, "aggregated-retry-lessons.jsonl"),
     aggregatedLearningUnitsPath: path.join(root, "aggregated-learning-units.jsonl"),
+    campaignOperationalMemoryPath: path.join(root, "campaign-operational-memory.json"),
+    campaignSeedContextPath: path.join(root, "campaign-seed-context.md"),
     campaignLessonsPath: path.join(root, "campaign-failure-lessons.md"),
     roundsRoot: path.join(root, "rounds"),
   }
@@ -66,6 +74,8 @@ export async function initializeLongTaskCampaign(paths: LongTaskCampaignPaths, s
   await ensureDirectory(paths.root)
   await ensureDirectory(paths.roundsRoot)
   await writeJsonFile(paths.campaignStatePath, state)
+  await writeJsonFile(paths.campaignOperationalMemoryPath, [])
+  await writeTextFile(paths.campaignSeedContextPath, "# Campaign Seed Context\n\n- no promoted cross-run memory yet\n")
 }
 
 export async function writeLongTaskCampaignState(paths: LongTaskCampaignPaths, state: LongTaskCampaignState) {
@@ -89,4 +99,19 @@ export async function appendLinesToAggregate(target: string, lines: string[]) {
 
 export async function writeLongTaskCampaignLessons(paths: LongTaskCampaignPaths, content: string) {
   await writeTextFile(paths.campaignLessonsPath, content)
+}
+
+export async function readLongTaskCampaignOperationalMemory(paths: LongTaskCampaignPaths) {
+  return readJsonFile<LongTaskCampaignOperationalMemoryRecord[]>(paths.campaignOperationalMemoryPath)
+}
+
+export async function writeLongTaskCampaignOperationalMemory(
+  paths: LongTaskCampaignPaths,
+  records: LongTaskCampaignOperationalMemoryRecord[],
+) {
+  await writeJsonFile(paths.campaignOperationalMemoryPath, records)
+}
+
+export async function writeLongTaskCampaignSeedContext(paths: LongTaskCampaignPaths, content: string) {
+  await writeTextFile(paths.campaignSeedContextPath, content)
 }

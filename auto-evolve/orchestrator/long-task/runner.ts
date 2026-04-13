@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises"
 import type {
   LongTaskFailurePacket,
   LongTaskLearningUnit,
+  LongTaskOperationalContextItem,
   LongTaskRunStatus,
   LongTaskScratchUnit,
   LongTaskRetryLesson,
@@ -21,6 +22,12 @@ import {
   appendRetryLesson,
   appendScratchUnit,
   appendShadowMemoryRecord,
+  readLearningUnits,
+  readOperationalContext,
+  readRetryLessons,
+  readScratchUnits,
+  readShadowMemoryRecords,
+  readVerificationClaims,
   appendValidatorResult,
   appendVerificationClaim,
   buildLongTaskRunSummary,
@@ -40,6 +47,8 @@ import {
   readLongTaskSpec,
   readLongTaskWorkGraph,
   resolveExistingLongTaskRun,
+  resolveLongTaskFormalPackageRoots,
+  upsertOperationalContext,
   writeLongTaskCandidatePackage,
   writeLongTaskProgressState,
   writeLongTaskRunSummary,
@@ -578,6 +587,195 @@ function createRetryLesson(input: {
   }
 }
 
+function syntheticCompletionUnit(spec: LongTaskSpec): LongTaskWorkUnit {
+  return {
+    id: "__completion__",
+    title: "Final Completion Validation",
+    goal: "Validate that the long task as a whole is complete.",
+    inputs: spec.materials.map((item) => item.path),
+    dependsOn: [],
+    expectedArtifacts: (spec.targetPaths ?? []).map((item) => item.path),
+    claim: "The overall task goal is complete.",
+    checkPlan: "Run final completion validators.",
+    validatorIDs: spec.validators.filter((item) => item.required !== false).map((item) => item.id),
+    retryBudget: 1,
+    status: "active",
+    attemptCount: 1,
+  }
+}
+
+function operationalContextTags(input: {
+  spec: LongTaskSpec
+  unit: LongTaskWorkUnit
+  extra?: string[]
+}) {
+  return uniqueStrings([
+    input.unit.id,
+    ...(input.spec.taskFamily ? [input.spec.taskFamily] : []),
+    ...(input.spec.domainTags ?? []),
+    ...(input.extra ?? []),
+  ])
+}
+
+function makeOperationalContextItem(input: {
+  runID: string
+  unit: LongTaskWorkUnit
+  attempt: number
+  kind: LongTaskOperationalContextItem["kind"]
+  status: LongTaskOperationalContextItem["status"]
+  statement: string
+  rationale?: string
+  refs: string[]
+  tags: string[]
+}): LongTaskOperationalContextItem {
+  return {
+    id: `opctx-${randomUUID().slice(0, 8)}`,
+    runID: input.runID,
+    createdAt: nowISO(),
+    updatedAt: nowISO(),
+    sourceUnitID: input.unit.id,
+    sourceAttempt: input.attempt,
+    kind: input.kind,
+    status: input.status,
+    statement: short(input.statement, 240),
+    rationale: input.rationale ? short(input.rationale, 220) : undefined,
+    refs: uniqueStrings(input.refs),
+    tags: uniqueStrings(input.tags),
+  }
+}
+
+function inferOperationalKindFromLearning(kind: LongTaskLearningUnit["kind"]) {
+  if (kind === "tooling_hint") return "tool_entrypoint" as const
+  if (kind === "repair_pattern" || kind === "validator_hint" || kind === "rule") return "validated_method" as const
+  if (kind === "exception") return "package_gap" as const
+  if (kind === "failure_pattern") return "failed_path" as const
+  return "confirmed_fact" as const
+}
+
+function promoteOperationalContextFromVerifiedUnit(input: {
+  spec: LongTaskSpec
+  runID: string
+  unit: LongTaskWorkUnit
+  attempt: number
+  claim: LongTaskVerificationClaim
+  learningUnits: LongTaskLearningUnit[]
+  validatorResults: LongTaskValidatorResult[]
+  selfChecksRun: string[]
+}): LongTaskOperationalContextItem[] {
+  const items: LongTaskOperationalContextItem[] = [
+    makeOperationalContextItem({
+      runID: input.runID,
+      unit: input.unit,
+      attempt: input.attempt,
+      kind: "confirmed_fact",
+      status: "confirmed",
+      statement: input.claim.statement,
+      rationale: "Validated at the work-unit boundary before promotion into run-global context.",
+      refs: input.claim.evidenceRefs,
+      tags: operationalContextTags({ spec: input.spec, unit: input.unit, extra: ["verified-claim"] }),
+    }),
+  ]
+
+  for (const unit of input.learningUnits) {
+    const shouldPromote =
+      unit.scope === "pattern" ||
+      unit.scope === "global_candidate" ||
+      unit.strength >= 2 ||
+      unit.kind === "repair_pattern" ||
+      unit.kind === "tooling_hint" ||
+      unit.kind === "validator_hint"
+    if (!shouldPromote) continue
+    items.push(
+      makeOperationalContextItem({
+        runID: input.runID,
+        unit: input.unit,
+        attempt: input.attempt,
+        kind: inferOperationalKindFromLearning(unit.kind),
+        status: unit.scope === "global_candidate" || unit.scope === "pattern" || unit.strength >= 2 ? "confirmed" : "candidate",
+        statement: unit.statement,
+        rationale: `Promoted from ${unit.kind} learning after a verified unit outcome.`,
+        refs: [...unit.refs, ...input.claim.evidenceRefs],
+        tags: operationalContextTags({ spec: input.spec, unit: input.unit, extra: [unit.kind, unit.scope] }),
+      }),
+    )
+  }
+
+  for (const selfCheck of input.selfChecksRun) {
+    items.push(
+      makeOperationalContextItem({
+        runID: input.runID,
+        unit: input.unit,
+        attempt: input.attempt,
+        kind: "validated_method",
+        status: "confirmed",
+        statement: `Before claiming success for ${input.unit.id}, run self-check: ${selfCheck}`,
+        rationale: "Observed in a verified attempt and therefore safe to share across the current run.",
+        refs: input.validatorResults.flatMap((item) => item.evidenceRefs),
+        tags: operationalContextTags({ spec: input.spec, unit: input.unit, extra: ["self-check"] }),
+      }),
+    )
+  }
+
+  return items
+}
+
+function promoteOperationalContextFromFailure(input: {
+  spec: LongTaskSpec
+  runID: string
+  unit: LongTaskWorkUnit
+  attempt: number
+  failure: LongTaskFailurePacket
+  retryLesson: LongTaskRetryLesson
+}): LongTaskOperationalContextItem[] {
+  const items: LongTaskOperationalContextItem[] = [
+    makeOperationalContextItem({
+      runID: input.runID,
+      unit: input.unit,
+      attempt: input.attempt,
+      kind: "blocking_issue",
+      status: "confirmed",
+      statement: input.failure.mismatchSummary,
+      rationale: "Observed as a validator-backed or execution-backed failure in the current run.",
+      refs: input.failure.evidenceRefs,
+      tags: operationalContextTags({ spec: input.spec, unit: input.unit, extra: [input.failure.failureType] }),
+    }),
+  ]
+
+  for (const line of input.retryLesson.doNotRepeat) {
+    items.push(
+      makeOperationalContextItem({
+        runID: input.runID,
+        unit: input.unit,
+        attempt: input.attempt,
+        kind: "failed_path",
+        status: "confirmed",
+        statement: line,
+        rationale: `Promoted from retry lesson after failure signature ${input.retryLesson.failureSignature}.`,
+        refs: input.retryLesson.evidenceRefs,
+        tags: operationalContextTags({ spec: input.spec, unit: input.unit, extra: ["do-not-repeat"] }),
+      }),
+    )
+  }
+
+  for (const line of input.retryLesson.nextAttemptStrategy) {
+    items.push(
+      makeOperationalContextItem({
+        runID: input.runID,
+        unit: input.unit,
+        attempt: input.attempt,
+        kind: "package_gap",
+        status: "candidate",
+        statement: line,
+        rationale: "Candidate gap or fix strategy that should be visible to later units within the same run.",
+        refs: input.retryLesson.evidenceRefs,
+        tags: operationalContextTags({ spec: input.spec, unit: input.unit, extra: ["next-attempt"] }),
+      }),
+    )
+  }
+
+  return items
+}
+
 function shouldStopForBudgets(input: {
   progress: ReturnType<typeof deriveLongTaskProgressState>
   spec: LongTaskSpec
@@ -705,8 +903,12 @@ async function executeWorkUnit(input: {
   const validatorInputPaths = activeUnit.validatorIDs.map((validatorID) =>
     path.join(attemptPaths.validatorsRoot, validatorID, "validator_input.json"),
   )
+  const formalPackageRoots = resolveLongTaskFormalPackageRoots(input.spec)
   const prompt = buildLongTaskExecutionPrompt({
-    spec: input.spec,
+    spec: {
+      ...input.spec,
+      formalPackageRoots,
+    },
     graph,
     unit: activeUnit,
     bundlePath: attemptPaths.inputBundlePath,
@@ -726,6 +928,7 @@ async function executeWorkUnit(input: {
       ...(input.spec.initialExpertContextPaths ?? []),
       attemptPaths.inputBundlePath,
       ...capabilityPaths,
+      ...formalPackageRoots,
       ...input.spec.validators.filter((item) => item.type === "script").map((item) => item.path),
     ],
     attachedFiles: capabilityFiles,
@@ -735,6 +938,7 @@ async function executeWorkUnit(input: {
       ...(input.spec.initialExpertContextPaths ?? []),
       attemptPaths.inputBundlePath,
       ...capabilityPaths,
+      ...formalPackageRoots,
       ...input.spec.validators.filter((item) => item.type === "script").map((item) => item.path),
     ],
     permissionEditPaths: input.spec.editablePaths ?? [],
@@ -887,36 +1091,42 @@ async function runCompletionValidators(input: {
   const validatorContracts = input.spec.validators.filter((validator) => completionValidatorIDs.includes(validator.id))
   const progress = await readLongTaskProgressState(input.run)
   const syntheticUnit: LongTaskWorkUnit = {
-    id: "__completion__",
-    title: "Final Completion Validation",
-    goal: "Validate that the long task as a whole is complete.",
-    inputs: input.spec.materials.map((item) => item.path),
-    dependsOn: [],
-    expectedArtifacts: (input.spec.targetPaths ?? []).map((item) => item.path),
-    claim: "The overall task goal is complete.",
-    checkPlan: "Run final completion validators.",
+    ...syntheticCompletionUnit(input.spec),
     validatorIDs: completionValidatorIDs,
-    retryBudget: 1,
-    status: "active",
-    attemptCount: 1,
   }
   const completionDir = path.join(input.run.root, "completion")
   const bundlePath = path.join(completionDir, "completion_bundle.json")
+  const [claims, failures, scratchUnits, learningUnits, retryLessons, operationalContext, shadowMemory] =
+    await Promise.all([
+      readVerificationClaims(input.run),
+      readFailurePackets(input.run),
+      readScratchUnits(input.run),
+      readLearningUnits(input.run),
+      readRetryLessons(input.run),
+      readOperationalContext(input.run),
+      readShadowMemoryRecords(longTaskPaths(input.cwd)),
+    ])
   await writeRetryInputBundle(bundlePath, {
     id: `completion-${randomUUID().slice(0, 8)}`,
     runID: progress.runID,
     unitID: syntheticUnit.id,
     createdAt: nowISO(),
     progressState: progress,
-      currentUnit: syntheticUnit,
-      recentClaims: [],
-      recentFailurePackets: [],
-      sameUnitRecentClaims: [],
-      dependencyClaims: [],
-      sameUnitRetryLessons: [],
-      relevantScratchUnits: [],
-      relevantLearningUnits: [],
-      relevantShadowMemory: [],
+    currentUnit: syntheticUnit,
+    recentClaims: claims.slice(-8),
+    recentFailurePackets: failures.slice(-8),
+    sameUnitRecentClaims: [],
+    dependencyClaims: claims
+      .filter((item) => input.graph.units.some((unit) => unit.id === item.unitID && unit.status === "verified"))
+      .slice(-8),
+    sameUnitRetryLessons: retryLessons.slice(-8),
+    relevantScratchUnits: scratchUnits.slice(-12),
+    relevantLearningUnits: learningUnits.slice(-12),
+    relevantShadowMemory: shadowMemory
+      .filter((record) => record.runID !== progress.runID)
+      .slice(-6),
+    runGlobalOperationalContext: operationalContext.slice(0, 12),
+    formalPackageRoots: resolveLongTaskFormalPackageRoots(input.spec),
   })
 
   const config = await loadConfig(input.configPathCwd)
@@ -1009,6 +1219,7 @@ async function finalizeLongTaskRun(input: {
       input.run.progressStatePath,
       input.run.workGraphPath,
       input.run.validatorResultsPath,
+      input.run.operationalContextPath,
     ],
     details: {
       finalStatus: summary.status,
@@ -1041,6 +1252,7 @@ async function finalizeLongTaskRun(input: {
     failurePacketsPath: input.run.failurePacketsPath,
     learningUnitsPath: input.run.learningUnitsPath,
     retryLessonsPath: input.run.retryLessonsPath,
+    operationalContextPath: input.run.operationalContextPath,
     shadowMemoryRecordID: shadowRecord.id,
     notes:
       summary.status === "verified_success"
@@ -1100,6 +1312,16 @@ async function finalizeLongTaskRun(input: {
         kind: "retry_lesson",
         path: input.run.retryLessonsPath,
         label: "long_task_retry_lessons",
+      },
+      {
+        kind: "candidate_summary",
+        path: input.run.operationalContextPath,
+        label: "long_task_operational_context",
+      },
+      {
+        kind: "candidate_summary",
+        path: input.run.operationalContextSummaryPath,
+        label: "long_task_operational_context_summary",
       },
       {
         kind: "shadow_memory",
@@ -1200,6 +1422,24 @@ async function continueLongTaskLoop(input: {
           failureType: "validator_failed",
         })
         await appendFailurePacket(input.run, failure)
+        await upsertOperationalContext(input.run, [
+          makeOperationalContextItem({
+            runID: progress.runID,
+            unit: syntheticCompletionUnit(input.spec),
+            attempt: 1,
+            kind: "blocking_issue",
+            status: "confirmed",
+            statement: failure.mismatchSummary,
+            rationale: "Completion validation failed after all current work units were marked verified.",
+            refs: failure.evidenceRefs,
+            tags: uniqueStrings([
+              "__completion__",
+              ...(input.spec.taskFamily ? [input.spec.taskFamily] : []),
+              ...(input.spec.domainTags ?? []),
+              "completion",
+            ]),
+          }),
+        ])
         await appendRetryJournalEntry(input.run, {
           id: `retry-${randomUUID().slice(0, 8)}`,
           runID: progress.runID,
@@ -1337,6 +1577,25 @@ async function continueLongTaskLoop(input: {
     })
 
     if (executionSucceeded) {
+      await upsertOperationalContext(
+        input.run,
+        promoteOperationalContextFromVerifiedUnit({
+          spec: input.spec,
+          runID: progress.runID,
+          unit: execution.activeUnit,
+          attempt: execution.attempt,
+          claim: execution.claim,
+          learningUnits: execution.normalized.learningUnits.length
+            ? makeLearningUnits({
+                runID: progress.runID,
+                unit: execution.activeUnit,
+                rawUnits: execution.normalized.learningUnits,
+              })
+            : [],
+          validatorResults: execution.validatorResults,
+          selfChecksRun: execution.normalized.selfChecksRun,
+        }),
+      )
       graph = markLongTaskWorkUnitVerified(graph, execution.activeUnit.id, execution.claim.id)
       progress = deriveLongTaskProgressState({
         runID: progress.runID,
@@ -1371,16 +1630,25 @@ async function continueLongTaskLoop(input: {
       failureType: execution.claim.claimedSuccess ? "validator_failed" : "invalid_execution_output",
     })
     await appendFailurePacket(input.run, failure)
-    await appendRetryLesson(
+    const retryLesson = createRetryLesson({
+      runID: progress.runID,
+      unit: execution.activeUnit,
+      attempt: execution.attempt,
+      claim: execution.claim,
+      failure,
+      strategyChange: execution.normalized.strategyChange,
+      selfChecksRun: execution.normalized.selfChecksRun,
+    })
+    await appendRetryLesson(input.run, retryLesson)
+    await upsertOperationalContext(
       input.run,
-      createRetryLesson({
+      promoteOperationalContextFromFailure({
+        spec: input.spec,
         runID: progress.runID,
         unit: execution.activeUnit,
         attempt: execution.attempt,
-        claim: execution.claim,
         failure,
-        strategyChange: execution.normalized.strategyChange,
-        selfChecksRun: execution.normalized.selfChecksRun,
+        retryLesson,
       }),
     )
     await appendRetryJournalEntry(input.run, {

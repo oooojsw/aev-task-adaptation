@@ -22,6 +22,14 @@ function resolveMaybePath(baseDir: string, input: string) {
 function normalizeCarryover(raw: unknown): LongTaskCampaignCarryoverConfig {
   if (!isObject(raw)) return { ...DEFAULT_LONG_TASK_CAMPAIGN_CARRYOVER }
   return {
+    includeCampaignOperationalMemory:
+      typeof raw.includeCampaignOperationalMemory === "boolean"
+        ? raw.includeCampaignOperationalMemory
+        : DEFAULT_LONG_TASK_CAMPAIGN_CARRYOVER.includeCampaignOperationalMemory,
+    includeCampaignSeedContext:
+      typeof raw.includeCampaignSeedContext === "boolean"
+        ? raw.includeCampaignSeedContext
+        : DEFAULT_LONG_TASK_CAMPAIGN_CARRYOVER.includeCampaignSeedContext,
     includeFailurePackets:
       typeof raw.includeFailurePackets === "boolean"
         ? raw.includeFailurePackets

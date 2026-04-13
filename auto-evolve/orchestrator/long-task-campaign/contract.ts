@@ -1,4 +1,8 @@
-import type { LongTaskBudgets, LongTaskRunStatus } from "../long-task/contract"
+import type {
+  LongTaskBudgets,
+  LongTaskOperationalContextItem,
+  LongTaskRunStatus,
+} from "../long-task/contract"
 
 export type LongTaskCampaignMode = "graph_iterative" | "single_session_iterative"
 
@@ -22,11 +26,20 @@ export interface LongTaskCampaignLessonsMirror {
 }
 
 export interface LongTaskCampaignCarryoverConfig {
+  includeCampaignOperationalMemory: boolean
+  includeCampaignSeedContext: boolean
   includeFailurePackets: boolean
   includeRetryLessons: boolean
   includeLearningUnits: boolean
   includeRoundSummaries: boolean
   recentRoundSummaryCount: number
+}
+
+export interface LongTaskCampaignOperationalMemoryRecord extends LongTaskOperationalContextItem {
+  roundNumber: number
+  lastRound: number
+  occurrenceCount: number
+  sourceRunIDs: string[]
 }
 
 export interface LongTaskCampaignSpec {
@@ -80,6 +93,8 @@ export interface LongTaskCampaignState {
 }
 
 export const DEFAULT_LONG_TASK_CAMPAIGN_CARRYOVER: LongTaskCampaignCarryoverConfig = {
+  includeCampaignOperationalMemory: true,
+  includeCampaignSeedContext: true,
   includeFailurePackets: true,
   includeRetryLessons: true,
   includeLearningUnits: true,

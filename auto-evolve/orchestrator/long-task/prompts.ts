@@ -183,6 +183,11 @@ export function buildLongTaskExecutionPrompt(input: {
     "Editable paths:",
     bullet((input.spec.editablePaths ?? []).map((item) => item)),
     "",
+    "Formal package roots:",
+    input.spec.formalPackageRoots?.length
+      ? bullet(input.spec.formalPackageRoots)
+      : "- infer from the tracked expert workspace and experience-workspace targets",
+    "",
     "Initial expert context:",
     (input.spec.initialExpertContextPaths ?? []).length
       ? bullet(input.spec.initialExpertContextPaths ?? [])
@@ -210,7 +215,8 @@ export function buildLongTaskExecutionPrompt(input: {
     "- Do not invent new validators.",
     "- Produce the expected artifacts for the current unit whenever the unit calls for explicit intermediate outputs.",
     "- If the current unit has no formal validators, satisfy the check plan by creating the expected artifacts and leaving concise structured scratch evidence.",
-    "- Read the retry bundle carefully, especially recent failures, relevant learning units, and relevant shadow memory. Repeated mistakes should change your next move.",
+    "- Read the retry bundle carefully, especially recent failures, relevant learning units, run-global operational context, and relevant shadow memory. Repeated mistakes should change your next move.",
+    "- Treat the formal expert package as a live shared surface. If you stabilize a rule, method, blocker, or package gap, write it into the formal package instead of leaving it only in local notes.",
     "- If this is not the first attempt for the current unit, you must explicitly acknowledge the previous same-unit failure, state what strategy changed this time, and list the self-checks you ran before returning your claim.",
     "- Keep scratch notes short and structured.",
     "- If you are blocked, say so explicitly in the JSON output instead of pretending success.",

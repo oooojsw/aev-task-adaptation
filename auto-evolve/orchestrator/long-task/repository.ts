@@ -15,6 +15,7 @@ import type {
   LongTaskCandidatePackage,
   LongTaskFailurePacket,
   LongTaskLearningUnit,
+  LongTaskOperationalContextItem,
   LongTaskProgressState,
   LongTaskRetryLesson,
   LongTaskRetryInputBundle,
@@ -52,6 +53,8 @@ export interface LongTaskRunPaths {
   learningUnitsPath: string
   retryLessonsPath: string
   retryJournalPath: string
+  operationalContextPath: string
+  operationalContextSummaryPath: string
   summaryJsonPath: string
   summaryMdPath: string
   bundlesRoot: string
@@ -117,6 +120,10 @@ function dedupeByID<T extends { id: string }>(items: T[]) {
   return ordered
 }
 
+function uniqueStrings(items: string[]) {
+  return Array.from(new Set(items.filter((item) => item.trim().length > 0)))
+}
+
 export function longTaskPaths(cwd: string): LongTaskPaths {
   const root = autoEvolvePath(cwd, "runtime-state", "long-task")
   return {
@@ -156,6 +163,8 @@ export function longTaskRunPaths(paths: LongTaskPaths, runID: string): LongTaskR
     learningUnitsPath: path.join(root, "learning_units.jsonl"),
     retryLessonsPath: path.join(root, "retry_lessons.jsonl"),
     retryJournalPath: path.join(root, "retry_journal.jsonl"),
+    operationalContextPath: path.join(root, "operational_context.json"),
+    operationalContextSummaryPath: path.join(root, "operational_context.md"),
     summaryJsonPath: path.join(root, "summary.json"),
     summaryMdPath: path.join(root, "summary.md"),
     bundlesRoot: path.join(root, "bundles"),
@@ -295,6 +304,8 @@ export async function initializeLongTaskRun(input: {
   await ensureJsonlFile(run.learningUnitsPath)
   await ensureJsonlFile(run.retryLessonsPath)
   await ensureJsonlFile(run.retryJournalPath)
+  await writeJsonFile(run.operationalContextPath, [])
+  await writeTextFile(run.operationalContextSummaryPath, "# Run-Global Operational Context\n\n- no promoted context yet\n")
   await writeJsonFile(run.scratchIndexPath, {
     updatedAt: nowISO(),
     totalScratchUnits: 0,
@@ -315,6 +326,16 @@ export async function initializeLongTaskRun(input: {
     paths,
     run,
   }
+}
+
+export function resolveLongTaskFormalPackageRoots(spec: LongTaskSpec) {
+  const inferred = (spec.targetPaths ?? [])
+    .filter((item) => item.role === "experience-workspace")
+    .map((item) => item.path)
+  const editableHints = (spec.editablePaths ?? []).filter((item) =>
+    path.basename(item).toLowerCase().includes("expert-workspace"),
+  )
+  return uniqueStrings([...(spec.formalPackageRoots ?? []), ...inferred, ...editableHints])
 }
 
 export function resolveExistingLongTaskRun(cwd: string, runID: string) {
@@ -403,6 +424,94 @@ export async function readRetryLessons(run: LongTaskRunPaths) {
   return readJsonl<LongTaskRetryLesson>(run.retryLessonsPath)
 }
 
+export async function readOperationalContext(run: LongTaskRunPaths) {
+  if (!(await pathExists(run.operationalContextPath))) return [] as LongTaskOperationalContextItem[]
+  return readJsonFile<LongTaskOperationalContextItem[]>(run.operationalContextPath)
+}
+
+function operationalContextSignature(item: Pick<LongTaskOperationalContextItem, "kind" | "statement">) {
+  return `${item.kind}::${item.statement.trim().toLowerCase()}`
+}
+
+function mergeOperationalContextItem(
+  existing: LongTaskOperationalContextItem,
+  incoming: LongTaskOperationalContextItem,
+): LongTaskOperationalContextItem {
+  return {
+    ...existing,
+    updatedAt: incoming.updatedAt,
+    sourceUnitID: incoming.sourceUnitID ?? existing.sourceUnitID,
+    sourceAttempt: incoming.sourceAttempt ?? existing.sourceAttempt,
+    status:
+      existing.status === "confirmed" || incoming.status === "confirmed" ? "confirmed" : "candidate",
+    rationale: incoming.rationale ?? existing.rationale,
+    refs: uniqueStrings([...existing.refs, ...incoming.refs]),
+    tags: uniqueStrings([...existing.tags, ...incoming.tags]),
+  }
+}
+
+function sortOperationalContextItems(items: LongTaskOperationalContextItem[]) {
+  return [...items].sort((left, right) => {
+    if (left.status !== right.status) return left.status === "confirmed" ? -1 : 1
+    if (left.updatedAt !== right.updatedAt) return left.updatedAt < right.updatedAt ? 1 : -1
+    return left.statement.localeCompare(right.statement)
+  })
+}
+
+export async function writeOperationalContext(run: LongTaskRunPaths, items: LongTaskOperationalContextItem[]) {
+  const sorted = sortOperationalContextItems(items)
+  await writeJsonFile(run.operationalContextPath, sorted)
+  const sections: Array<{
+    title: string
+    kind: LongTaskOperationalContextItem["kind"]
+  }> = [
+    { title: "Confirmed Facts", kind: "confirmed_fact" },
+    { title: "Validated Methods", kind: "validated_method" },
+    { title: "Blocking Issues", kind: "blocking_issue" },
+    { title: "Failed Paths", kind: "failed_path" },
+    { title: "Tool Entrypoints", kind: "tool_entrypoint" },
+    { title: "Package Gaps", kind: "package_gap" },
+  ]
+  const lines = [
+    "# Run-Global Operational Context",
+    "",
+    `- total_items: ${sorted.length}`,
+    `- updated_at: ${nowISO()}`,
+    "",
+  ]
+  if (!sorted.length) {
+    lines.push("- no promoted context yet", "")
+  } else {
+    for (const section of sections) {
+      const matches = sorted.filter((item) => item.kind === section.kind)
+      if (!matches.length) continue
+      lines.push(`## ${section.title}`, "")
+      for (const item of matches) {
+        const marker = item.status === "confirmed" ? "[confirmed]" : "[candidate]"
+        lines.push(`- ${marker} ${item.statement}`)
+        if (item.rationale) lines.push(`  rationale: ${short(item.rationale, 180)}`)
+        if (item.tags.length) lines.push(`  tags: ${item.tags.join(", ")}`)
+      }
+      lines.push("")
+    }
+  }
+  await writeTextFile(run.operationalContextSummaryPath, lines.join("\n").trimEnd() + "\n")
+  return sorted
+}
+
+export async function upsertOperationalContext(run: LongTaskRunPaths, items: LongTaskOperationalContextItem[]) {
+  if (!items.length) return readOperationalContext(run)
+  const existing = await readOperationalContext(run)
+  const merged = new Map<string, LongTaskOperationalContextItem>()
+  for (const item of existing) merged.set(operationalContextSignature(item), item)
+  for (const item of items) {
+    const signature = operationalContextSignature(item)
+    const current = merged.get(signature)
+    merged.set(signature, current ? mergeOperationalContextItem(current, item) : item)
+  }
+  return writeOperationalContext(run, Array.from(merged.values()))
+}
+
 export async function writeRetryInputBundle(targetPath: string, bundle: LongTaskRetryInputBundle) {
   await writeJsonFile(targetPath, bundle)
   return targetPath
@@ -419,6 +528,7 @@ export async function buildRetryInputBundle(input: {
   maxLearningUnits?: number
   maxRetryLessons?: number
   maxShadowMemory?: number
+  maxOperationalContext?: number
 }) {
   const graph = await readLongTaskWorkGraph(input.run)
   const progress = await readLongTaskProgressState(input.run)
@@ -427,13 +537,14 @@ export async function buildRetryInputBundle(input: {
     throw new Error(`Long-task work unit not found: ${input.unitID}`)
   }
 
-  const [claims, failures, scratch, learning, retryLessons, shadow] = await Promise.all([
+  const [claims, failures, scratch, learning, retryLessons, shadow, operationalContext] = await Promise.all([
     readVerificationClaims(input.run),
     readFailurePackets(input.run),
     readScratchUnits(input.run),
     readLearningUnits(input.run),
     readRetryLessons(input.run),
     readJsonl<LongTaskShadowMemoryRecord>(path.join(input.paths.shadowMemoryRoot, "index.jsonl")),
+    readOperationalContext(input.run),
   ])
 
   const relatedUnitIDs = new Set([unit.id, ...unit.dependsOn])
@@ -496,6 +607,11 @@ export async function buildRetryInputBundle(input: {
       )
       .slice(-(input.maxLearningUnits ?? 8)),
     relevantShadowMemory,
+    runGlobalOperationalContext: sortOperationalContextItems(operationalContext).slice(
+      0,
+      input.maxOperationalContext ?? 12,
+    ),
+    formalPackageRoots: resolveLongTaskFormalPackageRoots(input.spec),
   } satisfies LongTaskRetryInputBundle
 }
 
@@ -539,13 +655,14 @@ export async function writeScratchDerivedViews(run: LongTaskRunPaths) {
 }
 
 export async function buildLongTaskRunSummary(run: LongTaskRunPaths): Promise<LongTaskRunSummary> {
-  const [spec, graph, progress, failures, learning, retryLessons] = await Promise.all([
+  const [spec, graph, progress, failures, learning, retryLessons, operationalContext] = await Promise.all([
     readLongTaskSpec(run),
     readLongTaskWorkGraph(run),
     readLongTaskProgressState(run),
     readFailurePackets(run),
     readLearningUnits(run),
     readRetryLessons(run),
+    readOperationalContext(run),
   ])
 
   const verifiedUnits = graph.units.filter((item) => item.status === "verified").length
@@ -569,6 +686,7 @@ export async function buildLongTaskRunSummary(run: LongTaskRunPaths): Promise<Lo
     failurePacketCount: failures.length,
     learningUnitCount: learning.length,
     retryLessonCount: retryLessons.length,
+    operationalContextCount: operationalContext.length,
     summary:
       progress.finalSummary ??
       `Long-task ended with status ${progress.status}; verified ${verifiedUnits}/${graph.units.length} work units.`,
@@ -592,6 +710,7 @@ export async function writeLongTaskRunSummary(run: LongTaskRunPaths, summary: Lo
     `- failure packets: ${summary.failurePacketCount}`,
     `- learning units: ${summary.learningUnitCount}`,
     `- retry lessons: ${summary.retryLessonCount}`,
+    `- run-global context items: ${summary.operationalContextCount}`,
     "",
     "## Summary",
     "",

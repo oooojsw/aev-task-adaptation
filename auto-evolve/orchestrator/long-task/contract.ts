@@ -40,6 +40,14 @@ export type LongTaskLearningUnitKind =
 
 export type LongTaskLearningScope = "instance" | "local" | "pattern" | "global_candidate"
 
+export type LongTaskOperationalContextKind =
+  | "confirmed_fact"
+  | "validated_method"
+  | "blocking_issue"
+  | "failed_path"
+  | "tool_entrypoint"
+  | "package_gap"
+
 export interface LongTaskPathRef {
   path: string
   label?: string
@@ -137,6 +145,7 @@ export interface LongTaskSpec {
   targetPaths?: LongTaskPathRef[]
   editablePaths?: string[]
   initialExpertContextPaths?: string[]
+  formalPackageRoots?: string[]
   capabilities?: LongTaskCapabilityContract[]
   validators: LongTaskValidatorContract[]
   planning?: ExecutionSpec
@@ -315,6 +324,21 @@ export interface LongTaskRetryJournalEntry {
   reason: string
 }
 
+export interface LongTaskOperationalContextItem {
+  id: string
+  runID: string
+  createdAt: string
+  updatedAt: string
+  sourceUnitID?: string
+  sourceAttempt?: number
+  kind: LongTaskOperationalContextKind
+  status: "candidate" | "confirmed"
+  statement: string
+  rationale?: string
+  refs: string[]
+  tags: string[]
+}
+
 export interface LongTaskRetryInputBundle {
   id: string
   runID: string
@@ -331,6 +355,8 @@ export interface LongTaskRetryInputBundle {
   relevantScratchUnits: LongTaskScratchUnit[]
   relevantLearningUnits: LongTaskLearningUnit[]
   relevantShadowMemory: LongTaskShadowMemoryRecord[]
+  runGlobalOperationalContext: LongTaskOperationalContextItem[]
+  formalPackageRoots: string[]
 }
 
 export interface LongTaskArchiveRecord {
@@ -377,6 +403,7 @@ export interface LongTaskRunSummary {
   failurePacketCount: number
   learningUnitCount: number
   retryLessonCount: number
+  operationalContextCount: number
   summary: string
 }
 
@@ -400,6 +427,7 @@ export interface LongTaskCandidatePackage {
   failurePacketsPath: string
   learningUnitsPath: string
   retryLessonsPath: string
+  operationalContextPath: string
   shadowMemoryRecordID?: string
   notes: string[]
 }

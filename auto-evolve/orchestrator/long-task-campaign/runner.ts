@@ -13,10 +13,20 @@ import {
   writeExperienceWorkspaceSnapshot,
 } from "../experience-workspace"
 import { runLongTask } from "../long-task/runner"
+import {
+  readOperationalContext,
+  resolveExistingLongTaskRun,
+} from "../long-task/repository"
 import { loadLongTaskSpec } from "../long-task/spec"
-import type { LongTaskBudgets, LongTaskRunStatus, LongTaskSpec } from "../long-task/contract"
+import type {
+  LongTaskBudgets,
+  LongTaskOperationalContextItem,
+  LongTaskRunStatus,
+  LongTaskSpec,
+} from "../long-task/contract"
 import {
   DEFAULT_LONG_TASK_CAMPAIGN_CARRYOVER,
+  type LongTaskCampaignOperationalMemoryRecord,
   type LongTaskCampaignRoundRecord,
   type LongTaskCampaignSeedTarget,
   type LongTaskCampaignSpec,
@@ -29,7 +39,10 @@ import {
   initializeLongTaskCampaign,
   longTaskCampaignPaths,
   longTaskCampaignRoundPaths,
+  readLongTaskCampaignOperationalMemory,
   writeLongTaskCampaignLessons,
+  writeLongTaskCampaignOperationalMemory,
+  writeLongTaskCampaignSeedContext,
   writeLongTaskCampaignState,
 } from "./repository"
 import { loadLongTaskCampaignSpec } from "./spec"
@@ -74,6 +87,112 @@ async function readJsonLinesIfExists<T = Record<string, unknown>>(target: string
 
 function roundID(roundNumber: number) {
   return `round-${String(roundNumber).padStart(3, "0")}`
+}
+
+function campaignOperationalSignature(item: Pick<LongTaskOperationalContextItem, "kind" | "statement">) {
+  return `${item.kind}::${item.statement.trim().toLowerCase()}`
+}
+
+function mergeCampaignOperationalMemory(
+  existing: LongTaskCampaignOperationalMemoryRecord,
+  incoming: LongTaskOperationalContextItem,
+  roundNumber: number,
+  runID: string,
+): LongTaskCampaignOperationalMemoryRecord {
+  return {
+    ...existing,
+    updatedAt: nowISO(),
+    lastRound: roundNumber,
+    occurrenceCount: existing.sourceRunIDs.includes(runID) ? existing.occurrenceCount : existing.occurrenceCount + 1,
+    sourceRunIDs: uniqueStrings([...existing.sourceRunIDs, runID]),
+    status:
+      existing.status === "confirmed" || incoming.status === "confirmed" ? "confirmed" : "candidate",
+    rationale: incoming.rationale ?? existing.rationale,
+    refs: uniqueStrings([...existing.refs, ...incoming.refs]),
+    tags: uniqueStrings([...existing.tags, ...incoming.tags]),
+  }
+}
+
+function sortCampaignOperationalMemory(records: LongTaskCampaignOperationalMemoryRecord[]) {
+  return [...records].sort((left, right) => {
+    if (left.status !== right.status) return left.status === "confirmed" ? -1 : 1
+    if (left.occurrenceCount !== right.occurrenceCount) return right.occurrenceCount - left.occurrenceCount
+    if (left.updatedAt !== right.updatedAt) return left.updatedAt < right.updatedAt ? 1 : -1
+    return left.statement.localeCompare(right.statement)
+  })
+}
+
+function promoteCampaignOperationalMemory(input: {
+  existing: LongTaskCampaignOperationalMemoryRecord[]
+  incoming: LongTaskOperationalContextItem[]
+  roundNumber: number
+  runID: string
+}): LongTaskCampaignOperationalMemoryRecord[] {
+  const merged = new Map<string, LongTaskCampaignOperationalMemoryRecord>()
+  for (const item of input.existing) merged.set(campaignOperationalSignature(item), item)
+  for (const item of input.incoming) {
+    const signature = campaignOperationalSignature(item)
+    const current = merged.get(signature)
+    if (current) {
+      merged.set(signature, mergeCampaignOperationalMemory(current, item, input.roundNumber, input.runID))
+      continue
+    }
+    merged.set(signature, {
+      ...item,
+      updatedAt: nowISO(),
+      roundNumber: input.roundNumber,
+      lastRound: input.roundNumber,
+      occurrenceCount: 1,
+      sourceRunIDs: [input.runID],
+    })
+  }
+  return sortCampaignOperationalMemory(Array.from(merged.values()))
+}
+
+function buildCampaignSeedContextMarkdown(input: {
+  title: string
+  latestRound: number
+  operationalMemory: LongTaskCampaignOperationalMemoryRecord[]
+  records: LongTaskCampaignRoundRecord[]
+}) {
+  const latestRecord = input.records[input.records.length - 1]
+  const sections: Array<[string, LongTaskCampaignOperationalMemoryRecord["kind"]]> = [
+    ["Confirmed Facts", "confirmed_fact"],
+    ["Validated Methods", "validated_method"],
+    ["Known Blockers", "blocking_issue"],
+    ["Failed Paths", "failed_path"],
+    ["Tool Entrypoints", "tool_entrypoint"],
+    ["Package Gaps", "package_gap"],
+  ]
+  const lines = [
+    "# Campaign Seed Context",
+    "",
+    "- Purpose: provide promoted cross-run memory to the next generated round.",
+    `- title: ${input.title}`,
+    `- updated_through: ${roundID(input.latestRound)}`,
+    `- latest_status: ${latestRecord?.finalStatus ?? "unknown"}`,
+    `- latest_summary: ${latestRecord?.summary ?? "none"}`,
+    "",
+  ]
+
+  if (!input.operationalMemory.length) {
+    lines.push("- no promoted cross-run memory yet", "")
+    return lines.join("\n")
+  }
+
+  for (const [title, kind] of sections) {
+    const matches = input.operationalMemory.filter((item) => item.kind === kind).slice(0, 8)
+    if (!matches.length) continue
+    lines.push(`## ${title}`, "")
+    for (const item of matches) {
+      lines.push(`- ${item.statement}`)
+      lines.push(`  stability: occurrences=${item.occurrenceCount}, status=${item.status}`)
+      if (item.rationale) lines.push(`  rationale: ${short(item.rationale, 180)}`)
+    }
+    lines.push("")
+  }
+
+  return lines.join("\n").trimEnd() + "\n"
 }
 
 function applyBudgetOverrides(base: LongTaskBudgets, overrides?: Partial<LongTaskBudgets>): LongTaskBudgets {
@@ -318,6 +437,7 @@ async function syncLessonsMirror(input: {
 }
 
 async function harvestRound(input: {
+  cwd: string
   campaignSpec: LongTaskCampaignSpec
   roundNumber: number
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
@@ -328,10 +448,12 @@ async function harvestRound(input: {
   const failurePacketsPath = path.join(runDir, "failure_packets.jsonl")
   const retryLessonsPath = path.join(runDir, "retry_lessons.jsonl")
   const learningUnitsPath = path.join(runDir, "learning_units.jsonl")
+  const runPaths = resolveExistingLongTaskRun(input.cwd, input.runResult.runID).run
 
   const failurePackets = await readJsonLinesIfExists<Record<string, unknown>>(failurePacketsPath)
   const retryLessons = await readJsonLinesIfExists<Record<string, unknown>>(retryLessonsPath)
   const learningUnits = await readJsonLinesIfExists<Record<string, unknown>>(learningUnitsPath)
+  const operationalContext = await readOperationalContext(runPaths)
 
   const roundSummary = buildRoundSummaryMarkdown({
     roundNumber: input.roundNumber,
@@ -378,6 +500,7 @@ async function harvestRound(input: {
     failurePackets,
     retryLessons,
     learningUnits,
+    operationalContext,
   }
 }
 
@@ -399,7 +522,7 @@ function buildGeneratedRoundSpec(input: {
       input.baseSpec.notes,
       `campaign_mode=${input.campaignSpec.mode}`,
       `campaign_round=${input.roundNumber}/${input.campaignSpec.maxRounds}`,
-      "This round is generated by the long-task campaign controller. Every round must leave durable learning artifacts.",
+      "This round is generated by the long-task campaign controller. Every round must leave durable learning artifacts and promote stable operational context for later rounds.",
     ]
       .filter(Boolean)
       .join(" "),
@@ -428,6 +551,16 @@ async function collectCarryoverContext(input: {
   const latestRound = input.history[input.history.length - 1]
   if (latestRound) {
     paths.push(...latestRound.snapshotPaths.map((item) => item.snapshotPath))
+  }
+
+  if (
+    carryover.includeCampaignOperationalMemory &&
+    (await pathExists(input.campaignPaths.campaignOperationalMemoryPath))
+  ) {
+    paths.push(input.campaignPaths.campaignOperationalMemoryPath)
+  }
+  if (carryover.includeCampaignSeedContext && (await pathExists(input.campaignPaths.campaignSeedContextPath))) {
+    paths.push(input.campaignPaths.campaignSeedContextPath)
   }
 
   if (carryover.includeFailurePackets && (await pathExists(input.campaignPaths.aggregatedFailurePacketsPath))) {
@@ -515,6 +648,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
     })
 
     const harvested = await harvestRound({
+      cwd: input.cwd,
       campaignSpec,
       roundNumber,
       roundPaths,
@@ -537,6 +671,15 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
       harvested.learningUnits.map((item) => JSON.stringify(item)),
     )
 
+    const existingOperationalMemory = await readLongTaskCampaignOperationalMemory(campaignPaths)
+    const promotedOperationalMemory = promoteCampaignOperationalMemory({
+      existing: existingOperationalMemory,
+      incoming: harvested.operationalContext,
+      roundNumber,
+      runID: runResult.runID,
+    })
+    await writeLongTaskCampaignOperationalMemory(campaignPaths, promotedOperationalMemory)
+
     const allFailures = await readJsonLinesIfExists<Record<string, unknown>>(campaignPaths.aggregatedFailurePacketsPath)
     const allRetryLessons = await readJsonLinesIfExists<Record<string, unknown>>(campaignPaths.aggregatedRetryLessonsPath)
     const allLearningUnits = await readJsonLinesIfExists<Record<string, unknown>>(campaignPaths.aggregatedLearningUnitsPath)
@@ -549,6 +692,15 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
       learningUnits: allLearningUnits,
     })
     await writeLongTaskCampaignLessons(campaignPaths, campaignLessons)
+    await writeLongTaskCampaignSeedContext(
+      campaignPaths,
+      buildCampaignSeedContextMarkdown({
+        title: campaignSpec.title,
+        latestRound: roundNumber,
+        operationalMemory: promotedOperationalMemory,
+        records: history,
+      }),
+    )
 
     if (campaignSpec.lessonsMirror) {
       await syncLessonsMirror({
