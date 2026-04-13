@@ -1,4 +1,6 @@
 import { createServer } from "node:http"
+import { readdir, readFile, stat } from "node:fs/promises"
+import * as path from "node:path"
 import process from "node:process"
 import { bootstrap } from "../packages/opencode/src/cli/bootstrap"
 import { Session } from "../packages/opencode/src/session"
@@ -27,7 +29,87 @@ type MonitorRow = {
   detail?: string
   lastUser?: string
   recentActions: MonitorAction[]
+  task?: ArtifactRunTask
+  titleSource?: string
+  whyStarted?: string
+  statusReason?: string
+  nextStepTitle?: string
+  nextStepReason?: string
+  reasonTrail?: string[]
+  monitorKind?: "pipeline" | "ad_hoc"
 }
+
+type ArtifactRunTask = {
+  kind?: string
+  layer?: string
+  role?: string
+  title?: string
+  phase?: string
+  purpose?: string
+  caseID?: string
+  attempt?: number
+  maintenanceRound?: number
+  methodID?: string
+}
+
+type ArtifactRun = {
+  title?: string
+  task?: ArtifactRunTask
+  sessionID?: string
+  exitCode?: number
+  phase?: string
+  methodID?: string
+}
+
+type JudgeSummary = {
+  failureClass?: string
+  shouldStartMaintainer?: boolean
+  keyIssues?: string[]
+  behaviorIssues?: string[]
+}
+
+type PostJudgeSummary = {
+  decision?: string
+  riskLevel?: string
+  reasons?: string[]
+  notes?: string[]
+}
+
+type CaseRunMaintenanceRoundSummary = {
+  round?: number
+  maintainSessionID?: string
+  workspaceChanged?: boolean
+  currentCaseVerificationPassed?: boolean
+}
+
+type CaseRunAttemptSummary = {
+  attempt?: number
+  passed?: boolean
+  refineRoutingClass?: string
+  solveSessionID?: string
+  judgeSessionID?: string
+  maintenanceRounds?: CaseRunMaintenanceRoundSummary[]
+}
+
+type CaseRunSummary = {
+  caseID?: string
+  attempts?: CaseRunAttemptSummary[]
+}
+
+const AUTO_EVOLVE_ROOT = import.meta.dirname
+const RUNS_ROOT = path.join(AUTO_EVOLVE_ROOT, "runtime-state", "runs")
+const PROPAGATION_WORKSPACES_ROOT = path.join(AUTO_EVOLVE_ROOT, "runtime-state", "propagation", "workspaces")
+const ARTIFACT_CACHE_TTL_MS = 1500
+const MONITOR_FRONTEND_TEMPLATE_PATH = path.join(AUTO_EVOLVE_ROOT, "frontend", "monitor", "index.html")
+
+let artifactCache:
+  | {
+      expiresAt: number
+      rows: MonitorRow[]
+    }
+  | undefined
+
+const caseRunSummaryCache = new Map<string, CaseRunSummary | null>()
 
 function getOption(name: string, fallback: string) {
   const index = process.argv.indexOf(name)
@@ -108,6 +190,423 @@ function previewValue(input: unknown, max = 120) {
   }
 }
 
+function joinPreviewParts(parts: Array<string | undefined>) {
+  return parts.filter((part): part is string => !!part && !!part.trim()).join(" | ") || undefined
+}
+
+function pushReasonLine(lines: string[], input: string | undefined) {
+  const line = previewText(input, 220)
+  if (!line) return
+  if (lines.includes(line)) return
+  lines.push(line)
+}
+
+function describeTaskPurpose(task: ArtifactRunTask | undefined) {
+  if (!task) return undefined
+  if (task.purpose) return task.purpose
+
+  switch (task.kind) {
+    case "solve":
+      return "Solve the current case using the current experience workspace."
+    case "judge":
+      return "Inspect the failed run and decide whether experience maintenance should start."
+    case "maintain":
+      return "Update the experience workspace using the chosen reverse-propagation strategy."
+    case "verify":
+      return "Re-run the current case after maintenance to confirm the fix."
+    case "regression":
+      return "Check whether previously working cases still pass after the latest change."
+    case "bootstrap":
+      return "Initialize the experience workspace from the chosen starting cases."
+    default:
+      return undefined
+  }
+}
+
+function describeTaskStart(task: ArtifactRunTask | undefined) {
+  if (!task) return undefined
+
+  switch (task.kind) {
+    case "solve":
+      return "This worker session is the case solve attempt."
+    case "judge":
+      return "This judge session was spawned after a failed solve to decide whether maintenance should run."
+    case "maintain":
+      return "This maintainer session was spawned to update the experience workspace after the judge approved maintenance."
+    case "verify":
+      return "This verification session re-checks the current case after maintenance."
+    case "regression":
+      return "This regression session replays prior cases to catch collateral damage."
+    case "bootstrap":
+      return "This bootstrap session shapes the initial experience workspace before normal learning begins."
+    default:
+      return task.phase ? `This session runs the ${task.phase} phase.` : undefined
+  }
+}
+
+function isLikelyAutoEvolveSession(session: Session.GlobalInfo) {
+  if (session.title?.toLowerCase().startsWith("auto-evolve ")) return true
+  return session.directory.startsWith(AUTO_EVOLVE_ROOT)
+}
+
+function summarizeToolOutput(tool: string, output: string | undefined, max = 140) {
+  const preview = previewText(output, max)
+  if (!preview) return undefined
+  if (/^(Done|Completed|Success|OK)\.?$/i.test(preview)) return undefined
+  if (/successfully\.?$/i.test(preview) && preview.length < 80) return undefined
+
+  if (tool === "read") return `content: ${preview}`
+  if (tool === "write" || tool === "edit" || tool === "patch") return `result: ${preview}`
+  if (tool === "bash" || tool === "shell") return `output: ${preview}`
+  return preview
+}
+
+async function safeReadJson<T>(filePath: string) {
+  try {
+    return JSON.parse(await readFile(filePath, "utf8")) as T
+  } catch {
+    return undefined
+  }
+}
+
+async function safeReadPreview(filePath: string, max = 120) {
+  try {
+    return previewText(await readFile(filePath, "utf8"), max)
+  } catch {
+    return undefined
+  }
+}
+
+function findAttemptDir(stageDir: string) {
+  let current = stageDir
+  while (current.startsWith(RUNS_ROOT)) {
+    if (/^attempt-\d+$/i.test(path.basename(current))) return current
+    const parent = path.dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+}
+
+function findRoundDir(stageDir: string) {
+  let current = stageDir
+  while (current.startsWith(RUNS_ROOT)) {
+    if (/^round-\d+$/i.test(path.basename(current))) return current
+    const parent = path.dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+}
+
+async function findEnclosingCaseRunSummary(stageDir: string) {
+  let current = stageDir
+  while (current.startsWith(RUNS_ROOT)) {
+    if (caseRunSummaryCache.has(current)) {
+      return caseRunSummaryCache.get(current) ?? undefined
+    }
+
+    const candidate = await safeReadJson<CaseRunSummary>(path.join(current, "run.json"))
+    if (candidate?.caseID && Array.isArray(candidate.attempts)) {
+      caseRunSummaryCache.set(current, candidate)
+      return candidate
+    }
+    const parent = path.dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+}
+
+function matchAttemptRecord(
+  caseRun: CaseRunSummary | undefined,
+  sessionID: string | undefined,
+  task: ArtifactRunTask | undefined,
+) {
+  if (!caseRun?.attempts?.length) return undefined
+
+  for (const attempt of caseRun.attempts) {
+    if (sessionID) {
+      if (attempt.solveSessionID === sessionID) return { attempt, stage: "solve" as const }
+      if (attempt.judgeSessionID === sessionID) return { attempt, stage: "judge" as const }
+      for (const round of attempt.maintenanceRounds ?? []) {
+        if (round.maintainSessionID === sessionID) return { attempt, stage: "maintain" as const, round }
+      }
+    }
+
+    if (task?.kind === "solve" && typeof task.attempt === "number" && attempt.attempt === task.attempt) {
+      return { attempt, stage: "solve" as const }
+    }
+
+    if (task?.kind === "judge" && typeof task.attempt === "number" && attempt.attempt === task.attempt) {
+      return { attempt, stage: "judge" as const }
+    }
+
+    if (task?.kind === "maintain" && typeof task.attempt === "number" && attempt.attempt === task.attempt) {
+      const round = (attempt.maintenanceRounds ?? []).find((item) => item.round === task.maintenanceRound)
+      if (round) return { attempt, stage: "maintain" as const, round }
+    }
+  }
+}
+
+async function readSiblingRunTitle(filePath: string) {
+  const run = await safeReadJson<ArtifactRun>(filePath)
+  return run?.task?.title ?? run?.title
+}
+
+async function buildArtifactNarrative(run: ArtifactRun, stageDir: string) {
+  const task = run.task
+  const attemptDir = findAttemptDir(stageDir)
+  const roundDir = findRoundDir(stageDir)
+  const caseRun = await findEnclosingCaseRunSummary(stageDir)
+  const judgeSummary =
+    (task?.kind === "judge" || task?.kind === "maintain" || task?.kind === "solve") && attemptDir
+      ? await safeReadJson<JudgeSummary>(path.join(attemptDir, "judge", "judge_summary.json"))
+      : undefined
+  const postJudgeSummary =
+    task?.kind === "maintain" && roundDir
+      ? await safeReadJson<PostJudgeSummary>(path.join(roundDir, "acceptance", "post_judge_summary.json"))
+      : undefined
+  const matched = matchAttemptRecord(caseRun, run.sessionID, task)
+  const reasonTrail: string[] = []
+  let statusReason: string | undefined
+  let nextStepTitle: string | undefined
+  let nextStepReason: string | undefined
+
+  if (task?.kind === "solve") {
+    if (matched?.attempt.passed === false) {
+      pushReasonLine(reasonTrail, "This solve attempt failed the current case evaluation.")
+      statusReason = "Solve failed the current case evaluation."
+    }
+    if (matched?.attempt.refineRoutingClass) {
+      pushReasonLine(reasonTrail, `Failure was routed as ${matched.attempt.refineRoutingClass}.`)
+      statusReason ??= `Solve failed and was routed as ${matched.attempt.refineRoutingClass}.`
+    }
+    if (matched?.attempt.judgeSessionID && attemptDir) {
+      nextStepTitle = (await readSiblingRunTitle(path.join(attemptDir, "judge", "run.json"))) ?? "soft judge"
+      nextStepReason =
+        judgeSummary?.shouldStartMaintainer === true
+          ? "Solve failed, so a judge session was started to decide whether maintenance should begin."
+          : "Solve failed, so a judge session was started to analyze the failure."
+    }
+  }
+
+  if (task?.kind === "judge") {
+    if (judgeSummary?.failureClass) {
+      statusReason = `Judge classified the failure as ${judgeSummary.failureClass}.`
+    }
+    for (const issue of judgeSummary?.keyIssues ?? []) pushReasonLine(reasonTrail, issue)
+    for (const issue of judgeSummary?.behaviorIssues ?? []) pushReasonLine(reasonTrail, issue)
+    if (judgeSummary?.shouldStartMaintainer && attemptDir) {
+      const maintainTitle = attemptDir
+        ? await readSiblingRunTitle(path.join(attemptDir, "maintenance-rounds", "round-01", "maintain", "run.json"))
+        : undefined
+      nextStepTitle = maintainTitle ?? "knowledge maintainer"
+      nextStepReason = judgeSummary.failureClass
+        ? `Judge approved maintenance because the failure pattern was ${judgeSummary.failureClass}.`
+        : "Judge approved maintenance for the failed case."
+    } else if (judgeSummary?.shouldStartMaintainer === false) {
+      nextStepReason = "Judge decided not to start maintenance for this failure."
+    }
+  }
+
+  if (task?.kind === "maintain") {
+    if (judgeSummary?.failureClass) {
+      statusReason = `Maintainer was started after the judge classified the failure as ${judgeSummary.failureClass}.`
+    } else {
+      statusReason = "Maintainer was started after the judge approved experience maintenance."
+    }
+    if (postJudgeSummary?.decision) {
+      pushReasonLine(
+        reasonTrail,
+        `Post-judge decision: ${postJudgeSummary.decision}${postJudgeSummary.riskLevel ? ` (risk ${postJudgeSummary.riskLevel})` : ""}.`,
+      )
+      nextStepReason =
+        postJudgeSummary.decision === "accept"
+          ? "This maintenance round was accepted after verification and regression checks."
+          : "This maintenance round was not accepted after post-judge review."
+    }
+    for (const reason of postJudgeSummary?.reasons ?? []) pushReasonLine(reasonTrail, reason)
+    for (const note of postJudgeSummary?.notes ?? []) pushReasonLine(reasonTrail, note)
+  }
+
+  if (!statusReason && typeof run.exitCode === "number") {
+    statusReason = run.exitCode === 0 ? "This session finished without a process error." : `This session ended with exit code ${run.exitCode}.`
+  }
+
+  return {
+    task,
+    titleSource: run.task?.title ? "task.title" : run.title ? "run.title" : "directory name",
+    whyStarted: describeTaskStart(task),
+    statusReason,
+    nextStepTitle,
+    nextStepReason,
+    reasonTrail,
+  }
+}
+
+function actionFromEvent(event: any): MonitorAction | undefined {
+  if (event?.type === "session.error") {
+    return {
+      kind: "error",
+      label: "assistant_error",
+      detail: previewText(event?.error?.message, 160),
+      timestamp: typeof event?.timestamp === "number" ? event.timestamp : 0,
+    }
+  }
+
+  if (event?.part) {
+    return actionFromPart(event.part as MessageV2.Part)
+  }
+}
+
+async function listFilesRecursive(root: string, targetName: string, maxFiles: number) {
+  const files: { filePath: string; updated: number }[] = []
+
+  async function visit(directory: string): Promise<void> {
+    if (files.length >= maxFiles) return
+
+    let entries: import("node:fs").Dirent[]
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      if (files.length >= maxFiles) break
+      const fullPath = path.join(directory, entry.name)
+      if (entry.isDirectory()) {
+        await visit(fullPath)
+        continue
+      }
+      if (!entry.isFile() || entry.name !== targetName) continue
+      const info = await stat(fullPath).catch(() => undefined)
+      files.push({ filePath: fullPath, updated: info?.mtimeMs ?? 0 })
+    }
+  }
+
+  await visit(root)
+  return files
+}
+
+async function collectArtifactActions(stageDir: string, limit = 20) {
+  const events = (await safeReadJson<any[]>(path.join(stageDir, "events.json"))) ?? []
+  return events
+    .map((event) => actionFromEvent(event))
+    .filter((action): action is MonitorAction => !!action)
+    .sort((left, right) => left.timestamp - right.timestamp)
+    .slice(-limit)
+}
+
+function buildArtifactTitle(run: ArtifactRun, stageDir: string) {
+  return run.task?.title ?? run.title ?? path.basename(stageDir)
+}
+
+function buildArtifactStep(run: ArtifactRun) {
+  return run.task?.phase ?? run.task?.kind ?? run.phase ?? "task"
+}
+
+function buildArtifactStatus(run: ArtifactRun): MonitorStatus {
+  if (typeof run.exitCode === "number") {
+    return run.exitCode === 0 ? "done" : "error"
+  }
+  return "idle"
+}
+
+function buildArtifactDetail(run: ArtifactRun, responsePreview?: string) {
+  const parts: string[] = []
+  if (run.task?.caseID) parts.push(`case:${run.task.caseID}`)
+  if (typeof run.task?.attempt === "number") parts.push(`attempt:${run.task.attempt}`)
+  if (typeof run.task?.maintenanceRound === "number") parts.push(`round:${run.task.maintenanceRound}`)
+  if (run.task?.methodID ?? run.methodID) parts.push(`method:${run.task?.methodID ?? run.methodID}`)
+  if (responsePreview) parts.push(responsePreview)
+  return parts.join(" | ") || undefined
+}
+
+async function buildArtifactRow(runJsonPath: string) {
+  const run = await safeReadJson<ArtifactRun>(runJsonPath)
+  if (!run || typeof run !== "object") return undefined
+  if (!run.sessionID && !run.task && !run.phase) return undefined
+
+  const stageDir = path.dirname(runJsonPath)
+  const info = await stat(runJsonPath).catch(() => undefined)
+  const id = typeof run.sessionID === "string" && run.sessionID ? run.sessionID : `artifact:${stageDir}`
+  const responsePreview = await safeReadPreview(path.join(stageDir, "response.txt"), 120)
+  const narrative = await buildArtifactNarrative(run, stageDir)
+
+  return {
+    id,
+    title: buildArtifactTitle(run, stageDir),
+    directory: stageDir,
+    updated: info?.mtimeMs ?? 0,
+    archived: false,
+    status: buildArtifactStatus(run),
+    step: buildArtifactStep(run),
+    detail: buildArtifactDetail(run, responsePreview),
+    recentActions: await collectArtifactActions(stageDir, 20),
+    task: narrative.task,
+    titleSource: narrative.titleSource,
+    whyStarted: narrative.whyStarted,
+    statusReason: narrative.statusReason,
+    nextStepTitle: narrative.nextStepTitle,
+    nextStepReason: narrative.nextStepReason,
+    reasonTrail: narrative.reasonTrail,
+    monitorKind: "pipeline",
+  } satisfies MonitorRow
+}
+
+async function collectArtifactRows(limit: number) {
+  const now = Date.now()
+  if (artifactCache && artifactCache.expiresAt > now) {
+    return artifactCache.rows.slice(0, limit)
+  }
+
+  const roots = [RUNS_ROOT, PROPAGATION_WORKSPACES_ROOT]
+  const candidates: { filePath: string; updated: number }[] = []
+  const maxFiles = Math.max(limit * 12, 120)
+
+  for (const root of roots) {
+    const exists = await stat(root).then(() => true).catch(() => false)
+    if (!exists) continue
+    candidates.push(...(await listFilesRecursive(root, "run.json", maxFiles)))
+  }
+
+  const rows: MonitorRow[] = []
+  for (const item of candidates.sort((left, right) => right.updated - left.updated)) {
+    const row = await buildArtifactRow(item.filePath)
+    if (row) rows.push(row)
+  }
+
+  const unique = uniqueRows(rows).sort((left, right) => right.updated - left.updated)
+  artifactCache = {
+    expiresAt: now + ARTIFACT_CACHE_TTL_MS,
+    rows: unique,
+  }
+  return unique.slice(0, limit)
+}
+
+function mergeSessionRow(sessionRow: MonitorRow, artifactRow: MonitorRow) {
+  const sessionIsLive = sessionRow.status === "running" || sessionRow.status === "retry"
+  return {
+    ...sessionRow,
+    title: artifactRow.title || sessionRow.title,
+    directory: artifactRow.directory || sessionRow.directory,
+    updated: Math.max(sessionRow.updated, artifactRow.updated),
+    status: sessionIsLive ? sessionRow.status : artifactRow.status || sessionRow.status,
+    step: sessionIsLive || sessionRow.step !== "idle" ? sessionRow.step : artifactRow.step,
+    detail: sessionRow.detail ?? artifactRow.detail,
+    recentActions: sessionRow.recentActions.length ? sessionRow.recentActions : artifactRow.recentActions,
+    lastUser: sessionRow.lastUser ?? artifactRow.lastUser,
+    parentID: sessionRow.parentID ?? artifactRow.parentID,
+    task: sessionRow.task ?? artifactRow.task,
+    titleSource: artifactRow.titleSource ?? sessionRow.titleSource,
+    whyStarted: artifactRow.whyStarted ?? sessionRow.whyStarted,
+    statusReason: sessionRow.statusReason ?? artifactRow.statusReason,
+    nextStepTitle: artifactRow.nextStepTitle ?? sessionRow.nextStepTitle,
+    nextStepReason: artifactRow.nextStepReason ?? sessionRow.nextStepReason,
+    reasonTrail: sessionRow.reasonTrail?.length ? sessionRow.reasonTrail : artifactRow.reasonTrail,
+    monitorKind: artifactRow.monitorKind ?? sessionRow.monitorKind,
+  } satisfies MonitorRow
+}
+
 function actionFromPart(part: MessageV2.Part): MonitorAction | undefined {
   if (part.type === "tool") {
     const title =
@@ -118,16 +617,16 @@ function actionFromPart(part: MessageV2.Part): MonitorAction | undefined {
 
     let detail: string | undefined
     if (part.state.status === "completed") {
-      // For write/edit: title (file path) is more informative than "Wrote/Edited successfully."
-      // For read: title is the file path, already good.
-      // For grep/codesearch/glob: title is the pattern/query, already good.
-      // For other tools: use title if available, otherwise input preview.
-      detail = title ?? inputPreview
+      detail = joinPreviewParts([
+        title ?? inputPreview,
+        summarizeToolOutput(part.tool, part.state.output, 140),
+      ])
     } else if (part.state.status === "error") {
-      // Show error message for failed tools
-      detail = previewText(part.state.error, 120)
+      detail = joinPreviewParts([
+        title ?? inputPreview,
+        `error: ${previewText(part.state.error, 120) ?? "unknown"}`,
+      ])
     } else {
-      // pending / running: show what's being operated on
       detail = title ?? inputPreview
     }
 
@@ -190,6 +689,17 @@ function actionFromPart(part: MessageV2.Part): MonitorAction | undefined {
       timestamp: partTimestamp(part),
     }
   }
+}
+
+function uniqueRows(rows: MonitorRow[]) {
+  const seen = new Set<string>()
+  const ordered: MonitorRow[] = []
+  for (const row of rows) {
+    if (seen.has(row.id)) continue
+    seen.add(row.id)
+    ordered.push(row)
+  }
+  return ordered
 }
 
 function collectRecentActions(messages: MessageV2.WithParts[], limit = 20) {
@@ -292,16 +802,31 @@ function summarizeSession(
 }
 
 async function collectMonitorRows(limit: number) {
-  const statuses = await SessionStatus.list()
-  const sessions = [...Session.listGlobal({ limit, archived: true })]
+  const requestLimit = Math.max(1, limit)
+  const expandedLimit = Math.max(requestLimit * 12, 240)
+  const [statuses, artifactRows] = await Promise.all([SessionStatus.list(), collectArtifactRows(expandedLimit)])
+  const sessions = [...Session.listGlobal({ limit: expandedLimit, archived: true })]
   const rows: MonitorRow[] = []
+  const seen = new Set<string>()
+  const artifactByID = new Map<string, MonitorRow>(artifactRows.map((row) => [row.id, row] as const))
 
   for (const session of sessions) {
     const messages = await Session.messages({ sessionID: session.id, limit: 20 }).catch(() => [] as MessageV2.WithParts[])
-    rows.push(summarizeSession(session, statuses.get(session.id) ?? { type: "idle" }, messages, 20))
+    const sessionRow = summarizeSession(session, statuses.get(session.id) ?? { type: "idle" }, messages, 20)
+    const artifactRow = artifactByID.get(session.id)
+    const merged = artifactRow ? mergeSessionRow(sessionRow, artifactRow) : sessionRow
+    rows.push(merged)
+    seen.add(merged.id)
+  }
+
+  for (const artifactRow of artifactRows) {
+    if (seen.has(artifactRow.id)) continue
+    rows.push(artifactRow)
   }
 
   return rows
+    .sort((left, right) => right.updated - left.updated)
+    .slice(0, requestLimit)
 }
 
 function escapeHtml(input: string) {
@@ -313,222 +838,13 @@ function escapeHtml(input: string) {
     .replaceAll("'", "&#39;")
 }
 
-function renderDashboardHtml(options: { limit: number; intervalSeconds: number }) {
+async function renderDashboardHtml(options: { limit: number; intervalSeconds: number }) {
   const limit = Math.max(1, options.limit)
   const intervalSeconds = Math.max(1, options.intervalSeconds)
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Auto Evolve Session Monitor</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #0f1418;
-      --panel: #151c22;
-      --muted: #8b9cab;
-      --text: #edf3f8;
-      --line: #26323b;
-      --running: #45b26b;
-      --retry: #f2b84b;
-      --done: #5ea3ff;
-      --error: #ff6b6b;
-      --archived: #8f7eff;
-      --idle: #7f8b95;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-      background: linear-gradient(180deg, #0b1014 0%, #10181f 100%);
-      color: var(--text);
-    }
-    .wrap { max-width: 1600px; margin: 0 auto; padding: 24px; }
-    .header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 20px; }
-    .title { margin: 0 0 8px; font-size: 28px; font-weight: 700; }
-    .subtitle { margin: 0; color: var(--muted); font-size: 14px; }
-    .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-    .controls input, .controls button {
-      border: 1px solid var(--line);
-      background: var(--panel);
-      color: var(--text);
-      border-radius: 10px;
-      padding: 10px 12px;
-      font-size: 14px;
-    }
-    .controls button { cursor: pointer; }
-    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 18px; }
-    .card { background: rgba(21, 28, 34, 0.94); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; }
-    .card .label { color: var(--muted); font-size: 12px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.08em; }
-    .card .value { font-size: 24px; font-weight: 700; }
-    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 16px; background: rgba(21, 28, 34, 0.94); }
-    table { width: 100%; border-collapse: collapse; min-width: 1450px; }
-    th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 14px; }
-    th { position: sticky; top: 0; background: #151c22; z-index: 1; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
-    tr:hover td { background: rgba(255,255,255,0.02); }
-    .pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 10px; font-size: 12px; border: 1px solid var(--line); white-space: nowrap; }
-    .status-running { color: var(--running); }
-    .status-retry { color: var(--retry); }
-    .status-done { color: var(--done); }
-    .status-error { color: var(--error); }
-    .status-archived { color: var(--archived); }
-    .status-idle { color: var(--idle); }
-    .muted { color: var(--muted); }
-    .detail { color: var(--muted); font-size: 12px; margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
-    .mono { font-family: Consolas, "SFMono-Regular", monospace; font-size: 12px; }
-    .empty { padding: 28px; text-align: center; color: var(--muted); }
-    .actions-cell { padding: 8px 14px !important; vertical-align: top !important; }
-    .actions-cell > .detail { display: block; }
-    .actions { display: flex; flex-direction: column; gap: 6px; min-width: 340px; max-height: 400px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-    .actions::-webkit-scrollbar { width: 4px; }
-    .actions::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
-    .action-item { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: rgba(255,255,255,0.02); flex-shrink: 0; }
-    .action-label { font-size: 12px; font-family: Consolas, "SFMono-Regular", monospace; color: #b8c9d7; }
-    .action-detail { margin-top: 4px; font-size: 12px; color: var(--muted); word-break: break-word; white-space: pre-wrap; }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="header">
-      <div>
-        <h1 class="title">Auto Evolve Session Monitor</h1>
-        <p class="subtitle">持续观察当前有哪些 session 在运行、跑到哪一步、最近做了什么。</p>
-      </div>
-      <div class="controls">
-        <label>刷新秒数 <input id="interval" type="number" min="1" value="${intervalSeconds}" /></label>
-        <label>显示数量 <input id="limit" type="number" min="1" value="${limit}" /></label>
-        <button id="refresh">立即刷新</button>
-        <span id="last-updated" class="muted">尚未刷新</span>
-      </div>
-    </div>
-    <div class="summary" id="summary"></div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Session</th>
-            <th>状态</th>
-            <th>步骤</th>
-            <th>最近动作</th>
-            <th>最近更新</th>
-            <th>目录</th>
-            <th>标题 / 细节</th>
-          </tr>
-        </thead>
-        <tbody id="rows">
-          <tr><td colspan="7" class="empty">正在加载...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <script>
-    const summaryEl = document.getElementById("summary");
-    const rowsEl = document.getElementById("rows");
-    const lastUpdatedEl = document.getElementById("last-updated");
-    const intervalEl = document.getElementById("interval");
-    const limitEl = document.getElementById("limit");
-    const refreshBtn = document.getElementById("refresh");
-    let timer = null;
-
-    function esc(input) {
-      return String(input)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#39;");
-    }
-
-    function statusClass(status) { return "status-" + status; }
-    function timeText(timestamp) {
-      return new Date(timestamp).toLocaleString("zh-CN", { hour12: false });
-    }
-
-    function renderSummary(rows) {
-      const counts = {
-        total: rows.length,
-        running: rows.filter((row) => row.status === "running").length,
-        retry: rows.filter((row) => row.status === "retry").length,
-        done: rows.filter((row) => row.status === "done").length,
-        error: rows.filter((row) => row.status === "error").length,
-        archived: rows.filter((row) => row.status === "archived").length
-      };
-      summaryEl.innerHTML = [
-        ["总数", counts.total],
-        ["运行中", counts.running],
-        ["重试中", counts.retry],
-        ["已完成", counts.done],
-        ["错误", counts.error],
-        ["已归档", counts.archived]
-      ].map(([label, value]) => '<div class="card"><div class="label">' + esc(label) + '</div><div class="value">' + value + '</div></div>').join("");
-    }
-
-    function renderRows(rows) {
-      if (!rows.length) {
-        rowsEl.innerHTML = '<tr><td colspan="7" class="empty">当前没有 session。</td></tr>';
-        return;
-      }
-      rowsEl.innerHTML = rows.map((row) => {
-        const detail = row.detail ? '<div class="detail">' + esc(row.detail) + '</div>' : "";
-        const parent = row.parentID ? '<div class="detail">parent: <span class="mono">' + esc(row.parentID) + '</span></div>' : "";
-        const user = row.lastUser ? '<div class="detail">user: ' + esc(row.lastUser) + '</div>' : "";
-        const actions = row.recentActions?.length
-          ? '<div class="actions">' + row.recentActions.map((action) =>
-              '<div class="action-item"><div class="action-label">' + esc(action.label) + '</div>' +
-              (action.detail ? '<div class="action-detail">' + esc(action.detail) + '</div>' : '') +
-              '</div>'
-            ).join('') + '</div>'
-          : '<div class="detail">暂无动作</div>';
-        return (
-          '<tr>' +
-            '<td class="mono">' + esc(row.id) + '</td>' +
-            '<td><span class="pill ' + statusClass(row.status) + '">' + esc(row.status) + '</span></td>' +
-            '<td class="mono">' + esc(row.step) + '</td>' +
-            '<td class="actions-cell">' + actions + '</td>' +
-            '<td>' + esc(timeText(row.updated)) + '</td>' +
-            '<td class="mono">' + esc(row.directory) + '</td>' +
-            '<td><div>' + esc(row.title) + '</div>' + detail + parent + user + '</td>' +
-          '</tr>'
-        );
-      }).join("");
-    }
-
-    async function load() {
-      const limit = Math.max(1, Number(limitEl.value || ${limit}));
-      const response = await fetch("/api/sessions?limit=" + limit, { cache: "no-store" });
-      if (!response.ok) {
-        const text = await response.text();
-        rowsEl.innerHTML = '<tr><td colspan="7" class="empty">加载失败：' + esc(text) + '</td></tr>';
-        return;
-      }
-      const payload = await response.json();
-      renderSummary(payload.rows);
-      renderRows(payload.rows);
-      lastUpdatedEl.textContent = "最近刷新：" + new Date(payload.generatedAt).toLocaleString("zh-CN", { hour12: false });
-    }
-
-    function restartTimer() {
-      if (timer) clearInterval(timer);
-      const seconds = Math.max(1, Number(intervalEl.value || ${intervalSeconds}));
-      timer = setInterval(() => {
-        load().catch((err) => { lastUpdatedEl.textContent = "刷新失败: " + err.message; });
-      }, seconds * 1000);
-    }
-
-    refreshBtn.addEventListener("click", () => load().catch((err) => {
-      lastUpdatedEl.textContent = "刷新失败: " + err.message;
-    }));
-    intervalEl.addEventListener("change", restartTimer);
-    limitEl.addEventListener("change", () => load().catch((err) => {
-      lastUpdatedEl.textContent = "刷新失败: " + err.message;
-    }));
-
-    load().catch((err) => { lastUpdatedEl.textContent = "刷新失败: " + err.message; });
-    restartTimer();
-  </script>
-</body>
-</html>`
+  const template = await readFile(MONITOR_FRONTEND_TEMPLATE_PATH, "utf8")
+  return template
+    .replaceAll("__MONITOR_LIMIT__", String(limit))
+    .replaceAll("__MONITOR_INTERVAL_SECONDS__", String(intervalSeconds))
 }
 
 async function main() {
@@ -564,7 +880,7 @@ async function main() {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
     })
-    response.end(renderDashboardHtml({ limit, intervalSeconds }))
+    response.end(await renderDashboardHtml({ limit, intervalSeconds }))
   })
 
   server.listen(port, hostname, () => {

@@ -1,6 +1,6 @@
 import path from "node:path"
 import { readdir, rm } from "node:fs/promises"
-import { autoEvolvePath, ensureDirectory, pathExists, readTextFile, writeTextFile } from "./fs"
+import { autoEvolvePath, ensureDirectory, pathExists, readJsonFile, readTextFile, writeTextFile } from "./fs"
 import type { AutoEvolveConfig } from "./schema"
 
 export type ExperienceWorkspaceRole =
@@ -16,6 +16,8 @@ export type ExperienceWorkspaceRole =
   | "task_router"
   | string
 
+export type ExperienceSurfaceProfile = "operational" | "governed"
+
 export type ExperienceWorkspaceAssetKind =
   | "script"
   | "skill_definition"
@@ -30,12 +32,30 @@ export interface ExperienceWorkspacePaths {
   defaultEntryPath: string
 }
 
+export interface ExperienceSurfaceDocumentContract {
+  path: string
+  role?: ExperienceWorkspaceRole
+  notes?: string[]
+}
+
+export interface ExperienceSurfaceContract {
+  version: number
+  profile?: ExperienceSurfaceProfile
+  entry?: string
+  changeLog?: string
+  documents?: ExperienceSurfaceDocumentContract[]
+  assetRoots?: string[]
+  runtimeSidecarRoots?: string[]
+  notes?: string[]
+}
+
 export interface ExperienceWorkspaceDocument {
   relativePath: string
   absolutePath: string
   content: string
   role?: ExperienceWorkspaceRole
   isEntry: boolean
+  roleSource?: "marker" | "inferred" | "contract"
 }
 
 export interface ExperienceWorkspaceAsset {
@@ -49,13 +69,21 @@ export interface ExperienceWorkspaceLayout extends ExperienceWorkspacePaths {
   entryPath: string
   documents: ExperienceWorkspaceDocument[]
   assets: ExperienceWorkspaceAsset[]
+  controlFiles: string[]
   runtimeSidecarFiles: string[]
   unsupportedFiles: string[]
+  surfaceContract: ExperienceSurfaceContract | null
+  surfaceContractPath: string | null
+  resolvedAssetRoots: string[]
+  resolvedRuntimeSidecarRoots: string[]
 }
 
 export interface ExperienceWorkspaceValidation {
   valid: boolean
   errors: string[]
+  warnings: string[]
+  profile: ExperienceSurfaceProfile
+  contractPresent: boolean
 }
 
 export type ExperienceWorkspaceSnapshot = Record<string, string>
@@ -65,122 +93,49 @@ export interface TemplateLibraryPaths {
   files: string[]
 }
 
+export interface ExperienceWorkspaceValidationOptions {
+  profile?: ExperienceSurfaceProfile | "auto"
+}
+
 const ENTRY_MARKER = /<!--\s*auto-evolve-entry:\s*(true|yes|1)\s*-->/i
 const ROLE_MARKER = /<!--\s*auto-evolve-role:\s*([a-z0-9_\-/]+)\s*-->/i
 const ENTRY_FILE_CANDIDATES = ["manifest.md", "README.md", "index.md", "ENTRY.md"]
-const WORKSPACE_ASSET_ROOTS = ["tools", "skills"] as const
+const DEFAULT_WORKSPACE_ASSET_ROOTS = ["tools", "skills"] as const
 const WORKSPACE_ASSET_EXTENSIONS = new Set([".md", ".py", ".ps1", ".json", ".txt", ".toml", ".yaml", ".yml", ".csv"])
-const RUNTIME_SIDECAR_ROOTS = [".opencode"] as const
+const DEFAULT_RUNTIME_SIDECAR_ROOTS = [".opencode"] as const
+export const EXPERIENCE_SURFACE_CONTRACT_FILE = "surface_contract.json"
 
 function normalizeSlash(input: string) {
   return input.replace(/\\/g, "/")
 }
 
-function normalizeRole(rawRole: string | undefined, relativePath: string): ExperienceWorkspaceRole | undefined {
-  if (!rawRole?.trim()) return inferRoleFromPath(relativePath)
+function normalizeRelativeSurfacePath(input: string) {
+  return normalizeSlash(input).replace(/^\.\//, "").replace(/\/+/g, "/")
+}
 
-  switch (rawRole.trim().toLowerCase()) {
-    case "expert_rules":
-    case "pattern_general":
-      return "rule_module"
-    case "pattern_exception":
-      return "exception_module"
-    case "output_contract":
-      return "output_contract"
-    case "execution_checklist":
-      return "execution_checklist"
-    case "failure_lessons":
-      return "failure_lessons"
-    case "tool_guide":
-      return "tool_guide"
-    case "partition_index":
-      return "partition_index"
-    case "task_router":
-      return "task_router"
-    case "change_log":
-      return "change_log"
-    case "entry":
-      return "entry"
+function normalizeRootList(input: string[] | undefined, fallback: readonly string[]) {
+  const next = (input ?? [])
+    .map((item) => normalizeRelativeSurfacePath(item).replace(/\/+$/, ""))
+    .filter((item) => item.length > 0 && !item.startsWith(".."))
+  return next.length ? [...new Set(next)] : [...fallback]
+}
+
+function normalizeSurfaceProfile(raw: unknown): ExperienceSurfaceProfile | undefined {
+  if (typeof raw !== "string") return undefined
+  switch (raw.trim().toLowerCase()) {
+    case "operational":
+      return "operational"
+    case "governed":
+    case "canonical":
+    case "managed":
+      return "governed"
     default:
-      return rawRole.trim().toLowerCase()
+      return undefined
   }
-}
-
-function isWorkspaceAssetPath(relativePath: string) {
-  const normalized = normalizeSlash(relativePath)
-  const firstSegment = normalized.split("/")[0]?.toLowerCase()
-  return WORKSPACE_ASSET_ROOTS.includes(firstSegment as (typeof WORKSPACE_ASSET_ROOTS)[number])
-}
-
-function isRuntimeSidecarPath(relativePath: string) {
-  const normalized = normalizeSlash(relativePath)
-  const firstSegment = normalized.split("/")[0]?.toLowerCase()
-  return RUNTIME_SIDECAR_ROOTS.includes(firstSegment as (typeof RUNTIME_SIDECAR_ROOTS)[number])
-}
-
-function isSupportedWorkspaceAssetPath(relativePath: string) {
-  if (!isWorkspaceAssetPath(relativePath)) return false
-  const extension = path.posix.extname(normalizeSlash(relativePath)).toLowerCase()
-  return WORKSPACE_ASSET_EXTENSIONS.has(extension)
-}
-
-function classifyWorkspaceAsset(relativePath: string): ExperienceWorkspaceAssetKind {
-  const normalized = normalizeSlash(relativePath)
-  const basename = path.posix.basename(normalized)
-  const extension = path.posix.extname(normalized).toLowerCase()
-
-  if (basename === "SKILL.md") return "skill_definition"
-  if (extension === ".py" || extension === ".ps1") return "script"
-  if (extension === ".json" || extension === ".toml" || extension === ".yaml" || extension === ".yml") {
-    return "tool_manifest"
-  }
-  if (extension === ".md") return "helper_document"
-  return "data"
-}
-
-async function collectWorkspaceFiles(root: string, current = root): Promise<string[]> {
-  if (!(await pathExists(current))) return []
-  const entries = await readdir(current, { withFileTypes: true })
-  const results: string[] = []
-
-  for (const entry of entries) {
-    const absolute = path.join(current, entry.name)
-    if (entry.isDirectory()) {
-      results.push(...(await collectWorkspaceFiles(root, absolute)))
-      continue
-    }
-    if (!entry.isFile()) continue
-    results.push(normalizeSlash(path.relative(root, absolute)))
-  }
-
-  return results.sort((left, right) => left.localeCompare(right))
-}
-
-async function collectMarkdownFiles(root: string) {
-  const files = await collectWorkspaceFiles(root)
-  return files.filter((relative) => relative.toLowerCase().endsWith(".md") && !isRuntimeSidecarPath(relative))
-}
-
-async function collectWorkspaceDocumentFiles(root: string) {
-  const files = await collectWorkspaceFiles(root)
-  return files.filter(
-    (relative) =>
-      relative.toLowerCase().endsWith(".md") && !isWorkspaceAssetPath(relative) && !isRuntimeSidecarPath(relative),
-  )
-}
-
-async function collectWorkspaceAssetFiles(root: string) {
-  const files = await collectWorkspaceFiles(root)
-  return files.filter((relative) => !isRuntimeSidecarPath(relative) && isSupportedWorkspaceAssetPath(relative))
-}
-
-async function collectRuntimeSidecarFiles(root: string) {
-  const files = await collectWorkspaceFiles(root)
-  return files.filter((relative) => isRuntimeSidecarPath(relative))
 }
 
 function inferRoleFromPath(relativePath: string): ExperienceWorkspaceRole | undefined {
-  const normalized = normalizeSlash(relativePath)
+  const normalized = normalizeRelativeSurfacePath(relativePath)
   const filename = path.posix.basename(normalized).toLowerCase()
   const dirname = path.posix.dirname(normalized)
 
@@ -221,23 +176,213 @@ function inferRoleFromPath(relativePath: string): ExperienceWorkspaceRole | unde
   return undefined
 }
 
-function parseDocumentMeta(relativePath: string, absolutePath: string, content: string): ExperienceWorkspaceDocument {
+function normalizeRole(rawRole: string | undefined, relativePath: string): ExperienceWorkspaceRole | undefined {
+  if (!rawRole?.trim()) return inferRoleFromPath(relativePath)
+
+  switch (rawRole.trim().toLowerCase()) {
+    case "expert_rules":
+    case "pattern_general":
+      return "rule_module"
+    case "pattern_exception":
+      return "exception_module"
+    case "output_contract":
+      return "output_contract"
+    case "execution_checklist":
+      return "execution_checklist"
+    case "failure_lessons":
+      return "failure_lessons"
+    case "tool_guide":
+      return "tool_guide"
+    case "partition_index":
+      return "partition_index"
+    case "task_router":
+      return "task_router"
+    case "change_log":
+      return "change_log"
+    case "entry":
+      return "entry"
+    default:
+      return rawRole.trim().toLowerCase()
+  }
+}
+
+function classifyWorkspaceAsset(relativePath: string): ExperienceWorkspaceAssetKind {
+  const normalized = normalizeRelativeSurfacePath(relativePath)
+  const basename = path.posix.basename(normalized)
+  const extension = path.posix.extname(normalized).toLowerCase()
+
+  if (basename === "SKILL.md") return "skill_definition"
+  if (extension === ".py" || extension === ".ps1") return "script"
+  if (extension === ".json" || extension === ".toml" || extension === ".yaml" || extension === ".yml") {
+    return "tool_manifest"
+  }
+  if (extension === ".md") return "helper_document"
+  return "data"
+}
+
+async function collectWorkspaceFiles(root: string, current = root): Promise<string[]> {
+  if (!(await pathExists(current))) return []
+  const entries = await readdir(current, { withFileTypes: true })
+  const results: string[] = []
+
+  for (const entry of entries) {
+    const absolute = path.join(current, entry.name)
+    if (entry.isDirectory()) {
+      results.push(...(await collectWorkspaceFiles(root, absolute)))
+      continue
+    }
+    if (!entry.isFile()) continue
+    results.push(normalizeRelativeSurfacePath(path.relative(root, absolute)))
+  }
+
+  return results.sort((left, right) => left.localeCompare(right))
+}
+
+function isWorkspaceAssetPath(relativePath: string, assetRoots: string[]) {
+  const normalized = normalizeRelativeSurfacePath(relativePath)
+  const firstSegment = normalized.split("/")[0]?.toLowerCase()
+  return assetRoots.includes(firstSegment)
+}
+
+function isRuntimeSidecarPath(relativePath: string, runtimeSidecarRoots: string[]) {
+  const normalized = normalizeRelativeSurfacePath(relativePath)
+  const firstSegment = normalized.split("/")[0]?.toLowerCase()
+  return runtimeSidecarRoots.includes(firstSegment)
+}
+
+function isSupportedWorkspaceAssetPath(relativePath: string, assetRoots: string[]) {
+  if (!isWorkspaceAssetPath(relativePath, assetRoots)) return false
+  const extension = path.posix.extname(normalizeRelativeSurfacePath(relativePath)).toLowerCase()
+  return WORKSPACE_ASSET_EXTENSIONS.has(extension)
+}
+
+async function readExperienceSurfaceContract(root: string): Promise<{
+  path: string | null
+  contract: ExperienceSurfaceContract | null
+}> {
+  const contractPath = path.join(root, EXPERIENCE_SURFACE_CONTRACT_FILE)
+  if (!(await pathExists(contractPath))) {
+    return {
+      path: null,
+      contract: null,
+    }
+  }
+
+  const raw = await readJsonFile<Record<string, unknown>>(contractPath)
+  const documents = Array.isArray(raw.documents)
+    ? raw.documents
+        .filter((item): item is Record<string, unknown> => typeof item === "object" && !!item)
+        .map((item) => ({
+          path: normalizeRelativeSurfacePath(String(item.path ?? "")).trim(),
+          role: typeof item.role === "string" ? normalizeRole(item.role, String(item.path ?? "")) : undefined,
+          notes: Array.isArray(item.notes) ? item.notes.filter((note): note is string => typeof note === "string") : undefined,
+        }))
+        .filter((item) => item.path.length > 0)
+    : undefined
+
+  return {
+    path: EXPERIENCE_SURFACE_CONTRACT_FILE,
+    contract: {
+      version: typeof raw.version === "number" ? raw.version : 1,
+      profile: normalizeSurfaceProfile(raw.profile),
+      entry: typeof raw.entry === "string" ? normalizeRelativeSurfacePath(raw.entry) : undefined,
+      changeLog: typeof raw.changeLog === "string" ? normalizeRelativeSurfacePath(raw.changeLog) : undefined,
+      documents,
+      assetRoots: Array.isArray(raw.assetRoots) ? raw.assetRoots.filter((item): item is string => typeof item === "string") : undefined,
+      runtimeSidecarRoots: Array.isArray(raw.runtimeSidecarRoots)
+        ? raw.runtimeSidecarRoots.filter((item): item is string => typeof item === "string")
+        : undefined,
+      notes: Array.isArray(raw.notes) ? raw.notes.filter((item): item is string => typeof item === "string") : undefined,
+    },
+  }
+}
+
+function buildContractDocumentMap(contract: ExperienceSurfaceContract | null) {
+  const next = new Map<string, ExperienceSurfaceDocumentContract>()
+  for (const document of contract?.documents ?? []) {
+    next.set(normalizeRelativeSurfacePath(document.path), {
+      path: normalizeRelativeSurfacePath(document.path),
+      role: document.role,
+      notes: document.notes,
+    })
+  }
+  return next
+}
+
+function resolveSurfaceRoots(contract: ExperienceSurfaceContract | null) {
+  return {
+    assetRoots: normalizeRootList(contract?.assetRoots, DEFAULT_WORKSPACE_ASSET_ROOTS),
+    runtimeSidecarRoots: normalizeRootList(contract?.runtimeSidecarRoots, DEFAULT_RUNTIME_SIDECAR_ROOTS),
+  }
+}
+
+async function collectMarkdownFiles(root: string) {
+  const files = await collectWorkspaceFiles(root)
+  const { contract } = await readExperienceSurfaceContract(root)
+  const { runtimeSidecarRoots } = resolveSurfaceRoots(contract)
+  return files.filter((relative) => relative.toLowerCase().endsWith(".md") && !isRuntimeSidecarPath(relative, runtimeSidecarRoots))
+}
+
+function collectWorkspaceDocumentFiles(files: string[], runtimeSidecarRoots: string[]) {
+  return files.filter((relative) => relative.toLowerCase().endsWith(".md") && !isRuntimeSidecarPath(relative, runtimeSidecarRoots))
+}
+
+function collectWorkspaceAssetFiles(files: string[], assetRoots: string[], runtimeSidecarRoots: string[]) {
+  return files.filter(
+    (relative) => !isRuntimeSidecarPath(relative, runtimeSidecarRoots) && isSupportedWorkspaceAssetPath(relative, assetRoots),
+  )
+}
+
+function collectRuntimeSidecarFiles(files: string[], runtimeSidecarRoots: string[]) {
+  return files.filter((relative) => isRuntimeSidecarPath(relative, runtimeSidecarRoots))
+}
+
+function parseDocumentMeta(
+  relativePath: string,
+  absolutePath: string,
+  content: string,
+  declared: ExperienceSurfaceDocumentContract | undefined,
+  explicitEntryRelativePath: string | undefined,
+): ExperienceWorkspaceDocument {
   const rawRole = ROLE_MARKER.exec(content)?.[1]
-  const role = normalizeRole(rawRole, relativePath)
-  const isEntry = ENTRY_MARKER.test(content)
+  const markerRole = rawRole ? normalizeRole(rawRole, relativePath) : undefined
+  const inferredRole = markerRole ? undefined : inferRoleFromPath(relativePath)
+  const contractRole = markerRole || inferredRole ? undefined : declared?.role
+  const role = markerRole ?? inferredRole ?? contractRole
 
   return {
     relativePath,
     absolutePath,
     content,
     role,
-    isEntry,
+    isEntry:
+      ENTRY_MARKER.test(content) ||
+      (!!explicitEntryRelativePath && normalizeRelativeSurfacePath(relativePath) === explicitEntryRelativePath),
+    roleSource: markerRole ? "marker" : inferredRole ? "inferred" : contractRole ? "contract" : undefined,
   }
 }
 
-function selectWorkspaceEntryDocument(paths: ExperienceWorkspacePaths, documents: ExperienceWorkspaceDocument[]) {
-  const explicitRelative = normalizeSlash(paths.defaultEntryRelativePath)
+function selectWorkspaceEntryDocument(
+  paths: ExperienceWorkspacePaths,
+  documents: ExperienceWorkspaceDocument[],
+  contract: ExperienceSurfaceContract | null,
+) {
+  const explicitRelative = normalizeRelativeSurfacePath(paths.defaultEntryRelativePath)
+  const contractEntry = contract?.entry ? normalizeRelativeSurfacePath(contract.entry) : undefined
   const markedEntries = documents.filter((item) => item.isEntry)
+
+  if (contractEntry) {
+    const declared = documents.find((item) => item.relativePath === contractEntry)
+    if (declared) return declared
+    return {
+      relativePath: contractEntry,
+      absolutePath: path.join(paths.root, ...contractEntry.split("/")),
+      content: "",
+      role: "entry",
+      isEntry: true,
+      roleSource: "contract",
+    } satisfies ExperienceWorkspaceDocument
+  }
 
   if (markedEntries.length > 1) {
     const explicitMarked = markedEntries.find((item) => item.relativePath === explicitRelative)
@@ -266,6 +411,7 @@ function selectWorkspaceEntryDocument(paths: ExperienceWorkspacePaths, documents
     content: "",
     role: "entry",
     isEntry: true,
+    roleSource: "inferred",
   } satisfies ExperienceWorkspaceDocument
 }
 
@@ -273,35 +419,53 @@ function minimalSeedEntry(relativePath: string) {
   return `<!-- auto-evolve-bootstrap: replaceable -->
 <!-- auto-evolve-entry: true -->
 <!-- auto-evolve-role: entry -->
-# 经验工作区入口
+# Experience Workspace Entry
 
-状态：最小种子
+Status: minimal seed
 
-## 说明
+## Purpose
 
-- 这是经验工作区的唯一入口文件。
-- 当前工作区还没有形成最终专家经验结构。
-- 第一次 bootstrap 应先阅读训练案例和模板库，再自行决定最终结构。
-- 后续如果需要给 solve agent 提供本地辅助脚本或技能，可放在 \`tools/\` 或 \`skills/\` 下，并在本入口文件中导航。
+- This file is the only guaranteed entry point for the tracked expert surface.
+- Bootstrap or maintenance agents should evolve this workspace into a formal expert surface.
+- Helper assets may be stored under \`tools/\` or \`skills/\`.
 
-## 当前入口路径
+## Current Entry Path
 
 - ${relativePath}
-
-## 当前状态
-
-- 结构尚未展开
-- 规则尚未提炼
-- 后续 bootstrap 或经修 agent 需要生成正式结构
 `
 }
 
 function minimalSeedChangeLog() {
   return `<!-- auto-evolve-role: change_log -->
-# 变更记录
+# Change Log
 
-- 经验工作区已初始化为最小种子。
-`
+- Initialized the tracked expert surface as a minimal seed.`
+}
+
+function minimalSeedSurfaceContract(paths: ExperienceWorkspacePaths) {
+  return JSON.stringify(
+    {
+      version: 1,
+      profile: "governed",
+      entry: normalizeRelativeSurfacePath(paths.defaultEntryRelativePath),
+      changeLog: "change_log.md",
+      documents: [
+        {
+          path: normalizeRelativeSurfacePath(paths.defaultEntryRelativePath),
+          role: "entry",
+        },
+        {
+          path: "change_log.md",
+          role: "change_log",
+        },
+      ],
+      assetRoots: [...DEFAULT_WORKSPACE_ASSET_ROOTS],
+      runtimeSidecarRoots: [...DEFAULT_RUNTIME_SIDECAR_ROOTS],
+      notes: ["This contract declares the expert surface shape without forcing every document to carry inline role markers."],
+    },
+    null,
+    2,
+  )
 }
 
 export function experienceWorkspacePaths(cwd: string, config: AutoEvolveConfig): ExperienceWorkspacePaths {
@@ -311,8 +475,11 @@ export function experienceWorkspacePaths(cwd: string, config: AutoEvolveConfig):
 
 export function buildMinimalExperienceWorkspaceSeed(paths: ExperienceWorkspacePaths): ExperienceWorkspaceSnapshot {
   return {
-    [normalizeSlash(paths.defaultEntryRelativePath)]: minimalSeedEntry(normalizeSlash(paths.defaultEntryRelativePath)),
+    [normalizeRelativeSurfacePath(paths.defaultEntryRelativePath)]: minimalSeedEntry(
+      normalizeRelativeSurfacePath(paths.defaultEntryRelativePath),
+    ),
     "change_log.md": minimalSeedChangeLog(),
+    [EXPERIENCE_SURFACE_CONTRACT_FILE]: minimalSeedSurfaceContract(paths),
   }
 }
 
@@ -324,39 +491,47 @@ export async function templateLibraryPaths(cwd: string, config: AutoEvolveConfig
   }
 }
 
-export async function listExperienceWorkspaceFiles(
-  pathsOrLayout: ExperienceWorkspacePaths | ExperienceWorkspaceLayout,
-) {
+export async function listExperienceWorkspaceFiles(pathsOrLayout: ExperienceWorkspacePaths | ExperienceWorkspaceLayout) {
   if ("documents" in pathsOrLayout && "assets" in pathsOrLayout) {
     return [
       ...pathsOrLayout.documents.map((item) => item.relativePath),
       ...pathsOrLayout.assets.map((item) => item.relativePath),
+      ...pathsOrLayout.controlFiles,
     ].sort((left, right) => left.localeCompare(right))
   }
 
-  const [documents, assets] = await Promise.all([
-    collectWorkspaceDocumentFiles(pathsOrLayout.root),
-    collectWorkspaceAssetFiles(pathsOrLayout.root),
-  ])
-
-  return [...documents, ...assets].sort((left, right) => left.localeCompare(right))
+  const layout = await resolveExperienceWorkspaceLayout(pathsOrLayout)
+  return [
+    ...layout.documents.map((item) => item.relativePath),
+    ...layout.assets.map((item) => item.relativePath),
+    ...layout.controlFiles,
+  ].sort((left, right) => left.localeCompare(right))
 }
 
 export async function listExperienceWorkspaceDocuments(paths: ExperienceWorkspacePaths): Promise<ExperienceWorkspaceDocument[]> {
-  const files = await collectWorkspaceDocumentFiles(paths.root)
+  const allFiles = await collectWorkspaceFiles(paths.root)
+  const { contract } = await readExperienceSurfaceContract(paths.root)
+  const { runtimeSidecarRoots } = resolveSurfaceRoots(contract)
+  const contractDocuments = buildContractDocumentMap(contract)
+  const explicitEntryRelativePath = contract?.entry ? normalizeRelativeSurfacePath(contract.entry) : undefined
+  const files = collectWorkspaceDocumentFiles(allFiles, runtimeSidecarRoots)
   const documents: ExperienceWorkspaceDocument[] = []
 
   for (const relative of files) {
     const absolutePath = path.join(paths.root, ...relative.split("/"))
     const content = await readTextFile(absolutePath)
-    documents.push(parseDocumentMeta(relative, absolutePath, content))
+    documents.push(parseDocumentMeta(relative, absolutePath, content, contractDocuments.get(relative), explicitEntryRelativePath))
   }
 
   return documents.sort((left, right) => left.relativePath.localeCompare(right.relativePath))
 }
 
 export async function listExperienceWorkspaceAssets(paths: ExperienceWorkspacePaths): Promise<ExperienceWorkspaceAsset[]> {
-  const files = await collectWorkspaceAssetFiles(paths.root)
+  const allFiles = await collectWorkspaceFiles(paths.root)
+  const { contract } = await readExperienceSurfaceContract(paths.root)
+  const { assetRoots, runtimeSidecarRoots } = resolveSurfaceRoots(contract)
+  const files = collectWorkspaceAssetFiles(allFiles, assetRoots, runtimeSidecarRoots)
+
   return files.map((relativePath) => ({
     relativePath,
     absolutePath: path.join(paths.root, ...relativePath.split("/")),
@@ -366,16 +541,37 @@ export async function listExperienceWorkspaceAssets(paths: ExperienceWorkspacePa
 
 export async function resolveExperienceWorkspaceLayout(paths: ExperienceWorkspacePaths): Promise<ExperienceWorkspaceLayout> {
   const allFiles = await collectWorkspaceFiles(paths.root)
-  const documents = await listExperienceWorkspaceDocuments(paths)
-  const assets = await listExperienceWorkspaceAssets(paths)
-  const runtimeSidecarFiles = await collectRuntimeSidecarFiles(paths.root)
+  const { path: surfaceContractPath, contract: surfaceContract } = await readExperienceSurfaceContract(paths.root)
+  const { assetRoots, runtimeSidecarRoots } = resolveSurfaceRoots(surfaceContract)
+  const contractDocuments = buildContractDocumentMap(surfaceContract)
+  const explicitEntryRelativePath = surfaceContract?.entry ? normalizeRelativeSurfacePath(surfaceContract.entry) : undefined
+
+  const documentFiles = collectWorkspaceDocumentFiles(allFiles, runtimeSidecarRoots)
+  const documents: ExperienceWorkspaceDocument[] = []
+  for (const relative of documentFiles) {
+    const absolutePath = path.join(paths.root, ...relative.split("/"))
+    const content = await readTextFile(absolutePath)
+    documents.push(parseDocumentMeta(relative, absolutePath, content, contractDocuments.get(relative), explicitEntryRelativePath))
+  }
+  documents.sort((left, right) => left.relativePath.localeCompare(right.relativePath))
+
+  const assetFiles = collectWorkspaceAssetFiles(allFiles, assetRoots, runtimeSidecarRoots)
+  const assets = assetFiles.map((relativePath) => ({
+    relativePath,
+    absolutePath: path.join(paths.root, ...relativePath.split("/")),
+    kind: classifyWorkspaceAsset(relativePath),
+  }))
+  const runtimeSidecarFiles = collectRuntimeSidecarFiles(allFiles, runtimeSidecarRoots)
+  const controlFiles = surfaceContractPath ? [surfaceContractPath] : []
+
   const supportedFiles = new Set([
     ...documents.map((item) => item.relativePath),
     ...assets.map((item) => item.relativePath),
+    ...controlFiles,
     ...runtimeSidecarFiles,
   ])
   const unsupportedFiles = allFiles.filter((relative) => !supportedFiles.has(relative))
-  const entryDocument = selectWorkspaceEntryDocument(paths, documents)
+  const entryDocument = selectWorkspaceEntryDocument(paths, documents, surfaceContract)
 
   return {
     ...paths,
@@ -383,41 +579,92 @@ export async function resolveExperienceWorkspaceLayout(paths: ExperienceWorkspac
     entryPath: entryDocument.absolutePath,
     documents,
     assets,
+    controlFiles,
     runtimeSidecarFiles,
     unsupportedFiles,
+    surfaceContract,
+    surfaceContractPath,
+    resolvedAssetRoots: assetRoots,
+    resolvedRuntimeSidecarRoots: runtimeSidecarRoots,
   }
 }
 
-export function validateExperienceWorkspaceLayout(layout: ExperienceWorkspaceLayout): ExperienceWorkspaceValidation {
+function resolveValidationProfile(
+  layout: ExperienceWorkspaceLayout,
+  options?: ExperienceWorkspaceValidationOptions,
+): ExperienceSurfaceProfile {
+  if (options?.profile && options.profile !== "auto") return options.profile
+  return layout.surfaceContract?.profile ?? "governed"
+}
+
+export function validateExperienceWorkspaceLayout(
+  layout: ExperienceWorkspaceLayout,
+  options?: ExperienceWorkspaceValidationOptions,
+): ExperienceWorkspaceValidation {
   const errors: string[] = []
+  const warnings: string[] = []
+  const profile = resolveValidationProfile(layout, options)
+  const documentPathSet = new Set(layout.documents.map((item) => item.relativePath))
+  const contract = layout.surfaceContract
 
   if (!layout.documents.length) {
-    errors.push("Experience workspace has no expert Markdown documents.")
+    errors.push("Experience surface has no expert Markdown documents.")
   }
 
   if (!layout.documents.some((item) => item.relativePath === layout.entryRelativePath)) {
-    errors.push(`Experience workspace entry file is missing: ${layout.entryRelativePath}`)
+    errors.push(`Experience surface entry file is missing: ${layout.entryRelativePath}`)
   }
 
-  if (!layout.documents.some((item) => item.role === "change_log")) {
-    errors.push("Experience workspace must contain one change-log Markdown file.")
+  if (contract?.entry && !documentPathSet.has(normalizeRelativeSurfacePath(contract.entry))) {
+    errors.push(`Experience surface contract entry does not exist: ${normalizeRelativeSurfacePath(contract.entry)}`)
+  }
+
+  if (contract?.changeLog && !documentPathSet.has(normalizeRelativeSurfacePath(contract.changeLog))) {
+    const message = `Experience surface contract change-log does not exist: ${normalizeRelativeSurfacePath(contract.changeLog)}`
+    if (profile === "governed") errors.push(message)
+    else warnings.push(message)
+  }
+
+  for (const declared of contract?.documents ?? []) {
+    if (!documentPathSet.has(normalizeRelativeSurfacePath(declared.path))) {
+      const message = `Experience surface contract references a missing document: ${normalizeRelativeSurfacePath(declared.path)}`
+      if (profile === "governed") errors.push(message)
+      else warnings.push(message)
+    }
+  }
+
+  const hasChangeLog =
+    layout.documents.some((item) => item.role === "change_log") ||
+    (!!contract?.changeLog && documentPathSet.has(normalizeRelativeSurfacePath(contract.changeLog)))
+
+  if (!hasChangeLog) {
+    const message = "Experience surface does not currently declare a change-log Markdown file."
+    if (profile === "governed") errors.push(message)
+    else warnings.push(message)
   }
 
   for (const document of layout.documents) {
     if (!document.role) {
-      errors.push(`Experience workspace document is missing an auto-evolve role marker or recognizable role: ${document.relativePath}`)
+      const message = `Experience surface document has no declared or inferable role: ${document.relativePath}`
+      if (profile === "governed") errors.push(message)
+      else warnings.push(message)
     }
   }
 
   if (layout.unsupportedFiles.length) {
     errors.push(
-      `Experience workspace only supports expert Markdown files plus approved helper assets under tools/ or skills/. Unsupported files: ${layout.unsupportedFiles.join(", ")}`,
+      `Experience surface only supports expert Markdown documents, optional ${EXPERIENCE_SURFACE_CONTRACT_FILE}, approved helper assets under ${layout.resolvedAssetRoots.join(
+        ", ",
+      )}, and runtime sidecars under ${layout.resolvedRuntimeSidecarRoots.join(", ")}. Unsupported files: ${layout.unsupportedFiles.join(", ")}`,
     )
   }
 
   return {
     valid: errors.length === 0,
     errors,
+    warnings,
+    profile,
+    contractPresent: !!layout.surfaceContract,
   }
 }
 
@@ -468,7 +715,7 @@ export async function writeExperienceWorkspaceSnapshot(targetDir: string, snapsh
 }
 
 export function experienceWorkspacePathsFromRoot(root: string, defaultEntryRelativePath: string): ExperienceWorkspacePaths {
-  const normalizedEntry = normalizeSlash(defaultEntryRelativePath)
+  const normalizedEntry = normalizeRelativeSurfacePath(defaultEntryRelativePath)
   return {
     root,
     defaultEntryRelativePath: normalizedEntry,
@@ -476,17 +723,11 @@ export function experienceWorkspacePathsFromRoot(root: string, defaultEntryRelat
   }
 }
 
-export function findExperienceWorkspaceDocumentsByRole(
-  layout: ExperienceWorkspaceLayout,
-  roles: ExperienceWorkspaceRole[],
-) {
+export function findExperienceWorkspaceDocumentsByRole(layout: ExperienceWorkspaceLayout, roles: ExperienceWorkspaceRole[]) {
   const allowed = new Set(roles)
   return layout.documents.filter((item) => item.role && allowed.has(item.role))
 }
 
-export function findExperienceWorkspaceDocumentByRole(
-  layout: ExperienceWorkspaceLayout,
-  role: ExperienceWorkspaceRole,
-) {
+export function findExperienceWorkspaceDocumentByRole(layout: ExperienceWorkspaceLayout, role: ExperienceWorkspaceRole) {
   return layout.documents.find((item) => item.role === role)
 }

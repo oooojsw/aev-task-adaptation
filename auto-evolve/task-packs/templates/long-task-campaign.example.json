@@ -1,0 +1,36 @@
+{
+  "title": "example-long-task-campaign",
+  "taskFamily": "example-long-task",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./long-task.example.json",
+  "maxRounds": 10,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "./seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ],
+  "lessonsMirror": {
+    "workspaceTargetPath": "./expert-workspace",
+    "relativePath": "lessons/failure_lessons.md",
+    "addManifestPointer": true
+  },
+  "carryover": {
+    "includeFailurePackets": true,
+    "includeRetryLessons": true,
+    "includeLearningUnits": true,
+    "includeRoundSummaries": true,
+    "recentRoundSummaryCount": 6
+  },
+  "roundBudgetOverrides": {
+    "maxAttemptsPerUnit": 3,
+    "maxTotalUnitAttempts": 12,
+    "maxGraphReplans": 3,
+    "maxValidatorCalls": 24,
+    "maxNoProgressCycles": 4,
+    "maxUnitsPerGraph": 6
+  },
+  "notes": "A generic long-task campaign wraps repeated long-task runs. Each round must leave durable learning and mirror cumulative failure lessons into the tracked expert workspace."
+}

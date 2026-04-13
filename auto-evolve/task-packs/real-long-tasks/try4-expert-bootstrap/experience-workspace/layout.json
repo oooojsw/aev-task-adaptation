@@ -1,0 +1,219 @@
+{
+  "version": "1.0",
+  "workspace_id": "try4-expert-bootstrap-experience",
+  "generated_at": "2026-04-13T02:47:00Z",
+  "goal": "Enable blank agent to generate 资产评估报告 and 评估说明 Word documents from source.xlsx and templates in one uninterrupted session",
+  "input_contract": {
+    "materials": {
+      "source_workbook": {
+        "path": "materials/source.xlsx",
+        "role": "Data source for placeholder values",
+        "sheets": {
+          "Sheet1": {
+            "name": "固定资产汇总表",
+            "key_values": {
+              "评估基准日": { "row": 2, "col": "A", "value": "2026年3月23日" },
+              "产权持有单位": { "row": 4, "col": "A", "value": "江苏省国信集团有限公司" },
+              "评估结果金额_含税净值": { "row": 12, "col": "M", "value": "22893.8" }
+            }
+          },
+          "Sheet2": {
+            "name": "废旧物资（设备）",
+            "key_values": {
+              "产权持有单位": { "row": 4, "col": "A", "value": "南京恩瑞特实业有限公司" },
+              "设备状态": { "col": "V", "sample": "已拆除、拟处置" },
+              "存放情况": { "col": "V", "sample": "已拆除、拟处置" },
+              "典型设备名称": { "row": 7, "col": "C", "value": "保护架" },
+              "规格型号": { "row": 7, "col": "D", "value": "若干" },
+              "设备类别": { "derived": "unique values from 设备名称 column" },
+              "主材1单价": { "col": "AB", "sample": "2000" },
+              "主材2单价": { "col": "AC", "sample": "1900" }
+            }
+          }
+        }
+      },
+      "report_template": {
+        "path": "materials/report-template.docx",
+        "role": "Template for 资产评估报告",
+        "structure": { "sections": 3, "paragraphs": 230, "styles": 37 },
+        "unique_placeholders": 16,
+        "total_occurrences": 50
+      },
+      "explanation_template": {
+        "path": "materials/explanation-template.docx",
+        "role": "Template for 评估说明",
+        "structure": { "sections": 3, "paragraphs": 115, "styles": 421 },
+        "unique_placeholders": 26,
+        "total_occurrences": 55
+      }
+    }
+  },
+  "output_contract": {
+    "generated_report": {
+      "path": "outputs/filled-doc-1.docx",
+      "source_template": "report-template.docx",
+      "filled_placeholders": {
+        "【产权持有单位】": "江苏省国信集团有限公司",
+        "【评估基准日】": "2026年3月23日",
+        "【评估结果金额】": "22893.8",
+        "【评估目的详细描述】": "拟处置设备资产项目"
+      },
+      "external_required_placeholders": [
+        "【评估机构】",
+        "【报告文号】",
+        "【宗旨和业务范围】",
+        "【开办资金】",
+        "【法定代表人】",
+        "【注册地址】",
+        "【统一社会信用代码】",
+        "【报告日】",
+        "【报告日期中文大写】",
+        "【评估结论有效期截止日】",
+        "【举办单位】",
+        "【其他报告使用人说明】"
+      ]
+    },
+    "generated_explanation": {
+      "path": "outputs/filled-doc-2.docx",
+      "source_template": "explanation-template.docx",
+      "filled_placeholders": {
+        "【产权持有单位】": "南京恩瑞特实业有限公司",
+        "【评估基准日】": "2026年3月23日",
+        "【评估结果金额】": "22893.8",
+        "【设备状态】": "已拆除、拟处置",
+        "【存放情况】": "已拆除、拟处置",
+        "【是否申报账面价值】": "未申报账面价值",
+        "【典型设备名称】": "保护架",
+        "【规格型号】": "若干",
+        "【主材1单价】": "2000",
+        "【主材2单价】": "2000",
+        "【设备类别一】": "保护架",
+        "【设备类别二】": "天线座运输支撑",
+        "【设备类别三】": "过度环和轴承"
+      },
+      "external_required_placeholders": [
+        "【评估机构】",
+        "【报告文号】",
+        "【主材1】",
+        "【主材2】",
+        "【主材构成】",
+        "【案例计算公式】",
+        "【案例评估值】"
+      ]
+    }
+  },
+  "placeholder_resolution_rules": {
+    "priority_order": [
+      "direct: Values extracted directly from source.xlsx",
+      "inferred: Values derived from context or Sheet2 inference",
+      "external: Values NOT in source - requires external input",
+      "default: Contextual defaults (e.g., 评估目的详细描述 → 拟处置设备资产项目)"
+    ],
+    "report_document": {
+      "direct_from_sheet1": [
+        { "placeholder": "【产权持有单位】", "source": "Sheet1 Row 4" },
+        { "placeholder": "【评估基准日】", "source": "Sheet1 Row 2" },
+        { "placeholder": "【评估结果金额】", "source": "Sheet1 Row 12 (M column)" }
+      ],
+      "inferred": [{ "placeholder": "【评估目的详细描述】", "value": "拟处置设备资产项目" }],
+      "external_required": [
+        "【评估机构】",
+        "【报告文号】",
+        "【宗旨和业务范围】",
+        "【开办资金】",
+        "【法定代表人】",
+        "【注册地址】",
+        "【统一社会信用代码】",
+        "【报告日】",
+        "【报告日期中文大写】",
+        "【评估结论有效期截止日】",
+        "【举办单位】",
+        "【其他报告使用人说明】"
+      ]
+    },
+    "explanation_document": {
+      "direct_from_sheet1": [
+        { "placeholder": "【产权持有单位】", "source": "Sheet1 Row 4" },
+        { "placeholder": "【评估基准日】", "source": "Sheet1 Row 2" },
+        { "placeholder": "【评估结果金额】", "source": "Sheet1 Row 12 (M column)" }
+      ],
+      "direct_from_sheet2": [
+        { "placeholder": "【设备状态】", "source": "Sheet2 V column" },
+        { "placeholder": "【存放情况】", "source": "Sheet2 V column" },
+        { "placeholder": "【典型设备名称】", "source": "Sheet2 Row 7 C column" },
+        { "placeholder": "【规格型号】", "source": "Sheet2 Row 7 D column" },
+        { "placeholder": "【主材1单价】", "source": "Sheet2 AB column" },
+        { "placeholder": "【主材2单价】", "source": "Sheet2 AC column" }
+      ],
+      "derived_from_sheet2": [
+        { "placeholder": "【设备类别一】", "method": "first unique 设备名称" },
+        { "placeholder": "【设备类别二】", "method": "second unique 设备名称" },
+        { "placeholder": "【设备类别三】", "method": "third unique 设备名称" }
+      ],
+      "inferred": [{ "placeholder": "【是否申报账面价值】", "value": "未申报账面价值" }],
+      "external_required": [
+        "【评估机构】",
+        "【报告文号】",
+        "【主材1】",
+        "【主材2】",
+        "【主材构成】",
+        "【案例计算公式】",
+        "【案例评估值】"
+      ]
+    }
+  },
+  "generation_pipeline": {
+    "step_1": "Read source.xlsx using minimax-xlsx capability - extract Sheet1 key values (评估基准日, 产权持有单位, 评估结果金额)",
+    "step_2": "Extract Sheet2 detail values (设备类别, 存放地点, 设备状态, 规格型号, 主材单价)",
+    "step_3": "Build data map for report document (mapping.json)",
+    "step_4": "Build data map for explanation document (mapping.json)",
+    "step_5": "Use minimax-docx Pipeline B (Fill/Edit) to fill placeholders",
+    "step_6": "Run validation: docx CLI validate --input filled-doc-1.docx",
+    "step_7": "Run validation: docx CLI validate --input filled-doc-2.docx",
+    "step_8": "Run docx CLI list-placeholders to confirm unresolved vs filled"
+  },
+  "validation_checklist": {
+    "no_unresolved_placeholders": "All 【】 brackets must be resolved or marked external_required",
+    "data_consistency": [
+      "评估基准日 = 2026年3月23日 in both documents",
+      "评估结果金额 = 22893.8 in both documents",
+      "产权持有单位 matches respective sheet (Sheet1 → 江苏省国信集团, Sheet2 → 南京恩瑞特实业)"
+    ],
+    "format_requirements": {
+      "currency": "numeric without comma (22893.8)",
+      "date": "Chinese format 2026年3月23日",
+      "organization_names": "exact match from source"
+    }
+  },
+  "common_placeholders": ["【产权持有单位】", "【评估基准日】", "【评估机构】", "【评估结果金额】", "【报告文号】"],
+  "fixed_content_rules": {
+    "must_not_be_replaced": [
+      "HUACHEN ASSETS APPRAISAL CO.,LTD",
+      "固定资产评估汇总表",
+      "废旧物资（设备）",
+      "表 4-6",
+      "表 4-6-6",
+      "金额单位：人民币元",
+      "评估基准日：2026年3月23日"
+    ]
+  },
+  "known_limitations": {
+    "binary_doc_reference": "Reference .doc files cannot be parsed by docx CLI - use template analysis only",
+    "external_required_fields": "评估机构, 报告文号, and others require external input not in source.xlsx"
+  },
+  "capability_paths": {
+    "minimax_docx": "capabilities/minimax-docx",
+    "minimax_xlsx": "capabilities/minimax-xlsx"
+  },
+  "blank_agent_checklist": [
+    "Read source.xlsx using xlsx capability",
+    "Extract: 评估基准日, 产权持有单位, 评估结果金额 from Sheet1",
+    "Extract Sheet2 details: 设备类别, 存放地点, 设备状态, 规格型号, 主材单价",
+    "Build report data map from Sheet1 values",
+    "Build explanation data map from Sheet1 + Sheet2 values",
+    "Fill report-template.docx placeholders using docx CLI edit fill-placeholders",
+    "Fill explanation-template.docx placeholders using docx CLI edit fill-placeholders",
+    "Validate both outputs with docx CLI validate",
+    "Run list-placeholders to confirm external_required fields remain unfilled"
+  ]
+}

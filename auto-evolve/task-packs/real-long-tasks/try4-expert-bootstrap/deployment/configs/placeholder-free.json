@@ -1,0 +1,17 @@
+{
+  "targets": [
+    {
+      "label": "generated report",
+      "targetLabel": "generated report"
+    },
+    {
+      "label": "generated explanation",
+      "targetLabel": "generated explanation"
+    }
+  ],
+  "patterns": [
+    "\u3010",
+    "\u3011",
+    "XXXX"
+  ]
+}

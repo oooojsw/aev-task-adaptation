@@ -1,0 +1,92 @@
+{
+  "id": "try4-blank-agent-deployment",
+  "title": "try4 blank-agent deployment",
+  "goal": "Use only the formal expert workspace, the registered capability assets, the source workbook, and the blank templates to generate both required Word outputs in one uninterrupted session.",
+  "materials": [
+    {
+      "path": "C:/Users/ZhuanZ/Desktop/try4 - \u526f\u672c/\u6750\u6599/\u6069\u745e\u7279\u62df\u5904\u7f6e\u5e9f\u65e7\u7269\u8d44\u9879\u76ee\u8bc4\u4f30\u8ba1\u7b97\u88680330.xlsx",
+      "label": "source workbook",
+      "role": "source-artifact"
+    },
+    {
+      "path": "C:/Users/ZhuanZ/Desktop/try4 - \u526f\u672c/\u6750\u6599/\u673a\u5668\u8bbe\u5907\u8d44\u4ea7\u8bc4\u4f30\u62a5\u544a-\u7a7a\u6570\u636e\u6a21\u677f.docx",
+      "label": "report template",
+      "role": "target-template"
+    },
+    {
+      "path": "C:/Users/ZhuanZ/Desktop/try4 - \u526f\u672c/\u6750\u6599/\u673a\u5668\u8bbe\u5907\u8d44\u4ea7\u8bc4\u4f30\u8bf4\u660e-\u7a7a\u6570\u636e\u6a21\u677f.docx",
+      "label": "explanation template",
+      "role": "target-template"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "./outputs/generated-report.docx",
+      "label": "generated report",
+      "role": "target-artifact"
+    },
+    {
+      "path": "./outputs/generated-explanation.docx",
+      "label": "generated explanation",
+      "role": "target-artifact"
+    }
+  ],
+  "editablePaths": ["./outputs"],
+  "initialExpertContextPaths": [
+    "../expert-workspace/manifest.md",
+    "../expert-workspace/lessons/failure_lessons.md"
+  ],
+  "capabilities": [
+    {
+      "id": "docx-capability",
+      "title": "DOCX capability package",
+      "kind": "transform",
+      "description": "Use the registered DOCX skill package to inspect, edit, and generate Word outputs without relying on hidden system memory.",
+      "referencePaths": ["C:/Users/ZhuanZ/Desktop/try4 - \u526f\u672c/\u811a\u672c/minimax-docx"]
+    },
+    {
+      "id": "xlsx-capability",
+      "title": "XLSX capability package",
+      "kind": "inspect",
+      "description": "Use the registered XLSX skill package to inspect workbook structure and source values.",
+      "referencePaths": ["C:/Users/ZhuanZ/Desktop/try4 - \u526f\u672c/\u811a\u672c/minimax-xlsx"]
+    }
+  ],
+  "validators": [
+    {
+      "id": "targets-exist",
+      "type": "script",
+      "title": "Target files exist",
+      "path": "../../../../scripts/long-task-validator.example.py",
+      "runner": "python",
+      "inputMode": "json_file",
+      "required": true,
+      "blocking": true
+    },
+    {
+      "id": "placeholder-free",
+      "type": "script",
+      "title": "Generated Word targets are placeholder-free",
+      "path": "../../../../scripts/validate-word-targets-placeholder-free.py",
+      "runner": "python",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "cwd": "./",
+      "args": ["./configs/placeholder-free.json"]
+    },
+    {
+      "id": "reference-alignment",
+      "type": "script",
+      "title": "Generated Word targets align with expert references",
+      "path": "../../../../scripts/validate-word-targets-against-references.py",
+      "runner": "python",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "cwd": "./",
+      "args": ["./configs/reference-mapping.json"]
+    }
+  ],
+  "notes": "This deployment spec intentionally exposes only the formal expert workspace, capability packages, workbook, and blank templates. The expert reference docs are reserved for deployment validators only."
+}

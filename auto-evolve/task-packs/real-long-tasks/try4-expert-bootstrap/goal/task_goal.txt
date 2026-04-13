@@ -1,0 +1,19 @@
+Learn a formal expert experience workspace that allows a blank agent to go from:
+
+- source.xlsx
+- report-template.docx
+- explanation-template.docx
+
+to:
+
+- generated-report.docx
+- generated-explanation.docx
+
+in one uninterrupted session, using only the learned expert workspace plus the registered capability assets.
+
+The generated documents do not need to be byte-identical to the expert references, but they must:
+
+- preserve the required document intent,
+- keep critical data consistent with the references,
+- avoid unresolved placeholders,
+- remain close enough in overall content to count as the same deliverable family.

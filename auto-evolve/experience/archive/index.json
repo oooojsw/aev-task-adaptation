@@ -1,5 +1,14 @@
 [
   {
+    "archiveID": "archive-2026-04-12T16-14-31-352Z",
+    "archivedAt": "2026-04-12T16:14:31.353Z",
+    "note": "transaction-gate clean short test",
+    "sourceWorkspaceRoot": "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\experience\\workspace",
+    "entryRelativePath": "manifest.md",
+    "fileCount": 2,
+    "historyRoot": "history/archive-2026-04-12T16-14-31-352Z"
+  },
+  {
     "archiveID": "archive-2026-04-11T19-46-04-186Z",
     "archivedAt": "2026-04-11T19:46:04.186Z",
     "note": "pre-long-task-experiment",

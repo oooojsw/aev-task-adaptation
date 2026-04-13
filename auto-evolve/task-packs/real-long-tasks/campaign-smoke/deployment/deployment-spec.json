@@ -1,0 +1,41 @@
+{
+  "id": "campaign-smoke-deployment",
+  "title": "campaign smoke deployment",
+  "goal": "Use only the formal expert workspace and the source material to produce a final text output containing the source token in one uninterrupted session.",
+  "materials": [
+    {
+      "path": "../materials/source.txt",
+      "label": "source text",
+      "role": "source-artifact"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "./outputs/final.txt",
+      "label": "final text output",
+      "role": "target-artifact"
+    }
+  ],
+  "editablePaths": [
+    "./outputs"
+  ],
+  "initialExpertContextPaths": [
+    "../expert-workspace"
+  ],
+  "validators": [
+    {
+      "id": "contains-token",
+      "type": "script",
+      "title": "Final output contains the expected source token",
+      "path": "../../../../scripts/validate-text-target-contains.ps1",
+      "runner": "powershell",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "args": [
+        "smoke-ok-20260413"
+      ]
+    }
+  ],
+  "notes": "Deployment sees only the formal expert workspace and the source material."
+}

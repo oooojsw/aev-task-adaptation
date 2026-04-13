@@ -1,0 +1,187 @@
+{
+  "title": "try4-expert-bootstrap-round2",
+  "goal": "Learn a formal expert experience workspace from the workbook, the two finished expert Word documents, and the two blank templates, so that a blank agent can later generate the required Word outputs in one uninterrupted session.",
+  "taskFamily": "try4-expert-bootstrap",
+  "domainTags": [
+    "expert-bootstrap",
+    "excel-to-word",
+    "docx-generation",
+    "deployment-acceptance"
+  ],
+  "materials": [
+    {
+      "path": "./materials/source.xlsx",
+      "label": "source workbook",
+      "role": "source-artifact"
+    },
+    {
+      "path": "./materials/report-reference.doc",
+      "label": "expert report reference",
+      "role": "reference-artifact"
+    },
+    {
+      "path": "./materials/explanation-reference.doc",
+      "label": "expert explanation reference",
+      "role": "reference-artifact"
+    },
+    {
+      "path": "./materials/report-template.docx",
+      "label": "report template",
+      "role": "target-template"
+    },
+    {
+      "path": "./materials/explanation-template.docx",
+      "label": "explanation template",
+      "role": "target-template"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "./expert-workspace",
+      "label": "learned expert workspace",
+      "role": "experience-workspace"
+    }
+  ],
+  "editablePaths": [
+    "./expert-workspace",
+    "./workspace"
+  ],
+  "initialExpertContextPaths": [
+    "./00-task-entry.md",
+    "./goal/task_goal.txt",
+    "./seed-expert-workspace-round2/manifest.md",
+    "./seed-expert-workspace-round2/change_log.md",
+    "./seed-expert-workspace-round2/workbook-data-extract.json",
+    "./seed-expert-workspace-round2/reference-document-analysis.json",
+    "./seed-expert-workspace-round2/template-structure-analysis.json",
+    "./seed-round2-evidence/failure_packets.jsonl",
+    "./seed-round2-evidence/retry_lessons.jsonl",
+    "./seed-round2-evidence/final-deployment-attempt-01-response.txt",
+    "./seed-round2-evidence/final-deployment-attempt-02-response.txt"
+  ],
+  "capabilities": [
+    {
+      "id": "docx-capability",
+      "title": "DOCX capability package",
+      "kind": "transform",
+      "description": "Use the registered DOCX skill package to inspect templates, inspect finished Word references, and generate or edit final Word outputs through formal capability assets instead of hidden runtime memory.",
+      "referencePaths": [
+        "./capabilities/minimax-docx"
+      ]
+    },
+    {
+      "id": "xlsx-capability",
+      "title": "XLSX capability package",
+      "kind": "inspect",
+      "description": "Use the registered XLSX skill package to inspect workbook structure and source values through formal capability assets.",
+      "referencePaths": [
+        "./capabilities/minimax-xlsx"
+      ]
+    }
+  ],
+  "validators": [
+    {
+      "id": "workspace-layout",
+      "type": "script",
+      "title": "Learned expert workspace layout is valid",
+      "path": "../../../scripts/validate-experience-workspace-layout.ts",
+      "runner": "bun",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true
+    },
+    {
+      "id": "blank-agent-deployment",
+      "type": "script",
+      "title": "Blank-agent single-session deployment acceptance",
+      "path": "../../../scripts/run-blank-agent-task-deployment-acceptance.ts",
+      "runner": "bun",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "args": [
+        "./auto-evolve/task-packs/real-long-tasks/try4-expert-bootstrap/deployment/deployment-spec.json"
+      ]
+    }
+  ],
+  "planning": {
+    "agent": "top"
+  },
+  "execution": {
+    "agent": "top"
+  },
+  "validation": {
+    "agent": "top"
+  },
+  "initialGraph": {
+    "planner_summary": "Start by extracting stable obligations from the workbook, expert references, and blank templates, then synthesize a formal expert workspace that can later survive deployment acceptance.",
+    "completion_validator_ids": [
+      "workspace-layout",
+      "blank-agent-deployment"
+    ],
+    "units": [
+      {
+        "id": "inspect-learning-materials",
+        "title": "Inspect Learning Materials",
+        "goal": "Extract the stable task obligations, data mappings, output contracts, and failure-sensitive document requirements from the workbook, expert references, and templates.",
+        "inputs": [
+          "./materials/source.xlsx",
+          "./materials/report-reference.doc",
+          "./materials/explanation-reference.doc",
+          "./materials/report-template.docx",
+          "./materials/explanation-template.docx"
+        ],
+        "depends_on": [],
+        "expected_artifacts": [
+          "./workspace"
+        ],
+        "claim": "The stable obligations and reference evidence needed for an expert workspace have been extracted.",
+        "check_plan": "Leave concise structured scratch and learning evidence that future workspace synthesis can reuse.",
+        "validator_ids": [],
+        "retry_budget": 2
+      },
+      {
+        "id": "synthesize-expert-workspace",
+        "title": "Synthesize Expert Workspace",
+        "goal": "Write a formal expert workspace that teaches a blank agent how to use the approved capability assets to go from workbook plus templates to the required Word outputs.",
+        "inputs": [
+          "./workspace",
+          "./seed-expert-workspace/manifest.md",
+          "./seed-expert-workspace/change_log.md"
+        ],
+        "depends_on": [
+          "inspect-learning-materials"
+        ],
+        "expected_artifacts": [
+          "./expert-workspace/manifest.md",
+          "./expert-workspace/change_log.md"
+        ],
+        "claim": "The learned expert workspace is complete enough to face deployment acceptance.",
+        "check_plan": "Update the tracked expert workspace with rules, contracts, checklists, exceptions, and tool guidance that are specific enough for deployment but abstract enough to generalize across runs.",
+        "validator_ids": [],
+        "retry_budget": 2
+      }
+    ]
+  },
+  "budgets": {
+    "maxAttemptsPerUnit": 3,
+    "maxTotalUnitAttempts": 12,
+    "maxGraphReplans": 3,
+    "maxValidatorCalls": 24,
+    "maxNoProgressCycles": 4,
+    "maxUnitsPerGraph": 6
+  },
+  "shadowMemoryScope": {
+    "namespace": "try4-expert-bootstrap",
+    "tags": [
+      "expert-bootstrap",
+      "excel-to-word",
+      "deployment-acceptance"
+    ],
+    "retrievalMode": "manual"
+  },
+  "reversePropagation": {
+    "acceptancePolicyID": "long-task-candidate-guard"
+  },
+  "notes": "Round 2 of the real expert-experience bootstrap experiment. The platform may use multiple sessions during learning, but the final success gate is still a blank-agent single-session deployment acceptance run. This round starts from the round-1 learned expert workspace plus explicit failure evidence, without injecting task-specific execution code into the platform core."
+}

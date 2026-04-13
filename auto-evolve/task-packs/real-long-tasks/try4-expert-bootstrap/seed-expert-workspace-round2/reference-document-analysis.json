@@ -1,0 +1,164 @@
+{
+  "analysis_metadata": {
+    "analyzed_at": "2026-04-13",
+    "source_workbook": "source.xlsx",
+    "reference_documents": ["report-reference.doc", "explanation-reference.doc"],
+    "template_documents": ["report-template.docx", "explanation-template.docx"],
+    "encoding_issues": {
+      "report-reference.doc": "Binary .doc format - cannot read without LibreOffice",
+      "explanation-reference.doc": "Binary .doc format - cannot read without LibreOffice",
+      "report-template.docx": "Text extracted but garbled (CJK font encoding)",
+      "explanation-template.docx": "Text extracted but garbled (CJK font encoding)"
+    }
+  },
+  "source_workbook_structure": {
+    "sheet1_name": "固定资产汇总表 (元)",
+    "sheet1_dimensions": "A1:T39",
+    "sheet1_purpose": "固定资产评估汇总表 - Fixed assets assessment summary table",
+    "sheet1_key_fields": {
+      "assessment_date": "2026年3月23日",
+      "property_holder": "江苏省国信集团有限公司",
+      "table_id": "表 4-6",
+      "currency_unit": "金额单位：人民币元"
+    },
+    "sheet1_data_categories": [
+      { "id": "4-6", "name": "房屋建筑物类合计", "type": "category" },
+      { "id": "4-6-1", "name": "固定资产－房屋建筑物", "type": "subcategory" },
+      { "id": "4-6-2", "name": "固定资产－构筑物及其他辅助设施", "type": "subcategory" },
+      { "id": "4-6-3", "name": "固定资产－管道及沟槽", "type": "subcategory" },
+      { "id": "4-6-5", "name": "设备类合计", "type": "category" },
+      { "id": "4-6-5", "name": "固定资产－电子设备", "type": "detail" },
+      { "id": "4-6-7", "name": "固定资产－土地", "type": "detail" },
+      { "id": "4-6", "name": "固定资产合计", "type": "total" },
+      { "id": "4-6", "name": "减：减值准备", "type": "deduction" },
+      { "id": "4-6", "name": "固定资产净额", "type": "net_total" }
+    ],
+    "sheet1_key_values": {
+      "设备类合计": {
+        "评估价值": "0",
+        "净值(含税)": "20260",
+        "增值率": "100"
+      },
+      "固定资产合计": {
+        "评估价值": "0",
+        "净值(含税)": "20260"
+      }
+    },
+    "sheet2_name": "废旧物资（设备）",
+    "sheet2_dimensions": "A1:AK36",
+    "sheet2_purpose": "固定资产—设备评估明细表 - Fixed assets equipment assessment detail",
+    "sheet2_key_fields": {
+      "assessment_date": "2026年3月23日",
+      "property_holder": "南京恩瑞特实业有限公司",
+      "table_id": "表 4-6-6",
+      "currency_unit": "金额单位：人民币元"
+    },
+    "sheet2_columns": [
+      "序号",
+      "设备名称",
+      "规格型号",
+      "数量",
+      "生产厂家",
+      "计量单位",
+      "购置日期",
+      "启用日期",
+      "原账面金额",
+      "审计调整",
+      "审计后金额",
+      "账面价值",
+      "评估价值",
+      "备注",
+      "总重量(t)",
+      "碳钢重(t)",
+      "废碳钢回收价格",
+      "材料收入",
+      "状态"
+    ],
+    "sheet2_material_pricing": {
+      "废碳钢": {
+        "报价A": 2000,
+        "报价B": 1900,
+        "单位": "元/吨"
+      }
+    },
+    "sheet2_sample_items": [
+      {
+        "序号": 1,
+        "设备名称": "保护架",
+        "评估价值": 1000,
+        "状态": "已拆除、拟处置",
+        "总重量": 0.5,
+        "碳钢重": 0.5
+      }
+    ]
+  },
+  "document_patterns": {
+    "report_document": {
+      "document_type": "资产评估报告 - Asset Appraisal Report",
+      "template_identifiers": ["HUACHEN ASSETS APPRAISAL CO.,LTD", "固定资产—设备评估明细表", "表 4-6-6"],
+      "expected_sections": [
+        "目录 (Table of Contents)",
+        "一、委托人、产权持有人及委托以外的其他报告使用人概况",
+        "二、评估对象",
+        "三、评估范围",
+        "四、价值类型",
+        "五、评估基准日",
+        "六、评估依据",
+        "七、评估方法",
+        "八、评估过程",
+        "九、评估结论",
+        "十、特别事项说明",
+        "十一、资产评估报告使用说明",
+        "十二、资产评估报告附件"
+      ],
+      "data_source": "废旧物资（设备）sheet with detailed equipment assessment"
+    },
+    "explanation_document": {
+      "document_type": "评估说明 - Appraisal Explanation",
+      "template_identifiers": ["HUACHEN ASSETS APPRAISAL CO.,LTD", "废旧物资（设备）", "评估说明"],
+      "expected_purpose": "Detailed explanation of waste equipment disposal valuation methodology",
+      "data_source": "废旧物资（设备）sheet with material pricing and valuation methods"
+    }
+  },
+  "data_consistency_rules": {
+    "assessment_date": "2026年3月23日 - must be consistent across all documents",
+    "property_holders": {
+      "report": "江苏省国信集团有限公司",
+      "explanation": "南京恩瑞特实业有限公司"
+    },
+    "table_ids": {
+      "summary": "表 4-6",
+      "detail": "表 4-6-6"
+    },
+    "currency": "人民币元",
+    "key_calculated_values": {
+      "电子设备评估价值": 0,
+      "电子设备净值(含税)": 20260,
+      "固定资产合计净值": 20260
+    }
+  },
+  "template_structure_inference": {
+    "report_template": {
+      "has_cover_page": true,
+      "has_table_of_contents": true,
+      "has_numbered_sections": true,
+      "section_count": 16,
+      "uses_chinese_numbering": true
+    },
+    "explanation_template": {
+      "has_cover_page": true,
+      "has_table_of_contents": true,
+      "has_numbered_sections": true,
+      "section_count": 12,
+      "uses_chinese_numbering": true
+    }
+  },
+  "validation_observations": {
+    "data_extraction_possible": true,
+    "binary_doc_readable": false,
+    "docx_text_readable_with_issues": true,
+    "CJK_encoding_problem": "Template text is garbled due to CJK font encoding - document structure visible but text not extractable",
+    "workbook_data_complete": true,
+    "cross_reference_consistent": true
+  }
+}

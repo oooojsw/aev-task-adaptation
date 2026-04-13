@@ -14,6 +14,7 @@ export type AutoEvolveTaskKind =
   | "judge"
   | "maintain"
   | "post_judge"
+  | "deployment_acceptance"
   | "long_task_plan"
   | "long_task_execute"
   | "long_task_validate"
@@ -48,6 +49,8 @@ function purposeForKind(kind: AutoEvolveTaskKind) {
       return "Maintain the experience workspace using the chosen reverse-propagation module."
     case "post_judge":
       return "Evaluate post-maintenance evidence and decide whether to accept or roll back the maintenance transaction."
+    case "deployment_acceptance":
+      return "Run a deployment-level acceptance harness against the formal expert surface and target materials."
     case "long_task_plan":
       return "Bootstrap an initial work graph for a validator-driven long-running task."
     case "long_task_execute":
@@ -78,7 +81,7 @@ export function createTaskDescriptor(input: {
       ? "judge"
       : kind === "maintain"
         ? "experience_maintenance"
-        : kind === "verify" || kind === "regression" || kind === "post_judge"
+        : kind === "verify" || kind === "regression" || kind === "post_judge" || kind === "deployment_acceptance"
           ? "experience_transaction"
           : "task_execution"
 
@@ -87,8 +90,10 @@ export function createTaskDescriptor(input: {
       ? "judge"
       : kind === "maintain"
         ? "maintainer"
-        : kind === "verify" || kind === "regression" || kind === "post_judge"
-          ? "transaction_gate"
+        : kind === "deployment_acceptance"
+          ? "acceptance"
+          : kind === "verify" || kind === "regression" || kind === "post_judge"
+            ? "transaction_gate"
           : "worker"
 
   return {

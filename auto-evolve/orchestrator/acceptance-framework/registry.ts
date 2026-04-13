@@ -23,8 +23,8 @@ const STANDARDS: AcceptanceStandardDescriptor[] = [
   },
   {
     id: "workspace-layout-valid",
-    title: "Workspace Layout Valid",
-    summary: "The tracked expert workspace still satisfies the canonical layout rules.",
+    title: "Expert Surface Valid",
+    summary: "The tracked expert surface satisfies the required governance or operational profile.",
     level: "transaction",
     targetKinds: ["maintenance_transaction", "canonical_experience", "candidate_experience"],
     pluginFriendly: true,
@@ -111,8 +111,8 @@ const HARNESSES: AcceptanceHarnessDescriptor[] = [
   },
   {
     id: "workspace-layout-check",
-    title: "Workspace Layout Check",
-    summary: "Validate the tracked expert workspace layout and allowed file surface.",
+    title: "Expert Surface Check",
+    summary: "Validate the tracked expert surface contract, helper roots, sidecar roots, and allowed file surface.",
     kind: "workspace_layout_check",
     levels: ["transaction", "candidate"],
     targetKinds: ["maintenance_transaction", "candidate_experience", "canonical_experience"],
@@ -185,6 +185,17 @@ const HARNESSES: AcceptanceHarnessDescriptor[] = [
     summary:
       "Run a blank-agent one-session case solve using only the allowed formal expert surface plus task materials.",
     kind: "blank_agent_single_session_case",
+    levels: ["deployment"],
+    targetKinds: ["deployment_run", "candidate_experience", "canonical_experience"],
+    pluginFriendly: true,
+    stateful: true,
+  },
+  {
+    id: "blank-agent-single-session-task",
+    title: "Blank Agent Single-Session Task",
+    summary:
+      "Run a blank-agent one-session task-pack deployment using only the allowed formal expert surface plus task materials.",
+    kind: "blank_agent_single_session_task",
     levels: ["deployment"],
     targetKinds: ["deployment_run", "candidate_experience", "canonical_experience"],
     pluginFriendly: true,
@@ -315,6 +326,28 @@ const POLICIES: AcceptancePolicyDescriptor[] = [
         targetKind: "deployment_run",
         standardIDs: ["blank-agent-single-session-success"],
         harnessIDs: ["blank-agent-single-session-case"],
+        successOutcome: "promote",
+        failureOutcome: "hold",
+        required: true,
+      },
+    ],
+  },
+  {
+    id: "blank-agent-single-session-task-gate",
+    title: "Blank-Agent Single-Session Task Gate",
+    summary:
+      "Deployment acceptance requires that a blank agent can complete a task-pack deployment in one uninterrupted session using only the allowed formal expert surface.",
+    status: "experimental",
+    pluginFriendly: true,
+    stages: [
+      {
+        id: "deployment_guard",
+        title: "Task Deployment Guard",
+        summary: "Run the highest-level blank-agent task deployment harness.",
+        level: "deployment",
+        targetKind: "deployment_run",
+        standardIDs: ["blank-agent-single-session-success"],
+        harnessIDs: ["blank-agent-single-session-task"],
         successOutcome: "promote",
         failureOutcome: "hold",
         required: true,

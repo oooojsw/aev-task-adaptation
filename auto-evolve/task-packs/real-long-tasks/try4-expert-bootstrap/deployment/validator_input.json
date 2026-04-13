@@ -1,0 +1,14 @@
+﻿{
+    "targetPaths":  [
+                        {
+                            "label":  "generated report",
+                            "path":  "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\task-packs\\real-long-tasks\\try4-expert-bootstrap\\deployment\\outputs\\generated-report.docx",
+                            "role":  "target-artifact"
+                        },
+                        {
+                            "label":  "generated explanation",
+                            "path":  "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\task-packs\\real-long-tasks\\try4-expert-bootstrap\\deployment\\outputs\\generated-explanation.docx",
+                            "role":  "target-artifact"
+                        }
+                    ]
+}

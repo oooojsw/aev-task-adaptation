@@ -75,7 +75,7 @@ function buildScriptCommand(contract: LongTaskScriptValidatorContract, inputPath
     case "python":
       return ["python", contract.path, ...(contract.inputMode === "none" ? [] : [inputPath]), ...args]
     case "bun":
-      return ["bun", "run", contract.path, ...(contract.inputMode === "none" ? [] : [inputPath]), ...args]
+      return [process.execPath, "run", contract.path, ...(contract.inputMode === "none" ? [] : [inputPath]), ...args]
     case "node":
       return ["node", contract.path, ...(contract.inputMode === "none" ? [] : [inputPath]), ...args]
     case "powershell":

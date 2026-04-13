@@ -1,0 +1,36 @@
+{
+  "title": "campaign-smoke-campaign",
+  "taskFamily": "campaign-smoke",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "./seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ],
+  "lessonsMirror": {
+    "workspaceTargetPath": "./expert-workspace",
+    "relativePath": "lessons/failure_lessons.md",
+    "addManifestPointer": true
+  },
+  "carryover": {
+    "includeFailurePackets": true,
+    "includeRetryLessons": true,
+    "includeLearningUnits": true,
+    "includeRoundSummaries": true,
+    "recentRoundSummaryCount": 3
+  },
+  "roundBudgetOverrides": {
+    "maxAttemptsPerUnit": 2,
+    "maxTotalUnitAttempts": 6,
+    "maxGraphReplans": 1,
+    "maxValidatorCalls": 12,
+    "maxNoProgressCycles": 3,
+    "maxUnitsPerGraph": 5
+  },
+  "notes": "Minimal smoke campaign for validating round-of-runs learning carryover."
+}

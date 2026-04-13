@@ -1,0 +1,133 @@
+{
+  "title": "campaign-smoke",
+  "goal": "Learn a formal expert workspace from the source text so that a blank agent can later create a final text file containing the source token in one uninterrupted session.",
+  "taskFamily": "campaign-smoke",
+  "domainTags": [
+    "campaign-smoke",
+    "text-output",
+    "deployment-acceptance"
+  ],
+  "materials": [
+    {
+      "path": "./materials/source.txt",
+      "label": "source text",
+      "role": "source-artifact"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "./expert-workspace",
+      "label": "learned expert workspace",
+      "role": "experience-workspace"
+    }
+  ],
+  "editablePaths": [
+    "./expert-workspace",
+    "./workspace"
+  ],
+  "initialExpertContextPaths": [
+    "./00-task-entry.md",
+    "./goal/task_goal.txt",
+    "./seed-expert-workspace/manifest.md",
+    "./seed-expert-workspace/change_log.md"
+  ],
+  "validators": [
+    {
+      "id": "workspace-layout",
+      "type": "script",
+      "title": "Learned expert workspace layout is valid",
+      "path": "../../../scripts/validate-experience-workspace-layout.ts",
+      "runner": "bun",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true
+    },
+    {
+      "id": "blank-agent-deployment",
+      "type": "script",
+      "title": "Blank-agent single-session deployment acceptance",
+      "path": "../../../scripts/run-blank-agent-task-deployment-acceptance.ts",
+      "runner": "bun",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "args": [
+        "./auto-evolve/task-packs/real-long-tasks/campaign-smoke/deployment/deployment-spec.json"
+      ]
+    }
+  ],
+  "planning": {
+    "agent": "top"
+  },
+  "execution": {
+    "agent": "top"
+  },
+  "validation": {
+    "agent": "top"
+  },
+  "initialGraph": {
+    "planner_summary": "Read the source material, infer the required output token, then synthesize a formal expert workspace that can pass blank-agent deployment acceptance.",
+    "completion_validator_ids": [
+      "workspace-layout",
+      "blank-agent-deployment"
+    ],
+    "units": [
+      {
+        "id": "inspect-source-material",
+        "title": "Inspect Source Material",
+        "goal": "Extract the source token and the minimal operational rules needed for a blank agent to reproduce it in the final output.",
+        "inputs": [
+          "./materials/source.txt"
+        ],
+        "depends_on": [],
+        "expected_artifacts": [
+          "./workspace"
+        ],
+        "claim": "The source token and task obligations have been extracted.",
+        "check_plan": "Leave concise scratch and learning notes that downstream workspace synthesis can reuse.",
+        "validator_ids": [],
+        "retry_budget": 2
+      },
+      {
+        "id": "synthesize-expert-workspace",
+        "title": "Synthesize Expert Workspace",
+        "goal": "Write a formal expert workspace that teaches a blank agent how to produce the required final output from the source text.",
+        "inputs": [
+          "./workspace",
+          "./seed-expert-workspace/manifest.md",
+          "./seed-expert-workspace/change_log.md"
+        ],
+        "depends_on": [
+          "inspect-source-material"
+        ],
+        "expected_artifacts": [
+          "./expert-workspace/manifest.md",
+          "./expert-workspace/change_log.md"
+        ],
+        "claim": "The learned expert workspace is complete enough to face deployment acceptance.",
+        "check_plan": "Update the tracked expert workspace with stable rules, output contract, and execution checklist guidance.",
+        "validator_ids": [],
+        "retry_budget": 2
+      }
+    ]
+  },
+  "budgets": {
+    "maxAttemptsPerUnit": 2,
+    "maxTotalUnitAttempts": 6,
+    "maxGraphReplans": 1,
+    "maxValidatorCalls": 12,
+    "maxNoProgressCycles": 3,
+    "maxUnitsPerGraph": 5
+  },
+  "shadowMemoryScope": {
+    "namespace": "campaign-smoke",
+    "tags": [
+      "campaign-smoke"
+    ],
+    "retrievalMode": "manual"
+  },
+  "reversePropagation": {
+    "acceptancePolicyID": "long-task-candidate-guard"
+  },
+  "notes": "Smoke task for validating the generic long-task campaign layer."
+}

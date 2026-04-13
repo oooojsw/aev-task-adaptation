@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "profile": "governed",
+  "entry": "manifest.md",
+  "changeLog": "change_log.md",
+  "documents": [
+    {
+      "path": "manifest.md",
+      "role": "entry"
+    },
+    {
+      "path": "change_log.md",
+      "role": "change_log"
+    },
+    {
+      "path": "lessons/failure_lessons.md",
+      "role": "failure_lessons"
+    }
+  ],
+  "assetRoots": [
+    "tools",
+    "skills"
+  ],
+  "runtimeSidecarRoots": [
+    ".opencode"
+  ],
+  "notes": [
+    "This contract defines the formal expert surface without requiring every document to embed inline role markers."
+  ]
+}

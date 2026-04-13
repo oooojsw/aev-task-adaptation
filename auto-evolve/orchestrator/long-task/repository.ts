@@ -106,6 +106,17 @@ function short(text: string, limit = 200) {
   return normalized.slice(0, limit - 3) + "..."
 }
 
+function dedupeByID<T extends { id: string }>(items: T[]) {
+  const seen = new Set<string>()
+  const ordered: T[] = []
+  for (const item of items) {
+    if (seen.has(item.id)) continue
+    seen.add(item.id)
+    ordered.push(item)
+  }
+  return ordered
+}
+
 export function longTaskPaths(cwd: string): LongTaskPaths {
   const root = autoEvolvePath(cwd, "runtime-state", "long-task")
   return {
@@ -431,6 +442,8 @@ export async function buildRetryInputBundle(input: {
     .filter((item) => item.unitID !== unit.id && unit.dependsOn.includes(item.unitID))
     .slice(-(input.maxClaims ?? 4))
   const sameUnitFailures = failures.filter((item) => item.unitID === unit.id)
+  const relatedFailures = failures.filter((item) => item.unitID !== unit.id && relatedUnitIDs.has(item.unitID))
+  const globalRecentFailures = failures.slice(-(input.maxFailurePackets ?? 4))
   const sameUnitRetryLessons = retryLessons
     .filter((item) => item.unitID === unit.id)
     .slice(-(input.maxRetryLessons ?? 4))
@@ -460,19 +473,27 @@ export async function buildRetryInputBundle(input: {
     progressState: progress,
     currentUnit: unit,
     recentClaims: claims.filter((item) => relatedUnitIDs.has(item.unitID)).slice(-(input.maxClaims ?? 3)),
-    recentFailurePackets: sameUnitFailures
-      .concat(failures.filter((item) => item.unitID !== unit.id && relatedUnitIDs.has(item.unitID)))
-      .filter((item) => relatedUnitIDs.has(item.unitID))
-      .slice(-(input.maxFailurePackets ?? 4)),
+    recentFailurePackets: dedupeByID(
+      sameUnitFailures
+        .concat(relatedFailures)
+        .concat(globalRecentFailures)
+        .slice(-Math.max(input.maxFailurePackets ?? 4, 6)),
+    ).slice(-(input.maxFailurePackets ?? 4)),
     sameUnitRecentClaims,
     dependencyClaims,
-    sameUnitLastFailure: sameUnitFailures.at(-1),
+    sameUnitLastFailure: sameUnitFailures.at(-1) ?? failures.at(-1),
     sameUnitRetryLessons,
     relevantScratchUnits: scratch
       .filter((item) => relatedUnitIDs.has(item.unitID) || item.relatedUnitIDs.some((id) => relatedUnitIDs.has(id)))
       .slice(-(input.maxScratchUnits ?? 10)),
     relevantLearningUnits: learning
-      .filter((item) => !item.unitID || relatedUnitIDs.has(item.unitID))
+      .filter(
+        (item) =>
+          !item.unitID ||
+          relatedUnitIDs.has(item.unitID) ||
+          item.scope === "pattern" ||
+          item.scope === "global_candidate",
+      )
       .slice(-(input.maxLearningUnits ?? 8)),
     relevantShadowMemory,
   } satisfies LongTaskRetryInputBundle

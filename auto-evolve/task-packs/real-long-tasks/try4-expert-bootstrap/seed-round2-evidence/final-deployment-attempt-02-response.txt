@@ -1,0 +1,51 @@
+The validators are still failing. Let me produce an updated deployment-acceptance-report.json with current results.
+
+```json
+{
+  "claim_statement": "Workspace deployment validation FAILED - deployment/outputs documents contain U+3010/3011 placeholders (report: 21, explanation: 31) and fail numeric recall thresholds (report: 0.610, explanation: 0.400; both below 0.80).",
+  "claimed_success": false,
+  "blockers": [
+    "Generated documents in deployment/outputs/ contain U+3010/3011 placeholder markers not removed during regeneration",
+    "Numeric recall thresholds not met - report has 61% (needs 80%), explanation has 40% (needs 80%)",
+    "regenerate-word-outputs claimed success but validator finds deployment/outputs documents still have placeholders and low numeric alignment"
+  ],
+  "next_priority_fix": "Return to regenerate-word-outputs to fix the placeholder markers in deployment/outputs documents - the unit incorrectly claimed success when deployment/outputs still contains unreplaced U+3010/3011 placeholders and low numeric recall",
+  "retry_ack": "Previous attempt failed because generated documents contain U+3010/3011 placeholders (19 in report, 29 in explanation) and numeric_recall below threshold (report 61%, explanation 40%). The nextPriorityFix suggested returning to regenerate-word-outputs unit.",
+  "strategy_change": "Confirmed validators still failing after previous attempt. Ran placeholder-free validator directly against deployment/outputs documents - found 21 placeholders in generated-report.docx and 31 in generated-explanation.docx. Ran reference-alignment validator - numeric_recall still below threshold for both. The deployment-acceptance-report.json has been updated with current failing state.",
+  "self_checks_run": [
+    "validate-word-targets-placeholder-free.py - found U+3010/3011 placeholders in both deployment/outputs documents",
+    "validate-word-targets-against-references.py - numeric_recall 0.610 (report) and 0.400 (explanation), both below 0.80 threshold"
+  ],
+  "updated_files": [
+    "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\task-packs\\real-long-tasks\\try4-expert-bootstrap\\deployment\\outputs\\deployment-acceptance-report.json"
+  ],
+  "scratch_units": [
+    {
+      "kind": "obs",
+      "statement": "deployment/outputs documents differ from expert-workspace documents - deployment has 21+31 placeholders while expert-workspace has 1+0",
+      "refs": [
+        "file:///C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/auto-evolve/task-packs/real-long-tasks/try4-expert-bootstrap/deployment/outputs"
+      ],
+      "related_unit_ids": ["final-deployment-validation"]
+    },
+    {
+      "kind": "obs",
+      "statement": "placeholder-free.json config has U+3010/3011 patterns (confirmed via raw bytes: \\xe3\\x80\\x90, \\xe3\\x80\\x91), validator correctly identifies these in generated docs",
+      "refs": [
+        "file:///C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/auto-evolve/task-packs/real-long-tasks/try4-expert-bootstrap/deployment/configs/placeholder-free.json"
+      ],
+      "related_unit_ids": ["final-deployment-validation"]
+    }
+  ],
+  "learning_units": [
+    {
+      "kind": "failure_pattern",
+      "statement": "regenerate-word-outputs claimed success based on self-checks against expert-workspace files, but validators check deployment/outputs which had different (worse) content with many more placeholders",
+      "scope": "local",
+      "strength": 1,
+      "refs": ["validator:placeholder-free", "validator:reference-alignment"],
+      "relations": ["regenerate-word-outputs"]
+    }
+  ]
+}
+```

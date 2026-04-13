@@ -1,0 +1,55 @@
+{
+  "claim_statement": "Workspace deployment validation FAILED - generated documents contain U+3010/3011 placeholder markers (report: 19 instances, explanation: 29 instances) and fail numeric recall thresholds (report: 0.610 < 0.80, explanation: 0.400 < 0.80).",
+  "claimed_success": false,
+  "blockers": [
+    "Generated documents contain placeholder markers (U+3010 〖 and U+3011 〗) that were not removed during regeneration",
+    "Numeric recall thresholds not met - report has 61% (needs 80%), explanation has 40% (needs 80%)"
+  ],
+  "next_priority_fix": "Return to regenerate-word-outputs unit to properly replace all U+3010/3011 placeholders with actual data from workbook",
+  "retry_ack": null,
+  "strategy_change": null,
+  "self_checks_run": [
+    "validate-word-targets-placeholder-free.py - found 19 placeholders in report, 29 in explanation",
+    "validate-word-targets-against-references.py - numeric_recall below threshold for both documents"
+  ],
+  "updated_files": [
+    "C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/auto-evolve/task-packs/real-long-tasks/try4-expert-bootstrap/deployment/outputs/deployment-acceptance-report.json"
+  ],
+  "scratch_units": [
+    {
+      "kind": "obs",
+      "statement": "Placeholder markers in generated docs are U+3010 (〖) and U+3011 (〗) not U+3008/3009 (【/】)",
+      "refs": [
+        "file:///C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/auto-evolve/task-packs/real-long-tasks/try4-expert-bootstrap/deployment/outputs/generated-report.docx"
+      ],
+      "related_unit_ids": [
+        "final-deployment-validation",
+        "regenerate-word-outputs"
+      ]
+    },
+    {
+      "kind": "obs",
+      "statement": "Config file placeholder-free.json expects U+3010/3011 (double-byte bracket characters), not U+3008/3009",
+      "refs": [
+        "file:///C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/auto-evolve/task-packs/real-long-tasks/try4-expert-bootstrap/deployment/configs/placeholder-free.json"
+      ],
+      "related_unit_ids": [
+        "final-deployment-validation"
+      ]
+    }
+  ],
+  "learning_units": [
+    {
+      "kind": "failure_pattern",
+      "statement": "Previous unit claimed placeholder-free but actually left U+3010/3011 bracket markers (different from U+3008/3009)",
+      "scope": "local",
+      "strength": 1,
+      "refs": [
+        "validator:placeholder-free"
+      ],
+      "relations": [
+        "regenerate-word-outputs"
+      ]
+    }
+  ]
+}

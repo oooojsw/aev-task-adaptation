@@ -1,0 +1,36 @@
+{
+  "title": "try4-expert-bootstrap-campaign",
+  "taskFamily": "try4-expert-bootstrap",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 100,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "./seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ],
+  "lessonsMirror": {
+    "workspaceTargetPath": "./expert-workspace",
+    "relativePath": "lessons/failure_lessons.md",
+    "addManifestPointer": true
+  },
+  "carryover": {
+    "includeFailurePackets": true,
+    "includeRetryLessons": true,
+    "includeLearningUnits": true,
+    "includeRoundSummaries": true,
+    "recentRoundSummaryCount": 8
+  },
+  "roundBudgetOverrides": {
+    "maxAttemptsPerUnit": 3,
+    "maxTotalUnitAttempts": 12,
+    "maxGraphReplans": 3,
+    "maxValidatorCalls": 24,
+    "maxNoProgressCycles": 4,
+    "maxUnitsPerGraph": 6
+  },
+  "notes": "Generic graph-iterative campaign for the real try4 expert bootstrap task. Every round must leave durable learning, and cumulative failed-path lessons must remain visible inside the tracked expert workspace."
+}

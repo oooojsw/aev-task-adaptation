@@ -28,6 +28,7 @@ export type AcceptanceHarnessKind =
   | "long_task_validator"
   | "candidate_package_review"
   | "blank_agent_single_session_case"
+  | "blank_agent_single_session_task"
 
 export interface AcceptanceStandardDescriptor {
   id: string
@@ -97,4 +98,3 @@ export interface AcceptanceRecord {
   details?: Record<string, unknown> | null
   notes: string[]
 }
-

@@ -12,6 +12,7 @@ import { validateReversePropagationControlPlane } from "./orchestrator/reverse-p
 import { longTaskPaths, longTaskRunPaths } from "./orchestrator/long-task/repository"
 import { validateLongTaskLayout, validateLongTaskRun } from "./orchestrator/long-task/validate"
 import { runLongTask, resumeLongTask } from "./orchestrator/long-task/runner"
+import { runLongTaskCampaign } from "./orchestrator/long-task-campaign/runner"
 import { resetExperienceWorkspace, restoreLatestArchivedExperienceWorkspace } from "./orchestrator/experience-archive"
 
 function printHelp() {
@@ -36,6 +37,9 @@ function printHelp() {
 
   run-long-task --spec <path>
     Run a validator-driven long-running task. The system bootstraps its own work graph from the task spec and validators.
+
+  run-long-task-campaign --spec <path>
+    Run a multi-round long-task campaign. Each round harvests failure evidence and learning into carryover context for the next round.
 
   resume-long-task --run <run-id>
     Resume an unfinished long-running task from its existing run directory.
@@ -352,6 +356,37 @@ async function commandRunLongTask(args: string[]) {
   console.log(`Summary: ${result.summaryPath}`)
 }
 
+async function commandRunLongTaskCampaign(args: string[]) {
+  await ensureLayout(process.cwd())
+  const config = await loadConfig(process.cwd())
+  await ensureExperimentMonitor(process.cwd(), config).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(`Monitor warning: ${message}`)
+  })
+
+  const specPath = getOption(args, "--spec")
+  if (!specPath) {
+    console.error("Missing required option: --spec <path-to-long-task-campaign-spec>")
+    process.exit(1)
+  }
+
+  const result = await runLongTaskCampaign({
+    cwd: process.cwd(),
+    specPath,
+  })
+  console.log(`Long-task campaign: ${result.campaignID}`)
+  console.log(`Campaign dir: ${result.campaignDir}`)
+  console.log(`Status: ${result.status}`)
+  console.log(`Rounds completed: ${result.roundsCompleted}`)
+  if (result.lastRunID) {
+    console.log(`Last run: ${result.lastRunID}`)
+  }
+  console.log(`Lessons: ${result.lessonsPath}`)
+  if (result.roundSummaryPath) {
+    console.log(`Last round summary: ${result.roundSummaryPath}`)
+  }
+}
+
 async function commandResumeLongTask(args: string[]) {
   await ensureLayout(process.cwd())
   const config = await loadConfig(process.cwd())
@@ -397,6 +432,9 @@ async function main() {
       return
     case "run-long-task":
       await commandRunLongTask(args)
+      return
+    case "run-long-task-campaign":
+      await commandRunLongTaskCampaign(args)
       return
     case "resume-long-task":
       await commandResumeLongTask(args)

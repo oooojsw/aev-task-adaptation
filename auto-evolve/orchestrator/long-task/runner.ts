@@ -148,6 +148,29 @@ function capabilityAttachedFiles(spec: LongTaskSpec) {
   return uniqueStrings((spec.capabilities ?? []).flatMap((capability) => capability.attachedFiles ?? []))
 }
 
+function looksLikePathRef(value: string) {
+  return value.startsWith(".") || value.includes("/") || value.includes("\\") || value.includes(":")
+}
+
+function allowedGraphPathRoots(spec: LongTaskSpec) {
+  return uniqueStrings([
+    ...spec.materials.map((item) => item.path),
+    ...(spec.targetPaths ?? []).map((item) => item.path),
+    ...(spec.editablePaths ?? []),
+    ...(spec.initialExpertContextPaths ?? []),
+    ...capabilityReferencePaths(spec),
+  ]).map((item) => path.resolve(item))
+}
+
+function isWithinAllowedGraphRoots(value: string, roots: string[]) {
+  const resolved = path.resolve(value)
+  return roots.some((root) => resolved === root || resolved.startsWith(root + path.sep))
+}
+
+function sanitizeGraphPathRefs(values: string[], roots: string[]) {
+  return values.filter((value) => !looksLikePathRef(value) || isWithinAllowedGraphRoots(value, roots))
+}
+
 function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
   if (!Array.isArray(raw)) return []
   const maxUnits = spec.budgets?.maxUnitsPerGraph ?? DEFAULT_LONG_TASK_BUDGETS.maxUnitsPerGraph
@@ -155,6 +178,16 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
   const unitScopedValidatorIDs = new Set(
     spec.validators.filter((item) => item.placement !== "completion_only").map((item) => item.id),
   )
+  const allowedRoots = allowedGraphPathRoots(spec)
+  const fallbackInputs = uniqueStrings([
+    ...spec.materials.map((item) => item.path),
+    ...(spec.initialExpertContextPaths ?? []),
+    ...(spec.editablePaths ?? []),
+  ])
+  const fallbackExpectedArtifacts = uniqueStrings([
+    ...(spec.targetPaths ?? []).map((item) => item.path),
+    ...(spec.editablePaths ?? []),
+  ])
   const units: LongTaskWorkUnit[] = []
 
   for (const item of raw) {
@@ -168,6 +201,8 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
       retryBudgetRaw,
       spec.budgets?.maxAttemptsPerUnit ?? DEFAULT_LONG_TASK_BUDGETS.maxAttemptsPerUnit,
     )
+    const sanitizedInputs = sanitizeGraphPathRefs(normalizeStringArray(item.inputs), allowedRoots)
+    const sanitizedExpectedArtifacts = sanitizeGraphPathRefs(normalizeStringArray(item.expected_artifacts), allowedRoots)
     const hasExplicitValidatorIDs = Object.prototype.hasOwnProperty.call(item, "validator_ids")
     const proposedValidatorIDs = normalizeStringArray(item.validator_ids).filter((idValue) =>
       unitScopedValidatorIDs.has(idValue),
@@ -177,9 +212,9 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
         id,
         title: typeof item.title === "string" && item.title.trim() ? item.title.trim() : id,
         goal: typeof item.goal === "string" && item.goal.trim() ? item.goal.trim() : `Advance ${id}`,
-        inputs: normalizeStringArray(item.inputs),
+        inputs: sanitizedInputs.length > 0 ? sanitizedInputs : fallbackInputs,
         dependsOn: normalizeStringArray(item.depends_on).filter((dep) => dep !== id),
-        expectedArtifacts: normalizeStringArray(item.expected_artifacts),
+        expectedArtifacts: sanitizedExpectedArtifacts.length > 0 ? sanitizedExpectedArtifacts : fallbackExpectedArtifacts,
         claim: typeof item.claim === "string" && item.claim.trim() ? item.claim.trim() : `Unit ${id} is complete.`,
         checkPlan:
           typeof item.check_plan === "string" && item.check_plan.trim()

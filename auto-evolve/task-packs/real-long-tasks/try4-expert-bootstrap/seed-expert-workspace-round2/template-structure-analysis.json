@@ -1,0 +1,441 @@
+{
+  "analysis_metadata": {
+    "analyzed_at": "2026-04-13",
+    "templates_analyzed": ["report-template.docx", "explanation-template.docx"],
+    "placeholder_pattern": "【】Chinese brackets",
+    "extraction_method": "XML content search for 【 and 】 characters"
+  },
+  "report_template_structure": {
+    "file": "report-template.docx",
+    "placeholder_count": {
+      "unique": 16,
+      "total_occurrences": 50
+    },
+    "placeholders": [
+      {
+        "name": "【产权持有单位】",
+        "occurrences": 17,
+        "source_data": "Sheet1 Row 4",
+        "data_type": "string",
+        "source_value": "江苏省国信集团有限公司",
+        "resolution": "direct"
+      },
+      {
+        "name": "【评估基准日】",
+        "occurrences": 6,
+        "source_data": "Sheet1 Row 2",
+        "data_type": "date",
+        "source_value": "2026年3月23日",
+        "resolution": "direct"
+      },
+      {
+        "name": "【评估机构】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【报告文号】",
+        "occurrences": 3,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【评估结果金额】",
+        "occurrences": 1,
+        "source_data": "Sheet1 Row 12",
+        "data_type": "currency",
+        "source_value": "含税净值",
+        "resolution": "direct"
+      },
+      {
+        "name": "【评估目的详细描述】",
+        "occurrences": 2,
+        "source_data": "contextual",
+        "data_type": "string",
+        "resolution": "inferred",
+        "inferred_value": "拟处置设备资产项目"
+      },
+      {
+        "name": "【其他报告使用人说明】",
+        "occurrences": 2,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_or_placeholder"
+      },
+      {
+        "name": "【宗旨和业务范围】",
+        "occurrences": 7,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【开办资金】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【法定代表人】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【注册地址】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【统一社会信用代码】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【报告日】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "date",
+        "resolution": "external_or_default_today"
+      },
+      {
+        "name": "【报告日期中文大写】",
+        "occurrences": 1,
+        "source_data": "derived from 报告日",
+        "data_type": "date_chinese",
+        "resolution": "derived"
+      },
+      {
+        "name": "【评估结论有效期截止日】",
+        "occurrences": 2,
+        "source_data": null,
+        "data_type": "date",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【举办单位】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      }
+    ],
+    "sections_identified": [
+      "目录",
+      "一、委托人、产权持有人及委托以外的其他报告使用人概况",
+      "二、评估对象",
+      "三、评估范围",
+      "四、价值类型",
+      "五、评估基准日",
+      "六、评估依据",
+      "七、评估方法",
+      "八、评估过程",
+      "九、评估结论",
+      "十、特别事项说明",
+      "十一、资产评估报告使用说明",
+      "十二、资产评估报告附件"
+    ]
+  },
+  "explanation_template_structure": {
+    "file": "explanation-template.docx",
+    "placeholder_count": {
+      "unique": 26,
+      "total_occurrences": 55
+    },
+    "placeholders": [
+      {
+        "name": "【产权持有单位】",
+        "occurrences": 10,
+        "source_data": "Sheet1 Row 4",
+        "data_type": "string",
+        "resolution": "direct"
+      },
+      {
+        "name": "【评估基准日】",
+        "occurrences": 2,
+        "source_data": "Sheet1 Row 2",
+        "data_type": "date",
+        "resolution": "direct"
+      },
+      {
+        "name": "【评估机构】",
+        "occurrences": 2,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【评估结果金额】",
+        "occurrences": 2,
+        "source_data": "Sheet1 Row 12",
+        "data_type": "currency",
+        "resolution": "direct"
+      },
+      {
+        "name": "【报告文号】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【存放地点】",
+        "occurrences": 2,
+        "source_data": "Sheet2",
+        "data_type": "string",
+        "resolution": "inferred_from_sheet2"
+      },
+      {
+        "name": "【具体存放位置】",
+        "occurrences": 2,
+        "source_data": "Sheet2",
+        "data_type": "string",
+        "resolution": "inferred_from_sheet2"
+      },
+      {
+        "name": "【设备类别一】",
+        "occurrences": 3,
+        "source_data": "Sheet2 设备名称",
+        "data_type": "string",
+        "resolution": "derived_from_unique_types"
+      },
+      {
+        "name": "【设备类别二】",
+        "occurrences": 2,
+        "source_data": "Sheet2 设备名称",
+        "data_type": "string",
+        "resolution": "derived_from_unique_types"
+      },
+      {
+        "name": "【设备类别三】",
+        "occurrences": 2,
+        "source_data": "Sheet2 设备名称",
+        "data_type": "string",
+        "resolution": "derived_from_unique_types"
+      },
+      {
+        "name": "【存放情况】",
+        "occurrences": 2,
+        "source_data": "Sheet2",
+        "data_type": "string",
+        "resolution": "inferred_from_sheet2"
+      },
+      {
+        "name": "【设备状态】",
+        "occurrences": 2,
+        "source_data": "Sheet2 状态",
+        "data_type": "string",
+        "resolution": "direct_from_column"
+      },
+      {
+        "name": "【购置时间范围】",
+        "occurrences": 2,
+        "source_data": "Sheet2 购置日期",
+        "data_type": "date_range",
+        "resolution": "derived_min_max"
+      },
+      {
+        "name": "【是否申报账面价值】",
+        "occurrences": 2,
+        "source_data": "contextual",
+        "data_type": "string",
+        "resolution": "inferred"
+      },
+      {
+        "name": "【典型设备名称】",
+        "occurrences": 2,
+        "source_data": "Sheet2 设备名称",
+        "data_type": "string",
+        "resolution": "derived_first_item"
+      },
+      {
+        "name": "【规格型号】",
+        "occurrences": 2,
+        "source_data": "Sheet2 规格型号",
+        "data_type": "string",
+        "resolution": "direct_from_column"
+      },
+      {
+        "name": "【主材1】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【主材2】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【主材1重量】",
+        "occurrences": 2,
+        "source_data": "Sheet2",
+        "data_type": "number",
+        "resolution": "inferred_from_sheet2"
+      },
+      {
+        "name": "【主材2重量】",
+        "occurrences": 2,
+        "source_data": "Sheet2",
+        "data_type": "number",
+        "resolution": "inferred_from_sheet2"
+      },
+      {
+        "name": "【主材1单价】",
+        "occurrences": 2,
+        "source_data": "Sheet2 废碳钢回收价格",
+        "data_type": "currency",
+        "resolution": "direct"
+      },
+      {
+        "name": "【主材2单价】",
+        "occurrences": 2,
+        "source_data": "Sheet2 废碳钢回收价格",
+        "data_type": "currency",
+        "resolution": "direct"
+      },
+      {
+        "name": "【主材构成】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【案例计算公式】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "string",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【案例评估值】",
+        "occurrences": 1,
+        "source_data": null,
+        "data_type": "currency",
+        "resolution": "external_required"
+      },
+      {
+        "name": "【序号】",
+        "occurrences": 1,
+        "source_data": "Sheet2",
+        "data_type": "number",
+        "resolution": "direct_from_column"
+      }
+    ],
+    "sections_identified": "TOC + numbered sections (estimated 12 based on TOC field)"
+  },
+  "common_placeholders": {
+    "shared_across_both_templates": [
+      "【产权持有单位】",
+      "【评估基准日】",
+      "【评估机构】",
+      "【评估结果金额】",
+      "【报告文号】"
+    ],
+    "required_from_source": [
+      "【产权持有单位】",
+      "【评估基准日】",
+      "【评估结果金额】",
+      "【设备状态】",
+      "【规格型号】",
+      "【购置时间范围】",
+      "【存放地点】",
+      "【具体存放位置】",
+      "【设备类别一】",
+      "【设备类别二】",
+      "【设备类别三】"
+    ],
+    "required_external": [
+      "【评估机构】",
+      "【报告文号】",
+      "【宗旨和业务范围】",
+      "【开办资金】",
+      "【法定代表人】",
+      "【注册地址】",
+      "【统一社会信用代码】",
+      "【报告日】",
+      "【报告日期中文大写】",
+      "【评估结论有效期截止日】",
+      "【举办单位】",
+      "【其他报告使用人说明】",
+      "【评估目的详细描述】",
+      "【是否申报账面价值】",
+      "【主材1】",
+      "【主材2】",
+      "【主材构成】",
+      "【案例计算公式】",
+      "【案例评估值】"
+    ]
+  },
+  "template_field_mapping": {
+    "report_template": {
+      "data_source_sheet1": ["产权持有单位", "评估基准日", "评估结果金额"],
+      "data_source_sheet2": [],
+      "external_required": [
+        "评估机构",
+        "报告文号",
+        "宗旨和业务范围",
+        "开办资金",
+        "法定代表人",
+        "注册地址",
+        "统一社会信用代码",
+        "报告日",
+        "报告日期中文大写",
+        "评估结论有效期截止日",
+        "举办单位",
+        "其他报告使用人说明"
+      ],
+      "contextual_inference": ["评估目的详细描述"]
+    },
+    "explanation_template": {
+      "data_source_sheet1": ["产权持有单位", "评估基准日", "评估结果金额"],
+      "data_source_sheet2": [
+        "设备状态",
+        "规格型号",
+        "购置时间范围",
+        "存放地点",
+        "具体存放位置",
+        "设备类别一",
+        "设备类别二",
+        "设备类别三",
+        "典型设备名称"
+      ],
+      "external_required": [
+        "评估机构",
+        "报告文号",
+        "是否申报账面价值",
+        "主材1",
+        "主材2",
+        "主材构成",
+        "案例计算公式",
+        "案例评估值"
+      ]
+    }
+  },
+  "validation_checklist": {
+    "all_placeholders_resolved": "Check no 【】 brackets remain unresolved",
+    "data_consistency": [
+      "评估基准日 must be 2026年3月23日 in both documents",
+      "产权持有单位 must match between documents",
+      "评估结果金额 must match Sheet1 Row 12 value"
+    ],
+    "format_requirements": [
+      "Currency: numeric without comma formatting",
+      "Date: Chinese format '2026年3月23日'",
+      "Organization names: exact match from source"
+    ]
+  }
+}

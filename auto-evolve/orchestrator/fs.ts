@@ -38,7 +38,7 @@ export async function readTextFile(target: string) {
 
 export async function readJsonFile<T = any>(target: string): Promise<T> {
   const raw = await readTextFile(target)
-  return JSON.parse(raw) as T
+  return JSON.parse(raw.replace(/^\uFEFF/, "")) as T
 }
 
 export async function writeTextFile(target: string, content: string) {
