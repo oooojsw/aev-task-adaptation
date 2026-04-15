@@ -68,7 +68,10 @@ async function main() {
     materials: [{ path: sourcePath, label: "smoke source" }],
     targetPaths: [{ path: targetPath, label: "smoke target", role: "target-artifact" }],
     editablePaths: [outputsDir],
-    initialExpertContextPaths: [path.join(workspaceRoot, "manifest.md")],
+    initialExpertContextPaths: [
+      path.join(workspaceRoot, "manifest.md"),
+      path.join(workspaceRoot, "lessons", "failure_lessons.md"),
+    ],
     validators: [
       {
         id: "contains-token",

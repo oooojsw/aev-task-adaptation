@@ -246,7 +246,9 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
 }
 
 function fallbackLongTaskGraph(spec: LongTaskSpec, reason: string) {
-  const requiredValidatorIDs = spec.validators.filter((item) => item.required !== false).map((item) => item.id)
+  const requiredValidatorIDs = spec.disableCompletionValidators
+    ? []
+    : spec.validators.filter((item) => item.required !== false).map((item) => item.id)
   const unitValidatorIDs = spec.validators
     .filter((item) => item.required !== false && item.placement !== "completion_only")
     .map((item) => item.id)
@@ -272,6 +274,7 @@ function fallbackLongTaskGraph(spec: LongTaskSpec, reason: string) {
 
 function normalizePlanningGraph(raw: Record<string, unknown> | undefined, spec: LongTaskSpec, fallbackReason: string) {
   if (!raw) return fallbackLongTaskGraph(spec, fallbackReason)
+  const hasExplicitCompletionValidatorIDs = Object.prototype.hasOwnProperty.call(raw, "completion_validator_ids")
   const completionValidatorIDs = normalizeStringArray(raw.completion_validator_ids)
   const units = normalizeGraphUnits(raw.units, spec)
   if (!units.length) return fallbackLongTaskGraph(spec, fallbackReason)
@@ -279,9 +282,11 @@ function normalizePlanningGraph(raw: Record<string, unknown> | undefined, spec: 
     plannerSummary:
       typeof raw.planner_summary === "string" && raw.planner_summary.trim() ? raw.planner_summary.trim() : undefined,
     completionValidatorIDs:
-      completionValidatorIDs.length > 0
+      hasExplicitCompletionValidatorIDs
         ? completionValidatorIDs
-        : spec.validators.filter((item) => item.required !== false).map((item) => item.id),
+        : spec.disableCompletionValidators
+          ? []
+          : spec.validators.filter((item) => item.required !== false).map((item) => item.id),
     units,
   })
 }
@@ -1087,7 +1092,9 @@ async function runCompletionValidators(input: {
   const completionValidatorIDs =
     input.graph.completionValidatorIDs.length > 0
       ? input.graph.completionValidatorIDs
-      : input.spec.validators.filter((item) => item.required !== false).map((item) => item.id)
+      : input.spec.disableCompletionValidators
+        ? []
+        : input.spec.validators.filter((item) => item.required !== false).map((item) => item.id)
   const validatorContracts = input.spec.validators.filter((validator) => completionValidatorIDs.includes(validator.id))
   const progress = await readLongTaskProgressState(input.run)
   const syntheticUnit: LongTaskWorkUnit = {
@@ -1400,12 +1407,16 @@ async function continueLongTaskLoop(input: {
         })
         const completionPassed = completionResults.every((result) => result.passed)
         if (completionPassed) {
+          const completionSummary =
+            completionResults.length > 0
+              ? "All work units completed and all required completion validators passed."
+              : "All work units completed. Per-round completion validation is disabled or deferred."
           return finalizeLongTaskRun({
             cwd: input.cwd,
             run: input.run,
             spec: input.spec,
             status: "verified_success",
-            summaryText: "All work units completed and all required completion validators passed.",
+            summaryText: completionSummary,
           })
         }
 
@@ -1730,7 +1741,9 @@ export async function runLongTask(input: { cwd: string; specPath: string }) {
   const progress = createInitialLongTaskProgressState(runID)
   const placeholderGraph = createLongTaskWorkGraph({
     plannerSummary: "Long-task run initialized before graph bootstrap.",
-    completionValidatorIDs: spec.validators.filter((item) => item.required !== false).map((item) => item.id),
+    completionValidatorIDs: spec.disableCompletionValidators
+      ? []
+      : spec.validators.filter((item) => item.required !== false).map((item) => item.id),
     units: [],
     revision: 0,
   })

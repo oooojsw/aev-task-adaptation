@@ -7,6 +7,8 @@ import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
 import type { ToolFailure } from "./evaluator"
 import { autoEvolvePath, ensureDirectory, pathExists, writeJsonFile } from "./fs"
 
+const OPENCODE_TASK_TIMEOUT_MS = 30 * 60 * 1000
+
 export interface OpencodeEvent {
   type: string
   timestamp?: number
@@ -299,20 +301,43 @@ async function runOpencodeTaskOnce(
     },
   })
 
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
+  const stdoutPromise = new Response(child.stdout).text()
+  const stderrPromise = new Response(child.stderr).text()
+
+  let timedOut = false
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<number>((resolve) => {
+    timeoutHandle = setTimeout(async () => {
+      timedOut = true
+      try {
+        child.kill()
+      } catch {}
+      try {
+        resolve(await child.exited)
+      } catch {
+        resolve(124)
+      }
+    }, OPENCODE_TASK_TIMEOUT_MS)
+  })
+
+  const exitCode = await Promise.race([child.exited, timeoutPromise])
+  if (timeoutHandle) clearTimeout(timeoutHandle)
+
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise])
 
   const events = parseEvents(stdout)
+  const normalizedStderr = timedOut
+    ? [`OpenCode task timed out after ${OPENCODE_TASK_TIMEOUT_MS} ms and was terminated.`, stderr].filter(Boolean).join(
+        "\n\n",
+      )
+    : stderr
 
   return {
     sessionID: events.find((event) => typeof event.sessionID === "string")?.sessionID,
     exitCode,
     finishReason: undefined,
     stdout,
-    stderr,
+    stderr: normalizedStderr,
     events,
     responseText: collectResponseText(events),
     toolFailures: collectToolFailures(events),

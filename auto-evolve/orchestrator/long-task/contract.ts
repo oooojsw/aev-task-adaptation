@@ -146,12 +146,15 @@ export interface LongTaskSpec {
   editablePaths?: string[]
   initialExpertContextPaths?: string[]
   formalPackageRoots?: string[]
+  campaignPendingPackageRoot?: string
+  campaignExplorationTreePath?: string
   capabilities?: LongTaskCapabilityContract[]
   validators: LongTaskValidatorContract[]
   planning?: ExecutionSpec
   execution?: ExecutionSpec
   validation?: ExecutionSpec
   budgets?: Partial<LongTaskBudgets>
+  disableCompletionValidators?: boolean
   shadowMemoryScope?: LongTaskShadowMemoryScope
   reversePropagation?: LongTaskReversePropagationHints
   initialGraph?: LongTaskInitialGraphDraft

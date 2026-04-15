@@ -1,8 +1,10 @@
 import path from "node:path"
-import { cp, lstat, rm } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
+import { cp, lstat, readdir, rm } from "node:fs/promises"
 import {
   ensureDirectory,
   pathExists,
+  readJsonFile,
   readTextFile,
   writeJsonFile,
   writeTextFile,
@@ -13,6 +15,7 @@ import {
   writeExperienceWorkspaceSnapshot,
 } from "../experience-workspace"
 import { runLongTask } from "../long-task/runner"
+import { runLongTaskValidator } from "../long-task/validators"
 import {
   readOperationalContext,
   resolveExistingLongTaskRun,
@@ -23,14 +26,23 @@ import type {
   LongTaskOperationalContextItem,
   LongTaskRunStatus,
   LongTaskSpec,
+  LongTaskValidatorResult,
+  LongTaskWorkUnit,
 } from "../long-task/contract"
 import {
   DEFAULT_LONG_TASK_CAMPAIGN_CARRYOVER,
+  type LongTaskCampaignExplorationNode,
   type LongTaskCampaignOperationalMemoryRecord,
+  type LongTaskCampaignReviewSuggestion,
   type LongTaskCampaignRoundRecord,
   type LongTaskCampaignSeedTarget,
   type LongTaskCampaignSpec,
   type LongTaskCampaignState,
+  type LongTaskCampaignRunTrace,
+  type LongTaskCampaignRunTraceAttemptRecord,
+  type LongTaskCampaignRunTraceCommandRecord,
+  type LongTaskCampaignWorkerRole,
+  type LongTaskCampaignWorkerSuggestion,
 } from "./contract"
 import {
   appendLinesToAggregate,
@@ -39,13 +51,23 @@ import {
   initializeLongTaskCampaign,
   longTaskCampaignPaths,
   longTaskCampaignRoundPaths,
+  readLongTaskCampaignExplorationTree,
   readLongTaskCampaignOperationalMemory,
   writeLongTaskCampaignLessons,
+  writeLongTaskCampaignExplorationTree,
   writeLongTaskCampaignOperationalMemory,
+  writeLongTaskCampaignReviewerSuggestion,
   writeLongTaskCampaignSeedContext,
   writeLongTaskCampaignState,
+  writeLongTaskCampaignWorkerSuggestion,
 } from "./repository"
 import { loadLongTaskCampaignSpec } from "./spec"
+import { buildCampaignLeadPrompt, buildCampaignReviewerPrompt, buildCampaignWorkerPrompt } from "./prompts"
+import { loadConfig } from "../schema"
+import { resolveModelSelection } from "../model-selection"
+import { runOpencodeTask } from "../opencode"
+import { writeTaskArtifacts } from "../task-artifacts"
+import type { ExecutionSpec, ModelPhase } from "../schema"
 
 function nowISO() {
   return new Date().toISOString()
@@ -195,6 +217,381 @@ function buildCampaignSeedContextMarkdown(input: {
   return lines.join("\n").trimEnd() + "\n"
 }
 
+function extractJsonObject(raw: string) {
+  const trimmed = raw.trim()
+  if (!trimmed) return undefined
+  const attempts = [trimmed]
+  const fencedMatch = trimmed.match(/```json\s*([\s\S]*?)```/i)
+  if (fencedMatch?.[1]) attempts.push(fencedMatch[1].trim())
+  const firstObjectMatch = trimmed.match(/\{[\s\S]*\}/)
+  if (firstObjectMatch?.[0]) attempts.push(firstObjectMatch[0].trim())
+
+  for (const attempt of attempts) {
+    try {
+      return JSON.parse(attempt) as Record<string, unknown>
+    } catch {
+      continue
+    }
+  }
+  return undefined
+}
+
+function normalizeStringArray(input: unknown) {
+  if (!Array.isArray(input)) return []
+  return input.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
+}
+
+function primaryExperienceWorkspaceSeedTarget(seedTargets: LongTaskCampaignSeedTarget[]) {
+  return seedTargets.find((item) => (item.kind ?? "experience_workspace") === "experience_workspace")
+}
+
+function experienceSnapshotFromRoot(root: string) {
+  return experienceWorkspacePathsFromRoot(root, "manifest.md")
+}
+
+async function resetPath(target: string) {
+  await rm(target, { recursive: true, force: true })
+}
+
+async function copyExperienceWorkspaceRoot(sourceRoot: string, targetRoot: string) {
+  const snapshot = await readExperienceWorkspace(experienceSnapshotFromRoot(sourceRoot))
+  await resetPath(targetRoot)
+  await writeExperienceWorkspaceSnapshot(targetRoot, snapshot)
+}
+
+async function copyPathIntoTarget(sourcePath: string, targetPath: string) {
+  await resetPath(targetPath)
+  if (!(await pathExists(sourcePath))) {
+    await ensureDirectory(targetPath)
+    return
+  }
+  const stats = await lstat(sourcePath)
+  if (stats.isDirectory()) {
+    await cp(sourcePath, targetPath, { recursive: true, force: true })
+    return
+  }
+  await ensureParentDirForPath(targetPath)
+  await cp(sourcePath, targetPath, { force: true })
+}
+
+async function seedCampaignCurrentPendingPackage(input: {
+  currentRoot: string
+  seedTarget: LongTaskCampaignSeedTarget | undefined
+}) {
+  if (!input.seedTarget) return
+  if (await pathExists(path.join(input.currentRoot, "manifest.md"))) return
+  if ((input.seedTarget.kind ?? "experience_workspace") === "experience_workspace") {
+    await copyExperienceWorkspaceRoot(input.seedTarget.seedPath, input.currentRoot)
+    return
+  }
+  await copyPathIntoTarget(input.seedTarget.seedPath, input.currentRoot)
+}
+
+function normalizeContextPathForFilter(inputPath: string) {
+  return inputPath.replace(/\\/g, "/").toLowerCase()
+}
+
+function isStaticBaseContextPath(inputPath: string) {
+  const normalized = normalizeContextPathForFilter(inputPath)
+  return (
+    !normalized.includes("/seed-expert-workspace/") &&
+    !normalized.includes("/seed-campaign-evidence/") &&
+    !normalized.includes("/runtime-state/long-task-campaigns/") &&
+    !normalized.endsWith("aggregated-failure-packets.jsonl") &&
+    !normalized.endsWith("aggregated-retry-lessons.jsonl") &&
+    !normalized.endsWith("aggregated-learning-units.jsonl") &&
+    !normalized.endsWith("campaign-failure-lessons.md") &&
+    !normalized.endsWith("campaign-seed-context.md") &&
+    !normalized.endsWith("campaign-operational-memory.json")
+  )
+}
+
+function collectStaticBaseContextPaths(baseSpec: LongTaskSpec) {
+  return uniqueStrings((baseSpec.initialExpertContextPaths ?? []).filter(isStaticBaseContextPath))
+}
+
+function defaultCampaignWorkerRoles(): LongTaskCampaignWorkerRole[] {
+  return [
+    "success_synthesizer",
+    "failure_synthesizer",
+    "forbidden_path_synthesizer",
+    "exploration_tree_synthesizer",
+  ]
+}
+
+async function readEventsIfExists(target: string) {
+  if (!(await pathExists(target))) return [] as Array<Record<string, unknown>>
+  return readJsonFile<Array<Record<string, unknown>>>(target)
+}
+
+function extractCommandRecordsFromEvents(input: {
+  events: Array<Record<string, unknown>>
+  eventsPath: string
+  sessionExecutionReportPath?: string
+}): LongTaskCampaignRunTraceCommandRecord[] {
+  const records: LongTaskCampaignRunTraceCommandRecord[] = []
+  for (const event of input.events) {
+    if (event.type !== "tool_use" || typeof event.part !== "object" || !event.part || Array.isArray(event.part)) continue
+    const part = event.part as Record<string, unknown>
+    const tool = typeof part.tool === "string" ? part.tool : "unknown"
+    const state =
+      typeof part.state === "object" && part.state && !Array.isArray(part.state)
+        ? (part.state as Record<string, unknown>)
+        : undefined
+    const metadata =
+      typeof state?.metadata === "object" && state.metadata && !Array.isArray(state.metadata)
+        ? (state.metadata as Record<string, unknown>)
+        : undefined
+    const inputState =
+      typeof state?.input === "object" && state.input && !Array.isArray(state.input)
+        ? (state.input as Record<string, unknown>)
+        : undefined
+    const exit = typeof metadata?.exit === "number" ? metadata.exit : undefined
+    const status = state?.status === "error" || (typeof exit === "number" && exit !== 0) ? "failure" : "success"
+    const command =
+      typeof inputState?.command === "string"
+        ? inputState.command
+        : typeof inputState?.script === "string"
+          ? inputState.script
+          : undefined
+    records.push({
+      id: randomUUID().slice(0, 8),
+      tool,
+      status,
+      title: typeof state?.title === "string" ? state.title : undefined,
+      command,
+      error: typeof state?.error === "string" ? state.error : undefined,
+      outputPreview: typeof state?.output === "string" ? short(state.output, 200) : undefined,
+      timestamp: typeof event.timestamp === "number" ? event.timestamp : undefined,
+      refs: uniqueStrings(
+        [input.eventsPath, input.sessionExecutionReportPath].filter((item): item is string => Boolean(item)),
+      ),
+    })
+  }
+  return records
+}
+
+async function buildCampaignRunTrace(input: {
+  campaignID: string
+  roundNumber: number
+  run: ReturnType<typeof longTaskRunPaths>
+  spec: LongTaskSpec
+  finalStatus: LongTaskRunStatus
+  summary: string
+}): Promise<LongTaskCampaignRunTrace> {
+  const [graph, claims, failures, scratchUnits, learningUnits, retryLessons, operationalContext] = await Promise.all([
+    readJsonFile<LongTaskWorkGraph>(input.run.workGraphPath),
+    readJsonLinesIfExists<Record<string, unknown>>(input.run.claimsPath),
+    readJsonLinesIfExists<Record<string, unknown>>(input.run.failurePacketsPath),
+    readJsonLinesIfExists<Record<string, unknown>>(input.run.scratchUnitsPath),
+    readJsonLinesIfExists<Record<string, unknown>>(input.run.learningUnitsPath),
+    readJsonLinesIfExists<Record<string, unknown>>(input.run.retryLessonsPath),
+    readOperationalContext(input.run),
+  ])
+
+  const attempts: LongTaskCampaignRunTraceAttemptRecord[] = []
+  for (const unit of graph.units) {
+    const unitRoot = path.join(input.run.unitsRoot, unit.id)
+    if (!(await pathExists(unitRoot))) continue
+    const attemptEntries = await readdir(unitRoot, { withFileTypes: true })
+    for (const entry of attemptEntries) {
+      if (!entry.isDirectory()) continue
+      const attemptMatch = entry.name.match(/^attempt-(\d+)$/)
+      if (!attemptMatch) continue
+      const attemptNumber = Number(attemptMatch[1])
+      const attemptRoot = path.join(unitRoot, entry.name)
+      const executeDir = path.join(attemptRoot, "execute")
+      const retryInputBundlePath = path.join(attemptRoot, "retry_input_bundle.json")
+      const eventsPath = path.join(executeDir, "events.json")
+      const sessionExecutionReportPath = path.join(executeDir, "session_execution_report.md")
+      const responsePath = path.join(executeDir, "response.txt")
+      const toolFailuresPath = path.join(executeDir, "tool_failures.json")
+      const runJsonPath = path.join(executeDir, "run.json")
+      const events = await readEventsIfExists(eventsPath)
+      const runJson = (await pathExists(runJsonPath))
+        ? await readJsonFile<Record<string, unknown>>(runJsonPath)
+        : undefined
+      const claim = claims.find((item) => item.unitID === unit.id && item.attempt === attemptNumber)
+      const failure = failures.find((item) => item.unitID === unit.id && item.attempt === attemptNumber)
+      attempts.push({
+        unitID: unit.id,
+        unitTitle: unit.title,
+        attempt: attemptNumber,
+        executeDir,
+        retryInputBundlePath: (await pathExists(retryInputBundlePath)) ? retryInputBundlePath : undefined,
+        responsePath: (await pathExists(responsePath)) ? responsePath : undefined,
+        sessionExecutionReportPath: (await pathExists(sessionExecutionReportPath))
+          ? sessionExecutionReportPath
+          : undefined,
+        eventsPath: (await pathExists(eventsPath)) ? eventsPath : undefined,
+        toolFailuresPath: (await pathExists(toolFailuresPath)) ? toolFailuresPath : undefined,
+        claimID: typeof claim?.id === "string" ? claim.id : undefined,
+        claimRefs: Array.isArray(claim?.evidenceRefs)
+          ? claim.evidenceRefs.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          : [],
+        failurePacketID: typeof failure?.id === "string" ? failure.id : undefined,
+        failurePacketRefs: Array.isArray(failure?.evidenceRefs)
+          ? failure.evidenceRefs.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          : [],
+        exitCode: typeof runJson?.exitCode === "number" ? runJson.exitCode : undefined,
+        claimStatement: typeof claim?.statement === "string" ? claim.statement : undefined,
+        claimedSuccess: typeof claim?.claimedSuccess === "boolean" ? claim.claimedSuccess : undefined,
+        failureSummary: typeof failure?.mismatchSummary === "string" ? failure.mismatchSummary : undefined,
+        scratchUnits: scratchUnits
+          .filter((item) => item.unitID === unit.id && item.attempt === attemptNumber)
+          .map((item) => ({
+            id: typeof item.id === "string" ? item.id : `scratch-${unit.id}-${attemptNumber}`,
+            kind: typeof item.kind === "string" ? item.kind : "obs",
+            statement: typeof item.statement === "string" ? item.statement : "Unstructured scratch note.",
+            refs: Array.isArray(item.refs)
+              ? item.refs.filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0)
+              : [],
+          })),
+        learningUnits: learningUnits
+          .filter((item) => item.unitID === unit.id)
+          .map((item) => ({
+            id: typeof item.id === "string" ? item.id : `learning-${unit.id}`,
+            kind: typeof item.kind === "string" ? item.kind : "obs",
+            scope: typeof item.scope === "string" ? item.scope : "local",
+            strength:
+              item.strength === 2 || item.strength === 3
+                ? item.strength
+                : 1,
+            statement: typeof item.statement === "string" ? item.statement : "Unstructured learning unit.",
+            refs: Array.isArray(item.refs)
+              ? item.refs.filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0)
+              : [],
+          })),
+        retryLessons: retryLessons
+          .filter((item) => item.unitID === unit.id && item.attempt === attemptNumber)
+          .map((item) => ({
+            id: typeof item.id === "string" ? item.id : `retry-${unit.id}-${attemptNumber}`,
+            failureType: typeof item.failureType === "string" ? item.failureType : "validator_failed",
+            failureSignature: typeof item.failureSignature === "string" ? item.failureSignature : "unknown",
+            whatFailed: typeof item.whatFailed === "string" ? item.whatFailed : "Unknown retry lesson.",
+            whyFailed: Array.isArray(item.whyFailed)
+              ? item.whyFailed.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+              : [],
+            doNotRepeat: Array.isArray(item.doNotRepeat)
+              ? item.doNotRepeat.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+              : [],
+            nextAttemptStrategy: Array.isArray(item.nextAttemptStrategy)
+              ? item.nextAttemptStrategy.filter(
+                  (value): value is string => typeof value === "string" && value.trim().length > 0,
+                )
+              : [],
+            evidenceRefs: Array.isArray(item.evidenceRefs)
+              ? item.evidenceRefs.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+              : [],
+          })),
+        operationalContext: operationalContext
+          .filter((item) => item.sourceUnitID === unit.id && item.sourceAttempt === attemptNumber)
+          .map((item) => ({
+            id: item.id,
+            kind: item.kind,
+            status: item.status,
+            statement: item.statement,
+            rationale: item.rationale,
+            refs: item.refs,
+            tags: item.tags,
+          })),
+        commandRecords: extractCommandRecordsFromEvents({
+          events,
+          eventsPath,
+          sessionExecutionReportPath: (await pathExists(sessionExecutionReportPath))
+            ? sessionExecutionReportPath
+            : undefined,
+        }),
+      })
+    }
+  }
+
+  return {
+    campaignID: input.campaignID,
+    roundNumber: input.roundNumber,
+    runID: path.basename(input.run.root),
+    createdAt: nowISO(),
+    finalStatus: input.finalStatus,
+    summary: input.summary,
+    materials: input.spec.materials.map((item) => item.path),
+    capabilityPaths: uniqueStrings((input.spec.capabilities ?? []).flatMap((item) => item.referencePaths ?? [])),
+    exploredRegions: graph.units.map((unit) => `${unit.id}: ${short(unit.goal, 140)}`),
+    keySuccessPaths: claims
+      .filter((item) => item.claimedSuccess === true)
+      .map((item) => short(String(item.statement ?? ""), 220))
+      .slice(-12),
+    keyFailurePaths: failures
+      .map((item) => short(String(item.mismatchSummary ?? ""), 220))
+      .slice(-12),
+    blockers: uniqueStrings(
+      operationalContext
+        .filter((item) => item.kind === "blocking_issue" || item.kind === "failed_path")
+        .map((item) => item.statement),
+    ).slice(0, 24),
+    pendingPackageImpact: uniqueStrings(
+      learningUnits
+        .map((item) => (typeof item.statement === "string" ? item.statement : ""))
+        .filter((item) => item.trim().length > 0),
+    ).slice(0, 24),
+    attempts: attempts.sort((left, right) =>
+      left.unitID === right.unitID ? left.attempt - right.attempt : left.unitID.localeCompare(right.unitID),
+    ),
+  }
+}
+
+function buildCampaignRunTraceMarkdown(trace: LongTaskCampaignRunTrace) {
+  const lines = [
+    `# Run Trace ${trace.runID}`,
+    "",
+    `- round: ${trace.roundNumber}`,
+    `- status: ${trace.finalStatus}`,
+    `- summary: ${trace.summary}`,
+    `- attempts: ${trace.attempts.length}`,
+    "",
+    "## Key Success Paths",
+    "",
+    ...(trace.keySuccessPaths.length ? trace.keySuccessPaths.map((item) => `- ${item}`) : ["- none"]),
+    "",
+    "## Key Failure Paths",
+    "",
+    ...(trace.keyFailurePaths.length ? trace.keyFailurePaths.map((item) => `- ${item}`) : ["- none"]),
+    "",
+    "## Blockers",
+    "",
+    ...(trace.blockers.length ? trace.blockers.map((item) => `- ${item}`) : ["- none"]),
+    "",
+    "## Attempt Timeline",
+    "",
+  ]
+
+  if (!trace.attempts.length) {
+    lines.push("- no attempts recorded", "")
+    return lines.join("\n")
+  }
+
+  for (const attempt of trace.attempts) {
+    lines.push(`### ${attempt.unitID} / attempt ${attempt.attempt}`, "")
+    lines.push(`- title: ${attempt.unitTitle}`)
+    if (typeof attempt.exitCode === "number") lines.push(`- exit_code: ${attempt.exitCode}`)
+    if (attempt.claimStatement) lines.push(`- claim: ${attempt.claimStatement}`)
+    if (attempt.failureSummary) lines.push(`- failure: ${attempt.failureSummary}`)
+    lines.push(`- execute_dir: ${attempt.executeDir}`)
+    lines.push("- command_outcomes:")
+    if (!attempt.commandRecords.length) {
+      lines.push("  - none")
+    } else {
+      for (const record of attempt.commandRecords) {
+        const head = record.command ?? record.title ?? record.tool
+        lines.push(`  - [${record.status}] ${record.tool}: ${short(head, 180)}`)
+        if (record.error) lines.push(`    error: ${short(record.error, 180)}`)
+      }
+    }
+    lines.push("")
+  }
+
+  return lines.join("\n")
+}
+
 function applyBudgetOverrides(base: LongTaskBudgets, overrides?: Partial<LongTaskBudgets>): LongTaskBudgets {
   return {
     ...base,
@@ -253,6 +650,53 @@ function candidateManifestPaths(workspaceRoot: string) {
     manifestPath: path.join(workspaceRoot, "manifest.md"),
     changeLogPath: path.join(workspaceRoot, "change_log.md"),
     lessonsPath: path.join(workspaceRoot, "lessons", "failure_lessons.md"),
+  }
+}
+
+function completionOnlyValidatorContracts(spec: LongTaskSpec) {
+  return spec.validators.filter((validator) => validator.required !== false && validator.placement === "completion_only")
+}
+
+function shouldRunCampaignWorkers(roundNumber: number) {
+  return roundNumber > 1
+}
+
+function shouldRunCampaignReviewer(roundNumber: number) {
+  return roundNumber > 1
+}
+
+function buildCampaignFinalAcceptanceSpec(baseSpec: LongTaskSpec, pendingPackageRoot: string): LongTaskSpec {
+  return {
+    ...baseSpec,
+    disableCompletionValidators: false,
+    initialExpertContextPaths: [pendingPackageRoot],
+    formalPackageRoots: [pendingPackageRoot],
+    targetPaths: [
+      {
+        path: pendingPackageRoot,
+        label: "pending expert package",
+        role: "experience-workspace",
+      },
+    ],
+    editablePaths: [],
+    initialGraph: undefined,
+  }
+}
+
+function syntheticCampaignFinalAcceptanceUnit(spec: LongTaskSpec, pendingPackageRoot: string): LongTaskWorkUnit {
+  return {
+    id: "campaign-final-acceptance",
+    title: "Campaign Final Acceptance",
+    goal: spec.goal,
+    inputs: [pendingPackageRoot, ...spec.materials.map((item) => item.path)],
+    dependsOn: [],
+    expectedArtifacts: [pendingPackageRoot],
+    claim: "The current pending expert package is ready for final blank-agent acceptance.",
+    checkPlan: "Run all required completion validators against the current pending expert package.",
+    validatorIDs: completionOnlyValidatorContracts(spec).map((validator) => validator.id),
+    retryBudget: 1,
+    status: "active",
+    attemptCount: 1,
   }
 }
 
@@ -438,7 +882,9 @@ async function syncLessonsMirror(input: {
 
 async function harvestRound(input: {
   cwd: string
+  campaignID: string
   campaignSpec: LongTaskCampaignSpec
+  baseSpec: LongTaskSpec
   roundNumber: number
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   runResult: Awaited<ReturnType<typeof runLongTask>>
@@ -454,6 +900,14 @@ async function harvestRound(input: {
   const retryLessons = await readJsonLinesIfExists<Record<string, unknown>>(retryLessonsPath)
   const learningUnits = await readJsonLinesIfExists<Record<string, unknown>>(learningUnitsPath)
   const operationalContext = await readOperationalContext(runPaths)
+  const runTrace = await buildCampaignRunTrace({
+    campaignID: input.campaignID,
+    roundNumber: input.roundNumber,
+    run: runPaths,
+    spec: input.baseSpec,
+    finalStatus: input.runResult.status,
+    summary: input.runResult.summary.summary,
+  })
 
   const roundSummary = buildRoundSummaryMarkdown({
     roundNumber: input.roundNumber,
@@ -466,6 +920,8 @@ async function harvestRound(input: {
   })
 
   await writeTextFile(input.roundPaths.roundSummaryPath, roundSummary)
+  await writeJsonFile(input.roundPaths.runTraceJsonPath, runTrace)
+  await writeTextFile(input.roundPaths.runTraceMarkdownPath, buildCampaignRunTraceMarkdown(runTrace))
 
   const snapshotPaths: LongTaskCampaignRoundRecord["snapshotPaths"] = []
   for (const seed of input.seedTargets) {
@@ -486,6 +942,7 @@ async function harvestRound(input: {
       roundNumber: input.roundNumber,
       roundID: roundID(input.roundNumber),
       roundSpecPath: input.roundPaths.generatedSpecPath,
+      runTracePath: input.roundPaths.runTraceJsonPath,
       sourceRunID: input.runResult.runID,
       sourceRunDir: input.runResult.runDir,
       finalStatus: input.runResult.status,
@@ -501,6 +958,7 @@ async function harvestRound(input: {
     retryLessons,
     learningUnits,
     operationalContext,
+    runTrace,
   }
 }
 
@@ -509,14 +967,28 @@ function buildGeneratedRoundSpec(input: {
   campaignSpec: LongTaskCampaignSpec
   roundNumber: number
   carryoverContextPaths: string[]
+  pendingPackageRoot: string
+  explorationTreePath: string
 }): LongTaskSpec {
+  const staticBaseContext = collectStaticBaseContextPaths(input.baseSpec)
   return {
     ...input.baseSpec,
     title: `${input.campaignSpec.title}-${roundID(input.roundNumber)}`,
+    disableCompletionValidators: true,
     initialExpertContextPaths: uniqueStrings([
+      input.pendingPackageRoot,
+      input.explorationTreePath,
       ...input.carryoverContextPaths,
-      ...(input.baseSpec.initialExpertContextPaths ?? []),
+      ...staticBaseContext,
     ]),
+    initialGraph: input.baseSpec.initialGraph
+      ? {
+          ...input.baseSpec.initialGraph,
+          completion_validator_ids: [],
+        }
+      : undefined,
+    campaignPendingPackageRoot: input.pendingPackageRoot,
+    campaignExplorationTreePath: input.explorationTreePath,
     budgets: applyBudgetOverrides(input.baseSpec.budgets, input.campaignSpec.roundBudgetOverrides),
     notes: [
       input.baseSpec.notes,
@@ -529,11 +1001,116 @@ function buildGeneratedRoundSpec(input: {
   }
 }
 
+async function runCampaignSuggestionTask(input: {
+  cwd: string
+  baseSpec: LongTaskSpec
+  title: string
+  prompt: string
+  selectionPhase: ModelPhase
+  execution?: ExecutionSpec
+  referencePaths: string[]
+  attachedFiles?: string[]
+  permissionReadPaths: string[]
+  permissionEditPaths?: string[]
+  stageDir: string
+  phase: string
+}) {
+  const config = await loadConfig(input.cwd)
+  const selection = resolveModelSelection(config, input.selectionPhase, input.execution)
+  const task = await runOpencodeTask({
+    cwd: input.cwd,
+    config,
+    title: input.title,
+    prompt: input.prompt,
+    referencePaths: uniqueStrings(input.referencePaths),
+    attachedFiles: uniqueStrings(input.attachedFiles ?? []),
+    permissionReadPaths: uniqueStrings(input.permissionReadPaths),
+    permissionEditPaths: uniqueStrings(input.permissionEditPaths ?? []),
+    model: selection.model,
+    agent: selection.agent,
+    variant: selection.variant,
+  })
+  const artifactPaths = await writeTaskArtifacts(input.stageDir, task, {
+    phase: input.phase,
+  })
+  return {
+    task,
+    artifactPaths,
+    parsed: extractJsonObject(task.result.responseText),
+  }
+}
+
+function normalizeWorkerSuggestion(input: {
+  roundNumber: number
+  role: LongTaskCampaignWorkerRole
+  parsed: Record<string, unknown> | undefined
+  responsePath: string
+}): LongTaskCampaignWorkerSuggestion {
+  return {
+    id: `worker-${randomUUID().slice(0, 8)}`,
+    roundNumber: input.roundNumber,
+    role: input.role,
+    createdAt: nowISO(),
+    summary:
+      typeof input.parsed?.summary === "string" && input.parsed.summary.trim().length > 0
+        ? input.parsed.summary.trim()
+        : `${input.role} produced no structured summary.`,
+    findings: normalizeStringArray(input.parsed?.findings),
+    packageAdvice: normalizeStringArray(input.parsed?.package_advice),
+    explorationAdvice: normalizeStringArray(input.parsed?.exploration_advice),
+    refs: uniqueStrings([input.responsePath, ...normalizeStringArray(input.parsed?.refs)]),
+    responsePath: input.responsePath,
+  }
+}
+
+function normalizeReviewerSuggestion(input: {
+  roundNumber: number
+  parsed: Record<string, unknown> | undefined
+  responsePath: string
+}): LongTaskCampaignReviewSuggestion {
+  return {
+    id: `review-${randomUUID().slice(0, 8)}`,
+    roundNumber: input.roundNumber,
+    createdAt: nowISO(),
+    readyForFinalAcceptance:
+      typeof input.parsed?.ready_for_final_acceptance === "boolean"
+        ? input.parsed.ready_for_final_acceptance
+        : false,
+    summary:
+      typeof input.parsed?.summary === "string" && input.parsed.summary.trim().length > 0
+        ? input.parsed.summary.trim()
+        : "Reviewer produced no structured summary.",
+    reasons: normalizeStringArray(input.parsed?.reasons),
+    nextAttentionAreas: normalizeStringArray(input.parsed?.next_attention_areas),
+    refs: uniqueStrings([input.responsePath, ...normalizeStringArray(input.parsed?.refs)]),
+    responsePath: input.responsePath,
+  }
+}
+
 async function prepareCampaignRoundState(input: {
   baseSpec: LongTaskSpec
   campaignSpec: LongTaskCampaignSpec
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
 }) {
   await clearNonSeedEditablePaths(input.baseSpec, input.campaignSpec.seedTargets)
+  const primarySeed = primaryExperienceWorkspaceSeedTarget(input.campaignSpec.seedTargets)
+  for (const seedTarget of input.campaignSpec.seedTargets) {
+    if (seedTarget.resetOnStart === false) continue
+    if (
+      primarySeed &&
+      seedTarget.targetPath === primarySeed.targetPath &&
+      (seedTarget.kind ?? "experience_workspace") === "experience_workspace" &&
+      (await pathExists(path.join(input.campaignPaths.pendingCurrentRoot, "manifest.md")))
+    ) {
+      await copyExperienceWorkspaceRoot(input.campaignPaths.pendingCurrentRoot, seedTarget.targetPath)
+      continue
+    }
+    if ((seedTarget.kind ?? "experience_workspace") === "experience_workspace") {
+      await copyExperienceWorkspaceRoot(seedTarget.seedPath, seedTarget.targetPath)
+      continue
+    }
+    await copyPathIntoTarget(seedTarget.seedPath, seedTarget.targetPath)
+  }
 }
 
 async function collectCarryoverContext(input: {
@@ -542,45 +1119,340 @@ async function collectCarryoverContext(input: {
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   history: LongTaskCampaignRoundRecord[]
 }) {
-  const carryover = {
-    ...DEFAULT_LONG_TASK_CAMPAIGN_CARRYOVER,
-    ...(input.campaignSpec.carryover ?? {}),
-  }
   const paths: string[] = []
 
-  const latestRound = input.history[input.history.length - 1]
-  if (latestRound) {
-    paths.push(...latestRound.snapshotPaths.map((item) => item.snapshotPath))
+  if (await pathExists(input.campaignPaths.pendingCurrentRoot)) {
+    paths.push(input.campaignPaths.pendingCurrentRoot)
   }
-
-  if (
-    carryover.includeCampaignOperationalMemory &&
-    (await pathExists(input.campaignPaths.campaignOperationalMemoryPath))
-  ) {
-    paths.push(input.campaignPaths.campaignOperationalMemoryPath)
-  }
-  if (carryover.includeCampaignSeedContext && (await pathExists(input.campaignPaths.campaignSeedContextPath))) {
-    paths.push(input.campaignPaths.campaignSeedContextPath)
-  }
-
-  if (carryover.includeFailurePackets && (await pathExists(input.campaignPaths.aggregatedFailurePacketsPath))) {
-    paths.push(input.campaignPaths.aggregatedFailurePacketsPath)
-  }
-  if (carryover.includeRetryLessons && (await pathExists(input.campaignPaths.aggregatedRetryLessonsPath))) {
-    paths.push(input.campaignPaths.aggregatedRetryLessonsPath)
-  }
-  if (carryover.includeLearningUnits && (await pathExists(input.campaignPaths.aggregatedLearningUnitsPath))) {
-    paths.push(input.campaignPaths.aggregatedLearningUnitsPath)
-  }
-  if (await pathExists(input.campaignPaths.campaignLessonsPath)) {
-    paths.push(input.campaignPaths.campaignLessonsPath)
-  }
-  if (carryover.includeRoundSummaries) {
-    const recent = input.history.slice(-carryover.recentRoundSummaryCount)
-    paths.push(...recent.map((item) => item.roundSummaryPath))
+  if (await pathExists(input.campaignPaths.explorationTreePath)) {
+    paths.push(input.campaignPaths.explorationTreePath)
   }
 
   return uniqueStrings(paths)
+}
+
+async function readLatestReviewerSuggestionPath(campaignPaths: ReturnType<typeof longTaskCampaignPaths>) {
+  if (!(await pathExists(campaignPaths.campaignReviewSuggestionsPath))) return undefined
+  const raw = (await readTextFile(campaignPaths.campaignReviewSuggestionsPath)).trim()
+  if (!raw) return undefined
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  if (!lines.length) return undefined
+  try {
+    const last = JSON.parse(lines[lines.length - 1]) as LongTaskCampaignReviewSuggestion
+    return last.responsePath
+  } catch {
+    return undefined
+  }
+}
+
+async function seedRoundPendingPackageFromCurrent(input: {
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+  roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
+}) {
+  if (!(await pathExists(path.join(input.campaignPaths.pendingCurrentRoot, "manifest.md")))) {
+    await ensureDirectory(input.roundPaths.pendingPackageSnapshotRoot)
+    return
+  }
+  await copyExperienceWorkspaceRoot(input.campaignPaths.pendingCurrentRoot, input.roundPaths.pendingPackageSnapshotRoot)
+}
+
+async function seedRoundExplorationTreeFromCurrent(input: {
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+  roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
+}) {
+  const currentTree = await readLongTaskCampaignExplorationTree(input.campaignPaths)
+  await writeJsonFile(input.roundPaths.explorationTreeDraftPath, currentTree)
+}
+
+async function runCampaignWorkers(input: {
+  cwd: string
+  campaignID: string
+  campaignSpec: LongTaskCampaignSpec
+  baseSpec: LongTaskSpec
+  roundNumber: number
+  runTracePath: string
+  pendingPackageRoot: string
+  explorationTreePath: string
+  reviewerSuggestionPath?: string
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+  roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
+}) {
+  const workerRoles = defaultCampaignWorkerRoles()
+  const suggestions = await Promise.all(
+    workerRoles.map(async (role) => {
+      const stageDir = path.join(input.roundPaths.workersRoot, role)
+      const prompt = buildCampaignWorkerPrompt({
+        title: input.campaignSpec.title,
+      roundNumber: input.roundNumber,
+      role,
+      runTracePath: input.runTracePath,
+      pendingPackageRoot: input.pendingPackageRoot,
+      explorationTreePath: input.explorationTreePath,
+      reviewerSuggestionPath: input.reviewerSuggestionPath,
+      campaignMemoryPaths: [
+        input.campaignPaths.campaignOperationalMemoryPath,
+        input.campaignPaths.campaignSeedContextPath,
+        input.campaignPaths.campaignLessonsPath,
+      ].filter((item) => item),
+    })
+      const result = await runCampaignSuggestionTask({
+        cwd: input.cwd,
+        baseSpec: input.baseSpec,
+        title: `Campaign Worker ${role} ${roundID(input.roundNumber)}`,
+        prompt,
+        selectionPhase: "planning",
+        execution: input.baseSpec.planning ?? input.baseSpec.execution,
+        referencePaths: [
+          input.runTracePath,
+          input.pendingPackageRoot,
+        input.explorationTreePath,
+        input.campaignPaths.campaignOperationalMemoryPath,
+        input.campaignPaths.campaignSeedContextPath,
+        input.campaignPaths.campaignLessonsPath,
+        ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
+      ],
+      permissionReadPaths: [
+        input.runTracePath,
+        input.pendingPackageRoot,
+        input.explorationTreePath,
+        input.campaignPaths.campaignOperationalMemoryPath,
+        input.campaignPaths.campaignSeedContextPath,
+        input.campaignPaths.campaignLessonsPath,
+        ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
+      ],
+        stageDir,
+        phase: "campaign_worker",
+      })
+      const suggestion = normalizeWorkerSuggestion({
+        roundNumber: input.roundNumber,
+        role,
+        parsed: result.parsed,
+        responsePath: result.artifactPaths.responsePath,
+      })
+      await writeLongTaskCampaignWorkerSuggestion(path.join(stageDir, "suggestion.json"), suggestion)
+      return suggestion
+    }),
+  )
+
+  return suggestions
+}
+
+async function runCampaignLead(input: {
+  cwd: string
+  campaignSpec: LongTaskCampaignSpec
+  baseSpec: LongTaskSpec
+  roundNumber: number
+  runTracePath: string
+  previousPendingPackageRoot: string
+  nextPendingPackageRoot: string
+  previousExplorationTreePath: string
+  nextExplorationTreePath: string
+  workerSuggestions: LongTaskCampaignWorkerSuggestion[]
+  reviewerSuggestionPath?: string
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+  roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
+}) {
+  const workerSuggestionPaths = input.workerSuggestions
+    .map((item) => item.responsePath)
+    .filter((item): item is string => Boolean(item))
+  const stageDir = path.join(input.roundPaths.root, "campaign-lead")
+  const prompt = buildCampaignLeadPrompt({
+    title: input.campaignSpec.title,
+    roundNumber: input.roundNumber,
+    runTracePath: input.runTracePath,
+    previousPendingPackageRoot: input.previousPendingPackageRoot,
+    nextPendingPackageRoot: input.nextPendingPackageRoot,
+    previousExplorationTreePath: input.previousExplorationTreePath,
+    nextExplorationTreePath: input.nextExplorationTreePath,
+    workerSuggestionPaths,
+    reviewerSuggestionPath: input.reviewerSuggestionPath,
+    campaignMemoryPaths: [
+      input.campaignPaths.campaignOperationalMemoryPath,
+      input.campaignPaths.campaignSeedContextPath,
+      input.campaignPaths.campaignLessonsPath,
+    ],
+  })
+  return runCampaignSuggestionTask({
+    cwd: input.cwd,
+    baseSpec: input.baseSpec,
+    title: `Campaign Lead ${roundID(input.roundNumber)}`,
+    prompt,
+    selectionPhase: "solve",
+    execution: input.baseSpec.execution,
+    referencePaths: [
+      input.runTracePath,
+      input.previousPendingPackageRoot,
+      input.previousExplorationTreePath,
+      ...workerSuggestionPaths,
+      input.campaignPaths.campaignOperationalMemoryPath,
+      input.campaignPaths.campaignSeedContextPath,
+      input.campaignPaths.campaignLessonsPath,
+      ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
+    ],
+    permissionReadPaths: [
+      input.runTracePath,
+      input.previousPendingPackageRoot,
+      input.previousExplorationTreePath,
+      ...workerSuggestionPaths,
+      input.campaignPaths.campaignOperationalMemoryPath,
+      input.campaignPaths.campaignSeedContextPath,
+      input.campaignPaths.campaignLessonsPath,
+      ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
+    ],
+    permissionEditPaths: [
+      input.nextPendingPackageRoot,
+      input.nextExplorationTreePath,
+    ],
+    stageDir,
+    phase: "campaign_lead",
+  })
+}
+
+async function runCampaignReviewer(input: {
+  cwd: string
+  campaignSpec: LongTaskCampaignSpec
+  baseSpec: LongTaskSpec
+  roundNumber: number
+  pendingPackageRoot: string
+  runTracePath: string
+  explorationTreePath: string
+  roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
+}) {
+  const stageDir = input.roundPaths.reviewerRoot
+  const prompt = buildCampaignReviewerPrompt({
+    title: input.campaignSpec.title,
+    roundNumber: input.roundNumber,
+    pendingPackageRoot: input.pendingPackageRoot,
+    runTracePath: input.runTracePath,
+    explorationTreePath: input.explorationTreePath,
+  })
+  const result = await runCampaignSuggestionTask({
+    cwd: input.cwd,
+    baseSpec: input.baseSpec,
+    title: `Campaign Reviewer ${roundID(input.roundNumber)}`,
+    prompt,
+    selectionPhase: "validation",
+    execution: input.baseSpec.validation ?? input.baseSpec.execution,
+    referencePaths: [input.pendingPackageRoot, input.runTracePath, input.explorationTreePath],
+    permissionReadPaths: [input.pendingPackageRoot, input.runTracePath, input.explorationTreePath],
+    stageDir,
+    phase: "campaign_review",
+  })
+  const suggestion = normalizeReviewerSuggestion({
+    roundNumber: input.roundNumber,
+    parsed: result.parsed,
+    responsePath: result.artifactPaths.responsePath,
+  })
+  await writeJsonFile(input.roundPaths.reviewerSuggestionPath, suggestion)
+  return suggestion
+}
+
+async function runCampaignFinalAcceptance(input: {
+  cwd: string
+  campaignID: string
+  campaignSpec: LongTaskCampaignSpec
+  baseSpec: LongTaskSpec
+  roundNumber: number
+  sourceRunID: string
+  pendingPackageRoot: string
+  runTracePath: string
+  reviewerSuggestionPath: string
+  roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
+}) {
+  const validatorContracts = completionOnlyValidatorContracts(input.baseSpec)
+  if (!validatorContracts.length) {
+    const emptyResult = {
+      campaignID: input.campaignID,
+      roundNumber: input.roundNumber,
+      runID: input.sourceRunID,
+      passed: true,
+      summary: "No completion-only validators were configured for campaign final acceptance.",
+      validatorResults: [] as LongTaskValidatorResult[],
+      createdAt: nowISO(),
+    }
+    await ensureDirectory(input.roundPaths.finalAcceptanceRoot)
+    await writeJsonFile(input.roundPaths.finalAcceptanceResultPath, emptyResult)
+    return emptyResult
+  }
+
+  await ensureDirectory(input.roundPaths.finalAcceptanceRoot)
+  const acceptanceSpec = buildCampaignFinalAcceptanceSpec(input.baseSpec, input.pendingPackageRoot)
+  const syntheticUnit = syntheticCampaignFinalAcceptanceUnit(input.baseSpec, input.pendingPackageRoot)
+  const bundlePath = path.join(input.roundPaths.finalAcceptanceRoot, "final-acceptance-bundle.json")
+  await writeJsonFile(bundlePath, {
+    id: `campaign-final-${randomUUID().slice(0, 8)}`,
+    campaignID: input.campaignID,
+    roundNumber: input.roundNumber,
+    sourceRunID: input.sourceRunID,
+    pendingPackageRoot: input.pendingPackageRoot,
+    runTracePath: input.runTracePath,
+    reviewerSuggestionPath: input.reviewerSuggestionPath,
+    createdAt: nowISO(),
+  })
+
+  const config = await loadConfig(input.cwd)
+  const validatorResults: LongTaskValidatorResult[] = []
+  for (const validator of validatorContracts) {
+    const result = await runLongTaskValidator({
+      cwd: input.cwd,
+      config,
+      contract: validator,
+      spec: acceptanceSpec,
+      unit: syntheticUnit,
+      runID: input.sourceRunID,
+      attempt: 1,
+      validatorDir: path.join(input.roundPaths.finalAcceptanceRoot, validator.id),
+      bundlePath,
+      payload: {
+        runID: input.sourceRunID,
+        unitID: syntheticUnit.id,
+        attempt: 1,
+        goal: acceptanceSpec.goal,
+        claim: syntheticUnit.claim,
+        checkPlan: syntheticUnit.checkPlan,
+        materials: acceptanceSpec.materials,
+        targetPaths: acceptanceSpec.targetPaths ?? [],
+        expectedArtifacts: syntheticUnit.expectedArtifacts,
+        editablePaths: acceptanceSpec.editablePaths ?? [],
+        bundlePath,
+      },
+    })
+    validatorResults.push(result)
+  }
+
+  const passed = validatorResults.every((result) => result.passed)
+  const summary = passed
+    ? "Campaign final acceptance passed."
+    : validatorResults
+        .filter((result) => !result.passed)
+        .map((result) => result.summary)
+        .join(" | ") || "Campaign final acceptance failed."
+
+  const finalAcceptance = {
+    campaignID: input.campaignID,
+    roundNumber: input.roundNumber,
+    runID: input.sourceRunID,
+    passed,
+    summary,
+    validatorResults,
+    bundlePath,
+    createdAt: nowISO(),
+  }
+  await writeJsonFile(input.roundPaths.finalAcceptanceResultPath, finalAcceptance)
+  return finalAcceptance
+}
+
+async function promoteRoundPendingAndTreeToCurrent(input: {
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+  roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
+}) {
+  if (await pathExists(path.join(input.roundPaths.pendingPackageSnapshotRoot, "manifest.md"))) {
+    await copyExperienceWorkspaceRoot(input.roundPaths.pendingPackageSnapshotRoot, input.campaignPaths.pendingCurrentRoot)
+  }
+  const explorationTree = (await pathExists(input.roundPaths.explorationTreeDraftPath))
+    ? await readJsonFile<LongTaskCampaignExplorationNode[]>(input.roundPaths.explorationTreeDraftPath)
+    : []
+  await writeLongTaskCampaignExplorationTree(input.campaignPaths, explorationTree)
 }
 
 export async function runLongTaskCampaign(input: { cwd: string; specPath: string }) {
@@ -604,6 +1476,10 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
   }
 
   await initializeLongTaskCampaign(campaignPaths, initialState)
+  await seedCampaignCurrentPendingPackage({
+    currentRoot: campaignPaths.pendingCurrentRoot,
+    seedTarget: primaryExperienceWorkspaceSeedTarget(campaignSpec.seedTargets),
+  })
 
   const history: LongTaskCampaignRoundRecord[] = []
 
@@ -612,10 +1488,22 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
     await ensureDirectory(roundPaths.root)
     await ensureDirectory(roundPaths.harvestedRoot)
     await ensureDirectory(roundPaths.snapshotsRoot)
+    await ensureDirectory(roundPaths.workersRoot)
+    await ensureDirectory(roundPaths.reviewerRoot)
+    await ensureDirectory(roundPaths.finalAcceptanceRoot)
 
     await prepareCampaignRoundState({
       baseSpec,
       campaignSpec,
+      campaignPaths,
+    })
+    await seedRoundPendingPackageFromCurrent({
+      campaignPaths,
+      roundPaths,
+    })
+    await seedRoundExplorationTreeFromCurrent({
+      campaignPaths,
+      roundPaths,
     })
 
     const carryoverContextPaths = await collectCarryoverContext({
@@ -629,6 +1517,8 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
       campaignSpec,
       roundNumber,
       carryoverContextPaths,
+      pendingPackageRoot: campaignPaths.pendingCurrentRoot,
+      explorationTreePath: campaignPaths.explorationTreePath,
     })
     await writeJsonFile(roundPaths.generatedSpecPath, generatedSpec)
 
@@ -649,7 +1539,9 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
 
     const harvested = await harvestRound({
       cwd: input.cwd,
+      campaignID,
       campaignSpec,
+      baseSpec,
       roundNumber,
       roundPaths,
       runResult,
@@ -699,21 +1591,81 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
         latestRound: roundNumber,
         operationalMemory: promotedOperationalMemory,
         records: history,
-      }),
+        }),
     )
 
-    if (campaignSpec.lessonsMirror) {
-      await syncLessonsMirror({
-        lessonsContent: campaignLessons,
-        workspaceTargetPath: campaignSpec.lessonsMirror.workspaceTargetPath,
-        lessonsRelativePath: campaignSpec.lessonsMirror.relativePath,
-        addManifestPointer: campaignSpec.lessonsMirror.addManifestPointer ?? true,
-        roundRecord: harvested.roundRecord,
-      })
+    const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths)
+    const workerSuggestions = shouldRunCampaignWorkers(roundNumber)
+      ? await runCampaignWorkers({
+          cwd: input.cwd,
+          campaignID,
+          campaignSpec,
+          baseSpec,
+          roundNumber,
+          runTracePath: roundPaths.runTraceJsonPath,
+          pendingPackageRoot: campaignPaths.pendingCurrentRoot,
+          explorationTreePath: campaignPaths.explorationTreePath,
+          reviewerSuggestionPath: latestReviewerSuggestionPath,
+          campaignPaths,
+          roundPaths,
+        })
+      : []
+
+    await runCampaignLead({
+      cwd: input.cwd,
+      campaignSpec,
+      baseSpec,
+      roundNumber,
+      runTracePath: roundPaths.runTraceJsonPath,
+      previousPendingPackageRoot: campaignPaths.pendingCurrentRoot,
+      nextPendingPackageRoot: roundPaths.pendingPackageSnapshotRoot,
+      previousExplorationTreePath: campaignPaths.explorationTreePath,
+      nextExplorationTreePath: roundPaths.explorationTreeDraftPath,
+      workerSuggestions,
+      reviewerSuggestionPath: latestReviewerSuggestionPath,
+      campaignPaths,
+      roundPaths,
+    })
+
+    await promoteRoundPendingAndTreeToCurrent({
+      campaignPaths,
+      roundPaths,
+    })
+
+    const reviewerSuggestion = shouldRunCampaignReviewer(roundNumber)
+      ? await runCampaignReviewer({
+          cwd: input.cwd,
+          campaignSpec,
+          baseSpec,
+          roundNumber,
+          pendingPackageRoot: campaignPaths.pendingCurrentRoot,
+          runTracePath: roundPaths.runTraceJsonPath,
+          explorationTreePath: campaignPaths.explorationTreePath,
+          roundPaths,
+        })
+      : undefined
+    if (reviewerSuggestion) {
+      await writeLongTaskCampaignReviewerSuggestion(campaignPaths, reviewerSuggestion)
     }
 
+    const finalAcceptance =
+      reviewerSuggestion?.readyForFinalAcceptance === true
+        ? await runCampaignFinalAcceptance({
+            cwd: input.cwd,
+            campaignID,
+            campaignSpec,
+            baseSpec,
+            roundNumber,
+            sourceRunID: runResult.runID,
+            pendingPackageRoot: campaignPaths.pendingCurrentRoot,
+            runTracePath: roundPaths.runTraceJsonPath,
+            reviewerSuggestionPath: roundPaths.reviewerSuggestionPath,
+            roundPaths,
+          })
+        : undefined
+
     const nextStatus =
-      runResult.status === "verified_success"
+      finalAcceptance?.passed === true
         ? "verified_success"
         : roundNumber >= campaignSpec.maxRounds
           ? "round_limit_reached"
@@ -725,7 +1677,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
       status: nextStatus,
       updatedAt: nowISO(),
       lastRunID: runResult.runID,
-      lastSummary: harvested.roundRecord.summary,
+      lastSummary: finalAcceptance?.summary ?? harvested.roundRecord.summary,
       lastRoundSummaryPath: harvested.roundRecord.roundSummaryPath,
     }
     await writeLongTaskCampaignState(campaignPaths, state)

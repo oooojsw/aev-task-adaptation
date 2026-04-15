@@ -10,6 +10,10 @@ import type {
 import { DEFAULT_LONG_TASK_BUDGETS } from "./contract"
 import { pathExists, readJsonFile } from "../fs"
 
+export interface LoadLongTaskSpecOptions {
+  allowMissingInitialExpertContextPaths?: boolean
+}
+
 function isObject(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input)
 }
@@ -17,6 +21,10 @@ function isObject(input: unknown): input is Record<string, unknown> {
 function normalizeStringArray(input: unknown) {
   if (!Array.isArray(input)) return []
   return input.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+}
+
+function normalizeMaybeString(input: unknown) {
+  return typeof input === "string" && input.trim().length > 0 ? input.trim() : undefined
 }
 
 function normalizePathRef(raw: unknown): LongTaskPathRef | undefined {
@@ -202,7 +210,10 @@ function resolveMaybePath(baseDir: string, input: string) {
   return path.isAbsolute(input) ? input : path.resolve(baseDir, input)
 }
 
-export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTaskSpec; specPath: string }> {
+export async function loadLongTaskSpec(
+  specPath: string,
+  options?: LoadLongTaskSpecOptions,
+): Promise<{ spec: LongTaskSpec; specPath: string; missingInitialExpertContextPaths: string[] }> {
   const resolvedSpecPath = path.resolve(specPath)
   const raw = await readJsonFile<Record<string, unknown>>(resolvedSpecPath)
   const baseDir = path.dirname(resolvedSpecPath)
@@ -220,6 +231,8 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
     resolveMaybePath(baseDir, item),
   )
   const formalPackageRoots = normalizeStringArray(raw.formalPackageRoots).map((item) => resolveMaybePath(baseDir, item))
+  const campaignPendingPackageRoot = normalizeMaybeString(raw.campaignPendingPackageRoot)
+  const campaignExplorationTreePath = normalizeMaybeString(raw.campaignExplorationTreePath)
   const validators = normalizeValidators(raw.validators).map((validator) =>
     validator.type === "script"
       ? {
@@ -238,6 +251,8 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
     referencePaths: (capability.referencePaths ?? []).map((item) => resolveMaybePath(baseDir, item)),
     attachedFiles: (capability.attachedFiles ?? []).map((item) => resolveMaybePath(baseDir, item)),
   }))
+  const disableCompletionValidators =
+    typeof raw.disableCompletionValidators === "boolean" ? raw.disableCompletionValidators : false
 
   const planning = isObject(raw.planning)
     ? {
@@ -275,12 +290,19 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
     editablePaths: editablePaths.length ? editablePaths : targetPaths.map((item) => item.path),
     initialExpertContextPaths,
     formalPackageRoots,
+    campaignPendingPackageRoot: campaignPendingPackageRoot
+      ? resolveMaybePath(baseDir, campaignPendingPackageRoot)
+      : undefined,
+    campaignExplorationTreePath: campaignExplorationTreePath
+      ? resolveMaybePath(baseDir, campaignExplorationTreePath)
+      : undefined,
     capabilities,
     validators,
     planning,
     execution,
     validation,
     budgets: normalizeBudgets(raw.budgets),
+    disableCompletionValidators,
     shadowMemoryScope: isObject(raw.shadowMemoryScope)
       ? {
           namespace:
@@ -330,7 +352,26 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
     throw new Error(`Long-task spec must include at least one validator: ${resolvedSpecPath}`)
   }
 
-  for (const ref of [...spec.materials.map((item) => item.path), ...spec.initialExpertContextPaths]) {
+  const missingInitialExpertContextPaths: string[] = []
+  const verifiedInitialExpertContextPaths: string[] = []
+  for (const ref of spec.initialExpertContextPaths) {
+    if (await pathExists(ref)) {
+      verifiedInitialExpertContextPaths.push(ref)
+      continue
+    }
+    if (options?.allowMissingInitialExpertContextPaths) {
+      missingInitialExpertContextPaths.push(ref)
+      continue
+    }
+    throw new Error(`Long-task spec references a missing input path: ${ref}`)
+  }
+  spec.initialExpertContextPaths = verifiedInitialExpertContextPaths
+
+  for (const ref of [
+    ...spec.materials.map((item) => item.path),
+    ...(spec.campaignPendingPackageRoot ? [spec.campaignPendingPackageRoot] : []),
+    ...(spec.campaignExplorationTreePath ? [spec.campaignExplorationTreePath] : []),
+  ]) {
     if (!(await pathExists(ref))) {
       throw new Error(`Long-task spec references a missing input path: ${ref}`)
     }
@@ -351,5 +392,6 @@ export async function loadLongTaskSpec(specPath: string): Promise<{ spec: LongTa
   return {
     spec,
     specPath: resolvedSpecPath,
+    missingInitialExpertContextPaths,
   }
 }

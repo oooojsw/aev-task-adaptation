@@ -10,6 +10,7 @@ import { loadLongTaskSpec } from "../long-task/spec"
 import { runLongTaskValidator } from "../long-task/validators"
 import type { LongTaskSpec, LongTaskWorkUnit, LongTaskValidatorResult } from "../long-task/contract"
 import { recordAcceptanceResult } from "./run"
+import { experienceWorkspacePathsFromRoot, resolveExperienceWorkspaceLayout } from "../experience-workspace"
 
 function nowISO() {
   return new Date().toISOString()
@@ -100,7 +101,28 @@ async function resetEditablePaths(runDir: string, spec: LongTaskSpec) {
   }
 }
 
-function buildBlankAgentTaskPrompt(input: { spec: LongTaskSpec; formalSurfaceRoots: string[]; bundlePath: string }) {
+async function deriveFormalSurfaceEntryPoints(formalSurfaceRoots: string[]) {
+  const entryPoints: string[] = []
+
+  for (const root of uniqueStrings(formalSurfaceRoots)) {
+    if (!(await pathExists(root))) continue
+    try {
+      const layout = await resolveExperienceWorkspaceLayout(experienceWorkspacePathsFromRoot(root, "manifest.md"))
+      entryPoints.push(layout.entryPath, ...layout.documents.map((item) => item.absolutePath))
+    } catch {
+      continue
+    }
+  }
+
+  return uniqueStrings(entryPoints)
+}
+
+function buildBlankAgentTaskPrompt(input: {
+  spec: LongTaskSpec
+  formalSurfaceRoots: string[]
+  resolvedInitialExpertContextPaths: string[]
+  bundlePath: string
+}) {
   return [
     "You are running a highest-level blank-agent deployment acceptance task.",
     "",
@@ -110,8 +132,8 @@ function buildBlankAgentTaskPrompt(input: { spec: LongTaskSpec; formalSurfaceRoo
     "Formal expert surface roots:",
     bullet(input.formalSurfaceRoots),
     "",
-    "Initial expert context entry points:",
-    bullet(input.spec.initialExpertContextPaths ?? []),
+    "Resolved expert context entry points:",
+    bullet(input.resolvedInitialExpertContextPaths),
     "",
     "Task materials:",
     describePathRefs(input.spec.materials),
@@ -128,11 +150,13 @@ function buildBlankAgentTaskPrompt(input: { spec: LongTaskSpec; formalSurfaceRoo
     "Deployment rules:",
     "- Treat yourself as a blank agent. You may only use the formal expert surface, the provided materials, and the attached capability assets.",
     "- Do not assume access to runtime-state, shadow memory, maintenance requests, candidate packages, previous run artifacts, or hidden system memory.",
-    "- Start from the declared expert entry points and read only what you actually need.",
+    "- Start from the resolved expert entry points and the formal surface contract, then read only what you actually need.",
     "- If the formal expert surface includes failure lessons, exception modules, task routers, or execution checklists, treat them as first-class operational guidance rather than optional notes.",
     "- You may use helper scripts or skill assets only if they are part of the declared formal surface or registered capabilities.",
     "- If a registered external skill or capability asset cannot be loaded directly because of runtime or tooling issues, you may create a task-local fallback only inside the allowed editable surface by copying the minimal permitted instructions/scripts you actually need, or by authoring an equivalent local helper.",
     "- Do not modify any user-wide or hidden global skill stores, runtime registries, or external installations.",
+    "- Document, spreadsheet, and template handling must be headless-only. Do not launch Word, Excel, Explorer, or any other desktop GUI application.",
+    "- Do not use Start-Process, Invoke-Item, file association opens, explorer.exe, WINWORD, EXCEL, or equivalent GUI-launch paths.",
     "- You must finish in one uninterrupted session.",
     "- Leave validator-ready outputs at the declared target paths.",
     "- External acceptance validators exist, but their hidden criteria, reference data, and internal configurations are not available to you during deployment execution.",
@@ -184,7 +208,9 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
   policyID?: string
 }) {
   const config = await loadConfig(input.cwd)
-  const { spec, specPath } = await loadLongTaskSpec(input.deploymentSpecPath)
+  const { spec, specPath, missingInitialExpertContextPaths } = await loadLongTaskSpec(input.deploymentSpecPath, {
+    allowMissingInitialExpertContextPaths: true,
+  })
   const runID = `deployment-${deploymentRunID(spec.title)}`
   const runDir = path.join(input.harnessRoot, runID)
   const bundlePath = path.join(runDir, "deployment_bundle.json")
@@ -193,6 +219,12 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
   const selection = resolveModelSelection(config, "solve", spec.execution)
   const capabilityPaths = capabilityReferencePaths(spec)
   const capabilityFiles = capabilityAttachedFiles(spec)
+
+  const derivedEntryPoints = await deriveFormalSurfaceEntryPoints(input.formalSurfaceRoots)
+  const resolvedInitialExpertContextPaths = uniqueStrings([
+    ...(spec.initialExpertContextPaths ?? []),
+    ...derivedEntryPoints,
+  ])
 
   await ensureDirectory(runDir)
   await ensureDirectory(validatorBundleDir)
@@ -203,6 +235,8 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
     sourceRunID: input.sourceRunID,
     deploymentSpecPath: specPath,
     formalSurfaceRoots: input.formalSurfaceRoots,
+    resolvedInitialExpertContextPaths,
+    missingInitialExpertContextPaths,
     targetKind: input.targetKind,
     targetID: input.targetID,
     createdAt: nowISO(),
@@ -211,6 +245,7 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
   const prompt = buildBlankAgentTaskPrompt({
     spec,
     formalSurfaceRoots: input.formalSurfaceRoots,
+    resolvedInitialExpertContextPaths,
     bundlePath,
   })
 
@@ -221,7 +256,7 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
     prompt,
     referencePaths: uniqueStrings([
       ...input.formalSurfaceRoots,
-      ...(spec.initialExpertContextPaths ?? []),
+      ...resolvedInitialExpertContextPaths,
       ...spec.materials.map((item) => item.path),
       ...(spec.targetPaths ?? []).map((item) => item.path),
       ...capabilityPaths,
@@ -229,7 +264,7 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
     attachedFiles: capabilityFiles,
     permissionReadPaths: uniqueStrings([
       ...input.formalSurfaceRoots,
-      ...(spec.initialExpertContextPaths ?? []),
+      ...resolvedInitialExpertContextPaths,
       ...spec.materials.map((item) => item.path),
       ...(spec.targetPaths ?? []).map((item) => item.path),
       ...capabilityPaths,
@@ -315,6 +350,8 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
     ]),
     details: {
       deploymentSpecPath: specPath,
+      resolvedInitialExpertContextPaths,
+      missingInitialExpertContextPaths,
       validatorCount: validatorResults.length,
       toolFailureCount: task.result.toolFailures.length,
       exitCode: task.result.exitCode,
@@ -338,6 +375,8 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
     targetID: input.targetID,
     deploymentSpecPath: specPath,
     formalSurfaceRoots: input.formalSurfaceRoots,
+    resolvedInitialExpertContextPaths,
+    missingInitialExpertContextPaths,
     passed,
     summary,
     validatorResults,

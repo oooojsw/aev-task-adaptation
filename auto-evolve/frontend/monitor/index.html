@@ -108,8 +108,7 @@
     }
     .controls button:hover,
     .chip:hover,
-    .tile:hover,
-    .tile.selected {
+    .tile:hover {
       transform: translateY(-1px);
       border-color: rgba(104, 167, 255, 0.7);
       box-shadow: 0 0 0 1px rgba(104, 167, 255, 0.12), var(--shadow);
@@ -201,6 +200,7 @@
       align-content: start;
     }
     .tile {
+      position: relative;
       display: grid;
       gap: 9px;
       text-align: left;
@@ -214,6 +214,55 @@
       min-height: 148px;
       align-content: start;
       overflow: hidden;
+      transition:
+        transform 140ms ease,
+        border-color 140ms ease,
+        box-shadow 140ms ease,
+        background 140ms ease;
+    }
+    .tile::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0;
+      background: linear-gradient(180deg, rgba(104, 167, 255, 0.95), rgba(64, 196, 131, 0.65));
+      opacity: 0;
+      transition: width 140ms ease, opacity 140ms ease;
+    }
+    .tile.selected {
+      transform: translateY(-2px);
+      border-color: rgba(104, 167, 255, 0.95);
+      background:
+        radial-gradient(circle at top right, rgba(104, 167, 255, 0.16), transparent 34%),
+        linear-gradient(180deg, rgba(32, 43, 55, 0.98) 0%, rgba(16, 23, 30, 0.98) 100%);
+      box-shadow:
+        0 0 0 1px rgba(104, 167, 255, 0.34),
+        0 16px 38px rgba(0, 0, 0, 0.36),
+        0 0 26px rgba(104, 167, 255, 0.16);
+    }
+    .tile.selected::before {
+      width: 4px;
+      opacity: 1;
+    }
+    .tile.selected .tile-title {
+      color: #f7fbff;
+    }
+    .tile.selected .tile-detail,
+    .tile.selected .tile-footer,
+    .tile.selected .tile-top {
+      color: #b9cce1;
+    }
+    .tile.selected .badge {
+      border-color: rgba(104, 167, 255, 0.34);
+      background: rgba(104, 167, 255, 0.1);
+    }
+    .tile.selected .badge.status-done,
+    .tile.selected .badge.status-running,
+    .tile.selected .badge.status-retry,
+    .tile.selected .badge.status-error,
+    .tile.selected .badge.status-archived,
+    .tile.selected .badge.status-idle {
+      background: rgba(104, 167, 255, 0.14);
     }
     .tile-top {
       display: flex;

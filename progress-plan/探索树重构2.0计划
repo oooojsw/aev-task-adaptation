@@ -1,0 +1,69 @@
+按实际代码，逐条对齐是这样的。
+
+第零轮初始化，代码里就是 runLongTaskCampaign() 开头那一段，不是真正的 run。在 runner.ts (line 1244) 先建 initialState，currentRound=0、status="running"；然后 repository.ts (line 100) 的 initializeLongTaskCampaign() 会写出：
+
+campaign.json
+空的 campaign-operational-memory.json
+初始 campaign-seed-context.md
+空的 exploration-tree.json
+空的 review-suggestions.jsonl
+接着 runner.ts (line 274) 的 seedCampaignCurrentPendingPackage() 把 seed expert workspace 复制到 pending-expert-package/current。所以第零轮的本质是：搭基础状态，不跑 unit，不生成 run trace，不跑 worker/reviewer。
+
+“第一轮结束后就跑全套 worker + lead + reviewer”说的是第一轮，不是第零轮。代码路径是：
+
+先 runLongTask()，见 runner.ts (line 1311)
+再 harvestRound()，见 runner.ts (line 1316)
+然后立刻 runCampaignWorkers()、runCampaignLead()、runCampaignReviewer()，见 runner.ts (line 1374)、runner.ts (line 1388)、runner.ts (line 1409)。这点和我们后面讨论的不一致，你的判断是对的。
+“下一轮实际编辑的工作区，是从当前 pending package 恢复出来的”意思是：**上一轮被 campaign lead 写进 pending package current 的文件内容，会成为下一轮 live expert workspace 的起点。**逻辑在 runner.ts (line 965) 的 prepareCampaignRoundState()。这不是 git 历史，但历史版本不会丢，因为每轮还有：
+
+rounds/round-xxx/pending-package
+rounds/round-xxx/run-trace.json
+原始 long-task run 目录
+所以：内容会延续，历史靠每轮快照保留。
+
+对，runCampaignWorkers() 现在每轮都跑，而且固定 4 个角色。定义在 runner.ts (line 260) 的 defaultCampaignWorkerRoles()。这块按我们讨论，第一轮不该跑全套。更合理的是：
+
+第 1 轮只做 run trace + campaign lead + exploration tree 更新
+从第 2 轮起，或达到证据阈值后，再启用 failure_synthesizer / forbidden_path_synthesizer / reviewer
+对，这个现在就是错的，而且影响很大。因为 buildGeneratedRoundSpec() (line 844) 是直接把 baseSpec 整体带进每轮 spec，所以每轮 runLongTask() 都会继承 completion validators，等于每轮都在做最终验收。这个应该改成：
+
+常规轮次生成的 round spec 去掉最终硬验收
+只保留 run 内必要检查
+最终 blank-agent acceptance 由 campaign 在“ready”时单独触发
+这点必须改，不然第一轮就会被最终门提前打断。
+
+不会复制所有原始材料，代码只复制 campaignSpec.seedTargets 指定的路径。逻辑在 runner.ts (line 965) 和 runner.ts (line 805)。所以通常复制的是：
+
+专家经验工作区
+某些工作目录或输出目录
+不是把所有材料全量复制。会不会“文件爆炸”，取决于 seedTargets 里放了多大的目录。当前机制的膨胀主要来自每轮快照，不是每轮把整个任务包都复制一遍。
+
+run trace 需要改，而且我建议改成“JSON 里做完整账本，Markdown 只是可选摘要”。当前结构在 contract.ts (line 82) 开始定义，现有字段还不够。最合理的改法是：
+
+给每个 attempt 增加更多原始证据路径：
+retry_input_bundle_path
+claim_path
+failure_packet_path
+tool_failures_path
+response_path
+events_path
+session_execution_report_path
+把 unit-local memory 相关材料显式挂进去，而不是只留摘要
+commandRecords 保留现在的成功/失败明细
+再加一个 localFindings 或 attemptFindings，把本 attempt 的关键观察、脚本入口可用性、自检结论结构化收进去
+我不建议把所有文件全文都 inline 到 run trace 里，那会太大。更稳的是：trace 自己成为完整索引 + 关键结构化提取，这样既不丢信息，也不会爆体积。
+
+这个我同意你。reviewer 现在实际读取：
+
+pending package
+run trace
+exploration tree
+见 runner.ts (line 1183)。只要它输出仍然是“针对待转正专家经验区的建议”，而不是越权去指导内部别的东西，这个读取面可以放宽，不一定非要收窄。
+
+最短结论：
+
+第零轮有，而且只是初始化。
+第一轮结束后全套总结这件事现在确实过早。
+每轮都做最终验收这件事现在确实错了，必须改。
+pending package 会作为下一轮起点延续内容，历史靠快照保留。
+run trace 还需要升级成“完整账本索引”。

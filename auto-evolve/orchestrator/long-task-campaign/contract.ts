@@ -42,6 +42,139 @@ export interface LongTaskCampaignOperationalMemoryRecord extends LongTaskOperati
   sourceRunIDs: string[]
 }
 
+export type LongTaskCampaignWorkerRole =
+  | "success_synthesizer"
+  | "failure_synthesizer"
+  | "forbidden_path_synthesizer"
+  | "exploration_tree_synthesizer"
+  | "custom"
+
+export interface LongTaskCampaignWorkerSuggestion {
+  id: string
+  roundNumber: number
+  role: LongTaskCampaignWorkerRole
+  createdAt: string
+  summary: string
+  findings: string[]
+  packageAdvice: string[]
+  explorationAdvice: string[]
+  refs: string[]
+  responsePath?: string
+}
+
+export interface LongTaskCampaignReviewSuggestion {
+  id: string
+  roundNumber: number
+  createdAt: string
+  readyForFinalAcceptance: boolean
+  summary: string
+  reasons: string[]
+  nextAttentionAreas: string[]
+  refs: string[]
+  responsePath?: string
+}
+
+export interface LongTaskCampaignExplorationNode {
+  nodeID: string
+  parentID?: string
+  hypothesis: string
+  status:
+    | "unexplored"
+    | "in_progress"
+    | "weak_fail"
+    | "strong_fail"
+    | "promising"
+    | "validated_success"
+    | "deprecated"
+  confidence: number
+  evidenceRefs: string[]
+  lastUpdatedRound: number
+  notes?: string[]
+}
+
+export interface LongTaskCampaignRunTraceCommandRecord {
+  id: string
+  tool: string
+  status: "success" | "failure"
+  title?: string
+  command?: string
+  error?: string
+  outputPreview?: string
+  timestamp?: number
+  refs: string[]
+}
+
+export interface LongTaskCampaignRunTraceAttemptRecord {
+  unitID: string
+  unitTitle: string
+  attempt: number
+  executeDir: string
+  retryInputBundlePath?: string
+  responsePath?: string
+  sessionExecutionReportPath?: string
+  eventsPath?: string
+  toolFailuresPath?: string
+  claimID?: string
+  claimRefs: string[]
+  failurePacketID?: string
+  failurePacketRefs: string[]
+  exitCode?: number
+  claimStatement?: string
+  claimedSuccess?: boolean
+  failureSummary?: string
+  scratchUnits: Array<{
+    id: string
+    kind: string
+    statement: string
+    refs: string[]
+  }>
+  learningUnits: Array<{
+    id: string
+    kind: string
+    scope: string
+    strength: number
+    statement: string
+    refs: string[]
+  }>
+  retryLessons: Array<{
+    id: string
+    failureType: string
+    failureSignature: string
+    whatFailed: string
+    whyFailed: string[]
+    doNotRepeat: string[]
+    nextAttemptStrategy: string[]
+    evidenceRefs: string[]
+  }>
+  operationalContext: Array<{
+    id: string
+    kind: string
+    status: string
+    statement: string
+    rationale?: string
+    refs: string[]
+    tags: string[]
+  }>
+  commandRecords: LongTaskCampaignRunTraceCommandRecord[]
+}
+
+export interface LongTaskCampaignRunTrace {
+  campaignID: string
+  roundNumber: number
+  runID: string
+  createdAt: string
+  finalStatus: LongTaskRunStatus
+  summary: string
+  materials: string[]
+  capabilityPaths: string[]
+  exploredRegions: string[]
+  keySuccessPaths: string[]
+  keyFailurePaths: string[]
+  blockers: string[]
+  pendingPackageImpact: string[]
+  attempts: LongTaskCampaignRunTraceAttemptRecord[]
+}
+
 export interface LongTaskCampaignSpec {
   title: string
   baseSpecPath: string
@@ -59,6 +192,7 @@ export interface LongTaskCampaignRoundRecord {
   roundNumber: number
   roundID: string
   roundSpecPath: string
+  runTracePath?: string
   sourceRunID: string
   sourceRunDir: string
   finalStatus: LongTaskRunStatus

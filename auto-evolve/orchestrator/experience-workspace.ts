@@ -14,6 +14,9 @@ export type ExperienceWorkspaceRole =
   | "tool_guide"
   | "partition_index"
   | "task_router"
+  | "format_standard"
+  | "data_mapping"
+  | "placeholder_catalog"
   | string
 
 export type ExperienceSurfaceProfile = "operational" | "governed"
@@ -44,6 +47,9 @@ export interface ExperienceSurfaceContract {
   entry?: string
   changeLog?: string
   documents?: ExperienceSurfaceDocumentContract[]
+  formatReference?: string
+  dataMappingReference?: string
+  placeholderReference?: string
   assetRoots?: string[]
   runtimeSidecarRoots?: string[]
   notes?: string[]
@@ -158,10 +164,20 @@ function inferRoleFromPath(relativePath: string): ExperienceWorkspaceRole | unde
       return "exception_module"
     case "lessons/failure_lessons.md":
       return "failure_lessons"
+    case "format_rules.md":
+    case "format_rules_summary.md":
+      return "format_standard"
+    case "data_mapping.md":
+      return "data_mapping"
+    case "placeholders.md":
+      return "placeholder_catalog"
     default:
       break
   }
 
+  if (filename.includes("format-rule") || filename.includes("format_rule")) return "format_standard"
+  if (filename.includes("data-mapping") || filename.includes("data_mapping")) return "data_mapping"
+  if (filename.includes("placeholder")) return "placeholder_catalog"
   if (filename.includes("output-contract") || filename.includes("output_contract")) return "output_contract"
   if (filename.includes("execution-checklist") || filename.includes("execution_checklist")) return "execution_checklist"
   if (filename.includes("failure-lessons") || filename.includes("failure_lessons")) return "failure_lessons"
@@ -191,6 +207,12 @@ function normalizeRole(rawRole: string | undefined, relativePath: string): Exper
       return "execution_checklist"
     case "failure_lessons":
       return "failure_lessons"
+    case "format_standard":
+      return "format_standard"
+    case "data_mapping":
+      return "data_mapping"
+    case "placeholder_catalog":
+      return "placeholder_catalog"
     case "tool_guide":
       return "tool_guide"
     case "partition_index":
@@ -278,7 +300,22 @@ async function readExperienceSurfaceContract(root: string): Promise<{
           notes: Array.isArray(item.notes) ? item.notes.filter((note): note is string => typeof note === "string") : undefined,
         }))
         .filter((item) => item.path.length > 0)
-    : undefined
+    : []
+
+  const appendLegacyReference = (rawPath: unknown, role: ExperienceWorkspaceRole) => {
+    if (typeof rawPath !== "string" || !rawPath.trim()) return
+    const normalized = normalizeRelativeSurfacePath(rawPath)
+    if (documents.some((item) => item.path === normalized)) return
+    documents.push({
+      path: normalized,
+      role,
+      notes: ["Imported from legacy surface-contract reference field for compatibility."],
+    })
+  }
+
+  appendLegacyReference(raw.formatReference, "format_standard")
+  appendLegacyReference(raw.dataMappingReference, "data_mapping")
+  appendLegacyReference(raw.placeholderReference, "placeholder_catalog")
 
   return {
     path: EXPERIENCE_SURFACE_CONTRACT_FILE,
@@ -287,7 +324,19 @@ async function readExperienceSurfaceContract(root: string): Promise<{
       profile: normalizeSurfaceProfile(raw.profile),
       entry: typeof raw.entry === "string" ? normalizeRelativeSurfacePath(raw.entry) : undefined,
       changeLog: typeof raw.changeLog === "string" ? normalizeRelativeSurfacePath(raw.changeLog) : undefined,
-      documents,
+      documents: documents.length ? documents : undefined,
+      formatReference:
+        typeof raw.formatReference === "string" && raw.formatReference.trim()
+          ? normalizeRelativeSurfacePath(raw.formatReference)
+          : undefined,
+      dataMappingReference:
+        typeof raw.dataMappingReference === "string" && raw.dataMappingReference.trim()
+          ? normalizeRelativeSurfacePath(raw.dataMappingReference)
+          : undefined,
+      placeholderReference:
+        typeof raw.placeholderReference === "string" && raw.placeholderReference.trim()
+          ? normalizeRelativeSurfacePath(raw.placeholderReference)
+          : undefined,
       assetRoots: Array.isArray(raw.assetRoots) ? raw.assetRoots.filter((item): item is string => typeof item === "string") : undefined,
       runtimeSidecarRoots: Array.isArray(raw.runtimeSidecarRoots)
         ? raw.runtimeSidecarRoots.filter((item): item is string => typeof item === "string")
