@@ -1,6 +1,6 @@
 import path from "node:path"
 import type { AutoEvolveConfig } from "../schema"
-import { autoEvolvePath, ensureDirectory, readTextFile, writeJsonFile, writeTextFile } from "../fs"
+import { autoEvolvePath, ensureDirectory, readJsonFile, readTextFile, writeJsonFile, writeTextFile } from "../fs"
 import type { AcceptanceRecord } from "./contract"
 
 export interface AcceptanceFrameworkPaths {
@@ -21,6 +21,28 @@ async function appendJsonl<T>(target: string, value: T) {
   await ensureDirectory(path.dirname(target))
   const existing = await readTextFile(target).catch(() => "")
   await writeTextFile(target, existing + JSON.stringify(value) + "\n")
+}
+
+async function readJsonl<T>(target: string): Promise<T[]> {
+  const raw = await readTextFile(target).catch(() => "")
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as T)
+}
+
+function stripRecordTimestamps<T extends { createdAt?: string; updatedAt?: string }>(value: T) {
+  const { createdAt: _createdAt, updatedAt: _updatedAt, ...rest } = value
+  return rest
+}
+
+function sameLogicalRecord<T extends { createdAt?: string; updatedAt?: string }>(left: T, right: T) {
+  return JSON.stringify(stripRecordTimestamps(left)) === JSON.stringify(stripRecordTimestamps(right))
+}
+
+async function findIndexedRecordByID<T extends { id: string }>(target: string, id: string) {
+  return (await readJsonl<T>(target)).find((item) => item.id === id)
 }
 
 export function acceptanceFrameworkPaths(
@@ -63,14 +85,25 @@ export async function writeAcceptanceRecord(
 ) {
   await ensureAcceptanceFrameworkLayout(paths)
   const { mirrorPath, createdAt, updatedAt, ...base } = input
-  const record: AcceptanceRecord = {
+  const provisional: AcceptanceRecord = {
     ...base,
     createdAt: createdAt ?? nowISO(),
     updatedAt: updatedAt ?? nowISO(),
   }
-  const target = recordPath(paths, record)
+  const target = recordPath(paths, provisional)
+  const existing = await readJsonFile<AcceptanceRecord>(target).catch(() => undefined)
+  const draft: AcceptanceRecord = {
+    ...provisional,
+    id: existing?.id ?? provisional.id,
+    createdAt: existing?.createdAt ?? provisional.createdAt,
+    updatedAt: provisional.updatedAt,
+  }
+  const record = existing && sameLogicalRecord(existing, draft) ? { ...draft, updatedAt: existing.updatedAt } : draft
   await writeJsonFile(target, record)
-  await appendJsonl(paths.indexPath, record)
+  const existingIndexed = await findIndexedRecordByID<AcceptanceRecord>(paths.indexPath, record.id)
+  if (!existingIndexed || !sameLogicalRecord(existingIndexed, record)) {
+    await appendJsonl(paths.indexPath, record)
+  }
   if (mirrorPath) {
     await writeJsonFile(mirrorPath, record)
   }
@@ -79,4 +112,3 @@ export async function writeAcceptanceRecord(
     path: target,
   }
 }
-

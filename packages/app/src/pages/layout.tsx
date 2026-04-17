@@ -73,6 +73,7 @@ import {
 } from "./layout/helpers"
 import {
   collectNewSessionDeepLinks,
+  collectOpenSessionDeepLinks,
   collectOpenProjectDeepLinks,
   deepLinkEvent,
   drainPendingDeepLinks,
@@ -1372,6 +1373,12 @@ export default function Layout(props: ParentProps) {
 
     for (const directory of collectOpenProjectDeepLinks(urls)) {
       openProject(directory)
+    }
+
+    for (const link of collectOpenSessionDeepLinks(urls)) {
+      openProject(link.directory, false)
+      const slug = base64Encode(link.directory)
+      navigateWithSidebarReset(`/${slug}/session/${link.sessionID}`)
     }
 
     for (const link of collectNewSessionDeepLinks(urls)) {

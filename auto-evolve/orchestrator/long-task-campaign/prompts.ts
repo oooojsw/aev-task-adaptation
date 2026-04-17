@@ -34,8 +34,9 @@ export function buildCampaignWorkerPrompt(input: {
   runTracePath: string
   pendingPackageRoot: string
   explorationTreePath: string
+  workingMemoryPath: string
+  routingControlPath: string
   reviewerSuggestionPath?: string
-  campaignMemoryPaths: string[]
 }) {
   return [
     "You are a campaign worker agent inside a multi-round long-task learning campaign.",
@@ -50,18 +51,17 @@ export function buildCampaignWorkerPrompt(input: {
       `run_trace: ${input.runTracePath}`,
       `pending_expert_package: ${input.pendingPackageRoot}`,
       `exploration_tree_json: ${input.explorationTreePath}`,
+      `working_memory_json: ${input.workingMemoryPath}`,
+      `routing_control_json: ${input.routingControlPath}`,
       ...(input.reviewerSuggestionPath ? [`latest_reviewer_suggestion: ${input.reviewerSuggestionPath}`] : []),
     ]),
-    "",
-    "Campaign-internal memory inputs:",
-    bullet(input.campaignMemoryPaths),
     "",
     "Worker rules:",
     "- You are not the final campaign author.",
     "- Do not rewrite the pending expert package directly.",
     "- Do not output a generic summary report.",
     "- Focus on structured suggestions that a campaign lead can assemble into the next pending expert package.",
-    "- Ground every important claim in the run trace or the current pending package.",
+    "- Ground every important claim in the run-trace digest, working memory, routing control, or the current pending package.",
     "- Do not leak hidden validator answers or protected reference-only truth.",
     "",
     "Return JSON only, with this shape:",
@@ -84,9 +84,11 @@ export function buildCampaignLeadPrompt(input: {
   nextPendingPackageRoot: string
   previousExplorationTreePath: string
   nextExplorationTreePath: string
+  workingMemoryPath: string
+  previousRoutingControlPath: string
+  nextRoutingControlPath: string
   workerSuggestionPaths: string[]
   reviewerSuggestionPath?: string
-  campaignMemoryPaths: string[]
 }) {
   return [
     "You are the campaign lead for a multi-round long-task learning campaign.",
@@ -99,19 +101,19 @@ export function buildCampaignLeadPrompt(input: {
       `run_trace: ${input.runTracePath}`,
       `previous_pending_expert_package: ${input.previousPendingPackageRoot}`,
       `previous_exploration_tree_json: ${input.previousExplorationTreePath}`,
+      `working_memory_json: ${input.workingMemoryPath}`,
+      `previous_routing_control_json: ${input.previousRoutingControlPath}`,
       ...(input.reviewerSuggestionPath ? [`latest_reviewer_suggestion: ${input.reviewerSuggestionPath}`] : []),
     ]),
     "",
     "Worker suggestions:",
     bullet(input.workerSuggestionPaths),
     "",
-    "Campaign-internal memory inputs:",
-    bullet(input.campaignMemoryPaths),
-    "",
     "Editable targets:",
     bullet([
       `next_pending_expert_package_root: ${input.nextPendingPackageRoot}`,
       `next_exploration_tree_json: ${input.nextExplorationTreePath}`,
+      `next_routing_control_json: ${input.nextRoutingControlPath}`,
     ]),
     "",
     "Campaign lead rules:",
@@ -120,6 +122,11 @@ export function buildCampaignLeadPrompt(input: {
     "- The package must stay structurally compatible with the formal expert workspace surface.",
     "- Include concrete task logic, data linkage logic, numeric calculation guidance, field-location rules, template-filling rules, and explicit failure-path constraints when justified by evidence.",
     "- Update the exploration tree as a map, not as a rigid lawbook.",
+    "- For exploration-tree nodes, you must use only these status values: unexplored, in_progress, weak_fail, strong_fail, promising, validated_success, deprecated.",
+    "- Do not use non-schema statuses such as verified_success, pending, done, success, failed.",
+    "- Status mapping rule: if you would write verified_success, write validated_success instead; if you would write pending, write unexplored or in_progress based on actual progress.",
+    "- Keep routing control small and hard: only write signals that should directly change the next graph.",
+    "- Do not put round-specific command directives into the package if they belong in routing control instead.",
     "- Do not leak hidden validator answers or protected reference-only truth.",
     "",
     "Return JSON only, with this shape:",
@@ -140,6 +147,8 @@ export function buildCampaignReviewerPrompt(input: {
   pendingPackageRoot: string
   runTracePath: string
   explorationTreePath: string
+  workingMemoryPath: string
+  routingControlPath: string
 }) {
   return [
     "You are the round reviewer for a multi-round long-task learning campaign.",
@@ -152,6 +161,8 @@ export function buildCampaignReviewerPrompt(input: {
       `pending_expert_package: ${input.pendingPackageRoot}`,
       `run_trace: ${input.runTracePath}`,
       `exploration_tree_json: ${input.explorationTreePath}`,
+      `working_memory_json: ${input.workingMemoryPath}`,
+      `routing_control_json: ${input.routingControlPath}`,
     ]),
     "",
     "Reviewer rules:",

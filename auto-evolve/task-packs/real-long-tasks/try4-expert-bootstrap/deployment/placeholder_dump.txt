@@ -1,0 +1,37 @@
+REPORT PLACEHOLDERS
+Total: 21
+Unique: 21
+
+1. 中华人民共和国企业国有资产法
+2. 中华人民共和国民法典
+3. 中华人民共和国增值税暂行条例
+4. 中华人民共和国增值税暂行条例实施细则
+5. 国有资产评估管理办法
+6. 国有资产评估管理办法实施细则
+7. 关于改革国有资产评估行政管理方式加强资产评估监督管理工作意见的通知
+8. 国有资产评估管理若干问题的规定
+9. 企业国有资产监督管理暂行条例
+10. 企业国有资产评估管理暂行办法
+11. 企业国有资产交易监督管理办法
+12. 关于加强企业国有资产评估管理工作有关问题的通知
+13. 资产评估</w:t></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:lang w:eastAsia="zh-CN"/></w:rPr><w:t>基本</w:t></w:r><w:r w:rsidRPr="00BD631C"><w:t>准则
+14. 资产评估职业道德</w:t></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:lang w:eastAsia="zh-CN"/></w:rPr><w:t>准则</w:t></w:r><w:r w:rsidRPr="00540133"><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>
+15. 企业国有资产评估报告指南
+16. </w:t></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:lang w:eastAsia="zh-CN"/></w:rPr><w:t>资产</w:t></w:r><w:r w:rsidRPr="00BD631C"><w:t>评估机构业务质量控制指南
+17. 资产</w:t></w:r><w:r w:rsidRPr="00BD631C"><w:t>评估对象法律权属指导意见
+18. 资产评估价值类型指导意见
+19. 资产评估申报表
+20. 关于全面推开营业税改征增值税试点的通知
+21. 关于深化增值税改革有关政策的公告
+
+
+EXPLANATION PLACEHOLDERS
+Total: 6
+Unique: 5
+
+1. 评估说明
+2. 评估说明
+3. 设备清查评估明细表
+4. 中华人民共和国增值税暂行条例
+5. 中华人民共和国增值税暂行条例实施细则
+6. 关于深化增值税改革有关政策的公告

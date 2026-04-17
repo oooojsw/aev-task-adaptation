@@ -104,7 +104,12 @@ def main():
             failures.append(f"{item['label']}:missing")
             details.append(f"{item['label']}: missing target path {target_path}")
             continue
-        text = extract_word_text(target_path)
+        try:
+            text = extract_word_text(target_path)
+        except RuntimeError as exc:
+            failures.append(f"{item['label']}:unreadable")
+            details.append(f"{item['label']}: cannot extract text from target ({exc})")
+            continue
         matched = [pattern.pattern for pattern in patterns if pattern.search(text)]
         if matched:
             failures.append(f"{item['label']}:placeholder")

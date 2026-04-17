@@ -44,12 +44,15 @@ import {
   longTaskPaths,
   readFailurePackets,
   readLongTaskProgressState,
+  readLongTaskFinalizationState,
   readLongTaskSpec,
   readLongTaskWorkGraph,
   resolveExistingLongTaskRun,
+  resolveLongTaskEditablePaths,
   resolveLongTaskFormalPackageRoots,
   upsertOperationalContext,
   writeLongTaskCandidatePackage,
+  writeLongTaskFinalizationState,
   writeLongTaskProgressState,
   writeLongTaskRunSummary,
   writeLongTaskWorkGraph,
@@ -69,16 +72,13 @@ import {
   selectNextLongTaskUnit,
 } from "./work-graph"
 import { loadLongTaskSpec } from "./spec"
-import {
-  buildLongTaskExecutionPrompt,
-  buildLongTaskPlanningPrompt,
-  buildLongTaskReplanPrompt,
-} from "./prompts"
+import { buildLongTaskExecutionPrompt, buildLongTaskPlanningPrompt, buildLongTaskReplanPrompt } from "./prompts"
 import { runLongTaskValidator } from "./validators"
 import { loadConfig } from "../schema"
-import { runOpencodeTask } from "../opencode"
+import { runOpencodeTask, type OpencodeTaskInput } from "../opencode"
 import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
+import { extractJsonObject } from "./json-extract"
 
 function nowISO() {
   return new Date().toISOString()
@@ -90,23 +90,35 @@ function short(text: string, limit = 200) {
   return normalized.slice(0, limit - 3) + "..."
 }
 
-function extractJsonObject(raw: string) {
-  const trimmed = raw.trim()
-  if (!trimmed) return undefined
-  const attempts = [trimmed]
-  const fencedMatch = trimmed.match(/```json\s*([\s\S]*?)```/i)
-  if (fencedMatch?.[1]) attempts.push(fencedMatch[1].trim())
-  const firstObjectMatch = trimmed.match(/\{[\s\S]*\}/)
-  if (firstObjectMatch?.[0]) attempts.push(firstObjectMatch[0].trim())
-
-  for (const attempt of attempts) {
-    try {
-      return JSON.parse(attempt) as Record<string, unknown>
-    } catch {
-      continue
-    }
+function onceActivationCallback(callback?: OpencodeTaskInput["onSpawn"]) {
+  if (!callback) return undefined
+  let activated = false
+  return async () => {
+    if (activated) return
+    activated = true
+    await callback()
   }
-  return undefined
+}
+
+async function updateLongTaskProgressStatus(run: ReturnType<typeof longTaskRunPaths>, status: LongTaskRunStatus) {
+  const [graph, previous] = await Promise.all([readLongTaskWorkGraph(run), readLongTaskProgressState(run)])
+  if (previous.status === status) return
+  if (
+    previous.status === "verified_success" ||
+    previous.status === "exhausted_failure" ||
+    previous.status === "stagnation_failure" ||
+    previous.status === "blocked_failure" ||
+    previous.status === "archived"
+  ) {
+    return
+  }
+  const next = deriveLongTaskProgressState({
+    runID: previous.runID,
+    graph,
+    previous,
+    status,
+  })
+  await writeLongTaskProgressState(run, next)
 }
 
 async function extractJsonObjectFromPath(filePath: string) {
@@ -116,6 +128,30 @@ async function extractJsonObjectFromPath(filePath: string) {
   } catch {
     return undefined
   }
+}
+
+function readStringField(raw: Record<string, unknown> | undefined, ...keys: string[]) {
+  for (const key of keys) {
+    const value = raw?.[key]
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
+  return undefined
+}
+
+function readBooleanField(raw: Record<string, unknown> | undefined, ...keys: string[]) {
+  for (const key of keys) {
+    const value = raw?.[key]
+    if (typeof value === "boolean") return value
+  }
+  return undefined
+}
+
+function readArrayField(raw: Record<string, unknown> | undefined, ...keys: string[]) {
+  for (const key of keys) {
+    const value = raw?.[key]
+    if (Array.isArray(value)) return value
+  }
+  return undefined
 }
 
 function normalizeStringArray(input: unknown) {
@@ -211,7 +247,10 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
       spec.budgets?.maxAttemptsPerUnit ?? DEFAULT_LONG_TASK_BUDGETS.maxAttemptsPerUnit,
     )
     const sanitizedInputs = sanitizeGraphPathRefs(normalizeStringArray(item.inputs), allowedRoots)
-    const sanitizedExpectedArtifacts = sanitizeGraphPathRefs(normalizeStringArray(item.expected_artifacts), allowedRoots)
+    const sanitizedExpectedArtifacts = sanitizeGraphPathRefs(
+      normalizeStringArray(item.expected_artifacts),
+      allowedRoots,
+    )
     const hasExplicitValidatorIDs = Object.prototype.hasOwnProperty.call(item, "validator_ids")
     const proposedValidatorIDs = normalizeStringArray(item.validator_ids).filter((idValue) =>
       unitScopedValidatorIDs.has(idValue),
@@ -223,7 +262,8 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
         goal: typeof item.goal === "string" && item.goal.trim() ? item.goal.trim() : `Advance ${id}`,
         inputs: sanitizedInputs.length > 0 ? sanitizedInputs : fallbackInputs,
         dependsOn: normalizeStringArray(item.depends_on).filter((dep) => dep !== id),
-        expectedArtifacts: sanitizedExpectedArtifacts.length > 0 ? sanitizedExpectedArtifacts : fallbackExpectedArtifacts,
+        expectedArtifacts:
+          sanitizedExpectedArtifacts.length > 0 ? sanitizedExpectedArtifacts : fallbackExpectedArtifacts,
         claim: typeof item.claim === "string" && item.claim.trim() ? item.claim.trim() : `Unit ${id} is complete.`,
         checkPlan:
           typeof item.check_plan === "string" && item.check_plan.trim()
@@ -281,42 +321,35 @@ function normalizePlanningGraph(raw: Record<string, unknown> | undefined, spec: 
   return createLongTaskWorkGraph({
     plannerSummary:
       typeof raw.planner_summary === "string" && raw.planner_summary.trim() ? raw.planner_summary.trim() : undefined,
-    completionValidatorIDs:
-      hasExplicitCompletionValidatorIDs
-        ? completionValidatorIDs
-        : spec.disableCompletionValidators
-          ? []
-          : spec.validators.filter((item) => item.required !== false).map((item) => item.id),
+    completionValidatorIDs: hasExplicitCompletionValidatorIDs
+      ? completionValidatorIDs
+      : spec.disableCompletionValidators
+        ? []
+        : spec.validators.filter((item) => item.required !== false).map((item) => item.id),
     units,
   })
 }
 
 function normalizeExecutionOutput(raw: Record<string, unknown> | undefined, unit: LongTaskWorkUnit) {
   const claimStatement =
-    typeof raw?.claim_statement === "string" && raw.claim_statement.trim()
-      ? raw.claim_statement.trim()
-      : `Attempted ${unit.id}, but did not return a structured claim.`
-  const claimedSuccess = typeof raw?.claimed_success === "boolean" ? raw.claimed_success : false
-  const blockers = normalizeStringArray(raw?.blockers)
-  const nextPriorityFix =
-    typeof raw?.next_priority_fix === "string" && raw.next_priority_fix.trim() ? raw.next_priority_fix.trim() : undefined
-  const updatedFiles = normalizeStringArray(raw?.updated_files)
-  const retryAck =
-    typeof raw?.retry_ack === "string" && raw.retry_ack.trim().length > 0 ? raw.retry_ack.trim() : undefined
-  const strategyChange =
-    typeof raw?.strategy_change === "string" && raw.strategy_change.trim().length > 0
-      ? raw.strategy_change.trim()
-      : undefined
-  const selfChecksRun = normalizeStringArray(raw?.self_checks_run)
+    readStringField(raw, "claim_statement", "claimStatement", "claim", "summary") ??
+    `Attempted ${unit.id}, but did not return a structured claim.`
+  const claimedSuccess = readBooleanField(raw, "claimed_success", "claimedSuccess", "success") ?? false
+  const blockers = normalizeStringArray(readArrayField(raw, "blockers"))
+  const nextPriorityFix = readStringField(raw, "next_priority_fix", "nextPriorityFix")
+  const updatedFiles = normalizeStringArray(readArrayField(raw, "updated_files", "updatedFiles"))
+  const retryAck = readStringField(raw, "retry_ack", "retryAck")
+  const strategyChange = readStringField(raw, "strategy_change", "strategyChange")
+  const selfChecksRun = normalizeStringArray(readArrayField(raw, "self_checks_run", "selfChecksRun"))
 
-  const scratchUnits = Array.isArray(raw?.scratch_units)
-    ? raw.scratch_units
+  const scratchUnits = Array.isArray(readArrayField(raw, "scratch_units", "scratchUnits"))
+    ? (readArrayField(raw, "scratch_units", "scratchUnits") as unknown[])
         .filter((item) => typeof item === "object" && item !== null && !Array.isArray(item))
         .map((item) => item as Record<string, unknown>)
     : []
 
-  const learningUnits = Array.isArray(raw?.learning_units)
-    ? raw.learning_units
+  const learningUnits = Array.isArray(readArrayField(raw, "learning_units", "learningUnits"))
+    ? (readArrayField(raw, "learning_units", "learningUnits") as unknown[])
         .filter((item) => typeof item === "object" && item !== null && !Array.isArray(item))
         .map((item) => item as Record<string, unknown>)
     : []
@@ -367,63 +400,62 @@ function makeScratchUnits(input: {
   }))
 }
 
-function makeLearningUnits(input: {
-  runID: string
-  unit: LongTaskWorkUnit
-  rawUnits: Record<string, unknown>[]
-}) {
-  return input.rawUnits.map((item) => ({
-    id: `learning-${randomUUID().slice(0, 8)}`,
-    runID: input.runID,
-    unitID: input.unit.id,
-    createdAt: nowISO(),
-    kind:
-      item.kind === "obs" ||
-      item.kind === "map" ||
-      item.kind === "rule" ||
-      item.kind === "exception" ||
-      item.kind === "failure_pattern" ||
-      item.kind === "repair_pattern" ||
-      item.kind === "tooling_hint" ||
-      item.kind === "validator_hint"
-        ? item.kind
-        : "failure_pattern",
-    statement:
-      typeof item.statement === "string" && item.statement.trim()
-        ? short(item.statement.trim(), 240)
-        : "Unstructured learning unit.",
-    scope:
-      item.scope === "instance" ||
-      item.scope === "local" ||
-      item.scope === "pattern" ||
-      item.scope === "global_candidate"
-        ? item.scope
-        : "local",
-    strength: item.strength === 2 || item.strength === 3 ? item.strength : 1,
-    refs: normalizeStringArray(item.refs),
-    relations: Array.isArray(item.relations)
-      ? item.relations
-          .filter((relation) => typeof relation === "object" && relation !== null && !Array.isArray(relation))
-          .map((relation) => relation as Record<string, unknown>)
-          .filter(
-            (relation) =>
-              typeof relation.type === "string" &&
-              typeof relation.targetID === "string" &&
-              relation.targetID.trim().length > 0,
-          )
-          .map((relation) => ({
-            type:
-              relation.type === "supports" ||
-              relation.type === "conflicts" ||
-              relation.type === "exception_of" ||
-              relation.type === "derived_from" ||
-              relation.type === "blocks"
-                ? relation.type
-                : "supports",
-            targetID: relation.targetID as string,
-          }))
-      : [],
-  } satisfies LongTaskLearningUnit))
+function makeLearningUnits(input: { runID: string; unit: LongTaskWorkUnit; rawUnits: Record<string, unknown>[] }) {
+  return input.rawUnits.map(
+    (item) =>
+      ({
+        id: `learning-${randomUUID().slice(0, 8)}`,
+        runID: input.runID,
+        unitID: input.unit.id,
+        createdAt: nowISO(),
+        kind:
+          item.kind === "obs" ||
+          item.kind === "map" ||
+          item.kind === "rule" ||
+          item.kind === "exception" ||
+          item.kind === "failure_pattern" ||
+          item.kind === "repair_pattern" ||
+          item.kind === "tooling_hint" ||
+          item.kind === "validator_hint"
+            ? item.kind
+            : "failure_pattern",
+        statement:
+          typeof item.statement === "string" && item.statement.trim()
+            ? short(item.statement.trim(), 240)
+            : "Unstructured learning unit.",
+        scope:
+          item.scope === "instance" ||
+          item.scope === "local" ||
+          item.scope === "pattern" ||
+          item.scope === "global_candidate"
+            ? item.scope
+            : "local",
+        strength: item.strength === 2 || item.strength === 3 ? item.strength : 1,
+        refs: normalizeStringArray(item.refs),
+        relations: Array.isArray(item.relations)
+          ? item.relations
+              .filter((relation) => typeof relation === "object" && relation !== null && !Array.isArray(relation))
+              .map((relation) => relation as Record<string, unknown>)
+              .filter(
+                (relation) =>
+                  typeof relation.type === "string" &&
+                  typeof relation.targetID === "string" &&
+                  relation.targetID.trim().length > 0,
+              )
+              .map((relation) => ({
+                type:
+                  relation.type === "supports" ||
+                  relation.type === "conflicts" ||
+                  relation.type === "exception_of" ||
+                  relation.type === "derived_from" ||
+                  relation.type === "blocks"
+                    ? relation.type
+                    : "supports",
+                targetID: relation.targetID as string,
+              }))
+          : [],
+      }) satisfies LongTaskLearningUnit,
+  )
 }
 
 function createClaim(input: {
@@ -609,11 +641,7 @@ function syntheticCompletionUnit(spec: LongTaskSpec): LongTaskWorkUnit {
   }
 }
 
-function operationalContextTags(input: {
-  spec: LongTaskSpec
-  unit: LongTaskWorkUnit
-  extra?: string[]
-}) {
+function operationalContextTags(input: { spec: LongTaskSpec; unit: LongTaskWorkUnit; extra?: string[] }) {
   return uniqueStrings([
     input.unit.id,
     ...(input.spec.taskFamily ? [input.spec.taskFamily] : []),
@@ -696,7 +724,10 @@ function promoteOperationalContextFromVerifiedUnit(input: {
         unit: input.unit,
         attempt: input.attempt,
         kind: inferOperationalKindFromLearning(unit.kind),
-        status: unit.scope === "global_candidate" || unit.scope === "pattern" || unit.strength >= 2 ? "confirmed" : "candidate",
+        status:
+          unit.scope === "global_candidate" || unit.scope === "pattern" || unit.strength >= 2
+            ? "confirmed"
+            : "candidate",
         statement: unit.statement,
         rationale: `Promoted from ${unit.kind} learning after a verified unit outcome.`,
         refs: [...unit.refs, ...input.claim.evidenceRefs],
@@ -781,10 +812,7 @@ function promoteOperationalContextFromFailure(input: {
   return items
 }
 
-function shouldStopForBudgets(input: {
-  progress: ReturnType<typeof deriveLongTaskProgressState>
-  spec: LongTaskSpec
-}) {
+function shouldStopForBudgets(input: { progress: ReturnType<typeof deriveLongTaskProgressState>; spec: LongTaskSpec }) {
   const budgets = input.spec.budgets ?? DEFAULT_LONG_TASK_BUDGETS
   if (input.progress.totalUnitAttempts >= budgets.maxTotalUnitAttempts) return "exhausted_failure" as const
   if (input.progress.validatorCalls >= budgets.maxValidatorCalls) return "exhausted_failure" as const
@@ -792,8 +820,35 @@ function shouldStopForBudgets(input: {
   return undefined
 }
 
+function normalizePlanningContextPath(inputPath: string) {
+  return inputPath.replace(/\\/g, "/").toLowerCase()
+}
+
+function isCampaignRuntimePlanningContextPath(inputPath: string) {
+  return normalizePlanningContextPath(inputPath).includes("/runtime-state/long-task-campaigns/")
+}
+
+function explicitCampaignPlanningContextPaths(spec: LongTaskSpec) {
+  return uniqueStrings([
+    spec.campaignPendingPackageRoot ?? "",
+    spec.campaignExplorationTreePath ?? "",
+    spec.campaignRoutingControlPath ?? "",
+  ])
+}
+
+function explicitCampaignExecutionContextPaths(spec: LongTaskSpec) {
+  return uniqueStrings([
+    spec.campaignPendingPackageRoot ?? "",
+    spec.campaignExplorationTreePath ?? "",
+    spec.campaignWorkingMemoryPath ?? "",
+    spec.campaignRoutingControlPath ?? "",
+  ])
+}
+
 function selectLongTaskPlanningContext(spec: LongTaskSpec) {
-  return (spec.initialExpertContextPaths ?? []).slice(0, 4)
+  const initialContext = uniqueStrings(spec.initialExpertContextPaths ?? [])
+  const staticContext = initialContext.filter((item) => !isCampaignRuntimePlanningContextPath(item))
+  return uniqueStrings([...explicitCampaignPlanningContextPaths(spec), ...staticContext])
 }
 
 async function runPlanningSession(input: {
@@ -805,6 +860,8 @@ async function runPlanningSession(input: {
   phase: "plan" | "replan"
   existingGraph?: LongTaskWorkGraph
   failureSummaries?: string[]
+  runtimeScope?: string
+  onActivation?: OpencodeTaskInput["onSpawn"]
 }) {
   const config = await loadConfig(input.configPathCwd)
   const selection = resolveModelSelection(config, "solve", input.spec.planning)
@@ -836,21 +893,15 @@ async function runPlanningSession(input: {
     config,
     title: input.phase === "plan" ? "Long Task Graph Bootstrap" : "Long Task Graph Replan",
     prompt,
-    referencePaths: [
-      input.specPath,
-      ...planningContextPaths,
-      ...capabilityPaths,
-    ],
+    referencePaths: [input.specPath, ...planningContextPaths, ...capabilityPaths],
     attachedFiles: capabilityFiles,
-    permissionReadPaths: [
-      input.specPath,
-      ...planningContextPaths,
-      ...capabilityPaths,
-    ],
+    permissionReadPaths: [input.specPath, ...planningContextPaths, ...capabilityPaths],
     permissionEditPaths: [],
     model: selection.model,
     agent: selection.agent,
     variant: selection.variant,
+    runtimeScope: input.runtimeScope,
+    onSpawn: input.onActivation,
   })
 
   await writeTaskArtifacts(draftPaths.root, task, {
@@ -859,7 +910,8 @@ async function runPlanningSession(input: {
     methodID: input.spec.reversePropagation?.recipeID,
   })
 
-  const raw = (await extractJsonObjectFromPath(draftPaths.graphDraftPath)) ?? extractJsonObject(task.result.responseText)
+  const raw =
+    (await extractJsonObjectFromPath(draftPaths.graphDraftPath)) ?? extractJsonObject(task.result.responseText)
   const graph = normalizePlanningGraph(
     raw,
     input.spec,
@@ -876,25 +928,23 @@ async function executeWorkUnit(input: {
   run: ReturnType<typeof longTaskRunPaths>
   graph: LongTaskWorkGraph
   unit: LongTaskWorkUnit
+  runtimeScope?: string
+  onActivation?: OpencodeTaskInput["onSpawn"]
 }) {
   const config = await loadConfig(input.configPathCwd)
   const selection = resolveModelSelection(config, "solve", input.spec.execution)
-  let graph = activateLongTaskWorkUnit(input.graph, input.unit.id)
-  graph = bumpLongTaskWorkUnitAttempt(graph, input.unit.id)
+  const graph = bumpLongTaskWorkUnitAttempt(activateLongTaskWorkUnit(input.graph, input.unit.id), input.unit.id)
   const activeUnit = graph.units.find((item) => item.id === input.unit.id)!
   const attempt = activeUnit.attemptCount
   const attemptPaths = longTaskUnitAttemptPaths(input.run, activeUnit.id, attempt)
 
+  const previousProgress = await readLongTaskProgressState(input.run)
   const progressBefore = deriveLongTaskProgressState({
-    runID: (await readLongTaskProgressState(input.run)).runID,
-    graph,
-    previous: await readLongTaskProgressState(input.run),
-    status: "running",
+    runID: previousProgress.runID,
+    graph: input.graph,
+    previous: previousProgress,
+    status: previousProgress.status === "running" ? "running" : "bootstrapping",
   })
-  progressBefore.activeUnitID = activeUnit.id
-  progressBefore.activeAttempt = attempt
-  progressBefore.totalUnitAttempts += 1
-  await writeLongTaskWorkGraph(input.run, graph)
   await writeLongTaskProgressState(input.run, progressBefore)
 
   const bundle = await buildRetryInputBundle({
@@ -921,6 +971,24 @@ async function executeWorkUnit(input: {
   })
   const capabilityPaths = capabilityReferencePaths(input.spec)
   const capabilityFiles = capabilityAttachedFiles(input.spec)
+  const editablePaths = resolveLongTaskEditablePaths(input.spec)
+  const explicitCampaignContextPaths = explicitCampaignExecutionContextPaths(input.spec)
+  const activateExecution = onceActivationCallback(async () => {
+    const latestProgress = await readLongTaskProgressState(input.run)
+    const runningProgress = deriveLongTaskProgressState({
+      runID: latestProgress.runID,
+      graph,
+      previous: latestProgress,
+      status: "running",
+    })
+    runningProgress.totalUnitAttempts = Math.max(
+      latestProgress.totalUnitAttempts + 1,
+      previousProgress.totalUnitAttempts + 1,
+    )
+    await writeLongTaskWorkGraph(input.run, graph)
+    await writeLongTaskProgressState(input.run, runningProgress)
+    await input.onActivation?.()
+  })
 
   const task = await runOpencodeTask({
     cwd: input.cwd,
@@ -931,6 +999,7 @@ async function executeWorkUnit(input: {
       ...input.spec.materials.map((item) => item.path),
       ...(input.spec.targetPaths ?? []).map((item) => item.path),
       ...(input.spec.initialExpertContextPaths ?? []),
+      ...explicitCampaignContextPaths,
       attemptPaths.inputBundlePath,
       ...capabilityPaths,
       ...formalPackageRoots,
@@ -941,15 +1010,18 @@ async function executeWorkUnit(input: {
       ...input.spec.materials.map((item) => item.path),
       ...(input.spec.targetPaths ?? []).map((item) => item.path),
       ...(input.spec.initialExpertContextPaths ?? []),
+      ...explicitCampaignContextPaths,
       attemptPaths.inputBundlePath,
       ...capabilityPaths,
       ...formalPackageRoots,
       ...input.spec.validators.filter((item) => item.type === "script").map((item) => item.path),
     ],
-    permissionEditPaths: input.spec.editablePaths ?? [],
+    permissionEditPaths: editablePaths,
     model: selection.model,
     agent: selection.agent,
     variant: selection.variant,
+    runtimeScope: input.runtimeScope,
+    onSpawn: activateExecution,
   })
 
   await writeTaskArtifacts(attemptPaths.executeDir, task, {
@@ -1015,6 +1087,8 @@ async function executeWorkUnit(input: {
       attempt,
       validatorDir,
       bundlePath: attemptPaths.inputBundlePath,
+      runtimeScope: input.runtimeScope,
+      onActivation: input.onActivation,
       payload: {
         runID: progressBefore.runID,
         unitID: activeUnit.id,
@@ -1025,7 +1099,7 @@ async function executeWorkUnit(input: {
         materials: input.spec.materials,
         targetPaths: input.spec.targetPaths ?? [],
         expectedArtifacts: activeUnit.expectedArtifacts,
-        editablePaths: input.spec.editablePaths ?? [],
+        editablePaths,
         bundlePath: attemptPaths.inputBundlePath,
       },
     })
@@ -1056,6 +1130,8 @@ async function replanGraph(input: {
   spec: LongTaskSpec
   run: ReturnType<typeof longTaskRunPaths>
   graph: LongTaskWorkGraph
+  runtimeScope?: string
+  onActivation?: OpencodeTaskInput["onSpawn"]
 }) {
   const recentFailures = (await readFailurePackets(input.run))
     .slice(-6)
@@ -1069,6 +1145,8 @@ async function replanGraph(input: {
     phase: "replan",
     existingGraph: input.graph,
     failureSummaries: recentFailures,
+    runtimeScope: input.runtimeScope,
+    onActivation: input.onActivation,
   })
 
   const nextGraph = mergeReplannedGraph({
@@ -1088,6 +1166,8 @@ async function runCompletionValidators(input: {
   spec: LongTaskSpec
   run: ReturnType<typeof longTaskRunPaths>
   graph: LongTaskWorkGraph
+  runtimeScope?: string
+  onActivation?: OpencodeTaskInput["onSpawn"]
 }) {
   const completionValidatorIDs =
     input.graph.completionValidatorIDs.length > 0
@@ -1129,9 +1209,7 @@ async function runCompletionValidators(input: {
     sameUnitRetryLessons: retryLessons.slice(-8),
     relevantScratchUnits: scratchUnits.slice(-12),
     relevantLearningUnits: learningUnits.slice(-12),
-    relevantShadowMemory: shadowMemory
-      .filter((record) => record.runID !== progress.runID)
-      .slice(-6),
+    relevantShadowMemory: shadowMemory.filter((record) => record.runID !== progress.runID).slice(-6),
     runGlobalOperationalContext: operationalContext.slice(0, 12),
     formalPackageRoots: resolveLongTaskFormalPackageRoots(input.spec),
   })
@@ -1139,6 +1217,7 @@ async function runCompletionValidators(input: {
   const config = await loadConfig(input.configPathCwd)
   const results = []
   let updatedProgress = progress
+  const editablePaths = resolveLongTaskEditablePaths(input.spec)
   for (const validator of validatorContracts) {
     const result = await runLongTaskValidator({
       cwd: input.cwd,
@@ -1150,6 +1229,8 @@ async function runCompletionValidators(input: {
       attempt: 1,
       validatorDir: path.join(completionDir, validator.id),
       bundlePath,
+      runtimeScope: input.runtimeScope,
+      onActivation: input.onActivation,
       payload: {
         runID: progress.runID,
         unitID: syntheticUnit.id,
@@ -1160,7 +1241,7 @@ async function runCompletionValidators(input: {
         materials: input.spec.materials,
         targetPaths: input.spec.targetPaths ?? [],
         expectedArtifacts: syntheticUnit.expectedArtifacts,
-        editablePaths: input.spec.editablePaths ?? [],
+        editablePaths,
         bundlePath,
       },
     })
@@ -1193,11 +1274,22 @@ async function finalizeLongTaskRun(input: {
   const summary = await buildLongTaskRunSummary(input.run)
   await writeLongTaskRunSummary(input.run, summary)
 
+  const existingFinalization = await readLongTaskFinalizationState(input.run)
+  if (existingFinalization && existingFinalization.runID === summary.runID && existingFinalization.status === summary.status) {
+    return {
+      runID: summary.runID,
+      runDir: input.run.root,
+      status: summary.status,
+      summaryPath: input.run.summaryJsonPath,
+      summary,
+    }
+  }
+
   const config = await loadConfig(input.cwd)
   const paths = longTaskPaths(input.cwd)
-  await appendArchiveRecord(paths, defaultArchiveRecord({ run: input.run, summary }))
+  const archiveRecord = await appendArchiveRecord(paths, defaultArchiveRecord({ run: input.run, summary }))
   const shadowRecord = defaultShadowMemoryRecord({ run: input.run, summary, spec: input.spec })
-  await appendShadowMemoryRecord(paths, shadowRecord)
+  const persistedShadowRecord = await appendShadowMemoryRecord(paths, shadowRecord)
   const candidateAcceptance = await recordAcceptanceResult({
     cwd: input.cwd,
     config,
@@ -1218,9 +1310,7 @@ async function finalizeLongTaskRun(input: {
         ? "Completion validators and candidate preservation checks passed."
         : `Candidate acceptance held because final status was ${summary.status}.`,
     reasons:
-      summary.status === "verified_success"
-        ? []
-        : [summary.summary || `Long-task final status: ${summary.status}.`],
+      summary.status === "verified_success" ? [] : [summary.summary || `Long-task final status: ${summary.status}.`],
     evidenceRefs: [
       input.run.summaryJsonPath,
       input.run.progressStatePath,
@@ -1241,7 +1331,7 @@ async function finalizeLongTaskRun(input: {
     ],
     mirrorPath: longTaskRunAcceptanceMirrorPath(input.run.root, "candidate_guard"),
   })
-  await writeLongTaskCandidatePackage(paths, {
+  const candidatePackage = await writeLongTaskCandidatePackage(paths, {
     id: `candidate-${summary.runID}`,
     status: summary.status === "verified_success" ? "ready_for_maintainer" : "hold",
     mode: "long",
@@ -1260,13 +1350,13 @@ async function finalizeLongTaskRun(input: {
     learningUnitsPath: input.run.learningUnitsPath,
     retryLessonsPath: input.run.retryLessonsPath,
     operationalContextPath: input.run.operationalContextPath,
-    shadowMemoryRecordID: shadowRecord.id,
+    shadowMemoryRecordID: persistedShadowRecord.id,
     notes:
       summary.status === "verified_success"
         ? ["Verified-success long-task run preserved as a maintainer-ready candidate package."]
         : ["Run preserved for later maintainer review; keep as hold until higher-layer promotion decides otherwise."],
   })
-  await writeMaintenanceRequest(maintenanceGatewayPaths(input.cwd, config), {
+  const maintenanceRequest = await writeMaintenanceRequest(maintenanceGatewayPaths(input.cwd, config), {
     id: `maint-req-long-${summary.runID}`,
     status: summary.status === "verified_success" ? "ready_for_maintainer" : "hold",
     mode: "long",
@@ -1333,7 +1423,7 @@ async function finalizeLongTaskRun(input: {
       {
         kind: "shadow_memory",
         path: paths.shadowMemoryRoot,
-        label: shadowRecord.id,
+        label: persistedShadowRecord.id,
       },
       {
         kind: "candidate_summary",
@@ -1347,6 +1437,20 @@ async function finalizeLongTaskRun(input: {
         ? ["Long-task request is maintainer-ready but still isolated from direct canonical commit."]
         : ["Long-task request is preserved as hold for later governance or maintainer review."],
     mirrorPath: path.join(input.run.root, "maintenance_request.json"),
+  })
+  await writeLongTaskFinalizationState(input.run, {
+    runID: summary.runID,
+    status: summary.status,
+    completedAt: new Date().toISOString(),
+    summaryPath: input.run.summaryJsonPath,
+    archiveRecordID: archiveRecord.id,
+    shadowMemoryRecordID: persistedShadowRecord.id,
+    acceptanceRecordID: candidateAcceptance.record.id,
+    acceptanceRecordPath: candidateAcceptance.path,
+    candidateID: candidatePackage.candidate.id,
+    candidatePath: candidatePackage.path,
+    maintenanceRequestID: maintenanceRequest.request.id,
+    maintenanceRequestPath: maintenanceRequest.path,
   })
 
   return {
@@ -1363,120 +1467,167 @@ async function continueLongTaskLoop(input: {
   configPathCwd: string
   spec: LongTaskSpec
   run: ReturnType<typeof longTaskRunPaths>
+  runtimeScope?: string
+  onActivation?: OpencodeTaskInput["onSpawn"]
 }) {
-  while (true) {
-    let graph = await readLongTaskWorkGraph(input.run)
-    let progress = await readLongTaskProgressState(input.run)
+  try {
+    while (true) {
+      let graph = await readLongTaskWorkGraph(input.run)
+      let progress = await readLongTaskProgressState(input.run)
 
-    if (
-      progress.status === "verified_success" ||
-      progress.status === "exhausted_failure" ||
-      progress.status === "stagnation_failure" ||
-      progress.status === "blocked_failure"
-    ) {
-      return finalizeLongTaskRun({
-        cwd: input.cwd,
-        run: input.run,
-        spec: input.spec,
-        status: progress.status,
-        summaryText: progress.finalSummary ?? `Long-task finished with status ${progress.status}.`,
-      })
-    }
-
-    const budgetStop = shouldStopForBudgets({ progress, spec: input.spec })
-    if (budgetStop) {
-      return finalizeLongTaskRun({
-        cwd: input.cwd,
-        run: input.run,
-        spec: input.spec,
-        status: budgetStop,
-        summaryText: `Long-task stopped because ${budgetStop} was reached.`,
-      })
-    }
-
-    const nextUnit = selectNextLongTaskUnit(graph)
-    if (!nextUnit) {
-      const allVerified = graph.units.length > 0 && graph.units.every((unit) => unit.status === "verified")
-      if (allVerified) {
-        const completionResults = await runCompletionValidators({
+      if (
+        progress.status === "verified_success" ||
+        progress.status === "exhausted_failure" ||
+        progress.status === "stagnation_failure" ||
+        progress.status === "blocked_failure"
+      ) {
+        return finalizeLongTaskRun({
           cwd: input.cwd,
-          configPathCwd: input.configPathCwd,
-          spec: input.spec,
           run: input.run,
-          graph,
+          spec: input.spec,
+          status: progress.status,
+          summaryText: progress.finalSummary ?? `Long-task finished with status ${progress.status}.`,
         })
-        const completionPassed = completionResults.every((result) => result.passed)
-        if (completionPassed) {
-          const completionSummary =
-            completionResults.length > 0
-              ? "All work units completed and all required completion validators passed."
-              : "All work units completed. Per-round completion validation is disabled or deferred."
+      }
+
+      const budgetStop = shouldStopForBudgets({ progress, spec: input.spec })
+      if (budgetStop) {
+        return finalizeLongTaskRun({
+          cwd: input.cwd,
+          run: input.run,
+          spec: input.spec,
+          status: budgetStop,
+          summaryText: `Long-task stopped because ${budgetStop} was reached.`,
+        })
+      }
+
+      const nextUnit = selectNextLongTaskUnit(graph)
+      if (!nextUnit) {
+        const allVerified = graph.units.length > 0 && graph.units.every((unit) => unit.status === "verified")
+        if (allVerified) {
+          const completionResults = await runCompletionValidators({
+            cwd: input.cwd,
+            configPathCwd: input.configPathCwd,
+            spec: input.spec,
+            run: input.run,
+            graph,
+            runtimeScope: input.runtimeScope,
+            onActivation: input.onActivation,
+          })
+          const completionPassed = completionResults.every((result) => result.passed)
+          if (completionPassed) {
+            const completionSummary =
+              completionResults.length > 0
+                ? "All work units completed and all required completion validators passed."
+                : "All work units completed. Per-round completion validation is disabled or deferred."
+            return finalizeLongTaskRun({
+              cwd: input.cwd,
+              run: input.run,
+              spec: input.spec,
+              status: "verified_success",
+              summaryText: completionSummary,
+            })
+          }
+
+          const failure = createFailurePacket({
+            runID: progress.runID,
+            unitID: "__completion__",
+            attempt: 1,
+            claimedSuccess: true,
+            verificationPassed: false,
+            mismatchSummary:
+              completionResults.map((item) => item.summary).join(" | ") || "Final completion validation failed.",
+            suspectedCauses: completionResults.flatMap((item) => item.details).slice(0, 6),
+            evidenceRefs: completionResults.flatMap((item) => item.evidenceRefs),
+            retryLevel: "subgraph_retry",
+            failureType: "validator_failed",
+          })
+          await appendFailurePacket(input.run, failure)
+          await upsertOperationalContext(input.run, [
+            makeOperationalContextItem({
+              runID: progress.runID,
+              unit: syntheticCompletionUnit(input.spec),
+              attempt: 1,
+              kind: "blocking_issue",
+              status: "confirmed",
+              statement: failure.mismatchSummary,
+              rationale: "Completion validation failed after all current work units were marked verified.",
+              refs: failure.evidenceRefs,
+              tags: uniqueStrings([
+                "__completion__",
+                ...(input.spec.taskFamily ? [input.spec.taskFamily] : []),
+                ...(input.spec.domainTags ?? []),
+                "completion",
+              ]),
+            }),
+          ])
+          await appendRetryJournalEntry(input.run, {
+            id: `retry-${randomUUID().slice(0, 8)}`,
+            runID: progress.runID,
+            createdAt: nowISO(),
+            level: "subgraph_retry",
+            toUnitID: "__completion__",
+            reason: failure.mismatchSummary,
+          })
+
+          if (
+            (progress.graphReplanCount ?? 0) <
+            (input.spec.budgets?.maxGraphReplans ?? DEFAULT_LONG_TASK_BUDGETS.maxGraphReplans)
+          ) {
+            graph = await replanGraph({
+              cwd: input.cwd,
+              configPathCwd: input.configPathCwd,
+              spec: input.spec,
+              run: input.run,
+              graph,
+              runtimeScope: input.runtimeScope,
+              onActivation: input.onActivation,
+            })
+            const postReplanProgress = await readLongTaskProgressState(input.run)
+            progress = deriveLongTaskProgressState({
+              runID: postReplanProgress.runID,
+              graph,
+              previous: postReplanProgress,
+              status: postReplanProgress.status === "running" ? "running" : "bootstrapping",
+            })
+            progress.graphReplanCount += 1
+            progress.noProgressCycles += 1
+            progress.lastFailurePacketID = failure.id
+            await writeLongTaskWorkGraph(input.run, graph)
+            await writeLongTaskProgressState(input.run, progress)
+            continue
+          }
+
           return finalizeLongTaskRun({
             cwd: input.cwd,
             run: input.run,
             spec: input.spec,
-            status: "verified_success",
-            summaryText: completionSummary,
+            status: "exhausted_failure",
+            summaryText: failure.mismatchSummary,
           })
         }
 
-        const failure = createFailurePacket({
-          runID: progress.runID,
-          unitID: "__completion__",
-          attempt: 1,
-          claimedSuccess: true,
-          verificationPassed: false,
-          mismatchSummary: completionResults.map((item) => item.summary).join(" | ") || "Final completion validation failed.",
-          suspectedCauses: completionResults.flatMap((item) => item.details).slice(0, 6),
-          evidenceRefs: completionResults.flatMap((item) => item.evidenceRefs),
-          retryLevel: "subgraph_retry",
-          failureType: "validator_failed",
-        })
-        await appendFailurePacket(input.run, failure)
-        await upsertOperationalContext(input.run, [
-          makeOperationalContextItem({
-            runID: progress.runID,
-            unit: syntheticCompletionUnit(input.spec),
-            attempt: 1,
-            kind: "blocking_issue",
-            status: "confirmed",
-            statement: failure.mismatchSummary,
-            rationale: "Completion validation failed after all current work units were marked verified.",
-            refs: failure.evidenceRefs,
-            tags: uniqueStrings([
-              "__completion__",
-              ...(input.spec.taskFamily ? [input.spec.taskFamily] : []),
-              ...(input.spec.domainTags ?? []),
-              "completion",
-            ]),
-          }),
-        ])
-        await appendRetryJournalEntry(input.run, {
-          id: `retry-${randomUUID().slice(0, 8)}`,
-          runID: progress.runID,
-          createdAt: nowISO(),
-          level: "subgraph_retry",
-          toUnitID: "__completion__",
-          reason: failure.mismatchSummary,
-        })
-
-        if ((progress.graphReplanCount ?? 0) < (input.spec.budgets?.maxGraphReplans ?? DEFAULT_LONG_TASK_BUDGETS.maxGraphReplans)) {
+        if (
+          (progress.graphReplanCount ?? 0) <
+          (input.spec.budgets?.maxGraphReplans ?? DEFAULT_LONG_TASK_BUDGETS.maxGraphReplans)
+        ) {
           graph = await replanGraph({
             cwd: input.cwd,
             configPathCwd: input.configPathCwd,
             spec: input.spec,
             run: input.run,
             graph,
+            runtimeScope: input.runtimeScope,
+            onActivation: input.onActivation,
           })
           progress = deriveLongTaskProgressState({
             runID: progress.runID,
             graph,
             previous: progress,
-            status: "running",
+            status: progress.status === "running" ? "running" : "bootstrapping",
           })
           progress.graphReplanCount += 1
           progress.noProgressCycles += 1
-          progress.lastFailurePacketID = failure.id
           await writeLongTaskWorkGraph(input.run, graph)
           await writeLongTaskProgressState(input.run, progress)
           continue
@@ -1486,27 +1637,217 @@ async function continueLongTaskLoop(input: {
           cwd: input.cwd,
           run: input.run,
           spec: input.spec,
-          status: "exhausted_failure",
-          summaryText: failure.mismatchSummary,
+          status: "blocked_failure",
+          summaryText: "No ready work unit remained and the graph could not be replanned further.",
         })
       }
 
-      if ((progress.graphReplanCount ?? 0) < (input.spec.budgets?.maxGraphReplans ?? DEFAULT_LONG_TASK_BUDGETS.maxGraphReplans)) {
-        graph = await replanGraph({
-          cwd: input.cwd,
-          configPathCwd: input.configPathCwd,
-          spec: input.spec,
-          run: input.run,
-          graph,
-        })
+      const execution = await executeWorkUnit({
+        cwd: input.cwd,
+        configPathCwd: input.configPathCwd,
+        spec: input.spec,
+        run: input.run,
+        graph,
+        unit: nextUnit,
+        runtimeScope: input.runtimeScope,
+        onActivation: input.onActivation,
+      })
+
+      graph = execution.graph
+      progress = await readLongTaskProgressState(input.run)
+      progress.lastClaimID = execution.claim.id
+
+      const executionSucceeded = execution.claim.claimedSuccess && execution.allValidatorsPassed
+      const localAcceptanceEvidenceRefs = [
+        path.join(execution.attemptPaths.executeDir, "response.txt"),
+        ...execution.validatorResults.flatMap((item) => item.evidenceRefs),
+      ]
+      await recordAcceptanceResult({
+        cwd: input.cwd,
+        config: await loadConfig(input.cwd),
+        sourceRunID: progress.runID,
+        mode: "long",
+        policyID: longTaskAcceptancePolicyID(input.spec),
+        stageID: "local_guard",
+        targetKind: "work_unit",
+        targetID: longTaskLocalAcceptanceTargetID(execution.activeUnit, execution.attempt),
+        passed: executionSucceeded,
+        outcome: executionSucceeded ? "observe" : "retry",
+        summary: executionSucceeded
+          ? `Work unit ${execution.activeUnit.id} satisfied its execution and validator contract.`
+          : buildWorkUnitFailureSummary({
+              claim: execution.claim,
+              validatorResults: execution.validatorResults,
+            }),
+        reason: executionSucceeded
+          ? "Work-unit local acceptance passed."
+          : (execution.validatorResults.find((item) => !item.passed)?.summary ??
+            execution.claim.blockers[0] ??
+            "Work-unit local acceptance failed."),
+        reasons: executionSucceeded
+          ? []
+          : uniqueStrings([
+              ...execution.claim.blockers,
+              ...execution.validatorResults.filter((item) => !item.passed).map((item) => item.summary),
+              ...execution.validatorResults.flatMap((item) => item.details),
+            ]).slice(0, 8),
+        evidenceRefs: localAcceptanceEvidenceRefs,
+        details: {
+          unitID: execution.activeUnit.id,
+          attempt: execution.attempt,
+          claimedSuccess: execution.claim.claimedSuccess,
+          validatorsPassed: execution.allValidatorsPassed,
+          validatorResults: execution.validatorResults.map((item) => ({
+            validatorID: item.validatorID,
+            passed: item.passed,
+            summary: item.summary,
+          })),
+        },
+        notes: [
+          "This record captures local acceptance at the work-unit boundary.",
+          "It does not imply candidate promotion or canonical acceptance.",
+        ],
+        mirrorPath: longTaskAttemptAcceptanceMirrorPath(execution.attemptPaths.root, "local_guard"),
+      })
+
+      if (executionSucceeded) {
+        await upsertOperationalContext(
+          input.run,
+          promoteOperationalContextFromVerifiedUnit({
+            spec: input.spec,
+            runID: progress.runID,
+            unit: execution.activeUnit,
+            attempt: execution.attempt,
+            claim: execution.claim,
+            learningUnits: execution.normalized.learningUnits.length
+              ? makeLearningUnits({
+                  runID: progress.runID,
+                  unit: execution.activeUnit,
+                  rawUnits: execution.normalized.learningUnits,
+                })
+              : [],
+            validatorResults: execution.validatorResults,
+            selfChecksRun: execution.normalized.selfChecksRun,
+          }),
+        )
+        graph = markLongTaskWorkUnitVerified(graph, execution.activeUnit.id, execution.claim.id)
         progress = deriveLongTaskProgressState({
           runID: progress.runID,
           graph,
           previous: progress,
           status: "running",
         })
+        progress.noProgressCycles = 0
+        progress.lastProgressAt = nowISO()
+        await writeLongTaskWorkGraph(input.run, graph)
+        await writeLongTaskProgressState(input.run, progress)
+        continue
+      }
+
+      const failure = createFailurePacket({
+        runID: progress.runID,
+        unitID: execution.activeUnit.id,
+        attempt: execution.attempt,
+        claimedSuccess: execution.claim.claimedSuccess,
+        verificationPassed: execution.allValidatorsPassed,
+        mismatchSummary: buildWorkUnitFailureSummary({
+          claim: execution.claim,
+          validatorResults: execution.validatorResults,
+        }),
+        suspectedCauses: [
+          ...execution.claim.blockers,
+          ...execution.validatorResults.flatMap((item) => item.details),
+        ].slice(0, 6),
+        nextPriorityFix: execution.claim.nextPriorityFix ?? execution.normalized.nextPriorityFix,
+        evidenceRefs: localAcceptanceEvidenceRefs,
+        retryLevel: "work_unit_retry",
+        failureType: execution.claim.claimedSuccess ? "validator_failed" : "invalid_execution_output",
+      })
+      await appendFailurePacket(input.run, failure)
+      const retryLesson = createRetryLesson({
+        runID: progress.runID,
+        unit: execution.activeUnit,
+        attempt: execution.attempt,
+        claim: execution.claim,
+        failure,
+        strategyChange: execution.normalized.strategyChange,
+        selfChecksRun: execution.normalized.selfChecksRun,
+      })
+      await appendRetryLesson(input.run, retryLesson)
+      await upsertOperationalContext(
+        input.run,
+        promoteOperationalContextFromFailure({
+          spec: input.spec,
+          runID: progress.runID,
+          unit: execution.activeUnit,
+          attempt: execution.attempt,
+          failure,
+          retryLesson,
+        }),
+      )
+      await appendRetryJournalEntry(input.run, {
+        id: `retry-${randomUUID().slice(0, 8)}`,
+        runID: progress.runID,
+        createdAt: nowISO(),
+        level: "work_unit_retry",
+        fromUnitID: execution.activeUnit.id,
+        toUnitID: execution.activeUnit.id,
+        reason: failure.mismatchSummary,
+      })
+
+      const unitAfterFailure: LongTaskWorkUnit = {
+        ...execution.activeUnit,
+        status: "active",
+        lastFailurePacketID: failure.id,
+        lastClaimID: execution.claim.id,
+      }
+      graph = {
+        ...graph,
+        units: graph.units.map((unit) => (unit.id === unitAfterFailure.id ? unitAfterFailure : unit)),
+        updatedAt: nowISO(),
+      }
+
+      progress = deriveLongTaskProgressState({
+        runID: progress.runID,
+        graph,
+        previous: progress,
+        status: "waiting_for_retry",
+      })
+      progress.lastFailurePacketID = failure.id
+      progress.noProgressCycles += 1
+      await writeLongTaskWorkGraph(input.run, graph)
+      await writeLongTaskProgressState(input.run, progress)
+
+      const attemptsLimit = Math.min(
+        execution.activeUnit.retryBudget,
+        input.spec.budgets?.maxAttemptsPerUnit ?? DEFAULT_LONG_TASK_BUDGETS.maxAttemptsPerUnit,
+      )
+
+      if (execution.activeUnit.attemptCount < attemptsLimit) {
+        continue
+      }
+
+      if (
+        (progress.graphReplanCount ?? 0) <
+        (input.spec.budgets?.maxGraphReplans ?? DEFAULT_LONG_TASK_BUDGETS.maxGraphReplans)
+      ) {
+        graph = await replanGraph({
+          cwd: input.cwd,
+          configPathCwd: input.configPathCwd,
+          spec: input.spec,
+          run: input.run,
+          graph,
+          runtimeScope: input.runtimeScope,
+          onActivation: input.onActivation,
+        })
+        const postReplanProgress = await readLongTaskProgressState(input.run)
+        progress = deriveLongTaskProgressState({
+          runID: postReplanProgress.runID,
+          graph,
+          previous: postReplanProgress,
+          status: postReplanProgress.status === "running" ? "running" : "bootstrapping",
+        })
         progress.graphReplanCount += 1
-        progress.noProgressCycles += 1
         await writeLongTaskWorkGraph(input.run, graph)
         await writeLongTaskProgressState(input.run, progress)
         continue
@@ -1516,225 +1857,28 @@ async function continueLongTaskLoop(input: {
         cwd: input.cwd,
         run: input.run,
         spec: input.spec,
-        status: "blocked_failure",
-        summaryText: "No ready work unit remained and the graph could not be replanned further.",
+        status: "exhausted_failure",
+        summaryText: `Unit ${execution.activeUnit.id} exhausted its retry budget and no further replans were available.`,
       })
     }
-
-    const execution = await executeWorkUnit({
-      cwd: input.cwd,
-      configPathCwd: input.configPathCwd,
-      spec: input.spec,
-      run: input.run,
-      graph,
-      unit: nextUnit,
-    })
-
-    graph = execution.graph
-    progress = await readLongTaskProgressState(input.run)
-    progress.lastClaimID = execution.claim.id
-
-    const executionSucceeded = execution.claim.claimedSuccess && execution.allValidatorsPassed
-    const localAcceptanceEvidenceRefs = [
-      path.join(execution.attemptPaths.executeDir, "response.txt"),
-      ...execution.validatorResults.flatMap((item) => item.evidenceRefs),
-    ]
-    await recordAcceptanceResult({
-      cwd: input.cwd,
-      config: await loadConfig(input.cwd),
-      sourceRunID: progress.runID,
-      mode: "long",
-      policyID: longTaskAcceptancePolicyID(input.spec),
-      stageID: "local_guard",
-      targetKind: "work_unit",
-      targetID: longTaskLocalAcceptanceTargetID(execution.activeUnit, execution.attempt),
-      passed: executionSucceeded,
-      outcome: executionSucceeded ? "observe" : "retry",
-      summary: executionSucceeded
-        ? `Work unit ${execution.activeUnit.id} satisfied its execution and validator contract.`
-        : buildWorkUnitFailureSummary({
-            claim: execution.claim,
-            validatorResults: execution.validatorResults,
-          }),
-      reason: executionSucceeded
-        ? "Work-unit local acceptance passed."
-        : execution.validatorResults.find((item) => !item.passed)?.summary ??
-          execution.claim.blockers[0] ??
-          "Work-unit local acceptance failed.",
-      reasons: executionSucceeded
-        ? []
-        : uniqueStrings([
-            ...execution.claim.blockers,
-            ...execution.validatorResults.filter((item) => !item.passed).map((item) => item.summary),
-            ...execution.validatorResults.flatMap((item) => item.details),
-          ]).slice(0, 8),
-      evidenceRefs: localAcceptanceEvidenceRefs,
-      details: {
-        unitID: execution.activeUnit.id,
-        attempt: execution.attempt,
-        claimedSuccess: execution.claim.claimedSuccess,
-        validatorsPassed: execution.allValidatorsPassed,
-        validatorResults: execution.validatorResults.map((item) => ({
-          validatorID: item.validatorID,
-          passed: item.passed,
-          summary: item.summary,
-        })),
-      },
-      notes: [
-        "This record captures local acceptance at the work-unit boundary.",
-        "It does not imply candidate promotion or canonical acceptance.",
-      ],
-      mirrorPath: longTaskAttemptAcceptanceMirrorPath(execution.attemptPaths.root, "local_guard"),
-    })
-
-    if (executionSucceeded) {
-      await upsertOperationalContext(
-        input.run,
-        promoteOperationalContextFromVerifiedUnit({
-          spec: input.spec,
-          runID: progress.runID,
-          unit: execution.activeUnit,
-          attempt: execution.attempt,
-          claim: execution.claim,
-          learningUnits: execution.normalized.learningUnits.length
-            ? makeLearningUnits({
-                runID: progress.runID,
-                unit: execution.activeUnit,
-                rawUnits: execution.normalized.learningUnits,
-              })
-            : [],
-          validatorResults: execution.validatorResults,
-          selfChecksRun: execution.normalized.selfChecksRun,
-        }),
-      )
-      graph = markLongTaskWorkUnitVerified(graph, execution.activeUnit.id, execution.claim.id)
-      progress = deriveLongTaskProgressState({
-        runID: progress.runID,
-        graph,
-        previous: progress,
-        status: "running",
-      })
-      progress.noProgressCycles = 0
-      progress.lastProgressAt = nowISO()
-      await writeLongTaskWorkGraph(input.run, graph)
-      await writeLongTaskProgressState(input.run, progress)
-      continue
-    }
-
-    const failure = createFailurePacket({
-      runID: progress.runID,
-      unitID: execution.activeUnit.id,
-      attempt: execution.attempt,
-      claimedSuccess: execution.claim.claimedSuccess,
-      verificationPassed: execution.allValidatorsPassed,
-      mismatchSummary: buildWorkUnitFailureSummary({
-        claim: execution.claim,
-        validatorResults: execution.validatorResults,
-      }),
-      suspectedCauses: [
-        ...execution.claim.blockers,
-        ...execution.validatorResults.flatMap((item) => item.details),
-      ].slice(0, 6),
-      nextPriorityFix: execution.claim.nextPriorityFix ?? execution.normalized.nextPriorityFix,
-      evidenceRefs: localAcceptanceEvidenceRefs,
-      retryLevel: "work_unit_retry",
-      failureType: execution.claim.claimedSuccess ? "validator_failed" : "invalid_execution_output",
-    })
-    await appendFailurePacket(input.run, failure)
-    const retryLesson = createRetryLesson({
-      runID: progress.runID,
-      unit: execution.activeUnit,
-      attempt: execution.attempt,
-      claim: execution.claim,
-      failure,
-      strategyChange: execution.normalized.strategyChange,
-      selfChecksRun: execution.normalized.selfChecksRun,
-    })
-    await appendRetryLesson(input.run, retryLesson)
-    await upsertOperationalContext(
-      input.run,
-      promoteOperationalContextFromFailure({
-        spec: input.spec,
-        runID: progress.runID,
-        unit: execution.activeUnit,
-        attempt: execution.attempt,
-        failure,
-        retryLesson,
-      }),
-    )
-    await appendRetryJournalEntry(input.run, {
-      id: `retry-${randomUUID().slice(0, 8)}`,
-      runID: progress.runID,
-      createdAt: nowISO(),
-      level: "work_unit_retry",
-      fromUnitID: execution.activeUnit.id,
-      toUnitID: execution.activeUnit.id,
-      reason: failure.mismatchSummary,
-    })
-
-    const unitAfterFailure: LongTaskWorkUnit = {
-      ...execution.activeUnit,
-      status: "active",
-      lastFailurePacketID: failure.id,
-      lastClaimID: execution.claim.id,
-    }
-    graph = {
-      ...graph,
-      units: graph.units.map((unit) => (unit.id === unitAfterFailure.id ? unitAfterFailure : unit)),
-      updatedAt: nowISO(),
-    }
-
-    progress = deriveLongTaskProgressState({
-      runID: progress.runID,
-      graph,
-      previous: progress,
-      status: "waiting_for_retry",
-    })
-    progress.lastFailurePacketID = failure.id
-    progress.noProgressCycles += 1
-    await writeLongTaskWorkGraph(input.run, graph)
-    await writeLongTaskProgressState(input.run, progress)
-
-    const attemptsLimit = Math.min(
-      execution.activeUnit.retryBudget,
-      input.spec.budgets?.maxAttemptsPerUnit ?? DEFAULT_LONG_TASK_BUDGETS.maxAttemptsPerUnit,
-    )
-
-    if (execution.activeUnit.attemptCount < attemptsLimit) {
-      continue
-    }
-
-    if ((progress.graphReplanCount ?? 0) < (input.spec.budgets?.maxGraphReplans ?? DEFAULT_LONG_TASK_BUDGETS.maxGraphReplans)) {
-      graph = await replanGraph({
-        cwd: input.cwd,
-        configPathCwd: input.configPathCwd,
-        spec: input.spec,
-        run: input.run,
-        graph,
-      })
-      progress = deriveLongTaskProgressState({
-        runID: progress.runID,
-        graph,
-        previous: progress,
-        status: "running",
-      })
-      progress.graphReplanCount += 1
-      await writeLongTaskWorkGraph(input.run, graph)
-      await writeLongTaskProgressState(input.run, progress)
-      continue
-    }
-
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
     return finalizeLongTaskRun({
       cwd: input.cwd,
       run: input.run,
       spec: input.spec,
-      status: "exhausted_failure",
-      summaryText: `Unit ${execution.activeUnit.id} exhausted its retry budget and no further replans were available.`,
+      status: "blocked_failure",
+      summaryText: `Long-task aborted unexpectedly: ${short(message, 240)}`,
     })
   }
 }
 
-export async function runLongTask(input: { cwd: string; specPath: string }) {
+export async function runLongTask(input: {
+  cwd: string
+  specPath: string
+  runtimeScope?: string
+  onRuntimeActivated?: OpencodeTaskInput["onSpawn"]
+}) {
   await loadConfig(input.cwd)
   const { spec, specPath } = await loadLongTaskSpec(input.specPath)
   const runID = createLongTaskRunID(spec.title)
@@ -1754,9 +1898,17 @@ export async function runLongTask(input: { cwd: string; specPath: string }) {
     workGraph: placeholderGraph,
     progressState: progress,
   })
+  const activateRun = onceActivationCallback(async () => {
+    await updateLongTaskProgressStatus(initialized.run, "running")
+    await input.onRuntimeActivated?.()
+  })
 
   const graph = spec.initialGraph
-    ? normalizePlanningGraph(spec.initialGraph as unknown as Record<string, unknown>, spec, "spec.initialGraph was invalid")
+    ? normalizePlanningGraph(
+        spec.initialGraph as unknown as Record<string, unknown>,
+        spec,
+        "spec.initialGraph was invalid",
+      )
     : await runPlanningSession({
         cwd: input.cwd,
         configPathCwd: input.cwd,
@@ -1764,13 +1916,16 @@ export async function runLongTask(input: { cwd: string; specPath: string }) {
         specPath,
         run: initialized.run,
         phase: "plan",
+        runtimeScope: input.runtimeScope,
+        onActivation: activateRun,
       })
 
+  const currentProgress = await readLongTaskProgressState(initialized.run)
   const runningProgress = deriveLongTaskProgressState({
     runID: initialized.runID,
     graph,
-    previous: progress,
-    status: "running",
+    previous: currentProgress,
+    status: currentProgress.status === "running" ? "running" : "bootstrapping",
   })
   await writeLongTaskWorkGraph(initialized.run, graph)
   await writeLongTaskProgressState(initialized.run, runningProgress)
@@ -1780,6 +1935,8 @@ export async function runLongTask(input: { cwd: string; specPath: string }) {
     configPathCwd: input.cwd,
     spec,
     run: initialized.run,
+    runtimeScope: input.runtimeScope,
+    onActivation: activateRun,
   })
 }
 

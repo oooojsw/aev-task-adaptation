@@ -2,7 +2,8 @@ import { createServer } from "node:http"
 import { readdir, readFile, stat } from "node:fs/promises"
 import * as path from "node:path"
 import process from "node:process"
-import { bootstrap } from "../packages/opencode/src/cli/bootstrap"
+import { InstanceBootstrap } from "../packages/opencode/src/project/bootstrap"
+import { Instance } from "../packages/opencode/src/project/instance"
 import { Session } from "../packages/opencode/src/session"
 import { SessionStatus } from "../packages/opencode/src/session/status"
 import { MessageV2 } from "../packages/opencode/src/session/message-v2"
@@ -37,6 +38,7 @@ type MonitorRow = {
   nextStepReason?: string
   reasonTrail?: string[]
   monitorKind?: "pipeline" | "ad_hoc"
+  roundNumber?: number
 }
 
 type ArtifactRunTask = {
@@ -99,6 +101,14 @@ type CaseRunSummary = {
 const AUTO_EVOLVE_ROOT = import.meta.dirname
 const RUNS_ROOT = path.join(AUTO_EVOLVE_ROOT, "runtime-state", "runs")
 const PROPAGATION_WORKSPACES_ROOT = path.join(AUTO_EVOLVE_ROOT, "runtime-state", "propagation", "workspaces")
+const LONG_TASK_RUNS_ROOT = path.join(AUTO_EVOLVE_ROOT, "runtime-state", "long-task", "runs")
+const LONG_TASK_CAMPAIGNS_ROOT = path.join(AUTO_EVOLVE_ROOT, "runtime-state", "long-task-campaigns")
+const ARTIFACT_SCAN_ROOTS = [
+  RUNS_ROOT,
+  PROPAGATION_WORKSPACES_ROOT,
+  LONG_TASK_RUNS_ROOT,
+  LONG_TASK_CAMPAIGNS_ROOT,
+]
 const ARTIFACT_CACHE_TTL_MS = 1500
 const MONITOR_FRONTEND_TEMPLATE_PATH = path.join(AUTO_EVOLVE_ROOT, "frontend", "monitor", "index.html")
 
@@ -110,6 +120,14 @@ let artifactCache:
   | undefined
 
 const caseRunSummaryCache = new Map<string, CaseRunSummary | null>()
+
+function withMonitorInstance<T>(fn: () => Promise<T>) {
+  return Instance.provide({
+    directory: process.cwd(),
+    init: InstanceBootstrap,
+    fn,
+  })
+}
 
 function getOption(name: string, fallback: string) {
   const index = process.argv.indexOf(name)
@@ -147,7 +165,10 @@ function findActiveTool(parts: MessageV2.Part[]) {
 }
 
 function hasOpenStep(parts: MessageV2.Part[]) {
-  const lastStart = parts.map((part, index) => ({ part, index })).filter((item) => item.part.type === "step-start").at(-1)
+  const lastStart = parts
+    .map((part, index) => ({ part, index }))
+    .filter((item) => item.part.type === "step-start")
+    .at(-1)
   const lastFinish = parts
     .map((part, index) => ({ part, index }))
     .filter((item) => item.part.type === "step-finish")
@@ -178,6 +199,62 @@ function previewText(input: string | undefined, max = 100) {
   const normalized = input.replace(/\s+/g, " ").trim()
   if (!normalized) return undefined
   return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized
+}
+
+function padCounter(value: number, width: number) {
+  return String(value).padStart(width, "0")
+}
+
+function extractTitleContextFromDirectory(directory: string) {
+  const normalized = directory.replaceAll("\\", "/")
+  const caseMatch = normalized.match(/\/(case-\d+)(?:\/|$)/i)
+  const attemptMatch = normalized.match(/\/(attempt-\d+)(?:\/|$)/i)
+  const roundMatch = normalized.match(/\/(round-\d+)(?:\/|$)/i)
+  return {
+    caseID: caseMatch?.[1],
+    attempt: attemptMatch?.[1],
+    round: roundMatch?.[1],
+  }
+}
+
+function parseRoundNumber(input: string | undefined) {
+  if (!input) return undefined
+  const match = input.match(/round-(\d+)/i)
+  if (!match?.[1]) return undefined
+  const parsed = Number.parseInt(match[1], 10)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function normalizeMonitorTitle(
+  baseTitle: string | undefined,
+  task: ArtifactRunTask | undefined,
+  directory: string,
+  fallback: string,
+) {
+  const raw = previewText(baseTitle, 220) ?? fallback
+  const title = raw.trim()
+  const lower = title.toLowerCase()
+  const fromDir = extractTitleContextFromDirectory(directory)
+  const suffixes: string[] = []
+
+  const caseID = task?.caseID ?? fromDir.caseID
+  if (caseID && !lower.includes(caseID.toLowerCase())) {
+    suffixes.push(caseID)
+  }
+
+  const attemptLabel = typeof task?.attempt === "number" ? `attempt-${padCounter(task.attempt, 2)}` : fromDir.attempt
+  if (attemptLabel && !/\battempt[-_ ]?\d+\b/i.test(title)) {
+    suffixes.push(attemptLabel)
+  }
+
+  const roundLabel =
+    typeof task?.maintenanceRound === "number" ? `round-${padCounter(task.maintenanceRound, 3)}` : fromDir.round
+  if (roundLabel && !/\bround[-_ ]?\d+\b/i.test(title)) {
+    suffixes.push(roundLabel)
+  }
+
+  if (!suffixes.length) return title
+  return `${title} · ${suffixes.join(" · ")}`
 }
 
 function previewValue(input: unknown, max = 120) {
@@ -428,7 +505,10 @@ async function buildArtifactNarrative(run: ArtifactRun, stageDir: string) {
   }
 
   if (!statusReason && typeof run.exitCode === "number") {
-    statusReason = run.exitCode === 0 ? "This session finished without a process error." : `This session ended with exit code ${run.exitCode}.`
+    statusReason =
+      run.exitCode === 0
+        ? "This session finished without a process error."
+        : `This session ended with exit code ${run.exitCode}.`
   }
 
   return {
@@ -497,7 +577,7 @@ async function collectArtifactActions(stageDir: string, limit = 20) {
 }
 
 function buildArtifactTitle(run: ArtifactRun, stageDir: string) {
-  return run.task?.title ?? run.title ?? path.basename(stageDir)
+  return normalizeMonitorTitle(run.task?.title ?? run.title, run.task, stageDir, path.basename(stageDir))
 }
 
 function buildArtifactStep(run: ArtifactRun) {
@@ -531,6 +611,9 @@ async function buildArtifactRow(runJsonPath: string) {
   const id = typeof run.sessionID === "string" && run.sessionID ? run.sessionID : `artifact:${stageDir}`
   const responsePreview = await safeReadPreview(path.join(stageDir, "response.txt"), 120)
   const narrative = await buildArtifactNarrative(run, stageDir)
+  const roundNumber =
+    (typeof run.task?.maintenanceRound === "number" ? run.task.maintenanceRound : undefined) ??
+    parseRoundNumber(extractTitleContextFromDirectory(stageDir).round)
 
   return {
     id,
@@ -550,6 +633,7 @@ async function buildArtifactRow(runJsonPath: string) {
     nextStepReason: narrative.nextStepReason,
     reasonTrail: narrative.reasonTrail,
     monitorKind: "pipeline",
+    roundNumber,
   } satisfies MonitorRow
 }
 
@@ -559,12 +643,13 @@ async function collectArtifactRows(limit: number) {
     return artifactCache.rows.slice(0, limit)
   }
 
-  const roots = [RUNS_ROOT, PROPAGATION_WORKSPACES_ROOT]
   const candidates: { filePath: string; updated: number }[] = []
   const maxFiles = Math.max(limit * 12, 120)
 
-  for (const root of roots) {
-    const exists = await stat(root).then(() => true).catch(() => false)
+  for (const root of ARTIFACT_SCAN_ROOTS) {
+    const exists = await stat(root)
+      .then(() => true)
+      .catch(() => false)
     if (!exists) continue
     candidates.push(...(await listFilesRecursive(root, "run.json", maxFiles)))
   }
@@ -604,28 +689,21 @@ function mergeSessionRow(sessionRow: MonitorRow, artifactRow: MonitorRow) {
     nextStepReason: artifactRow.nextStepReason ?? sessionRow.nextStepReason,
     reasonTrail: sessionRow.reasonTrail?.length ? sessionRow.reasonTrail : artifactRow.reasonTrail,
     monitorKind: artifactRow.monitorKind ?? sessionRow.monitorKind,
+    roundNumber: artifactRow.roundNumber ?? sessionRow.roundNumber,
   } satisfies MonitorRow
 }
 
 function actionFromPart(part: MessageV2.Part): MonitorAction | undefined {
   if (part.type === "tool") {
     const title =
-      ("title" in part.state && typeof part.state.title === "string" && part.state.title)
-        ? part.state.title
-        : undefined
+      "title" in part.state && typeof part.state.title === "string" && part.state.title ? part.state.title : undefined
     const inputPreview = previewValue(part.state.input, 80)
 
     let detail: string | undefined
     if (part.state.status === "completed") {
-      detail = joinPreviewParts([
-        title ?? inputPreview,
-        summarizeToolOutput(part.tool, part.state.output, 140),
-      ])
+      detail = joinPreviewParts([title ?? inputPreview, summarizeToolOutput(part.tool, part.state.output, 140)])
     } else if (part.state.status === "error") {
-      detail = joinPreviewParts([
-        title ?? inputPreview,
-        `error: ${previewText(part.state.error, 120) ?? "unknown"}`,
-      ])
+      detail = joinPreviewParts([title ?? inputPreview, `error: ${previewText(part.state.error, 120) ?? "unknown"}`])
     } else {
       detail = title ?? inputPreview
     }
@@ -721,9 +799,7 @@ function collectRecentActions(messages: MessageV2.WithParts[], limit = 20) {
     }
   }
 
-  return actions
-    .sort((left, right) => left.timestamp - right.timestamp)
-    .slice(-limit)
+  return actions.sort((left, right) => left.timestamp - right.timestamp).slice(-limit)
 }
 
 function summarizeSession(
@@ -774,7 +850,9 @@ function summarizeSession(
     detail = assistant.info.error.message
   } else if (assistant?.info.role === "assistant" && assistant.info.time.completed) {
     monitorStatus = "done"
-    const lastFinish = [...parts].reverse().find((part) => part.type === "step-finish") as MessageV2.StepFinishPart | undefined
+    const lastFinish = [...parts].reverse().find((part) => part.type === "step-finish") as
+      | MessageV2.StepFinishPart
+      | undefined
     step = lastFinish ? `done:${lastFinish.reason}` : "done"
     const lastText = [...parts].reverse().find((part) => part.type === "text") as MessageV2.TextPart | undefined
     detail = previewText(lastText?.text, 120)
@@ -782,7 +860,7 @@ function summarizeSession(
 
   return {
     id: session.id,
-    title: session.title,
+    title: normalizeMonitorTitle(session.title, undefined, session.directory, session.id),
     parentID: session.parentID,
     directory: session.directory,
     updated: session.time.updated,
@@ -798,6 +876,137 @@ function summarizeSession(
       120,
     ),
     recentActions,
+    roundNumber: parseRoundNumber(session.title) ?? parseRoundNumber(session.directory),
+  }
+}
+
+function formatActionNarrative(action: MonitorAction | undefined) {
+  if (!action) return undefined
+  const detail = previewText(action.detail, 180)
+  return detail ? `${action.label}: ${detail}` : action.label
+}
+
+function fallbackWhyStarted(row: MonitorRow) {
+  if (row.whyStarted) return row.whyStarted
+  if (row.task) {
+    return describeTaskStart(row.task) ?? describeTaskPurpose(row.task)
+  }
+
+  const source = row.monitorKind === "pipeline" ? "pipeline" : "ad hoc"
+  const user = previewText(row.lastUser, 180)
+  if (user) return `This ${source} session was started for the request: ${user}.`
+  if (row.title) return `This ${source} session was started as "${previewText(row.title, 180)}".`
+  return `This ${source} session started without a structured task narrative.`
+}
+
+function fallbackStatusReason(row: MonitorRow) {
+  if (row.statusReason) return row.statusReason
+
+  const detail = previewText(row.detail, 200)
+  const latestAction = formatActionNarrative(row.recentActions.at(-1))
+
+  switch (row.status) {
+    case "running":
+      return detail
+        ? `This session is still running. Latest observed output: ${detail}.`
+        : latestAction
+          ? `This session is still running. Latest observed action: ${latestAction}.`
+          : "This session is still running."
+    case "retry":
+      return detail
+        ? `This session is in retry flow. Current signal: ${detail}.`
+        : latestAction
+          ? `This session is in retry flow. Latest observed action: ${latestAction}.`
+          : "This session is waiting for or performing another retry."
+    case "done":
+      return detail
+        ? `This session finished successfully. Latest result: ${detail}.`
+        : latestAction
+          ? `This session finished successfully. Final observed action: ${latestAction}.`
+          : "This session finished successfully."
+    case "error":
+      return detail
+        ? `This session ended with an error signal: ${detail}.`
+        : latestAction
+          ? `This session ended with an error after: ${latestAction}.`
+          : "This session ended with an error."
+    case "archived":
+      return detail ? `This session is archived. Last recorded detail: ${detail}.` : "This session is archived."
+    case "idle":
+    default:
+      return detail
+        ? `No live runtime signal is active. Last known detail: ${detail}.`
+        : latestAction
+          ? `No live runtime signal is active. Last observed action: ${latestAction}.`
+          : "No live runtime signal is currently active for this session."
+  }
+}
+
+function fallbackNextStep(row: MonitorRow) {
+  if (row.nextStepTitle || row.nextStepReason) {
+    return {
+      nextStepTitle: row.nextStepTitle,
+      nextStepReason: row.nextStepReason,
+    }
+  }
+
+  if (row.status === "running" || row.status === "retry") {
+    return {
+      nextStepTitle: undefined,
+      nextStepReason: "This session is still active, so no downstream stage has been recorded yet.",
+    }
+  }
+
+  if (row.monitorKind === "pipeline" || row.task) {
+    return {
+      nextStepTitle: undefined,
+      nextStepReason: "No explicit next-stage transition was recorded in the pipeline artifacts for this session.",
+    }
+  }
+
+  return {
+    nextStepTitle: undefined,
+    nextStepReason: "This ad hoc session does not have a structured follow-up stage recorded.",
+  }
+}
+
+function fallbackReasonTrail(row: MonitorRow) {
+  if (row.reasonTrail?.length) return row.reasonTrail
+
+  const trail: string[] = []
+  if (row.titleSource) {
+    trail.push(`Title source: ${row.titleSource}.`)
+  }
+
+  const latestActions = row.recentActions
+    .slice(-3)
+    .map((action) => formatActionNarrative(action))
+    .filter((line): line is string => !!line)
+
+  for (const line of latestActions) {
+    trail.push(`Observed action: ${line}.`)
+  }
+
+  if (row.status === "retry") {
+    trail.push("This session is marked as retry, so another attempt or follow-up worker was expected.")
+  }
+
+  if (row.status === "error") {
+    trail.push("This session reached an error state, so upstream orchestration may have stopped or rerouted work.")
+  }
+
+  return trail.length ? trail : undefined
+}
+
+function finalizeNarrativeRow(row: MonitorRow): MonitorRow {
+  const next = fallbackNextStep(row)
+  return {
+    ...row,
+    whyStarted: fallbackWhyStarted(row),
+    statusReason: fallbackStatusReason(row),
+    nextStepTitle: next.nextStepTitle,
+    nextStepReason: next.nextStepReason,
+    reasonTrail: fallbackReasonTrail(row),
   }
 }
 
@@ -811,22 +1020,22 @@ async function collectMonitorRows(limit: number) {
   const artifactByID = new Map<string, MonitorRow>(artifactRows.map((row) => [row.id, row] as const))
 
   for (const session of sessions) {
-    const messages = await Session.messages({ sessionID: session.id, limit: 20 }).catch(() => [] as MessageV2.WithParts[])
+    const messages = await Session.messages({ sessionID: session.id, limit: 20 }).catch(
+      () => [] as MessageV2.WithParts[],
+    )
     const sessionRow = summarizeSession(session, statuses.get(session.id) ?? { type: "idle" }, messages, 20)
     const artifactRow = artifactByID.get(session.id)
     const merged = artifactRow ? mergeSessionRow(sessionRow, artifactRow) : sessionRow
-    rows.push(merged)
+    rows.push(finalizeNarrativeRow(merged))
     seen.add(merged.id)
   }
 
   for (const artifactRow of artifactRows) {
     if (seen.has(artifactRow.id)) continue
-    rows.push(artifactRow)
+    rows.push(finalizeNarrativeRow(artifactRow))
   }
 
-  return rows
-    .sort((left, right) => right.updated - left.updated)
-    .slice(0, requestLimit)
+  return rows.sort((left, right) => right.updated - left.updated).slice(0, requestLimit)
 }
 
 function escapeHtml(input: string) {
@@ -853,6 +1062,9 @@ async function main() {
   const intervalSeconds = Math.max(1, Number(getOption("--interval", "2")) || 2)
   const limit = Math.max(1, Number(getOption("--limit", "50")) || 50)
 
+  // Warm once so monitor refresh does not repeatedly bootstrap/dispose the OpenCode runtime.
+  await withMonitorInstance(async () => undefined)
+
   const server = createServer(async (request, response) => {
     const url = new URL(request.url || "/", `http://${hostname}:${port}`)
 
@@ -865,7 +1077,7 @@ async function main() {
     if (url.pathname === "/api/sessions") {
       try {
         const requestLimit = Math.max(1, Number(url.searchParams.get("limit") || limit))
-        const rows = await bootstrap(process.cwd(), async () => collectMonitorRows(requestLimit))
+        const rows = await withMonitorInstance(() => collectMonitorRows(requestLimit))
         response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" })
         response.end(JSON.stringify({ generatedAt: Date.now(), rows }))
         return
@@ -884,8 +1096,17 @@ async function main() {
   })
 
   server.listen(port, hostname, () => {
-    console.log(`Auto-evolve monitor listening on ${escapeHtml(`http://${hostname === "0.0.0.0" ? "127.0.0.1" : hostname}:${port}`)}`)
+    console.log(
+      `Auto-evolve monitor listening on ${escapeHtml(`http://${hostname === "0.0.0.0" ? "127.0.0.1" : hostname}:${port}`)}`,
+    )
   })
+
+  const cleanup = () => {
+    void Instance.disposeAll().catch(() => {})
+    server.close()
+  }
+  process.once("SIGINT", cleanup)
+  process.once("SIGTERM", cleanup)
 }
 
 main().catch((error) => {

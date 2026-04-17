@@ -1,16 +1,8 @@
-import type {
-  LongTaskBudgets,
-  LongTaskOperationalContextItem,
-  LongTaskRunStatus,
-} from "../long-task/contract"
+import type { LongTaskBudgets, LongTaskOperationalContextItem, LongTaskRunStatus } from "../long-task/contract"
 
 export type LongTaskCampaignMode = "graph_iterative" | "single_session_iterative"
 
-export type LongTaskCampaignStatus =
-  | "running"
-  | "verified_success"
-  | "round_limit_reached"
-  | "failed"
+export type LongTaskCampaignStatus = "bootstrapping" | "running" | "verified_success" | "round_limit_reached" | "failed"
 
 export interface LongTaskCampaignSeedTarget {
   targetPath: string
@@ -40,6 +32,48 @@ export interface LongTaskCampaignOperationalMemoryRecord extends LongTaskOperati
   lastRound: number
   occurrenceCount: number
   sourceRunIDs: string[]
+}
+
+export type LongTaskCampaignWorkingMemoryKind =
+  | "stable_fact"
+  | "validated_method"
+  | "real_blocker"
+  | "forbidden_path"
+  | "package_gap"
+
+export type LongTaskCampaignConfidence = "low" | "medium" | "high"
+
+export interface LongTaskCampaignWorkingMemoryRecord {
+  key: string
+  kind: LongTaskCampaignWorkingMemoryKind
+  statement: string
+  confidence: LongTaskCampaignConfidence
+  evidenceCount: number
+  firstSeenRound: number
+  lastSeenRound: number
+  refs: string[]
+  applicableUnits?: string[]
+}
+
+export interface LongTaskCampaignWorkingMemoryDocument {
+  updatedAt: string
+  updatedThroughRound: number
+  items: LongTaskCampaignWorkingMemoryRecord[]
+}
+
+export interface LongTaskCampaignRoutingControl {
+  updatedAt: string
+  updatedThroughRound: number
+  currentPhase: string
+  requiredNextRegions: string[]
+  forbiddenUnits: string[]
+  forbiddenRegions: string[]
+  prerequisites: string[]
+  blockedBy: string[]
+  readyForFinalAcceptance: boolean
+  summary?: string
+  evidenceRefs: string[]
+  notes?: string[]
 }
 
 export type LongTaskCampaignWorkerRole =
@@ -76,20 +110,28 @@ export interface LongTaskCampaignReviewSuggestion {
 
 export interface LongTaskCampaignExplorationNode {
   nodeID: string
+  region: string
   parentID?: string
-  hypothesis: string
-  status:
-    | "unexplored"
-    | "in_progress"
-    | "weak_fail"
-    | "strong_fail"
-    | "promising"
-    | "validated_success"
-    | "deprecated"
+  summary: string
+  status: "unexplored" | "in_progress" | "weak_fail" | "strong_fail" | "promising" | "validated_success" | "deprecated"
   confidence: number
   evidenceRefs: string[]
   lastUpdatedRound: number
+  prerequisites?: string[]
+  attemptCount?: number
+  successCount?: number
+  failCount?: number
   notes?: string[]
+}
+
+export interface LongTaskCampaignExplorationTreeDocument {
+  updatedAt: string
+  updatedThroughRound: number
+  currentPhase: string
+  frontierRegions: string[]
+  requiredNextRegions: string[]
+  forbiddenRepeatRegions: string[]
+  nodes: LongTaskCampaignExplorationNode[]
 }
 
 export interface LongTaskCampaignRunTraceCommandRecord {
@@ -155,6 +197,7 @@ export interface LongTaskCampaignRunTraceAttemptRecord {
     refs: string[]
     tags: string[]
   }>
+  attemptFindings: string[]
   commandRecords: LongTaskCampaignRunTraceCommandRecord[]
 }
 
@@ -173,6 +216,30 @@ export interface LongTaskCampaignRunTrace {
   blockers: string[]
   pendingPackageImpact: string[]
   attempts: LongTaskCampaignRunTraceAttemptRecord[]
+}
+
+export interface LongTaskCampaignRunTraceDigest {
+  campaignID: string
+  roundNumber: number
+  runID: string
+  createdAt: string
+  finalStatus: LongTaskRunStatus
+  summary: string
+  exploredRegions: string[]
+  keySuccessPaths: string[]
+  keyFailurePaths: string[]
+  blockers: string[]
+  pendingPackageImpact: string[]
+  validatedMethods: string[]
+  forbiddenPaths: string[]
+  packageGaps: string[]
+  commandOutcomes: Array<{
+    unitID: string
+    attempt: number
+    successCommands: string[]
+    failedCommands: string[]
+  }>
+  refs: string[]
 }
 
 export interface LongTaskCampaignSpec {
@@ -220,6 +287,9 @@ export interface LongTaskCampaignState {
   status: LongTaskCampaignStatus
   createdAt: string
   updatedAt: string
+  ownerPID?: number
+  ownerCommandHint?: string
+  heartbeatAt?: string
   notes?: string
   lastRunID?: string
   lastSummary?: string

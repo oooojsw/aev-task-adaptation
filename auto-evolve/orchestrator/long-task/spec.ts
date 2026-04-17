@@ -103,6 +103,7 @@ function normalizeValidator(raw: unknown): LongTaskValidatorContract | undefined
       successExitCodes: Array.isArray(raw.successExitCodes)
         ? raw.successExitCodes.filter((item): item is number => typeof item === "number")
         : undefined,
+      timeoutMs: typeof raw.timeoutMs === "number" && raw.timeoutMs > 0 ? raw.timeoutMs : undefined,
     }
   }
   if (raw.type === "prompt_json") {
@@ -233,6 +234,8 @@ export async function loadLongTaskSpec(
   const formalPackageRoots = normalizeStringArray(raw.formalPackageRoots).map((item) => resolveMaybePath(baseDir, item))
   const campaignPendingPackageRoot = normalizeMaybeString(raw.campaignPendingPackageRoot)
   const campaignExplorationTreePath = normalizeMaybeString(raw.campaignExplorationTreePath)
+  const campaignWorkingMemoryPath = normalizeMaybeString(raw.campaignWorkingMemoryPath)
+  const campaignRoutingControlPath = normalizeMaybeString(raw.campaignRoutingControlPath)
   const validators = normalizeValidators(raw.validators).map((validator) =>
     validator.type === "script"
       ? {
@@ -295,6 +298,10 @@ export async function loadLongTaskSpec(
       : undefined,
     campaignExplorationTreePath: campaignExplorationTreePath
       ? resolveMaybePath(baseDir, campaignExplorationTreePath)
+      : undefined,
+    campaignWorkingMemoryPath: campaignWorkingMemoryPath ? resolveMaybePath(baseDir, campaignWorkingMemoryPath) : undefined,
+    campaignRoutingControlPath: campaignRoutingControlPath
+      ? resolveMaybePath(baseDir, campaignRoutingControlPath)
       : undefined,
     capabilities,
     validators,
@@ -371,6 +378,8 @@ export async function loadLongTaskSpec(
     ...spec.materials.map((item) => item.path),
     ...(spec.campaignPendingPackageRoot ? [spec.campaignPendingPackageRoot] : []),
     ...(spec.campaignExplorationTreePath ? [spec.campaignExplorationTreePath] : []),
+    ...(spec.campaignWorkingMemoryPath ? [spec.campaignWorkingMemoryPath] : []),
+    ...(spec.campaignRoutingControlPath ? [spec.campaignRoutingControlPath] : []),
   ]) {
     if (!(await pathExists(ref))) {
       throw new Error(`Long-task spec references a missing input path: ${ref}`)

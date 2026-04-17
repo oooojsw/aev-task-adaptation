@@ -2,6 +2,7 @@ import type { ExecutionSpec } from "../schema"
 
 export type LongTaskRunStatus =
   | "planning"
+  | "bootstrapping"
   | "running"
   | "waiting_for_retry"
   | "verified_success"
@@ -18,15 +19,7 @@ export type LongTaskValidatorType = "script" | "prompt_json"
 
 export type LongTaskCapabilityKind = "inspect" | "transform" | "validate" | "compare" | "synthesize"
 
-export type LongTaskScratchUnitKind =
-  | "claim"
-  | "obs"
-  | "map"
-  | "hyp"
-  | "fail"
-  | "fix"
-  | "rule_candidate"
-  | "verified"
+export type LongTaskScratchUnitKind = "claim" | "obs" | "map" | "hyp" | "fail" | "fix" | "rule_candidate" | "verified"
 
 export type LongTaskLearningUnitKind =
   | "obs"
@@ -118,6 +111,7 @@ export interface LongTaskScriptValidatorContract {
   blocking?: boolean
   inputMode?: "json_file" | "none"
   successExitCodes?: number[]
+  timeoutMs?: number
 }
 
 export interface LongTaskPromptValidatorContract {
@@ -148,6 +142,8 @@ export interface LongTaskSpec {
   formalPackageRoots?: string[]
   campaignPendingPackageRoot?: string
   campaignExplorationTreePath?: string
+  campaignWorkingMemoryPath?: string
+  campaignRoutingControlPath?: string
   capabilities?: LongTaskCapabilityContract[]
   validators: LongTaskValidatorContract[]
   planning?: ExecutionSpec
@@ -192,6 +188,9 @@ export interface LongTaskProgressState {
   runID: string
   createdAt: string
   updatedAt: string
+  ownerPID?: number
+  ownerCommandHint?: string
+  heartbeatAt?: string
   status: LongTaskRunStatus
   graphRevision: number
   activeUnitID?: string

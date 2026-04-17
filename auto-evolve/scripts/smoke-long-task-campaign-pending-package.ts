@@ -130,7 +130,10 @@ async function main() {
 
   await mustExist(path.join(campaignDir, "pending-expert-package", "current", "manifest.md"), "pending current manifest")
   await mustExist(path.join(campaignDir, "exploration-tree.json"), "exploration tree json")
+  await mustExist(path.join(campaignDir, "campaign-working-memory.json"), "campaign working memory json")
+  await mustExist(path.join(campaignDir, "routing-control.json"), "campaign routing control json")
   await mustExist(path.join(campaignDir, "rounds", "round-001", "run-trace.json"), "round run trace")
+  await mustExist(path.join(campaignDir, "rounds", "round-001", "run-trace-digest.json"), "round run trace digest")
 
   if (await pathExists(path.join(campaignDir, "exploration-tree.md"))) {
     throw new Error("Campaign should not emit exploration-tree.md when JSON is the only tree source of truth")
@@ -145,6 +148,12 @@ async function main() {
   }
   if (typeof generatedRoundSpec.campaignExplorationTreePath !== "string") {
     throw new Error("Generated round spec is missing campaignExplorationTreePath")
+  }
+  if (typeof generatedRoundSpec.campaignWorkingMemoryPath !== "string") {
+    throw new Error("Generated round spec is missing campaignWorkingMemoryPath")
+  }
+  if (typeof generatedRoundSpec.campaignRoutingControlPath !== "string") {
+    throw new Error("Generated round spec is missing campaignRoutingControlPath")
   }
   if (generatedRoundSpec.disableCompletionValidators !== true) {
     throw new Error("Generated round spec should disable per-round completion validators")
@@ -168,6 +177,8 @@ async function main() {
         generatedRoundSpec: {
           campaignPendingPackageRoot: generatedRoundSpec.campaignPendingPackageRoot,
           campaignExplorationTreePath: generatedRoundSpec.campaignExplorationTreePath,
+          campaignWorkingMemoryPath: generatedRoundSpec.campaignWorkingMemoryPath,
+          campaignRoutingControlPath: generatedRoundSpec.campaignRoutingControlPath,
         },
       },
       null,

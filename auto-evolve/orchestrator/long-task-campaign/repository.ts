@@ -1,8 +1,11 @@
 import path from "node:path"
+import process from "node:process"
 import { appendFile } from "node:fs/promises"
 import { autoEvolvePath, ensureDirectory, readJsonFile, writeJsonFile, writeTextFile } from "../fs"
 import type {
-  LongTaskCampaignExplorationNode,
+  LongTaskCampaignExplorationTreeDocument,
+  LongTaskCampaignRoutingControl,
+  LongTaskCampaignWorkingMemoryDocument,
   LongTaskCampaignOperationalMemoryRecord,
   LongTaskCampaignRoundRecord,
   LongTaskCampaignReviewSuggestion,
@@ -17,7 +20,12 @@ export interface LongTaskCampaignPaths {
   aggregatedFailurePacketsPath: string
   aggregatedRetryLessonsPath: string
   aggregatedLearningUnitsPath: string
+  carryoverFailurePacketsPath: string
+  carryoverRetryLessonsPath: string
+  carryoverLearningUnitsPath: string
   campaignOperationalMemoryPath: string
+  campaignWorkingMemoryPath: string
+  campaignRoutingControlPath: string
   campaignSeedContextPath: string
   campaignLessonsPath: string
   pendingPackageRoot: string
@@ -33,6 +41,7 @@ export interface LongTaskCampaignRoundPaths {
   generatedSpecPath: string
   roundSummaryPath: string
   runTraceJsonPath: string
+  runTraceDigestPath: string
   runTraceMarkdownPath: string
   harvestedRoot: string
   snapshotsRoot: string
@@ -43,6 +52,14 @@ export interface LongTaskCampaignRoundPaths {
   finalAcceptanceRoot: string
   finalAcceptanceResultPath: string
   explorationTreeDraftPath: string
+  routingControlDraftPath: string
+}
+
+function detectOwnerCommandHint() {
+  const argv = process.argv.map((item) => item.toLowerCase())
+  if (argv.some((item) => item.includes("run-long-task-campaign"))) return "run-long-task-campaign"
+  if (argv.some((item) => item.includes("run-long-task"))) return "run-long-task"
+  return undefined
 }
 
 function slugify(input: string) {
@@ -68,7 +85,12 @@ export function longTaskCampaignPaths(cwd: string, campaignID: string): LongTask
     aggregatedFailurePacketsPath: path.join(root, "aggregated-failure-packets.jsonl"),
     aggregatedRetryLessonsPath: path.join(root, "aggregated-retry-lessons.jsonl"),
     aggregatedLearningUnitsPath: path.join(root, "aggregated-learning-units.jsonl"),
+    carryoverFailurePacketsPath: path.join(root, "carryover-failure-packets.md"),
+    carryoverRetryLessonsPath: path.join(root, "carryover-retry-lessons.md"),
+    carryoverLearningUnitsPath: path.join(root, "carryover-learning-units.md"),
     campaignOperationalMemoryPath: path.join(root, "campaign-operational-memory.json"),
+    campaignWorkingMemoryPath: path.join(root, "campaign-working-memory.json"),
+    campaignRoutingControlPath: path.join(root, "routing-control.json"),
     campaignSeedContextPath: path.join(root, "campaign-seed-context.md"),
     campaignLessonsPath: path.join(root, "campaign-failure-lessons.md"),
     pendingPackageRoot: path.join(root, "pending-expert-package"),
@@ -80,7 +102,10 @@ export function longTaskCampaignPaths(cwd: string, campaignID: string): LongTask
   }
 }
 
-export function longTaskCampaignRoundPaths(paths: LongTaskCampaignPaths, roundNumber: number): LongTaskCampaignRoundPaths {
+export function longTaskCampaignRoundPaths(
+  paths: LongTaskCampaignPaths,
+  roundNumber: number,
+): LongTaskCampaignRoundPaths {
   const roundID = `round-${String(roundNumber).padStart(3, "0")}`
   const root = path.join(paths.roundsRoot, roundID)
   return {
@@ -88,6 +113,7 @@ export function longTaskCampaignRoundPaths(paths: LongTaskCampaignPaths, roundNu
     generatedSpecPath: path.join(root, "generated-spec.json"),
     roundSummaryPath: path.join(root, "round-summary.md"),
     runTraceJsonPath: path.join(root, "run-trace.json"),
+    runTraceDigestPath: path.join(root, "run-trace-digest.json"),
     runTraceMarkdownPath: path.join(root, "run-trace.md"),
     harvestedRoot: path.join(root, "harvested"),
     snapshotsRoot: path.join(root, "snapshots"),
@@ -98,6 +124,7 @@ export function longTaskCampaignRoundPaths(paths: LongTaskCampaignPaths, roundNu
     finalAcceptanceRoot: path.join(root, "final-acceptance"),
     finalAcceptanceResultPath: path.join(root, "final-acceptance", "result.json"),
     explorationTreeDraftPath: path.join(root, "exploration-tree.json"),
+    routingControlDraftPath: path.join(root, "routing-control.json"),
   }
 }
 
@@ -106,15 +133,49 @@ export async function initializeLongTaskCampaign(paths: LongTaskCampaignPaths, s
   await ensureDirectory(paths.roundsRoot)
   await ensureDirectory(paths.pendingPackageRoot)
   await ensureDirectory(paths.runTracesRoot)
-  await writeJsonFile(paths.campaignStatePath, state)
+  await writeLongTaskCampaignState(paths, state)
   await writeJsonFile(paths.campaignOperationalMemoryPath, [])
+  await writeJsonFile(paths.campaignWorkingMemoryPath, {
+    updatedAt: state.createdAt,
+    updatedThroughRound: 0,
+    items: [],
+  } satisfies LongTaskCampaignWorkingMemoryDocument)
+  await writeJsonFile(paths.campaignRoutingControlPath, {
+    updatedAt: state.createdAt,
+    updatedThroughRound: 0,
+    currentPhase: "bootstrap",
+    requiredNextRegions: [],
+    forbiddenUnits: [],
+    forbiddenRegions: [],
+    prerequisites: [],
+    blockedBy: [],
+    readyForFinalAcceptance: false,
+    summary: "Campaign has not completed the first round yet.",
+    evidenceRefs: [],
+    notes: [],
+  } satisfies LongTaskCampaignRoutingControl)
   await writeTextFile(paths.campaignSeedContextPath, "# Campaign Seed Context\n\n- no promoted cross-run memory yet\n")
-  await writeJsonFile(paths.explorationTreePath, [])
+  await writeJsonFile(paths.explorationTreePath, {
+    updatedAt: state.createdAt,
+    updatedThroughRound: 0,
+    currentPhase: "bootstrap",
+    frontierRegions: [],
+    requiredNextRegions: [],
+    forbiddenRepeatRegions: [],
+    nodes: [],
+  } satisfies LongTaskCampaignExplorationTreeDocument)
   await writeTextFile(paths.campaignReviewSuggestionsPath, "")
 }
 
 export async function writeLongTaskCampaignState(paths: LongTaskCampaignPaths, state: LongTaskCampaignState) {
-  await writeJsonFile(paths.campaignStatePath, state)
+  const heartbeatAt = new Date().toISOString()
+  await writeJsonFile(paths.campaignStatePath, {
+    ...state,
+    ownerPID: state.ownerPID ?? process.pid,
+    ownerCommandHint: state.ownerCommandHint ?? detectOwnerCommandHint(),
+    heartbeatAt,
+    updatedAt: heartbeatAt,
+  })
 }
 
 export async function readLongTaskCampaignState(paths: LongTaskCampaignPaths) {
@@ -129,7 +190,14 @@ export async function appendLongTaskCampaignHistory(paths: LongTaskCampaignPaths
 export async function appendLinesToAggregate(target: string, lines: string[]) {
   if (!lines.length) return
   await ensureDirectory(path.dirname(target))
-  await appendFile(target, lines.map((line) => line.trim()).filter(Boolean).join("\n") + "\n", "utf8")
+  await appendFile(
+    target,
+    lines
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join("\n") + "\n",
+    "utf8",
+  )
 }
 
 export async function writeLongTaskCampaignLessons(paths: LongTaskCampaignPaths, content: string) {
@@ -147,19 +215,41 @@ export async function writeLongTaskCampaignOperationalMemory(
   await writeJsonFile(paths.campaignOperationalMemoryPath, records)
 }
 
+export async function readLongTaskCampaignWorkingMemory(paths: LongTaskCampaignPaths) {
+  return readJsonFile<LongTaskCampaignWorkingMemoryDocument>(paths.campaignWorkingMemoryPath)
+}
+
+export async function writeLongTaskCampaignWorkingMemory(
+  paths: LongTaskCampaignPaths,
+  document: LongTaskCampaignWorkingMemoryDocument,
+) {
+  await writeJsonFile(paths.campaignWorkingMemoryPath, document)
+}
+
+export async function readLongTaskCampaignRoutingControl(paths: LongTaskCampaignPaths) {
+  return readJsonFile<LongTaskCampaignRoutingControl>(paths.campaignRoutingControlPath)
+}
+
+export async function writeLongTaskCampaignRoutingControl(
+  paths: LongTaskCampaignPaths,
+  control: LongTaskCampaignRoutingControl,
+) {
+  await writeJsonFile(paths.campaignRoutingControlPath, control)
+}
+
 export async function writeLongTaskCampaignSeedContext(paths: LongTaskCampaignPaths, content: string) {
   await writeTextFile(paths.campaignSeedContextPath, content)
 }
 
 export async function writeLongTaskCampaignExplorationTree(
   paths: LongTaskCampaignPaths,
-  records: LongTaskCampaignExplorationNode[],
+  document: LongTaskCampaignExplorationTreeDocument,
 ) {
-  await writeJsonFile(paths.explorationTreePath, records)
+  await writeJsonFile(paths.explorationTreePath, document)
 }
 
 export async function readLongTaskCampaignExplorationTree(paths: LongTaskCampaignPaths) {
-  return readJsonFile<LongTaskCampaignExplorationNode[]>(paths.explorationTreePath)
+  return readJsonFile<LongTaskCampaignExplorationTreeDocument>(paths.explorationTreePath)
 }
 
 export async function writeLongTaskCampaignReviewerSuggestion(

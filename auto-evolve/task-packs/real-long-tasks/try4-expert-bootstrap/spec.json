@@ -96,6 +96,7 @@
       "placement": "completion_only",
       "required": true,
       "blocking": true,
+      "timeoutMs": 1200000,
       "args": [
         "./auto-evolve/task-packs/real-long-tasks/try4-expert-bootstrap/deployment/deployment-spec.json"
       ]

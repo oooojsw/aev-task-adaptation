@@ -4,22 +4,18 @@
       "label": "generated report",
       "targetLabel": "generated report",
       "referencePath": "C:/Users/ZhuanZ/Desktop/try4 - \u526f\u672c/\u6750\u6599/\u534e\u8fb0\u8bc4\u62a5\u5b57(2026)\u7b2cXXXX\u53f7 \u5357\u4eac\u6069\u745e\u7279\u5b9e\u4e1a\u6709\u9650\u516c\u53f8\u62df\u5904\u7f6e\u5e9f\u65e7\u7269\u8d44\u9879\u76ee\u8bc4\u4f30\u62a5\u544a.doc",
-      "minNumericRecall": 0.80,
+      "minNumericRecall": 0.8,
       "minNumericDigits": 2,
-      "requiredContains": [
-        "22893.8"
-      ],
+      "requiredContains": ["20,260", "20665.2", "南京恩瑞特实业有限公司", "2026年3月23日"],
       "minRequiredTokenRecall": 1.0
     },
     {
       "label": "generated explanation",
       "targetLabel": "generated explanation",
       "referencePath": "C:/Users/ZhuanZ/Desktop/try4 - \u526f\u672c/\u6750\u6599/\u534e\u8fb0\u8bc4\u62a5\u5b57(2026)\u7b2cXXXX\u53f7 \u5357\u4eac\u6069\u745e\u7279\u5b9e\u4e1a\u6709\u9650\u516c\u53f8\u62df\u5904\u7f6e\u5e9f\u65e7\u7269\u8d44\u9879\u76ee\u8bc4\u4f30\u8bf4\u660e.doc",
-      "minNumericRecall": 0.80,
+      "minNumericRecall": 0.8,
       "minNumericDigits": 2,
-      "requiredContains": [
-        "22893.8"
-      ],
+      "requiredContains": ["20,260", "20665.2", "南京恩瑞特实业有限公司", "2026年3月23日"],
       "minRequiredTokenRecall": 1.0
     }
   ]

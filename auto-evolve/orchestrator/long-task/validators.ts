@@ -11,11 +11,15 @@ import type {
   LongTaskWorkUnit,
 } from "./contract"
 import { writeJsonFile, writeTextFile } from "../fs"
-import { runOpencodeTask } from "../opencode"
+import { runOpencodeTask, type OpencodeTaskInput } from "../opencode"
 import type { AutoEvolveConfig } from "../schema"
 import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
 import { buildLongTaskPromptValidatorPrompt } from "./prompts"
+import { extractJsonObject } from "./json-extract"
+import { registerRuntimeProcess, terminateProcessTree } from "../runtime-process-registry"
+
+const DEFAULT_SCRIPT_VALIDATOR_TIMEOUT_MS = 10 * 60 * 1000
 
 function nowISO() {
   return new Date().toISOString()
@@ -38,23 +42,24 @@ function capabilityAttachedFiles(spec: LongTaskSpec) {
   return uniqueStrings((spec.capabilities ?? []).flatMap((capability) => capability.attachedFiles ?? []))
 }
 
-function extractJsonObject(raw: string) {
-  const trimmed = raw.trim()
-  if (!trimmed) return undefined
-  const attempts = [trimmed]
-  const fencedMatch = trimmed.match(/```json\s*([\s\S]*?)```/i)
-  if (fencedMatch?.[1]) attempts.push(fencedMatch[1].trim())
-  const firstObjectMatch = trimmed.match(/\{[\s\S]*\}/)
-  if (firstObjectMatch?.[0]) attempts.push(firstObjectMatch[0].trim())
-
-  for (const attempt of attempts) {
-    try {
-      return JSON.parse(attempt) as Record<string, unknown>
-    } catch {
-      continue
-    }
+function readBooleanField(raw: Record<string, unknown> | undefined, ...keys: string[]) {
+  for (const key of keys) {
+    const value = raw?.[key]
+    if (typeof value === "boolean") return value
   }
   return undefined
+}
+
+function readStringField(raw: Record<string, unknown> | undefined, ...keys: string[]) {
+  for (const key of keys) {
+    const value = raw?.[key]
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
+  return undefined
+}
+
+function readDetailsField(raw: Record<string, unknown> | undefined) {
+  return normalizeDetails(raw?.details ?? raw?.detailLines ?? raw?.messages)
 }
 
 function inferRunner(contract: LongTaskScriptValidatorContract) {
@@ -96,6 +101,8 @@ async function runScriptValidator(input: {
   attempt: number
   validatorDir: string
   payload: Record<string, unknown>
+  runtimeScope?: string
+  onActivation?: OpencodeTaskInput["onSpawn"]
 }): Promise<LongTaskValidatorResult> {
   await mkdir(input.validatorDir, { recursive: true })
   const payloadPath = path.join(input.validatorDir, "validator_input.json")
@@ -110,19 +117,45 @@ async function runScriptValidator(input: {
     stderr: "pipe",
     env: process.env,
   })
+  registerRuntimeProcess(input.runtimeScope, child.pid, input.contract.path)
+  await input.onActivation?.()
 
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
+  const stdoutPromise = new Response(child.stdout).text()
+  const stderrPromise = new Response(child.stderr).text()
+  const timeoutMs = input.contract.timeoutMs ?? DEFAULT_SCRIPT_VALIDATOR_TIMEOUT_MS
+  let timedOut = false
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<number>((resolve) => {
+    timeoutHandle = setTimeout(async () => {
+      timedOut = true
+      try {
+        await terminateProcessTree(child.pid)
+      } catch {}
+      try {
+        resolve(await child.exited)
+      } catch {
+        resolve(124)
+      }
+    }, timeoutMs)
+  })
+
+  const exitCode = await Promise.race([child.exited, timeoutPromise])
+  if (timeoutHandle) clearTimeout(timeoutHandle)
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise])
+  const normalizedStderr = timedOut
+    ? [`Validator timed out after ${timeoutMs} ms and the full process tree was terminated.`, stderr]
+        .filter(Boolean)
+        .join("\n\n")
+    : stderr
 
   await writeTextFile(stdoutPath, stdout)
-  await writeTextFile(stderrPath, stderr)
+  await writeTextFile(stderrPath, normalizedStderr)
 
-  const parsed = extractJsonObject(stdout)
+  const parsed = extractJsonObject(stdout, {
+    preferredKeys: ["passed", "summary", "details", "blocking"],
+  })
   const successExitCodes = input.contract.successExitCodes ?? [0]
-  const passedFromExit = successExitCodes.includes(exitCode)
+  const passedFromExit = !timedOut && successExitCodes.includes(exitCode)
 
   return {
     id: `validator-${randomUUID().slice(0, 8)}`,
@@ -132,21 +165,19 @@ async function runScriptValidator(input: {
     validatorID: input.contract.id,
     validatorType: "script",
     createdAt: nowISO(),
-    passed:
-      typeof parsed?.passed === "boolean"
-        ? parsed.passed
-        : passedFromExit,
-    blocking: typeof parsed?.blocking === "boolean" ? parsed.blocking : input.contract.blocking === true,
-    summary:
-      typeof parsed?.summary === "string" && parsed.summary.trim()
-        ? parsed.summary
-        : passedFromExit
-          ? `${input.contract.title} passed.`
-          : `${input.contract.title} failed with exit code ${exitCode}.`,
+    passed: readBooleanField(parsed, "passed", "ok", "success") ?? passedFromExit,
+    blocking: readBooleanField(parsed, "blocking", "is_blocking") ?? input.contract.blocking === true,
+    summary: readStringField(parsed, "summary", "message", "result_summary")
+      ? (readStringField(parsed, "summary", "message", "result_summary") as string)
+      : timedOut
+        ? `${input.contract.title} timed out after ${timeoutMs} ms.`
+      : passedFromExit
+        ? `${input.contract.title} passed.`
+        : `${input.contract.title} failed with exit code ${exitCode}.`,
     details:
-      normalizeDetails(parsed?.details).length > 0
-        ? normalizeDetails(parsed?.details)
-        : [stderr.trim() || stdout.trim()].filter(Boolean),
+      readDetailsField(parsed).length > 0
+        ? readDetailsField(parsed)
+        : [normalizedStderr.trim() || stdout.trim()].filter(Boolean),
     evidenceRefs: [payloadPath, stdoutPath, stderrPath],
     rawOutputPath: stdoutPath,
   }
@@ -162,6 +193,8 @@ async function runPromptValidator(input: {
   attempt: number
   validatorDir: string
   bundlePath: string
+  runtimeScope?: string
+  onActivation?: OpencodeTaskInput["onSpawn"]
 }): Promise<LongTaskValidatorResult> {
   await mkdir(input.validatorDir, { recursive: true })
   const promptPath = path.join(input.validatorDir, "validator_prompt.txt")
@@ -202,6 +235,8 @@ async function runPromptValidator(input: {
     model: selection.model,
     agent: selection.agent,
     variant: selection.variant,
+    runtimeScope: input.runtimeScope,
+    onSpawn: input.onActivation,
   })
 
   await writeTaskArtifacts(path.join(input.validatorDir, "session"), task, {
@@ -210,7 +245,9 @@ async function runPromptValidator(input: {
     methodID: input.spec.reversePropagation?.recipeID,
   })
 
-  const parsed = extractJsonObject(task.result.responseText)
+  const parsed = extractJsonObject(task.result.responseText, {
+    preferredKeys: ["passed", "summary", "details", "blocking"],
+  })
 
   return {
     id: `validator-${randomUUID().slice(0, 8)}`,
@@ -220,15 +257,14 @@ async function runPromptValidator(input: {
     validatorID: input.contract.id,
     validatorType: "prompt_json",
     createdAt: nowISO(),
-    passed: typeof parsed?.passed === "boolean" ? parsed.passed : false,
-    blocking: typeof parsed?.blocking === "boolean" ? parsed.blocking : input.contract.blocking === true,
-    summary:
-      typeof parsed?.summary === "string" && parsed.summary.trim()
-        ? parsed.summary
-        : `${input.contract.title} did not return a valid validator summary.`,
+    passed: readBooleanField(parsed, "passed", "ok", "success") ?? false,
+    blocking: readBooleanField(parsed, "blocking", "is_blocking") ?? input.contract.blocking === true,
+    summary: readStringField(parsed, "summary", "message", "result_summary")
+      ? (readStringField(parsed, "summary", "message", "result_summary") as string)
+      : `${input.contract.title} did not return a valid validator summary.`,
     details:
-      normalizeDetails(parsed?.details).length > 0
-        ? normalizeDetails(parsed?.details)
+      readDetailsField(parsed).length > 0
+        ? readDetailsField(parsed)
         : [task.result.responseText.trim()].filter(Boolean),
     evidenceRefs: [path.join(input.validatorDir, "session", "response.txt"), input.bundlePath],
     rawOutputPath: path.join(input.validatorDir, "session", "response.txt"),
@@ -246,6 +282,8 @@ export async function runLongTaskValidator(input: {
   validatorDir: string
   bundlePath: string
   payload: Record<string, unknown>
+  runtimeScope?: string
+  onActivation?: OpencodeTaskInput["onSpawn"]
 }) {
   if (input.contract.type === "script") {
     return runScriptValidator({
@@ -257,6 +295,8 @@ export async function runLongTaskValidator(input: {
       attempt: input.attempt,
       validatorDir: input.validatorDir,
       payload: input.payload,
+      runtimeScope: input.runtimeScope,
+      onActivation: input.onActivation,
     })
   }
 
@@ -270,5 +310,7 @@ export async function runLongTaskValidator(input: {
     attempt: input.attempt,
     validatorDir: input.validatorDir,
     bundlePath: input.bundlePath,
+    runtimeScope: input.runtimeScope,
+    onActivation: input.onActivation,
   })
 }

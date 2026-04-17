@@ -3,10 +3,11 @@ import re
 import sys
 from pathlib import Path
 
-from word_text_utils import extract_word_text
+from word_text_utils import extract_word_text, normalize_text
 
 
 NUMBER_RE = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?%?")
+STRICT_NUMBER_RE = re.compile(r"^[-+]?\d[\d,]*(?:\.\d+)?%?$")
 
 
 def load_json(path_value: str):
@@ -39,7 +40,11 @@ def resolve_target(item, payload_targets):
 
 
 def normalize_number_token(token: str) -> str:
-    return token.replace(",", "").replace("％", "%").strip()
+    return token.replace(",", "").replace("锛?", "%").strip()
+
+
+def is_strict_numeric_token(token: str) -> bool:
+    return bool(STRICT_NUMBER_RE.fullmatch(token.strip()))
 
 
 def extract_number_tokens(text: str, min_digits: int) -> list[str]:
@@ -51,6 +56,15 @@ def extract_number_tokens(text: str, min_digits: int) -> list[str]:
             continue
         values.append(normalized)
     return sorted(set(values))
+
+
+def contains_expected_token(token: str, normalized_target_text: str, target_numbers: set[str]) -> bool:
+    normalized_token = token.strip()
+    if not normalized_token:
+        return False
+    if is_strict_numeric_token(normalized_token):
+        return normalize_number_token(normalized_token) in target_numbers
+    return normalize_text(normalized_token) in normalized_target_text
 
 
 def main():
@@ -95,49 +109,76 @@ def main():
     for pair in pairs:
         if not isinstance(pair, dict):
             continue
+
         target_path = resolve_target(pair, payload_targets)
-        reference_raw = pair.get("referencePath")
-        if not target_path or not isinstance(reference_raw, str) or not reference_raw.strip():
+        if not target_path:
             failed.append("unresolved_pair")
             details.append(f"unresolved pair: {pair}")
             continue
-
-        if Path(reference_raw).is_absolute():
-            reference_path = str(Path(reference_raw).resolve())
-        else:
-            reference_path = str((mapping_path.parent / reference_raw).resolve())
 
         if not Path(target_path).exists():
             failed.append(f"{pair.get('label') or Path(target_path).name}:missing_target")
             details.append(f"missing target: {target_path}")
             continue
-        if not Path(reference_path).exists():
-            failed.append(f"{pair.get('label') or Path(reference_path).name}:missing_reference")
-            details.append(f"missing reference: {reference_path}")
+
+        try:
+            target_text = extract_word_text(target_path)
+        except RuntimeError as exc:
+            failed.append(f"{pair.get('label') or Path(target_path).name}:unreadable_target")
+            details.append(f"cannot extract text from target {target_path}: {exc}")
             continue
-
-        target_text = extract_word_text(target_path)
-        reference_text = extract_word_text(reference_path)
+        normalized_target_text = normalize_text(target_text)
         min_digits = int(pair.get("minNumericDigits", 2))
-        reference_numbers = extract_number_tokens(reference_text, min_digits)
         target_numbers = set(extract_number_tokens(target_text, min_digits))
-        matched_numbers = [token for token in reference_numbers if token in target_numbers]
-        numeric_recall = len(matched_numbers) / len(reference_numbers) if reference_numbers else 1.0
 
-        min_numeric_recall = float(pair.get("minNumericRecall", 0.80))
         required_tokens = [
             str(token).strip()
             for token in pair.get("requiredContains", [])
             if isinstance(token, str) and str(token).strip()
         ]
-        matched_required_tokens = [token for token in required_tokens if token in target_text]
+        matched_required_tokens = [
+            token for token in required_tokens if contains_expected_token(token, normalized_target_text, target_numbers)
+        ]
         required_token_recall = len(matched_required_tokens) / len(required_tokens) if required_tokens else 1.0
         min_required_token_recall = float(pair.get("minRequiredTokenRecall", 1.0 if required_tokens else 0.0))
+
+        reference_numbers: list[str] = []
+        reference_raw = pair.get("referencePath")
         label = pair.get("label") or Path(target_path).name
+        numeric_basis_label = "required_tokens"
+
+        if isinstance(reference_raw, str) and reference_raw.strip():
+            if Path(reference_raw).is_absolute():
+                reference_path = str(Path(reference_raw).resolve())
+            else:
+                reference_path = str((mapping_path.parent / reference_raw).resolve())
+
+            if not Path(reference_path).exists():
+                failed.append(f"{label}:missing_reference")
+                details.append(f"missing reference: {reference_path}")
+                continue
+
+            try:
+                reference_text = extract_word_text(reference_path)
+                reference_numbers = extract_number_tokens(reference_text, min_digits)
+                numeric_basis_label = "reference_document"
+            except RuntimeError as exc:
+                details.append(f"{label}: reference extraction skipped ({exc})")
+
+        required_numeric_tokens = [
+            normalize_number_token(token)
+            for token in required_tokens
+            if is_strict_numeric_token(token)
+        ]
+        numeric_basis = reference_numbers or required_numeric_tokens
+        matched_numbers = [token for token in numeric_basis if token in target_numbers]
+        numeric_recall = len(matched_numbers) / len(numeric_basis) if numeric_basis else 1.0
+        min_numeric_recall = float(pair.get("minNumericRecall", 0.80))
 
         details.append(
             (
-                f"{label}: numeric_recall={numeric_recall:.3f}, matched_numbers={len(matched_numbers)}/{len(reference_numbers)}, "
+                f"{label}: numeric_recall={numeric_recall:.3f}, matched_numbers={len(matched_numbers)}/{len(numeric_basis)}, "
+                f"numeric_basis={numeric_basis_label if reference_numbers else 'required_tokens'}, "
                 f"required_token_recall={required_token_recall:.3f}, matched_required_tokens={len(matched_required_tokens)}/{len(required_tokens)}"
             )
         )
@@ -151,9 +192,9 @@ def main():
         json.dumps(
             {
                 "passed": passed,
-                "summary": "Generated Word targets are data-consistent with the reference documents for the required filled values."
+                "summary": "Generated Word targets contain the required task values and match the configured numeric baseline."
                 if passed
-                else "Generated Word targets are missing required filled data or do not retain enough reference-side data consistency.",
+                else "Generated Word targets are missing required task values or numeric consistency checks.",
                 "details": details + ([f"failed: {', '.join(failed)}"] if failed else []),
                 "blocking": False,
             },

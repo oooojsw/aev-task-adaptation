@@ -6,6 +6,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
 import type { ToolFailure } from "./evaluator"
 import { autoEvolvePath, ensureDirectory, pathExists, writeJsonFile } from "./fs"
+import { registerRuntimeProcess, terminateProcessTree } from "./runtime-process-registry"
 
 const OPENCODE_TASK_TIMEOUT_MS = 30 * 60 * 1000
 
@@ -53,6 +54,8 @@ export interface OpencodeTaskInput {
   model?: string
   agent?: string
   variant?: string
+  runtimeScope?: string
+  onSpawn?: () => Promise<void> | void
 }
 
 function collectToolFailures(events: OpencodeEvent[]) {
@@ -209,11 +212,13 @@ async function ensureOverrideConfig(
 }
 
 function slugifyTitle(input: string) {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "task"
+  return (
+    input
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "task"
+  )
 }
 
 function buildRunLabel(title: string, attempt: number) {
@@ -251,10 +256,16 @@ async function runOpencodeTaskOnce(
   permissionEditPaths: string[],
   attempt: number,
 ) {
-  const overrideConfigDir = await ensureOverrideConfig(input.cwd, selectedModel, input.config.permissionConfig, {
-    readPaths: permissionReadPaths,
-    editPaths: permissionEditPaths,
-  }, buildRunLabel(input.title, attempt))
+  const overrideConfigDir = await ensureOverrideConfig(
+    input.cwd,
+    selectedModel,
+    input.config.permissionConfig,
+    {
+      readPaths: permissionReadPaths,
+      editPaths: permissionEditPaths,
+    },
+    buildRunLabel(input.title, attempt),
+  )
 
   const args = [
     process.execPath,
@@ -300,6 +311,8 @@ async function runOpencodeTaskOnce(
         : {}),
     },
   })
+  registerRuntimeProcess(input.runtimeScope, child.pid, input.title)
+  await input.onSpawn?.()
 
   const stdoutPromise = new Response(child.stdout).text()
   const stderrPromise = new Response(child.stderr).text()
@@ -310,7 +323,7 @@ async function runOpencodeTaskOnce(
     timeoutHandle = setTimeout(async () => {
       timedOut = true
       try {
-        child.kill()
+        await terminateProcessTree(child.pid)
       } catch {}
       try {
         resolve(await child.exited)
@@ -327,9 +340,9 @@ async function runOpencodeTaskOnce(
 
   const events = parseEvents(stdout)
   const normalizedStderr = timedOut
-    ? [`OpenCode task timed out after ${OPENCODE_TASK_TIMEOUT_MS} ms and was terminated.`, stderr].filter(Boolean).join(
-        "\n\n",
-      )
+    ? [`OpenCode task timed out after ${OPENCODE_TASK_TIMEOUT_MS} ms and the full process tree was terminated.`, stderr]
+        .filter(Boolean)
+        .join("\n\n")
     : stderr
 
   return {
@@ -347,7 +360,9 @@ async function runOpencodeTaskOnce(
 export async function runOpencodeTask(input: OpencodeTaskInput): Promise<OpencodeTaskRun> {
   const dependenciesInstalled = await pathExists(path.join(input.cwd, "node_modules"))
   if (!dependenciesInstalled) {
-    throw new Error("Repository dependencies are not installed. Run `bun install` in the repo root before running auto-evolve tasks.")
+    throw new Error(
+      "Repository dependencies are not installed. Run `bun install` in the repo root before running auto-evolve tasks.",
+    )
   }
 
   const selectedModel = input.model ?? input.config.defaultModel

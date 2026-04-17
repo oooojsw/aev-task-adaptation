@@ -6,6 +6,7 @@ import type {
   LongTaskWorkGraph,
   LongTaskWorkUnit,
 } from "./contract"
+import { resolveLongTaskEditablePaths } from "./repository"
 
 function bullet(items: string[]) {
   return items.map((item) => `- ${item}`).join("\n")
@@ -61,6 +62,10 @@ function describeValidators(validators: LongTaskValidatorContract[]) {
     .join("\n")
 }
 
+function describeEditablePaths(spec: LongTaskSpec) {
+  return bullet(resolveLongTaskEditablePaths(spec))
+}
+
 function describeCapabilities(capabilities: LongTaskCapabilityContract[]) {
   if (!capabilities.length) return "- none"
   return capabilities
@@ -101,13 +106,19 @@ export function buildLongTaskPlanningPrompt(input: {
     describePathRefs(input.spec.targetPaths ?? []),
     "",
     "Editable paths:",
-    bullet((input.spec.editablePaths ?? []).map((item) => item)),
+    describeEditablePaths(input.spec),
     "",
     "Campaign pending expert package:",
     input.spec.campaignPendingPackageRoot ? `- ${input.spec.campaignPendingPackageRoot}` : "- none",
     "",
     "Campaign exploration tree:",
     input.spec.campaignExplorationTreePath ? `- ${input.spec.campaignExplorationTreePath}` : "- none",
+    "",
+    "Campaign working memory:",
+    input.spec.campaignWorkingMemoryPath ? `- ${input.spec.campaignWorkingMemoryPath}` : "- none",
+    "",
+    "Campaign routing control:",
+    input.spec.campaignRoutingControlPath ? `- ${input.spec.campaignRoutingControlPath}` : "- none",
     "",
     "Initial expert context:",
     bullet((input.spec.initialExpertContextPaths ?? []).map((item) => item)) || "- none",
@@ -124,6 +135,7 @@ export function buildLongTaskPlanningPrompt(input: {
     "- Each work unit must reduce uncertainty against the goal or the validators.",
     "- Treat the current campaign pending expert package as the latest draft expert experience, not as an optional note.",
     "- Treat the exploration tree as a map of explored and unexplored solution space, not as a hard law.",
+    "- Treat the routing control file as the hard next-round control signal. Required regions and forbidden units must change the graph.",
     "- Prefer 3 to 8 work units unless the task is trivial.",
     `- The graph must end in validator-backed completion using these completion validators: ${completionValidatorIDs.join(", ") || "(none)"}.`,
     "- Do not create units that are just 'read file X' or 'think more'.",
@@ -189,13 +201,19 @@ export function buildLongTaskExecutionPrompt(input: {
     describePathRefs(input.spec.targetPaths ?? []),
     "",
     "Editable paths:",
-    bullet((input.spec.editablePaths ?? []).map((item) => item)),
+    describeEditablePaths(input.spec),
     "",
     "Campaign pending expert package:",
     input.spec.campaignPendingPackageRoot ? `- ${input.spec.campaignPendingPackageRoot}` : "- none",
     "",
     "Campaign exploration tree:",
     input.spec.campaignExplorationTreePath ? `- ${input.spec.campaignExplorationTreePath}` : "- none",
+    "",
+    "Campaign working memory:",
+    input.spec.campaignWorkingMemoryPath ? `- ${input.spec.campaignWorkingMemoryPath}` : "- none",
+    "",
+    "Campaign routing control:",
+    input.spec.campaignRoutingControlPath ? `- ${input.spec.campaignRoutingControlPath}` : "- none",
     "",
     "Formal package roots:",
     input.spec.formalPackageRoots?.length
@@ -223,7 +241,7 @@ export function buildLongTaskExecutionPrompt(input: {
     "Execution rules:",
     "- You may read and modify only the task-relevant paths provided to you.",
     "- Work backward from the current claim and validators. Every action should either reduce uncertainty or increase validator confidence.",
-    "- Read the current campaign pending expert package and exploration tree before deciding how to proceed.",
+    "- Read the current campaign pending expert package, exploration tree, working memory, and routing control before deciding how to proceed.",
     "- Document, spreadsheet, and template handling must be headless-only. Do not launch Word, Excel, Explorer, or any other desktop GUI application.",
     "- Do not use Start-Process, Invoke-Item, file association opens, explorer.exe, WINWORD, EXCEL, or equivalent GUI-launch paths.",
     "- If you update surface_contract.json, keep it in the platform surface-contract schema. Use entry/changeLog/documents instead of replacing the contract with task-local custom keys only.",
@@ -348,6 +366,12 @@ export function buildLongTaskReplanPrompt(input: {
     "Campaign exploration tree:",
     input.spec.campaignExplorationTreePath ? `- ${input.spec.campaignExplorationTreePath}` : "- none",
     "",
+    "Campaign working memory:",
+    input.spec.campaignWorkingMemoryPath ? `- ${input.spec.campaignWorkingMemoryPath}` : "- none",
+    "",
+    "Campaign routing control:",
+    input.spec.campaignRoutingControlPath ? `- ${input.spec.campaignRoutingControlPath}` : "- none",
+    "",
     "Available validators:",
     describeValidators(input.spec.validators),
     "",
@@ -359,6 +383,7 @@ export function buildLongTaskReplanPrompt(input: {
     "- Only emit remaining or replacement units.",
     "- Prefer the smallest graph change that can escape the current failure pattern.",
     "- Use the exploration tree as a memory of explored solution regions, but do not treat it as an untouchable rulebook.",
+    "- Treat the routing control file as a hard constraint. Required regions must appear, and forbidden units must not reappear.",
     "- Replan around capability gaps and validator gaps, not around domain recipes.",
     `- Keep completion validator ids aligned with: ${completionValidatorIDs.join(", ") || "(none)"}.`,
     "- Prefer intermediate validators for intermediate outputs whenever such validators are available.",

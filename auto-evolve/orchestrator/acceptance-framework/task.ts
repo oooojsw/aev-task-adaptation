@@ -7,6 +7,7 @@ import { loadConfig } from "../schema"
 import { ensureDirectory, pathExists, readJsonFile, writeJsonFile, writeTextFile } from "../fs"
 import { writeTaskArtifacts } from "../task-artifacts"
 import { loadLongTaskSpec } from "../long-task/spec"
+import { resolveLongTaskEditablePaths } from "../long-task/repository"
 import { runLongTaskValidator } from "../long-task/validators"
 import type { LongTaskSpec, LongTaskWorkUnit, LongTaskValidatorResult } from "../long-task/contract"
 import { recordAcceptanceResult } from "./run"
@@ -58,6 +59,10 @@ function describeCapabilities(spec: LongTaskSpec) {
     .join("\n")
 }
 
+function describeEditablePaths(spec: LongTaskSpec) {
+  return bullet(resolveLongTaskEditablePaths(spec))
+}
+
 function capabilityReferencePaths(spec: LongTaskSpec) {
   return uniqueStrings((spec.capabilities ?? []).flatMap((capability) => capability.referencePaths ?? []))
 }
@@ -78,7 +83,7 @@ function deploymentRunID(title: string) {
 }
 
 async function resetEditablePaths(runDir: string, spec: LongTaskSpec) {
-  const editablePaths = uniqueStrings([...(spec.editablePaths ?? []), ...(spec.targetPaths ?? []).map((item) => item.path)])
+  const editablePaths = resolveLongTaskEditablePaths(spec)
   const archiveRoot = path.join(runDir, "preexisting")
   await ensureDirectory(archiveRoot)
 
@@ -142,7 +147,7 @@ function buildBlankAgentTaskPrompt(input: {
     describePathRefs(input.spec.targetPaths ?? []),
     "",
     "Editable paths:",
-    bullet(input.spec.editablePaths ?? []),
+    describeEditablePaths(input.spec),
     "",
     "Registered capabilities:",
     describeCapabilities(input.spec),
@@ -248,6 +253,7 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
     resolvedInitialExpertContextPaths,
     bundlePath,
   })
+  const editablePaths = resolveLongTaskEditablePaths(spec)
 
   const task = await runOpencodeTask({
     cwd: input.cwd,
@@ -269,7 +275,7 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
       ...(spec.targetPaths ?? []).map((item) => item.path),
       ...capabilityPaths,
     ]),
-    permissionEditPaths: spec.editablePaths ?? [],
+    permissionEditPaths: editablePaths,
     model: selection.model,
     agent: selection.agent,
     variant: selection.variant,
@@ -292,7 +298,7 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
     materials: spec.materials,
     targetPaths: spec.targetPaths ?? [],
     expectedArtifacts: unit.expectedArtifacts,
-    editablePaths: spec.editablePaths ?? [],
+    editablePaths,
     bundlePath,
   }
 

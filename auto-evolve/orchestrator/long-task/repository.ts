@@ -1,5 +1,6 @@
 import path from "node:path"
 import { randomUUID } from "node:crypto"
+import process from "node:process"
 import { cp, lstat, rm } from "node:fs/promises"
 import {
   autoEvolvePath,
@@ -20,6 +21,7 @@ import type {
   LongTaskRetryLesson,
   LongTaskRetryInputBundle,
   LongTaskRetryJournalEntry,
+  LongTaskRunStatus,
   LongTaskRunSummary,
   LongTaskScratchUnit,
   LongTaskShadowMemoryRecord,
@@ -44,6 +46,7 @@ export interface LongTaskRunPaths {
   taskPath: string
   workGraphPath: string
   progressStatePath: string
+  finalizationStatePath: string
   claimsPath: string
   validatorResultsPath: string
   failurePacketsPath: string
@@ -63,16 +66,40 @@ export interface LongTaskRunPaths {
   replanRoot: string
 }
 
+export interface LongTaskFinalizationState {
+  runID: string
+  status: LongTaskRunStatus
+  completedAt: string
+  summaryPath: string
+  archiveRecordID: string
+  shadowMemoryRecordID: string
+  acceptanceRecordID: string
+  acceptanceRecordPath: string
+  candidateID: string
+  candidatePath: string
+  maintenanceRequestID: string
+  maintenanceRequestPath: string
+}
+
 function nowISO() {
   return new Date().toISOString()
 }
 
+function detectOwnerCommandHint() {
+  const argv = process.argv.map((item) => item.toLowerCase())
+  if (argv.some((item) => item.includes("run-long-task-campaign"))) return "run-long-task-campaign"
+  if (argv.some((item) => item.includes("run-long-task"))) return "run-long-task"
+  return undefined
+}
+
 function slugify(input: string) {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "long-task"
+  return (
+    input
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "long-task"
+  )
 }
 
 export function createLongTaskRunID(title: string) {
@@ -101,6 +128,19 @@ async function readJsonl<T>(target: string): Promise<T[]> {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => JSON.parse(line) as T)
+}
+
+function stripRecordTimestamps<T extends { createdAt?: string; updatedAt?: string }>(value: T) {
+  const { createdAt: _createdAt, updatedAt: _updatedAt, ...rest } = value
+  return rest
+}
+
+function sameLogicalRecord<T extends { createdAt?: string; updatedAt?: string }>(left: T, right: T) {
+  return JSON.stringify(stripRecordTimestamps(left)) === JSON.stringify(stripRecordTimestamps(right))
+}
+
+async function findJsonlRecordByID<T extends { id: string }>(target: string, id: string): Promise<T | undefined> {
+  return (await readJsonl<T>(target)).find((item) => item.id === id)
 }
 
 function short(text: string, limit = 200) {
@@ -154,6 +194,7 @@ export function longTaskRunPaths(paths: LongTaskPaths, runID: string): LongTaskR
     taskPath: path.join(root, "task.json"),
     workGraphPath: path.join(root, "work_graph.json"),
     progressStatePath: path.join(root, "progress_state.json"),
+    finalizationStatePath: path.join(root, "finalization.json"),
     claimsPath: path.join(root, "claims.jsonl"),
     validatorResultsPath: path.join(root, "validator_results.jsonl"),
     failurePacketsPath: path.join(root, "failure_packets.jsonl"),
@@ -200,21 +241,15 @@ export function longTaskReplanPaths(run: LongTaskRunPaths, revision: number) {
   }
 }
 
-function uniqueLongTaskEditablePaths(spec: LongTaskSpec) {
-  const values = [
-    ...(spec.editablePaths ?? []),
-    ...(spec.targetPaths ?? []).map((item) => item.path),
-  ]
+export function resolveLongTaskEditablePaths(spec: LongTaskSpec) {
+  const values = [...(spec.editablePaths ?? []), ...(spec.targetPaths ?? []).map((item) => item.path)]
   const unique = Array.from(new Set(values)).sort((left, right) => left.length - right.length)
   const filtered: string[] = []
   for (const candidate of unique) {
     const normalizedCandidate = path.resolve(candidate)
     const covered = filtered.some((existing) => {
       const normalizedExisting = path.resolve(existing)
-      return (
-        normalizedCandidate === normalizedExisting ||
-        normalizedCandidate.startsWith(normalizedExisting + path.sep)
-      )
+      return normalizedCandidate === normalizedExisting || normalizedCandidate.startsWith(normalizedExisting + path.sep)
     })
     if (!covered) filtered.push(candidate)
   }
@@ -231,7 +266,7 @@ async function stageEditablePathsForFreshRun(run: LongTaskRunPaths, spec: LongTa
     existed: boolean
   }> = []
 
-  const editablePaths = uniqueLongTaskEditablePaths(spec)
+  const editablePaths = resolveLongTaskEditablePaths(spec)
 
   for (const [index, editablePath] of editablePaths.entries()) {
     if (!(await pathExists(editablePath))) {
@@ -305,7 +340,10 @@ export async function initializeLongTaskRun(input: {
   await ensureJsonlFile(run.retryLessonsPath)
   await ensureJsonlFile(run.retryJournalPath)
   await writeJsonFile(run.operationalContextPath, [])
-  await writeTextFile(run.operationalContextSummaryPath, "# Run-Global Operational Context\n\n- no promoted context yet\n")
+  await writeTextFile(
+    run.operationalContextSummaryPath,
+    "# Run-Global Operational Context\n\n- no promoted context yet\n",
+  )
   await writeJsonFile(run.scratchIndexPath, {
     updatedAt: nowISO(),
     totalScratchUnits: 0,
@@ -366,10 +404,23 @@ export async function readLongTaskProgressState(run: LongTaskRunPaths) {
 }
 
 export async function writeLongTaskProgressState(run: LongTaskRunPaths, progress: LongTaskProgressState) {
+  const heartbeatAt = nowISO()
   await writeJsonFile(run.progressStatePath, {
     ...progress,
-    updatedAt: nowISO(),
+    ownerPID: progress.ownerPID ?? process.pid,
+    ownerCommandHint: progress.ownerCommandHint ?? detectOwnerCommandHint(),
+    heartbeatAt,
+    updatedAt: heartbeatAt,
   })
+}
+
+export async function readLongTaskFinalizationState(run: LongTaskRunPaths) {
+  if (!(await pathExists(run.finalizationStatePath))) return undefined
+  return readJsonFile<LongTaskFinalizationState>(run.finalizationStatePath)
+}
+
+export async function writeLongTaskFinalizationState(run: LongTaskRunPaths, state: LongTaskFinalizationState) {
+  await writeJsonFile(run.finalizationStatePath, state)
 }
 
 export async function appendVerificationClaim(run: LongTaskRunPaths, claim: LongTaskVerificationClaim) {
@@ -442,8 +493,7 @@ function mergeOperationalContextItem(
     updatedAt: incoming.updatedAt,
     sourceUnitID: incoming.sourceUnitID ?? existing.sourceUnitID,
     sourceAttempt: incoming.sourceAttempt ?? existing.sourceAttempt,
-    status:
-      existing.status === "confirmed" || incoming.status === "confirmed" ? "confirmed" : "candidate",
+    status: existing.status === "confirmed" || incoming.status === "confirmed" ? "confirmed" : "candidate",
     rationale: incoming.rationale ?? existing.rationale,
     refs: uniqueStrings([...existing.refs, ...incoming.refs]),
     tags: uniqueStrings([...existing.tags, ...incoming.tags]),
@@ -721,11 +771,19 @@ export async function writeLongTaskRunSummary(run: LongTaskRunPaths, summary: Lo
 }
 
 export async function appendArchiveRecord(paths: LongTaskPaths, record: LongTaskArchiveRecord) {
-  await appendJsonl(path.join(paths.archiveRoot, "index.jsonl"), record)
+  const indexPath = path.join(paths.archiveRoot, "index.jsonl")
+  const existing = await findJsonlRecordByID<LongTaskArchiveRecord>(indexPath, record.id)
+  if (existing) return existing
+  await appendJsonl(indexPath, record)
+  return record
 }
 
 export async function appendShadowMemoryRecord(paths: LongTaskPaths, record: LongTaskShadowMemoryRecord) {
-  await appendJsonl(path.join(paths.shadowMemoryRoot, "index.jsonl"), record)
+  const indexPath = path.join(paths.shadowMemoryRoot, "index.jsonl")
+  const existing = await findJsonlRecordByID<LongTaskShadowMemoryRecord>(indexPath, record.id)
+  if (existing) return existing
+  await appendJsonl(indexPath, record)
+  return record
 }
 
 function candidateDir(paths: LongTaskPaths, candidateID: string) {
@@ -744,15 +802,29 @@ export async function writeLongTaskCandidatePackage(
   },
 ) {
   await ensureLongTaskLayout(paths)
-  const candidate: LongTaskCandidatePackage = {
+  const target = candidateMetadataPath(paths, input.id)
+  const indexPath = path.join(paths.candidatesRoot, "index.jsonl")
+  const existing =
+    (await readJsonFile<LongTaskCandidatePackage>(target).catch(() => undefined)) ??
+    (await findJsonlRecordByID<LongTaskCandidatePackage>(indexPath, input.id))
+  const draft: LongTaskCandidatePackage = {
     ...input,
-    createdAt: input.createdAt ?? nowISO(),
+    id: existing?.id ?? input.id,
+    createdAt: existing?.createdAt ?? input.createdAt ?? nowISO(),
     updatedAt: input.updatedAt ?? nowISO(),
   }
+  const candidate: LongTaskCandidatePackage =
+    existing && sameLogicalRecord(existing, draft) ? { ...draft, updatedAt: existing.updatedAt } : draft
   await ensureDirectory(candidateDir(paths, candidate.id))
-  await writeJsonFile(candidateMetadataPath(paths, candidate.id), candidate)
-  await appendJsonl(path.join(paths.candidatesRoot, "index.jsonl"), candidate)
-  return candidate
+  await writeJsonFile(target, candidate)
+  const existingIndexed = await findJsonlRecordByID<LongTaskCandidatePackage>(indexPath, candidate.id)
+  if (!existingIndexed || !sameLogicalRecord(existingIndexed, candidate)) {
+    await appendJsonl(indexPath, candidate)
+  }
+  return {
+    candidate,
+    path: target,
+  }
 }
 
 export async function readShadowMemoryRecords(paths: LongTaskPaths) {
@@ -764,7 +836,7 @@ export function defaultArchiveRecord(input: {
   summary: LongTaskRunSummary
 }): LongTaskArchiveRecord {
   return {
-    id: `archive-${randomUUID().slice(0, 8)}`,
+    id: `archive-${input.summary.runID}`,
     runID: input.summary.runID,
     createdAt: nowISO(),
     status: input.summary.status,
@@ -791,7 +863,7 @@ export function defaultShadowMemoryRecord(input: {
   }
 
   return {
-    id: `shadow-${randomUUID().slice(0, 8)}`,
+    id: `shadow-${input.summary.runID}`,
     runID: input.summary.runID,
     createdAt: nowISO(),
     namespace: scope.namespace,
@@ -804,10 +876,14 @@ export function defaultShadowMemoryRecord(input: {
 }
 
 export function createInitialLongTaskProgressState(runID: string): LongTaskProgressState {
+  const createdAt = nowISO()
   return {
     runID,
-    createdAt: nowISO(),
-    updatedAt: nowISO(),
+    createdAt,
+    updatedAt: createdAt,
+    ownerPID: process.pid,
+    ownerCommandHint: detectOwnerCommandHint(),
+    heartbeatAt: createdAt,
     status: "planning",
     graphRevision: 0,
     completedUnitIDs: [],
