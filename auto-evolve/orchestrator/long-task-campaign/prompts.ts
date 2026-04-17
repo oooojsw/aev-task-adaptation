@@ -20,10 +20,26 @@ function roleDescription(role: LongTaskCampaignWorkerRole) {
       return "Extract the real failure paths, blockers, and failure causes from the run trace."
     case "forbidden_path_synthesizer":
       return "Extract high-confidence do-not-repeat paths that should become explicit negative guidance."
+    case "learning_promoter":
+      return "Rescue durable cross-unit lessons that are still trapped in local learning units or retry lessons and propose how campaign memory should preserve them."
     case "exploration_tree_synthesizer":
       return "Extract exploration-space updates: which solution regions were explored, which failed strongly, which remain promising."
     default:
       return "Extract structured campaign suggestions from the current round."
+  }
+}
+
+function roleSpecificRules(role: LongTaskCampaignWorkerRole) {
+  switch (role) {
+    case "learning_promoter":
+      return [
+        "- Inspect the full run trace, including attempt-level learning units, retry lessons, and operational context across all units.",
+        "- Focus on durable lessons that should survive beyond one unit even if they were not promoted automatically.",
+        "- Prefer compact canonical statements instead of copying raw logs or long historical prose.",
+        "- Use memory_advice to say what should be promoted into campaign memory, seed context, failure lessons, routing control, or the pending expert package.",
+      ]
+    default:
+      return [] as string[]
   }
 }
 
@@ -32,6 +48,7 @@ export function buildCampaignWorkerPrompt(input: {
   roundNumber: number
   role: LongTaskCampaignWorkerRole
   runTracePath: string
+  runTraceDigestPath: string
   pendingPackageRoot: string
   explorationTreePath: string
   workingMemoryPath: string
@@ -48,7 +65,8 @@ export function buildCampaignWorkerPrompt(input: {
     "",
     "Primary inputs:",
     bullet([
-      `run_trace: ${input.runTracePath}`,
+      `run_trace_full: ${input.runTracePath}`,
+      `run_trace_digest: ${input.runTraceDigestPath}`,
       `pending_expert_package: ${input.pendingPackageRoot}`,
       `exploration_tree_json: ${input.explorationTreePath}`,
       `working_memory_json: ${input.workingMemoryPath}`,
@@ -62,12 +80,16 @@ export function buildCampaignWorkerPrompt(input: {
     "- Do not output a generic summary report.",
     "- Focus on structured suggestions that a campaign lead can assemble into the next pending expert package.",
     "- Ground every important claim in the run-trace digest, working memory, routing control, or the current pending package.",
+    "- Distinguish verified infrastructure blockers from agent-side inference. Do not treat 'stale heartbeat' wording alone as a confirmed blocker.",
+    "- A missing execute/ directory for an in-flight attempt is not by itself proof of no-spawn; mark uncertain runtime diagnostics as tentative, not final.",
     "- Do not leak hidden validator answers or protected reference-only truth.",
+    ...roleSpecificRules(input.role),
     "",
     "Return JSON only, with this shape:",
     jsonFence({
       summary: "one short sentence",
       findings: ["key finding"],
+      memory_advice: ["what durable lesson should be promoted and where it should live"],
       package_advice: ["what the pending expert package should add, remove, or clarify"],
       exploration_advice: ["what should change in the exploration tree"],
       refs: ["absolute/path/or/reference"],
@@ -126,7 +148,9 @@ export function buildCampaignLeadPrompt(input: {
     "- Do not use non-schema statuses such as verified_success, pending, done, success, failed.",
     "- Status mapping rule: if you would write verified_success, write validated_success instead; if you would write pending, write unexplored or in_progress based on actual progress.",
     "- Keep routing control small and hard: only write signals that should directly change the next graph.",
+    "- Do not copy tentative runtime-stall narratives into routing_control.blockedBy as hard blockers unless supported by hard evidence in run trace.",
     "- Do not put round-specific command directives into the package if they belong in routing control instead.",
+    "- If a worker suggestion includes memory_advice, treat it as rescue guidance for durable lessons that might otherwise stay trapped in unit-local memory.",
     "- Do not leak hidden validator answers or protected reference-only truth.",
     "",
     "Return JSON only, with this shape:",
@@ -169,6 +193,7 @@ export function buildCampaignReviewerPrompt(input: {
     "- You do not edit the package.",
     "- You do not accept or reject the package.",
     "- You only assess whether this package looks likely to pass the final blank-agent acceptance.",
+    "- Do not treat heartbeat wording alone as decisive failure evidence; require hard run-trace evidence before concluding a true orchestrator stall.",
     "- If it is not ready, explain the reasons in abstract diagnostic language.",
     "- Do not leak hidden validator answers or protected reference-only truth.",
     "",

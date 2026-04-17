@@ -80,6 +80,7 @@ export type LongTaskCampaignWorkerRole =
   | "success_synthesizer"
   | "failure_synthesizer"
   | "forbidden_path_synthesizer"
+  | "learning_promoter"
   | "exploration_tree_synthesizer"
   | "custom"
 
@@ -90,10 +91,12 @@ export interface LongTaskCampaignWorkerSuggestion {
   createdAt: string
   summary: string
   findings: string[]
+  memoryAdvice: string[]
   packageAdvice: string[]
   explorationAdvice: string[]
   refs: string[]
   responsePath?: string
+  suggestionPath?: string
 }
 
 export interface LongTaskCampaignReviewSuggestion {

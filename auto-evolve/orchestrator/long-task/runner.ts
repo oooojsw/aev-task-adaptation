@@ -76,6 +76,7 @@ import { buildLongTaskExecutionPrompt, buildLongTaskPlanningPrompt, buildLongTas
 import { runLongTaskValidator } from "./validators"
 import { loadConfig } from "../schema"
 import { runOpencodeTask, type OpencodeTaskInput } from "../opencode"
+import type { OpencodeRunResult } from "../opencode"
 import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
 import { extractJsonObject } from "./json-extract"
@@ -88,6 +89,43 @@ function short(text: string, limit = 200) {
   const normalized = text.replace(/\s+/g, " ").trim()
   if (normalized.length <= limit) return normalized
   return normalized.slice(0, limit - 3) + "..."
+}
+
+interface TaskSignalHealth {
+  noSessionSignal: boolean
+  likelyInfrastructureFailure: boolean
+}
+
+function analyzeTaskSignalHealth(
+  result: Pick<OpencodeRunResult, "exitCode" | "events" | "responseText" | "sessionID">,
+): TaskSignalHealth {
+  const noEvents = result.events.length === 0
+  const noResponse = result.responseText.trim().length === 0
+  const noSession = typeof result.sessionID !== "string" || result.sessionID.trim().length === 0
+  const noSessionSignal = noEvents && noResponse
+  return {
+    noSessionSignal,
+    likelyInfrastructureFailure: result.exitCode !== 0 && noSession && noSessionSignal,
+  }
+}
+
+function noSignalSummary(input: {
+  owner: string
+  result: Pick<OpencodeRunResult, "exitCode" | "stderr">
+}) {
+  const stderrLine = short(input.result.stderr || "", 120)
+  const suffix = stderrLine ? ` Last stderr: ${stderrLine}` : ""
+  return short(
+    `${input.owner} produced no structured signal (no events/response) and exited with code ${input.result.exitCode}.${suffix}`,
+    240,
+  )
+}
+
+function isNoSignalFailurePacket(packet: LongTaskFailurePacket) {
+  return (
+    packet.failureType === "invalid_execution_output" &&
+    packet.mismatchSummary.toLowerCase().includes("no structured signal")
+  )
 }
 
 function onceActivationCallback(callback?: OpencodeTaskInput["onSpawn"]) {
@@ -910,12 +948,21 @@ async function runPlanningSession(input: {
     methodID: input.spec.reversePropagation?.recipeID,
   })
 
+  const signalHealth = analyzeTaskSignalHealth(task.result)
   const raw =
     (await extractJsonObjectFromPath(draftPaths.graphDraftPath)) ?? extractJsonObject(task.result.responseText)
+  const fallbackReason = signalHealth.likelyInfrastructureFailure
+    ? noSignalSummary({
+        owner: input.phase === "plan" ? "planner" : "replanner",
+        result: task.result,
+      })
+    : input.phase === "plan"
+      ? "planner output was invalid"
+      : "replanner output was invalid"
   const graph = normalizePlanningGraph(
     raw,
     input.spec,
-    input.phase === "plan" ? "planner output was invalid" : "replanner output was invalid",
+    fallbackReason,
   )
   await writeLongTaskWorkGraph(input.run, graph)
   return graph
@@ -1030,8 +1077,23 @@ async function executeWorkUnit(input: {
     methodID: input.spec.reversePropagation?.recipeID,
   })
 
+  const signalHealth = analyzeTaskSignalHealth(task.result)
   const rawOutput = extractJsonObject(task.result.responseText)
-  const normalized = normalizeExecutionOutput(rawOutput, activeUnit)
+  let normalized = normalizeExecutionOutput(rawOutput, activeUnit)
+  if (signalHealth.likelyInfrastructureFailure) {
+    const summary = noSignalSummary({
+      owner: `Execution runtime for unit ${activeUnit.id}`,
+      result: task.result,
+    })
+    normalized = {
+      ...normalized,
+      claimStatement: summary,
+      claimedSuccess: false,
+      blockers: uniqueStrings([...normalized.blockers, summary]),
+      nextPriorityFix:
+        normalized.nextPriorityFix ?? "Check runtime/provider health before retrying this unit execution.",
+    }
+  }
   const claim = createClaim({
     runID: progressBefore.runID,
     unit: activeUnit,
@@ -1121,6 +1183,7 @@ async function executeWorkUnit(input: {
     validatorResults,
     allValidatorsPassed: validatorResults.every((result) => result.passed),
     normalized,
+    signalHealth,
   }
 }
 
@@ -1794,6 +1857,22 @@ async function continueLongTaskLoop(input: {
         toUnitID: execution.activeUnit.id,
         reason: failure.mismatchSummary,
       })
+
+      if (execution.signalHealth.likelyInfrastructureFailure) {
+        const recentNoSignalFailures = (await readFailurePackets(input.run))
+          .filter((packet) => packet.unitID === execution.activeUnit.id)
+          .filter(isNoSignalFailurePacket)
+          .slice(-2)
+        if (recentNoSignalFailures.length >= 2) {
+          return finalizeLongTaskRun({
+            cwd: input.cwd,
+            run: input.run,
+            spec: input.spec,
+            status: "blocked_failure",
+            summaryText: `Repeated no-structured-signal execution failures detected for unit ${execution.activeUnit.id}; stopped to avoid retry loop.`,
+          })
+        }
+      }
 
       const unitAfterFailure: LongTaskWorkUnit = {
         ...execution.activeUnit,

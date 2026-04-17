@@ -865,6 +865,32 @@ function buildRoutingControl(input: {
   reviewerSuggestion?: LongTaskCampaignReviewSuggestion
   roundNumber: number
 }): LongTaskCampaignRoutingControl {
+  const hardBlockerKeywords = [
+    "timeout",
+    "timed out",
+    "spawn",
+    "no structured signal",
+    "validator",
+    "permission",
+    "access is denied",
+    "eperm",
+    "missing",
+    "not found",
+    "exit code",
+    "crash",
+    "blocked",
+    "failed",
+  ]
+  const softBlockerHints = ["maybe", "might", "looks like", "seems", "probably", "possibly", "suggest", "guess"]
+  const hardBlockers = uniqueStrings(
+    input.digest.blockers.filter((item) => {
+      const normalized = item.toLowerCase()
+      if (!normalized) return false
+      if (softBlockerHints.some((hint) => normalized.includes(hint))) return false
+      return hardBlockerKeywords.some((keyword) => normalized.includes(keyword))
+    }),
+  ).slice(0, 8)
+
   const repeatedSuccessfulUnits = input.tree.nodes
     .filter((node) => (node.successCount ?? 0) >= 2 && node.region.trim().length > 0)
     .map((node) => node.region)
@@ -885,7 +911,7 @@ function buildRoutingControl(input: {
     forbiddenUnits: uniqueStrings([...input.previous.forbiddenUnits, ...repeatedSuccessfulUnits]),
     forbiddenRegions: uniqueStrings([...input.previous.forbiddenRegions, ...input.tree.forbiddenRepeatRegions]),
     prerequisites: uniqueStrings(input.previous.prerequisites),
-    blockedBy: uniqueStrings(input.digest.blockers.slice(0, 8)),
+    blockedBy: hardBlockers,
     readyForFinalAcceptance: input.reviewerSuggestion?.readyForFinalAcceptance === true,
     summary: input.reviewerSuggestion?.summary ?? input.digest.summary,
     evidenceRefs: compactRefs(input.digest.refs),
@@ -992,7 +1018,13 @@ function collectStaticBaseContextPaths(baseSpec: LongTaskSpec) {
 }
 
 function defaultCampaignWorkerRoles(): LongTaskCampaignWorkerRole[] {
-  return ["success_synthesizer", "failure_synthesizer", "forbidden_path_synthesizer", "exploration_tree_synthesizer"]
+  return [
+    "success_synthesizer",
+    "failure_synthesizer",
+    "forbidden_path_synthesizer",
+    "learning_promoter",
+    "exploration_tree_synthesizer",
+  ]
 }
 
 async function readEventsIfExists(target: string) {
@@ -1366,6 +1398,44 @@ function shouldRunCampaignWorkers(roundNumber: number) {
 
 function shouldRunCampaignReviewer(roundNumber: number) {
   return roundNumber > 1
+}
+
+function normalizeRoundSummaryForSignature(summary: string) {
+  return summary.toLowerCase().replace(/\s+/g, " ").trim()
+}
+
+function noProgressRoundSignature(record: LongTaskCampaignRoundRecord) {
+  if (record.finalStatus !== "stagnation_failure" && record.finalStatus !== "blocked_failure") return undefined
+  if (record.failurePacketCount <= 0) return undefined
+  if (record.learningUnitCount > 0) return undefined
+  return [
+    record.finalStatus,
+    normalizeRoundSummaryForSignature(record.summary),
+    `f:${record.failurePacketCount}`,
+    `r:${record.retryLessonCount}`,
+    `l:${record.learningUnitCount}`,
+  ].join("|")
+}
+
+function detectRepeatedNoProgressLoop(records: LongTaskCampaignRoundRecord[], windowSize = 3) {
+  if (records.length < windowSize) return undefined
+  const recent = records.slice(-windowSize)
+  const signature = noProgressRoundSignature(recent[0])
+  if (!signature) return undefined
+  if (!recent.every((record) => noProgressRoundSignature(record) === signature)) return undefined
+  return {
+    windowSize,
+    signature,
+    startRound: recent[0].roundNumber,
+    endRound: recent[recent.length - 1].roundNumber,
+  }
+}
+
+function shouldAbortCampaignImmediately(record: LongTaskCampaignRoundRecord) {
+  if (record.finalStatus !== "blocked_failure") return undefined
+  const normalized = normalizeRoundSummaryForSignature(record.summary)
+  if (!normalized.includes("no structured signal") && !normalized.includes("no-structured-signal")) return undefined
+  return `Detected non-recoverable blocked_failure with no structured signal in round ${record.roundNumber}.`
 }
 
 function buildCampaignFinalAcceptanceSpec(baseSpec: LongTaskSpec, pendingPackageRoot: string): LongTaskSpec {
@@ -1783,11 +1853,26 @@ function buildGeneratedRoundSpec(input: {
   workingMemoryPath: string
   routingControlPath: string
 }): LongTaskSpec {
+  const isFirstRound = input.roundNumber === 1
+  const roundValidators = input.baseSpec.validators.map((validator) => {
+    const descriptor =
+      `${validator.id} ${validator.title} ${validator.type === "script" ? validator.path : ""}`.toLowerCase()
+    const isLikelyFinalDeploymentGate =
+      descriptor.includes("blank-agent") ||
+      descriptor.includes("deployment-acceptance") ||
+      descriptor.includes("single-session deployment")
+    if (!isLikelyFinalDeploymentGate || validator.required === false) return validator
+    return {
+      ...validator,
+      required: false,
+    }
+  })
   const staticBaseContext = collectStaticBaseContextPaths(input.baseSpec)
   return {
     ...input.baseSpec,
     title: `${input.campaignSpec.title}-${roundID(input.roundNumber)}`,
-    disableCompletionValidators: true,
+    validators: roundValidators,
+    disableCompletionValidators: isFirstRound,
     initialExpertContextPaths: uniqueStrings([
       input.pendingPackageRoot,
       input.explorationTreePath,
@@ -1795,7 +1880,7 @@ function buildGeneratedRoundSpec(input: {
       ...staticBaseContext,
     ]),
     initialGraph:
-      input.roundNumber === 1 && input.baseSpec.initialGraph
+      isFirstRound && input.baseSpec.initialGraph
         ? {
             ...input.baseSpec.initialGraph,
             completion_validator_ids: [],
@@ -1866,6 +1951,7 @@ function normalizeWorkerSuggestion(input: {
   role: LongTaskCampaignWorkerRole
   parsed: Record<string, unknown> | undefined
   responsePath: string
+  suggestionPath: string
 }): LongTaskCampaignWorkerSuggestion {
   return {
     id: `worker-${randomUUID().slice(0, 8)}`,
@@ -1877,10 +1963,12 @@ function normalizeWorkerSuggestion(input: {
         ? input.parsed.summary.trim()
         : `${input.role} produced no structured summary.`,
     findings: normalizeStringArray(input.parsed?.findings),
+    memoryAdvice: normalizeStringArray(input.parsed?.memory_advice),
     packageAdvice: normalizeStringArray(input.parsed?.package_advice),
     explorationAdvice: normalizeStringArray(input.parsed?.exploration_advice),
     refs: uniqueStrings([input.responsePath, ...normalizeStringArray(input.parsed?.refs)]),
     responsePath: input.responsePath,
+    suggestionPath: input.suggestionPath,
   }
 }
 
@@ -2046,11 +2134,13 @@ async function runCampaignWorkers(input: {
   const suggestions = await Promise.all(
     workerRoles.map(async (role) => {
       const stageDir = path.join(input.roundPaths.workersRoot, role)
+      const suggestionPath = path.join(stageDir, "suggestion.json")
       const prompt = buildCampaignWorkerPrompt({
         title: input.campaignSpec.title,
         roundNumber: input.roundNumber,
         role,
-        runTracePath: input.runTraceDigestPath,
+        runTracePath: input.runTracePath,
+        runTraceDigestPath: input.runTraceDigestPath,
         pendingPackageRoot: input.pendingPackageRoot,
         explorationTreePath: input.explorationTreePath,
         workingMemoryPath: input.workingMemoryPath,
@@ -2065,6 +2155,7 @@ async function runCampaignWorkers(input: {
         selectionPhase: "planning",
         execution: input.baseSpec.planning ?? input.baseSpec.execution,
         referencePaths: [
+          input.runTracePath,
           input.runTraceDigestPath,
           input.pendingPackageRoot,
           input.explorationTreePath,
@@ -2073,6 +2164,7 @@ async function runCampaignWorkers(input: {
           ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
         ],
         permissionReadPaths: [
+          input.runTracePath,
           input.runTraceDigestPath,
           input.pendingPackageRoot,
           input.explorationTreePath,
@@ -2090,8 +2182,9 @@ async function runCampaignWorkers(input: {
         role,
         parsed: result.parsed,
         responsePath: result.artifactPaths.responsePath,
+        suggestionPath,
       })
-      await writeLongTaskCampaignWorkerSuggestion(path.join(stageDir, "suggestion.json"), suggestion)
+      await writeLongTaskCampaignWorkerSuggestion(suggestionPath, suggestion)
       return suggestion
     }),
   )
@@ -2121,7 +2214,7 @@ async function runCampaignLead(input: {
   onActivation?: OpencodeTaskInput["onSpawn"]
 }) {
   const workerSuggestionPaths = input.workerSuggestions
-    .map((item) => item.responsePath)
+    .map((item) => item.suggestionPath ?? item.responsePath)
     .filter((item): item is string => Boolean(item))
   const stageDir = path.join(input.roundPaths.root, "campaign-lead")
   const prompt = buildCampaignLeadPrompt({
@@ -2483,6 +2576,52 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
         lastRoundSummaryPath = harvested.roundRecord.roundSummaryPath
         await appendLongTaskCampaignHistory(campaignPaths, harvested.roundRecord)
 
+        const immediateAbortReason = shouldAbortCampaignImmediately(harvested.roundRecord)
+        if (immediateAbortReason) {
+          const nextState: LongTaskCampaignState = {
+            ...initialState,
+            currentRound: roundNumber,
+            status: "failed",
+            updatedAt: nowISO(),
+            lastRunID: runResult.runID,
+            lastSummary: immediateAbortReason,
+            lastRoundSummaryPath: harvested.roundRecord.roundSummaryPath,
+          }
+          await writeLongTaskCampaignState(campaignPaths, nextState)
+          return {
+            campaignID,
+            campaignDir: campaignPaths.root,
+            status: nextState.status,
+            roundsCompleted: roundNumber,
+            lastRunID: runResult.runID,
+            lessonsPath: campaignPaths.campaignLessonsPath,
+            roundSummaryPath: harvested.roundRecord.roundSummaryPath,
+          }
+        }
+
+        const loopDetection = detectRepeatedNoProgressLoop(history)
+        if (loopDetection) {
+          const nextState: LongTaskCampaignState = {
+            ...initialState,
+            currentRound: roundNumber,
+            status: "failed",
+            updatedAt: nowISO(),
+            lastRunID: runResult.runID,
+            lastSummary: `Detected repeated no-progress loop (${loopDetection.windowSize} rounds: ${loopDetection.startRound}-${loopDetection.endRound}); stopped campaign early.`,
+            lastRoundSummaryPath: harvested.roundRecord.roundSummaryPath,
+          }
+          await writeLongTaskCampaignState(campaignPaths, nextState)
+          return {
+            campaignID,
+            campaignDir: campaignPaths.root,
+            status: nextState.status,
+            roundsCompleted: roundNumber,
+            lastRunID: runResult.runID,
+            lessonsPath: campaignPaths.campaignLessonsPath,
+            roundSummaryPath: harvested.roundRecord.roundSummaryPath,
+          }
+        }
+
         await appendLinesToAggregate(
           campaignPaths.aggregatedFailurePacketsPath,
           harvested.failurePackets.map((item) => JSON.stringify(item)),
@@ -2663,7 +2802,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
         }
 
         const finalAcceptance =
-          reviewerSuggestion?.readyForFinalAcceptance === true
+          reviewerSuggestion?.readyForFinalAcceptance === true && runResult.status === "verified_success"
             ? await runCampaignFinalAcceptance({
                 cwd: input.cwd,
                 campaignID,

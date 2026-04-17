@@ -3,6 +3,7 @@ import process from "node:process"
 import { randomUUID } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
+import { spawn as nodeSpawn } from "node:child_process"
 import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
 import type { ToolFailure } from "./evaluator"
 import { autoEvolvePath, ensureDirectory, pathExists, writeJsonFile } from "./fs"
@@ -56,6 +57,15 @@ export interface OpencodeTaskInput {
   variant?: string
   runtimeScope?: string
   onSpawn?: () => Promise<void> | void
+}
+
+function normalizeAgentForRuntime(agent: string | undefined) {
+  const normalized = typeof agent === "string" ? agent.trim() : ""
+  if (!normalized) return undefined
+  // "top" is accepted in some task packs but not always installed in runtime.
+  // Falling back here avoids repeated "agent not found" noise loops.
+  if (normalized.toLowerCase() === "top") return undefined
+  return normalized
 }
 
 function collectToolFailures(events: OpencodeEvent[]) {
@@ -281,8 +291,10 @@ async function runOpencodeTaskOnce(
     input.title,
   ]
 
-  if (selectedAgent) {
-    args.push("--agent", selectedAgent)
+  const runtimeAgent = normalizeAgentForRuntime(selectedAgent)
+
+  if (runtimeAgent) {
+    args.push("--agent", runtimeAgent)
   }
   if (selectedModel) {
     args.push("--model", selectedModel)
@@ -297,10 +309,9 @@ async function runOpencodeTaskOnce(
 
   args.push("--", input.prompt)
 
-  const child = Bun.spawn(args, {
+  const child = nodeSpawn(process.execPath, args.slice(1), {
     cwd: path.join(input.cwd, "packages", "opencode"),
-    stdout: "pipe",
-    stderr: "pipe",
+    stdio: ["pipe", "pipe", "pipe"],
     env: {
       ...process.env,
       OPENCODE_CONFIG_DIR: overrideConfigDir,
@@ -314,29 +325,37 @@ async function runOpencodeTaskOnce(
   registerRuntimeProcess(input.runtimeScope, child.pid, input.title)
   await input.onSpawn?.()
 
-  const stdoutPromise = new Response(child.stdout).text()
-  const stderrPromise = new Response(child.stderr).text()
+  let stdoutData = ""
+  let stderrData = ""
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdoutData += chunk.toString()
+  })
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderrData += chunk.toString()
+  })
 
   let timedOut = false
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+
+  const exitPromise = new Promise<number>((resolve) => {
+    child.on("exit", (code) => resolve(code ?? 0))
+  })
+
   const timeoutPromise = new Promise<number>((resolve) => {
     timeoutHandle = setTimeout(async () => {
       timedOut = true
       try {
         await terminateProcessTree(child.pid)
       } catch {}
-      try {
-        resolve(await child.exited)
-      } catch {
-        resolve(124)
-      }
+      resolve(124)
     }, OPENCODE_TASK_TIMEOUT_MS)
   })
 
-  const exitCode = await Promise.race([child.exited, timeoutPromise])
+  let exitCode = await Promise.race([exitPromise, timeoutPromise])
   if (timeoutHandle) clearTimeout(timeoutHandle)
 
-  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise])
+  const stdout = stdoutData
+  const stderr = stderrData
 
   const events = parseEvents(stdout)
   const normalizedStderr = timedOut
@@ -366,7 +385,7 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
   }
 
   const selectedModel = input.model ?? input.config.defaultModel
-  const selectedAgent = input.agent ?? input.config.defaultAgent
+  const selectedAgent = normalizeAgentForRuntime(input.agent ?? input.config.defaultAgent)
   const referencedPaths = uniqueFiles(input.referencePaths ?? [])
   const attachedFiles = uniqueFiles(input.attachedFiles ?? [])
   const permissionReadPaths = uniqueFiles(input.permissionReadPaths ?? referencedPaths)
