@@ -43,7 +43,7 @@
         height: 100vh;
         padding: 22px;
         display: grid;
-        grid-template-rows: auto auto auto 1fr;
+        grid-template-rows: auto auto 1fr;
         gap: 14px;
         max-width: 1800px;
         margin: 0 auto;
@@ -68,11 +68,11 @@
         letter-spacing: -0.02em;
       }
       .subtitle {
-        margin: 10px 0 0;
-        max-width: 76ch;
+        margin: 8px 0 0;
+        max-width: 52ch;
         color: var(--muted);
-        font-size: 14px;
-        line-height: 1.6;
+        font-size: 13px;
+        line-height: 1.45;
       }
       .controls {
         display: flex;
@@ -125,39 +125,52 @@
       }
       .stats {
         display: grid;
-        grid-template-columns: repeat(7, minmax(120px, 1fr));
-        gap: 12px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
       }
       .stat {
-        background: var(--panel);
+        background: rgba(15, 21, 26, 0.88);
         border: 1px solid var(--line);
-        border-radius: 18px;
-        padding: 14px 16px;
-        min-height: 82px;
+        border-radius: 14px;
+        padding: 10px 11px 9px;
+        min-height: 62px;
         display: grid;
-        gap: 6px;
+        gap: 4px;
         align-content: start;
       }
       .stat-label {
         color: var(--muted);
-        font-size: 12px;
-        letter-spacing: 0.12em;
+        font-size: 10px;
+        letter-spacing: 0.1em;
         text-transform: uppercase;
       }
       .stat-value {
-        font-size: 27px;
+        font-size: 18px;
         font-weight: 760;
         line-height: 1;
       }
-      .meta-bar {
-        display: flex;
-        justify-content: flex-end;
-        align-items: center;
-        gap: 12px;
+      .pinned-strip {
+        display: grid;
+        grid-template-columns: minmax(360px, 1fr) minmax(480px, 1.25fr);
+        gap: 10px;
+        min-height: 0;
+      }
+      .pinned-card {
+        background: var(--panel-strong);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        box-shadow: var(--shadow);
+        min-height: 0;
+      }
+      .pinned-left {
+        padding: 12px 12px 10px;
+        display: grid;
+        gap: 8px;
+        align-content: start;
       }
       .meta {
         color: var(--muted);
-        font-size: 13px;
+        font-size: 12px;
       }
       .split {
         display: grid;
@@ -173,8 +186,8 @@
       .pane {
         min-height: 0;
         overflow: hidden;
-        display: grid;
-        grid-template-rows: auto auto 1fr;
+        display: flex;
+        flex-direction: column;
         background: rgba(16, 22, 28, 0.82);
       }
       .pane.left {
@@ -379,67 +392,77 @@
         opacity: 0.8;
       }
       .detail-shell {
-        display: grid;
-        grid-template-rows: auto auto 1fr;
+        display: flex;
         min-height: 0;
+        flex: 1;
       }
       .detail-top {
         padding: 18px 18px 14px;
-        border-bottom: 1px solid rgba(38, 50, 59, 0.7);
         display: grid;
-        gap: 10px;
+        gap: 8px;
+      }
+      .pinned-card .detail-top {
+        padding: 12px 12px 10px;
       }
       .detail-title-row {
         display: flex;
         justify-content: space-between;
-        gap: 12px;
+        gap: 10px;
         align-items: start;
+      }
+      .detail-title-row > div:first-child {
+        min-width: 0;
       }
       .detail-title-row h3 {
         margin: 0;
-        font-size: 24px;
-        line-height: 1.2;
+        font-size: 20px;
+        line-height: 1.24;
         letter-spacing: -0.02em;
+        overflow-wrap: anywhere;
+        word-break: break-word;
       }
       .detail-sub {
         color: var(--muted);
-        font-size: 13px;
-        line-height: 1.55;
+        font-size: 12px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
       }
       .detail-actions {
         display: flex;
-        gap: 10px;
+        gap: 8px;
         flex-wrap: wrap;
         align-items: center;
       }
       .detail-actions .chip {
-        padding: 8px 12px;
-        font-size: 13px;
+        padding: 6px 10px;
+        font-size: 12px;
       }
       .facts {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 10px;
+        gap: 8px;
       }
       .fact {
         background: rgba(15, 22, 28, 0.82);
         border: 1px solid rgba(38, 50, 59, 0.85);
-        border-radius: 16px;
-        padding: 12px 12px 11px;
-        min-height: 72px;
+        border-radius: 12px;
+        padding: 9px 9px 8px;
+        min-height: 58px;
         display: grid;
-        gap: 6px;
+        gap: 4px;
         align-content: start;
+        min-width: 0;
       }
       .fact-label {
         color: var(--muted);
         text-transform: uppercase;
-        letter-spacing: 0.12em;
-        font-size: 11px;
+        letter-spacing: 0.1em;
+        font-size: 10px;
       }
       .fact-value {
-        font-size: 14px;
-        line-height: 1.45;
+        font-size: 12px;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
         word-break: break-word;
       }
       .detail-body {
@@ -449,6 +472,7 @@
         display: grid;
         gap: 14px;
         align-content: start;
+        flex: 1;
       }
       .section {
         background: rgba(15, 22, 28, 0.78);
@@ -488,6 +512,10 @@
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: #bdd4e8;
+      }
+      .action-time {
+        color: var(--muted);
+        font-size: 12px;
       }
       .action-detail {
         color: var(--muted);
@@ -534,9 +562,9 @@
         align-items: center;
         gap: 6px;
         border-radius: 999px;
-        padding: 6px 11px;
+        padding: 5px 9px;
         border: 1px solid var(--line);
-        font-size: 12px;
+        font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.08em;
         white-space: nowrap;
@@ -588,7 +616,10 @@
           display: none;
         }
         .stats {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+        .pinned-strip {
+          grid-template-columns: 1fr;
         }
         .facts {
           grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -605,10 +636,7 @@
         <div>
           <div class="eyebrow">Auto Evolve</div>
           <h1>Session Monitor</h1>
-          <p class="subtitle">
-            The left wall shows compact session tiles. The right panel explains why a session exists, why it retried,
-            what happened recently, and what the next stage was.
-          </p>
+          <p class="subtitle">Compact wall + selected session focus.</p>
         </div>
         <div class="controls">
           <label
@@ -620,21 +648,30 @@
         </div>
       </header>
 
-      <section class="stats" id="summary"></section>
-
-      <div class="meta-bar">
-        <div class="meta" id="wall-meta">Loading...</div>
-      </div>
+      <section class="pinned-strip">
+        <div class="pinned-card pinned-left">
+          <div class="stats" id="summary"></div>
+          <div class="meta" id="wall-meta">Loading...</div>
+        </div>
+        <div class="pinned-card pinned-right">
+          <div class="detail-top">
+            <div class="detail-title-row">
+              <div>
+                <h3 id="detail-title">Select a session</h3>
+                <div class="detail-sub" id="detail-sub">
+                  Choose a tile on the left to inspect why this session exists and what it did last.
+                </div>
+              </div>
+              <div class="status-pill idle" id="detail-status"><span class="dot idle"></span><span>idle</span></div>
+            </div>
+            <div class="detail-actions" id="detail-actions"></div>
+            <div class="facts" id="facts"></div>
+          </div>
+        </div>
+      </section>
 
       <main class="split" id="split-root">
         <section class="pane left">
-          <div class="pane-head">
-            <h2>Sessions</h2>
-            <p>
-              Click a tile to pin the full narrative on the right. This wall always shows all recent sessions, including
-              long-task layers like execute, inspect, re-encode, and deployment runs.
-            </p>
-          </div>
           <div class="pane-body">
             <div class="tile-wrap" id="rows">
               <div class="empty">Loading...</div>
@@ -646,19 +683,6 @@
 
         <section class="pane right">
           <div class="detail-shell">
-            <div class="detail-top">
-              <div class="detail-title-row">
-                <div>
-                  <h3 id="detail-title">Select a session</h3>
-                  <div class="detail-sub" id="detail-sub">
-                    Choose a tile on the left to inspect why this session exists and what it did last.
-                  </div>
-                </div>
-                <div class="status-pill idle" id="detail-status"><span class="dot idle"></span><span>idle</span></div>
-              </div>
-              <div class="detail-actions" id="detail-actions"></div>
-              <div class="facts" id="facts"></div>
-            </div>
             <div class="detail-body" id="detail-body"></div>
           </div>
         </section>
@@ -687,10 +711,14 @@
       const state = {
         rows: [],
         selectedId: null,
+        hasManualSelection: false,
         timer: null,
         refreshing: false,
         pendingRefresh: false,
         leftWidth: 44,
+        timelineBySession: {},
+        timelineLoading: {},
+        timelineErrors: {},
       }
 
       function esc(input) {
@@ -743,12 +771,54 @@
         return ""
       }
 
+      function isLifecycleRow(row) {
+        return String(row?.id || "").startsWith("lifecycle:")
+      }
+
+      function actionCount(row) {
+        return Array.isArray(row?.recentActions) ? row.recentActions.length : 0
+      }
+
       function getDisplayRows(rows) {
-        return [...rows].sort((a, b) => b.updated - a.updated)
+        return [...rows].sort((a, b) => {
+          const aLifecycle = isLifecycleRow(a) ? 1 : 0
+          const bLifecycle = isLifecycleRow(b) ? 1 : 0
+          if (aLifecycle !== bLifecycle) return aLifecycle - bLifecycle
+
+          const aHasActions = actionCount(a) > 0 ? 0 : 1
+          const bHasActions = actionCount(b) > 0 ? 0 : 1
+          if (aHasActions !== bHasActions) return aHasActions - bHasActions
+
+          return b.updated - a.updated
+        })
       }
 
       function getRowsForLimit() {
         return getDisplayRows(state.rows).slice(0, Math.max(1, Number(limitEl.value || LIMIT_DEFAULT)))
+      }
+
+      function pickPreferredRow(candidates) {
+        if (!Array.isArray(candidates) || candidates.length === 0) return null
+        return (
+          candidates.find((row) => !isLifecycleRow(row) && actionCount(row) > 0) ||
+          candidates.find((row) => !isLifecycleRow(row)) ||
+          candidates[0]
+        )
+      }
+
+      function chooseSelectedRowID(rows, currentSelectedID, keepManualSelection) {
+        const displayRows = getDisplayRows(rows)
+        const preferred = pickPreferredRow(displayRows)
+        if (!preferred) return null
+
+        if (!currentSelectedID) return preferred.id
+        const current = rows.find((row) => row.id === currentSelectedID)
+        if (!current) return preferred.id
+        if (keepManualSelection) return current.id
+
+        if (isLifecycleRow(current) && !isLifecycleRow(preferred)) return preferred.id
+        if (actionCount(current) === 0 && actionCount(preferred) > 0) return preferred.id
+        return current.id
       }
 
       function renderSummary(rows) {
@@ -854,6 +924,7 @@
         rowsEl.querySelectorAll("[data-id]").forEach((tile) => {
           tile.addEventListener("click", () => {
             state.selectedId = tile.getAttribute("data-id")
+            state.hasManualSelection = true
             renderDetail()
             renderRows(state.rows)
           })
@@ -902,13 +973,19 @@
           '<div class="actions">' +
           actions
             .map(
-              (action) =>
+              (action) => {
+                const ts = Number(action?.timestamp || 0)
+                const when = Number.isFinite(ts) && ts > 0 ? '<div class="action-time">' + esc(timeText(ts)) + "</div>" : ""
+                return (
                 '<div class="action">' +
                 '<div class="action-label">' +
                 esc(action.label) +
                 "</div>" +
+                when +
                 (action.detail ? '<div class="action-detail">' + esc(action.detail) + "</div>" : "") +
-                "</div>",
+                "</div>"
+                )
+              },
             )
             .join("") +
           "</div>"
@@ -928,9 +1005,101 @@
         )
       }
 
+      function isSessionTimelineRow(row) {
+        const sessionID = String(row?.id || "")
+        if (!sessionID) return false
+        if (sessionID.startsWith("artifact:")) return false
+        if (sessionID.startsWith("lifecycle:")) return false
+        return true
+      }
+
+      function sessionTimelineMeta(entry) {
+        if (!entry) return ""
+        const generatedAt = Number(entry.generatedAt || 0)
+        const generated = Number.isFinite(generatedAt) && generatedAt > 0 ? timeText(generatedAt) : "n/a"
+        return (
+          '<div style="margin-bottom:8px;color:var(--muted);font-size:12px;">' +
+          "messages: " +
+          esc(entry.messageCount ?? 0) +
+          " / actions: " +
+          esc(entry.actionCount ?? 0) +
+          " / fetched: " +
+          esc(generated) +
+          "</div>"
+        )
+      }
+
+      function renderSessionTimeline(row) {
+        if (!isSessionTimelineRow(row)) {
+          return '<div class="empty">This row does not map to a concrete session timeline.</div>'
+        }
+
+        const sessionID = String(row.id)
+        const entry = state.timelineBySession[sessionID]
+        const loading = !!state.timelineLoading[sessionID]
+        const error = state.timelineErrors[sessionID]
+
+        if (!entry && loading) return '<div class="empty">Loading full session timeline...</div>'
+        if (!entry && error) return '<div class="empty">' + esc(error) + "</div>"
+        if (!entry) return '<div class="empty">Timeline not loaded yet.</div>'
+
+        const body = renderActionList(entry.actions || [])
+        return sessionTimelineMeta(entry) + body + (loading ? '<div class="empty">Refreshing timeline...</div>' : "")
+      }
+
+      function ensureSessionTimeline(row, force = false) {
+        if (!isSessionTimelineRow(row)) return
+        const sessionID = String(row.id)
+        if (!sessionID) return
+        if (state.timelineLoading[sessionID]) return
+        if (!force && state.timelineBySession[sessionID]) return
+
+        delete state.timelineErrors[sessionID]
+        state.timelineLoading[sessionID] = true
+
+        const query =
+          "/api/session-actions?sessionID=" +
+          encodeURIComponent(sessionID) +
+          "&messageLimit=800&actionLimit=1200"
+
+        fetch(query, { cache: "no-store" })
+          .then(async (response) => {
+            if (!response.ok) throw new Error(await response.text())
+            return response.json()
+          })
+          .then((payload) => {
+            state.timelineBySession[sessionID] = {
+              generatedAt: payload.generatedAt,
+              messageCount: payload.messageCount,
+              actionCount: payload.actionCount,
+              actions: Array.isArray(payload.actions) ? payload.actions : [],
+            }
+          })
+          .catch((error) => {
+            state.timelineErrors[sessionID] = error?.message || String(error)
+          })
+          .finally(() => {
+            delete state.timelineLoading[sessionID]
+            if (state.selectedId === sessionID) renderDetail()
+          })
+      }
+
       function renderDetailActions(row) {
         detailActionsEl.innerHTML = ""
         if (!row) return
+
+        if (isSessionTimelineRow(row)) {
+          const refreshTimelineBtn = document.createElement("button")
+          refreshTimelineBtn.type = "button"
+          refreshTimelineBtn.className = "chip"
+          refreshTimelineBtn.textContent = "Refresh Full Timeline"
+          refreshTimelineBtn.addEventListener("click", () => {
+            ensureSessionTimeline(row, true)
+            renderDetail()
+          })
+          detailActionsEl.appendChild(refreshTimelineBtn)
+        }
+
         const deepLink = buildOpenCodeSessionDeepLink(row)
         if (!deepLink) return
 
@@ -945,7 +1114,8 @@
       }
 
       function renderDetail() {
-        const row = state.rows.find((item) => item.id === state.selectedId) || getRowsForLimit()[0]
+        const displayRows = getRowsForLimit()
+        const row = state.rows.find((item) => item.id === state.selectedId) || pickPreferredRow(displayRows)
         if (!row) {
           detailTitleEl.textContent = "Select a session"
           detailSubEl.textContent = "Choose a tile on the left to inspect why this session exists and what it did last."
@@ -965,6 +1135,7 @@
         detailStatusEl.className = "status-pill " + row.status
         detailStatusEl.innerHTML = '<span class="dot ' + row.status + '"></span><span>' + esc(row.status) + "</span>"
         renderDetailActions(row)
+        ensureSessionTimeline(row)
         renderFacts(row)
 
         const parts = []
@@ -1003,6 +1174,7 @@
           ),
         )
         parts.push(renderSection("Recent actions", renderActionList(row.recentActions)))
+        parts.push(renderSection("Full session timeline", renderSessionTimeline(row)))
         parts.push(
           renderSection(
             "Context",
@@ -1045,13 +1217,17 @@
           const response = await fetch("/api/sessions?limit=" + requestLimit, { cache: "no-store" })
           if (!response.ok) throw new Error(await response.text())
           const payload = await response.json()
-          const previousSelected = state.selectedId
           state.rows = payload.rows || []
-          if (!state.selectedId || !state.rows.some((row) => row.id === state.selectedId)) {
-            state.selectedId = state.rows[0]?.id || null
+          const hasCurrentSelection = !!state.selectedId && state.rows.some((row) => row.id === state.selectedId)
+          if (!hasCurrentSelection) {
+            state.hasManualSelection = false
           }
+          state.selectedId = chooseSelectedRowID(
+            state.rows,
+            hasCurrentSelection ? state.selectedId : null,
+            state.hasManualSelection,
+          )
           renderAll()
-          state.selectedId = state.selectedId || previousSelected || null
           lastUpdatedEl.textContent =
             "Last updated: " + new Date(payload.generatedAt).toLocaleString("zh-CN", { hour12: false })
         } catch (err) {

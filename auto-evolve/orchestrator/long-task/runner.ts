@@ -1,6 +1,7 @@
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
+import { setTimeout as sleep } from "node:timers/promises"
 import type {
   LongTaskFailurePacket,
   LongTaskLearningUnit,
@@ -80,6 +81,7 @@ import type { OpencodeRunResult } from "../opencode"
 import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
 import { extractJsonObject } from "./json-extract"
+import { cleanupRuntimeProcessScope, longTaskRunRuntimeScope } from "../runtime-process-registry"
 
 function nowISO() {
   return new Date().toISOString()
@@ -91,20 +93,31 @@ function short(text: string, limit = 200) {
   return normalized.slice(0, limit - 3) + "..."
 }
 
+const NO_SIGNAL_BLOCK_FAILURE_THRESHOLD = (() => {
+  const value = Number.parseInt(process.env.AUTO_EVOLVE_NO_SIGNAL_BLOCK_THRESHOLD ?? "", 10)
+  if (Number.isFinite(value) && value >= 2) return value
+  // Prefer resilience by default: require 3 consecutive hard no-signal failures
+  // before marking the entire long-task run as blocked.
+  return 3
+})()
+
 interface TaskSignalHealth {
   noSessionSignal: boolean
+  hasTransportSignal: boolean
   likelyInfrastructureFailure: boolean
 }
 
 function analyzeTaskSignalHealth(
-  result: Pick<OpencodeRunResult, "exitCode" | "events" | "responseText" | "sessionID">,
+  result: Pick<OpencodeRunResult, "exitCode" | "events" | "responseText" | "sessionID" | "stdout" | "stderr">,
 ): TaskSignalHealth {
   const noEvents = result.events.length === 0
   const noResponse = result.responseText.trim().length === 0
   const noSession = typeof result.sessionID !== "string" || result.sessionID.trim().length === 0
-  const noSessionSignal = noEvents && noResponse
+  const hasTransportSignal = result.stdout.trim().length > 0 || result.stderr.trim().length > 0
+  const noSessionSignal = noEvents && noResponse && !hasTransportSignal
   return {
     noSessionSignal,
+    hasTransportSignal,
     likelyInfrastructureFailure: result.exitCode !== 0 && noSession && noSessionSignal,
   }
 }
@@ -121,11 +134,20 @@ function noSignalSummary(input: {
   )
 }
 
+function isHardNoSignalSummary(text: string) {
+  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim()
+  if (!normalized) return false
+  return normalized.includes("no structured signal") || normalized.includes("no-structured-signal") || normalized.includes("no events/response")
+}
+
 function isNoSignalFailurePacket(packet: LongTaskFailurePacket) {
-  return (
-    packet.failureType === "invalid_execution_output" &&
-    packet.mismatchSummary.toLowerCase().includes("no structured signal")
-  )
+  return packet.failureType === "invalid_execution_output" && isHardNoSignalSummary(packet.mismatchSummary)
+}
+
+function hasConsecutiveNoSignalFailures(packets: LongTaskFailurePacket[], threshold: number) {
+  if (threshold <= 0) return false
+  if (packets.length < threshold) return false
+  return packets.slice(-threshold).every(isNoSignalFailurePacket)
 }
 
 function onceActivationCallback(callback?: OpencodeTaskInput["onSpawn"]) {
@@ -136,6 +158,13 @@ function onceActivationCallback(callback?: OpencodeTaskInput["onSpawn"]) {
     activated = true
     await callback()
   }
+}
+
+async function cleanupRuntimeScopeWithRetry(scope: string | undefined) {
+  const first = await cleanupRuntimeProcessScope(scope)
+  if (first.remainingCount <= 0) return
+  await sleep(250)
+  await cleanupRuntimeProcessScope(scope)
 }
 
 async function updateLongTaskProgressStatus(run: ReturnType<typeof longTaskRunPaths>, status: LongTaskRunStatus) {
@@ -157,6 +186,16 @@ async function updateLongTaskProgressStatus(run: ReturnType<typeof longTaskRunPa
     status,
   })
   await writeLongTaskProgressState(run, next)
+}
+
+function isLiveLongTaskStatus(status: LongTaskRunStatus) {
+  return status === "planning" || status === "bootstrapping" || status === "running" || status === "waiting_for_retry"
+}
+
+async function pulseLongTaskProgress(run: ReturnType<typeof longTaskRunPaths>) {
+  const progress = await readLongTaskProgressState(run)
+  if (!isLiveLongTaskStatus(progress.status)) return
+  await writeLongTaskProgressState(run, progress)
 }
 
 async function extractJsonObjectFromPath(filePath: string) {
@@ -626,14 +665,20 @@ function createRetryLesson(input: {
   strategyChange?: string
   selfChecksRun: string[]
 }): LongTaskRetryLesson {
+  const isNoSignalFailure = isHardNoSignalSummary(input.failure.mismatchSummary)
   const doNotRepeat = uniqueStrings([
-    input.claim.claimedSuccess ? "" : "Do not claim success while blockers or known gaps still remain.",
-    ...input.failure.suspectedCauses.map((item) => `Do not ignore: ${short(item, 120)}`),
+    isNoSignalFailure
+      ? "Do not continue domain-level retries until runtime can return structured execution signal."
+      : input.claim.claimedSuccess
+        ? ""
+        : "Do not claim success while blockers or known gaps still remain.",
+    ...(isNoSignalFailure ? [] : input.failure.suspectedCauses.map((item) => `Do not ignore: ${short(item, 120)}`)),
   ]).slice(0, 4)
 
   const nextAttemptStrategy = uniqueStrings([
     input.failure.nextPriorityFix ?? "",
     input.strategyChange ?? "",
+    isNoSignalFailure ? "Restore events/response structured signal first, then retry this unit." : "",
     `Follow the current unit check plan before returning claimed_success=true: ${short(input.unit.checkPlan, 160)}`,
   ]).slice(0, 4)
 
@@ -801,21 +846,24 @@ function promoteOperationalContextFromFailure(input: {
   failure: LongTaskFailurePacket
   retryLesson: LongTaskRetryLesson
 }): LongTaskOperationalContextItem[] {
+  const isNoSignalFailure = isHardNoSignalSummary(input.failure.mismatchSummary)
   const items: LongTaskOperationalContextItem[] = [
     makeOperationalContextItem({
       runID: input.runID,
       unit: input.unit,
       attempt: input.attempt,
-      kind: "blocking_issue",
-      status: "confirmed",
+      kind: isNoSignalFailure ? "package_gap" : "blocking_issue",
+      status: isNoSignalFailure ? "candidate" : "confirmed",
       statement: input.failure.mismatchSummary,
-      rationale: "Observed as a validator-backed or execution-backed failure in the current run.",
+      rationale: isNoSignalFailure
+        ? "Observed as runtime/no-signal instability; keep as candidate context and avoid hard routing conclusions."
+        : "Observed as a validator-backed or execution-backed failure in the current run.",
       refs: input.failure.evidenceRefs,
       tags: operationalContextTags({ spec: input.spec, unit: input.unit, extra: [input.failure.failureType] }),
     }),
   ]
 
-  for (const line of input.retryLesson.doNotRepeat) {
+  for (const line of isNoSignalFailure ? [] : input.retryLesson.doNotRepeat) {
     items.push(
       makeOperationalContextItem({
         runID: input.runID,
@@ -900,6 +948,7 @@ async function runPlanningSession(input: {
   failureSummaries?: string[]
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const config = await loadConfig(input.configPathCwd)
   const selection = resolveModelSelection(config, "solve", input.spec.planning)
@@ -940,6 +989,13 @@ async function runPlanningSession(input: {
     variant: selection.variant,
     runtimeScope: input.runtimeScope,
     onSpawn: input.onActivation,
+    onPulse: input.onPulse,
+    live: {
+      stageDir: draftPaths.root,
+      phase: input.phase === "plan" ? "long_task_plan" : "long_task_replan",
+      taskKind: input.phase === "plan" ? "long_task_plan" : "long_task_replan",
+      methodID: input.spec.reversePropagation?.recipeID,
+    },
   })
 
   await writeTaskArtifacts(draftPaths.root, task, {
@@ -977,6 +1033,7 @@ async function executeWorkUnit(input: {
   unit: LongTaskWorkUnit
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const config = await loadConfig(input.configPathCwd)
   const selection = resolveModelSelection(config, "solve", input.spec.execution)
@@ -1006,6 +1063,7 @@ async function executeWorkUnit(input: {
     path.join(attemptPaths.validatorsRoot, validatorID, "validator_input.json"),
   )
   const formalPackageRoots = resolveLongTaskFormalPackageRoots(input.spec)
+  const monitorCaseID = input.spec.id ?? input.spec.taskFamily ?? input.spec.title
   const prompt = buildLongTaskExecutionPrompt({
     spec: {
       ...input.spec,
@@ -1069,11 +1127,22 @@ async function executeWorkUnit(input: {
     variant: selection.variant,
     runtimeScope: input.runtimeScope,
     onSpawn: activateExecution,
+    onPulse: input.onPulse,
+    live: {
+      stageDir: attemptPaths.executeDir,
+      phase: "long_task_execute",
+      taskKind: "long_task_execute",
+      caseID: monitorCaseID,
+      attempt,
+      methodID: input.spec.reversePropagation?.recipeID,
+    },
   })
 
   await writeTaskArtifacts(attemptPaths.executeDir, task, {
     phase: "long_task_execute",
     taskKind: "long_task_execute",
+    caseID: monitorCaseID,
+    attempt,
     methodID: input.spec.reversePropagation?.recipeID,
   })
 
@@ -1195,6 +1264,7 @@ async function replanGraph(input: {
   graph: LongTaskWorkGraph
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const recentFailures = (await readFailurePackets(input.run))
     .slice(-6)
@@ -1207,10 +1277,11 @@ async function replanGraph(input: {
     run: input.run,
     phase: "replan",
     existingGraph: input.graph,
-    failureSummaries: recentFailures,
-    runtimeScope: input.runtimeScope,
-    onActivation: input.onActivation,
-  })
+      failureSummaries: recentFailures,
+      runtimeScope: input.runtimeScope,
+      onActivation: input.onActivation,
+      onPulse: input.onPulse,
+    })
 
   const nextGraph = mergeReplannedGraph({
     current: input.graph,
@@ -1231,6 +1302,7 @@ async function runCompletionValidators(input: {
   graph: LongTaskWorkGraph
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const completionValidatorIDs =
     input.graph.completionValidatorIDs.length > 0
@@ -1294,6 +1366,7 @@ async function runCompletionValidators(input: {
       bundlePath,
       runtimeScope: input.runtimeScope,
       onActivation: input.onActivation,
+      onPulse: input.onPulse,
       payload: {
         runID: progress.runID,
         unitID: syntheticUnit.id,
@@ -1532,6 +1605,7 @@ async function continueLongTaskLoop(input: {
   run: ReturnType<typeof longTaskRunPaths>
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   try {
     while (true) {
@@ -1576,6 +1650,7 @@ async function continueLongTaskLoop(input: {
             graph,
             runtimeScope: input.runtimeScope,
             onActivation: input.onActivation,
+            onPulse: input.onPulse,
           })
           const completionPassed = completionResults.every((result) => result.passed)
           if (completionPassed) {
@@ -1645,6 +1720,7 @@ async function continueLongTaskLoop(input: {
               graph,
               runtimeScope: input.runtimeScope,
               onActivation: input.onActivation,
+              onPulse: input.onPulse,
             })
             const postReplanProgress = await readLongTaskProgressState(input.run)
             progress = deriveLongTaskProgressState({
@@ -1682,6 +1758,7 @@ async function continueLongTaskLoop(input: {
             graph,
             runtimeScope: input.runtimeScope,
             onActivation: input.onActivation,
+            onPulse: input.onPulse,
           })
           progress = deriveLongTaskProgressState({
             runID: progress.runID,
@@ -1714,6 +1791,7 @@ async function continueLongTaskLoop(input: {
         unit: nextUnit,
         runtimeScope: input.runtimeScope,
         onActivation: input.onActivation,
+        onPulse: input.onPulse,
       })
 
       graph = execution.graph
@@ -1858,20 +1936,17 @@ async function continueLongTaskLoop(input: {
         reason: failure.mismatchSummary,
       })
 
-      if (execution.signalHealth.likelyInfrastructureFailure) {
-        const recentNoSignalFailures = (await readFailurePackets(input.run))
-          .filter((packet) => packet.unitID === execution.activeUnit.id)
-          .filter(isNoSignalFailurePacket)
-          .slice(-2)
-        if (recentNoSignalFailures.length >= 2) {
-          return finalizeLongTaskRun({
-            cwd: input.cwd,
-            run: input.run,
-            spec: input.spec,
-            status: "blocked_failure",
-            summaryText: `Repeated no-structured-signal execution failures detected for unit ${execution.activeUnit.id}; stopped to avoid retry loop.`,
-          })
-        }
+      const recentUnitFailures = (await readFailurePackets(input.run)).filter(
+        (packet) => packet.unitID === execution.activeUnit.id,
+      )
+      if (hasConsecutiveNoSignalFailures(recentUnitFailures, NO_SIGNAL_BLOCK_FAILURE_THRESHOLD)) {
+        return finalizeLongTaskRun({
+          cwd: input.cwd,
+          run: input.run,
+          spec: input.spec,
+          status: "blocked_failure",
+          summaryText: `Repeated no-structured-signal execution failures (${NO_SIGNAL_BLOCK_FAILURE_THRESHOLD} consecutive) detected for unit ${execution.activeUnit.id}; stopped to avoid retry loop.`,
+        })
       }
 
       const unitAfterFailure: LongTaskWorkUnit = {
@@ -1913,12 +1988,13 @@ async function continueLongTaskLoop(input: {
         graph = await replanGraph({
           cwd: input.cwd,
           configPathCwd: input.configPathCwd,
-          spec: input.spec,
-          run: input.run,
-          graph,
-          runtimeScope: input.runtimeScope,
-          onActivation: input.onActivation,
-        })
+            spec: input.spec,
+            run: input.run,
+            graph,
+            runtimeScope: input.runtimeScope,
+            onActivation: input.onActivation,
+            onPulse: input.onPulse,
+          })
         const postReplanProgress = await readLongTaskProgressState(input.run)
         progress = deriveLongTaskProgressState({
           runID: postReplanProgress.runID,
@@ -1949,6 +2025,8 @@ async function continueLongTaskLoop(input: {
       status: "blocked_failure",
       summaryText: `Long-task aborted unexpectedly: ${short(message, 240)}`,
     })
+  } finally {
+    await cleanupRuntimeScopeWithRetry(input.runtimeScope)
   }
 }
 
@@ -1957,75 +2035,99 @@ export async function runLongTask(input: {
   specPath: string
   runtimeScope?: string
   onRuntimeActivated?: OpencodeTaskInput["onSpawn"]
+  onRuntimePulse?: OpencodeTaskInput["onPulse"]
 }) {
-  await loadConfig(input.cwd)
-  const { spec, specPath } = await loadLongTaskSpec(input.specPath)
-  const runID = createLongTaskRunID(spec.title)
-  const progress = createInitialLongTaskProgressState(runID)
-  const placeholderGraph = createLongTaskWorkGraph({
-    plannerSummary: "Long-task run initialized before graph bootstrap.",
-    completionValidatorIDs: spec.disableCompletionValidators
-      ? []
-      : spec.validators.filter((item) => item.required !== false).map((item) => item.id),
-    units: [],
-    revision: 0,
-  })
+  let runtimeScope = input.runtimeScope
+  try {
+    await loadConfig(input.cwd)
+    const { spec, specPath } = await loadLongTaskSpec(input.specPath)
+    const runID = createLongTaskRunID(spec.title)
+    runtimeScope = runtimeScope ?? longTaskRunRuntimeScope(runID)
+    const progress = createInitialLongTaskProgressState(runID)
+    const placeholderGraph = createLongTaskWorkGraph({
+      plannerSummary: "Long-task run initialized before graph bootstrap.",
+      completionValidatorIDs: spec.disableCompletionValidators
+        ? []
+        : spec.validators.filter((item) => item.required !== false).map((item) => item.id),
+      units: [],
+      revision: 0,
+    })
 
-  const initialized = await initializeLongTaskRun({
-    cwd: input.cwd,
-    spec,
-    workGraph: placeholderGraph,
-    progressState: progress,
-  })
-  const activateRun = onceActivationCallback(async () => {
-    await updateLongTaskProgressStatus(initialized.run, "running")
-    await input.onRuntimeActivated?.()
-  })
+    const initialized = await initializeLongTaskRun({
+      cwd: input.cwd,
+      spec,
+      workGraph: placeholderGraph,
+      progressState: progress,
+    })
+    const activateRun = onceActivationCallback(async () => {
+      await updateLongTaskProgressStatus(initialized.run, "running")
+      await input.onRuntimeActivated?.()
+    })
+    const pulseRun = async () => {
+      await pulseLongTaskProgress(initialized.run)
+      await input.onRuntimePulse?.()
+    }
 
-  const graph = spec.initialGraph
-    ? normalizePlanningGraph(
-        spec.initialGraph as unknown as Record<string, unknown>,
-        spec,
-        "spec.initialGraph was invalid",
-      )
-    : await runPlanningSession({
-        cwd: input.cwd,
-        configPathCwd: input.cwd,
-        spec,
-        specPath,
-        run: initialized.run,
-        phase: "plan",
-        runtimeScope: input.runtimeScope,
-        onActivation: activateRun,
-      })
+    const graph = spec.initialGraph
+      ? normalizePlanningGraph(
+          spec.initialGraph as unknown as Record<string, unknown>,
+          spec,
+          "spec.initialGraph was invalid",
+        )
+      : await runPlanningSession({
+          cwd: input.cwd,
+          configPathCwd: input.cwd,
+          spec,
+          specPath,
+          run: initialized.run,
+          phase: "plan",
+          runtimeScope,
+          onActivation: activateRun,
+          onPulse: pulseRun,
+        })
 
-  const currentProgress = await readLongTaskProgressState(initialized.run)
-  const runningProgress = deriveLongTaskProgressState({
-    runID: initialized.runID,
-    graph,
-    previous: currentProgress,
-    status: currentProgress.status === "running" ? "running" : "bootstrapping",
-  })
-  await writeLongTaskWorkGraph(initialized.run, graph)
-  await writeLongTaskProgressState(initialized.run, runningProgress)
+    const currentProgress = await readLongTaskProgressState(initialized.run)
+    const runningProgress = deriveLongTaskProgressState({
+      runID: initialized.runID,
+      graph,
+      previous: currentProgress,
+      status: currentProgress.status === "running" ? "running" : "bootstrapping",
+    })
+    await writeLongTaskWorkGraph(initialized.run, graph)
+    await writeLongTaskProgressState(initialized.run, runningProgress)
 
-  return continueLongTaskLoop({
-    cwd: input.cwd,
-    configPathCwd: input.cwd,
-    spec,
-    run: initialized.run,
-    runtimeScope: input.runtimeScope,
-    onActivation: activateRun,
-  })
+    return continueLongTaskLoop({
+      cwd: input.cwd,
+      configPathCwd: input.cwd,
+      spec,
+      run: initialized.run,
+      runtimeScope,
+      onActivation: activateRun,
+      onPulse: pulseRun,
+    })
+  } finally {
+    await cleanupRuntimeScopeWithRetry(runtimeScope)
+  }
 }
 
 export async function resumeLongTask(input: { cwd: string; runID: string }) {
   const resolved = resolveExistingLongTaskRun(input.cwd, input.runID)
   const spec = await readLongTaskSpec(resolved.run)
+  const runtimeScope = longTaskRunRuntimeScope(input.runID)
+  const activateRun = onceActivationCallback(async () => {
+    await updateLongTaskProgressStatus(resolved.run, "running")
+  })
+  const pulseRun = async () => {
+    await pulseLongTaskProgress(resolved.run)
+  }
+  await pulseRun()
   return continueLongTaskLoop({
     cwd: input.cwd,
     configPathCwd: input.cwd,
     spec,
     run: resolved.run,
+    runtimeScope,
+    onActivation: activateRun,
+    onPulse: pulseRun,
   })
 }

@@ -103,6 +103,7 @@ async function runScriptValidator(input: {
   payload: Record<string, unknown>
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }): Promise<LongTaskValidatorResult> {
   await mkdir(input.validatorDir, { recursive: true })
   const payloadPath = path.join(input.validatorDir, "validator_input.json")
@@ -118,29 +119,49 @@ async function runScriptValidator(input: {
     env: process.env,
   })
   registerRuntimeProcess(input.runtimeScope, child.pid, input.contract.path)
-  await input.onActivation?.()
+  const abortAfterSpawn = async (cause: unknown): Promise<never> => {
+    const error = cause instanceof Error ? cause : new Error(String(cause))
+    try {
+      await terminateProcessTree(child.pid)
+    } catch {}
+    await writeTextFile(stdoutPath, "")
+    await writeTextFile(
+      stderrPath,
+      [`Validator runtime bootstrap failed after spawn: ${error.message}`].filter(Boolean).join("\n\n"),
+    )
+    throw error
+  }
+  try {
+    await input.onActivation?.()
+    await input.onPulse?.()
+  } catch (error) {
+    return abortAfterSpawn(error)
+  }
 
   const stdoutPromise = new Response(child.stdout).text()
   const stderrPromise = new Response(child.stderr).text()
   const timeoutMs = input.contract.timeoutMs ?? DEFAULT_SCRIPT_VALIDATOR_TIMEOUT_MS
   let timedOut = false
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  const pulseHandle = setInterval(() => {
+    void Promise.resolve(input.onPulse?.()).catch(() => undefined)
+  }, 60_000)
   const timeoutPromise = new Promise<number>((resolve) => {
+    let settled = false
     timeoutHandle = setTimeout(async () => {
+      if (settled) return
+      settled = true
       timedOut = true
       try {
         await terminateProcessTree(child.pid)
       } catch {}
-      try {
-        resolve(await child.exited)
-      } catch {
-        resolve(124)
-      }
+      resolve(124)
     }, timeoutMs)
   })
 
   const exitCode = await Promise.race([child.exited, timeoutPromise])
   if (timeoutHandle) clearTimeout(timeoutHandle)
+  clearInterval(pulseHandle)
   const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise])
   const normalizedStderr = timedOut
     ? [`Validator timed out after ${timeoutMs} ms and the full process tree was terminated.`, stderr]
@@ -151,9 +172,13 @@ async function runScriptValidator(input: {
   await writeTextFile(stdoutPath, stdout)
   await writeTextFile(stderrPath, normalizedStderr)
 
-  const parsed = extractJsonObject(stdout, {
-    preferredKeys: ["passed", "summary", "details", "blocking"],
-  })
+  const parsed =
+    extractJsonObject(stdout, {
+      preferredKeys: ["passed", "summary", "details", "blocking"],
+    }) ??
+    extractJsonObject(stderr, {
+      preferredKeys: ["passed", "summary", "details", "blocking"],
+    })
   const successExitCodes = input.contract.successExitCodes ?? [0]
   const passedFromExit = !timedOut && successExitCodes.includes(exitCode)
 
@@ -195,6 +220,7 @@ async function runPromptValidator(input: {
   bundlePath: string
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }): Promise<LongTaskValidatorResult> {
   await mkdir(input.validatorDir, { recursive: true })
   const promptPath = path.join(input.validatorDir, "validator_prompt.txt")
@@ -237,6 +263,13 @@ async function runPromptValidator(input: {
     variant: selection.variant,
     runtimeScope: input.runtimeScope,
     onSpawn: input.onActivation,
+    onPulse: input.onPulse,
+    live: {
+      stageDir: path.join(input.validatorDir, "session"),
+      phase: "long_task_validate",
+      taskKind: "long_task_validate",
+      methodID: input.spec.reversePropagation?.recipeID,
+    },
   })
 
   await writeTaskArtifacts(path.join(input.validatorDir, "session"), task, {
@@ -284,6 +317,7 @@ export async function runLongTaskValidator(input: {
   payload: Record<string, unknown>
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   if (input.contract.type === "script") {
     return runScriptValidator({
@@ -297,6 +331,7 @@ export async function runLongTaskValidator(input: {
       payload: input.payload,
       runtimeScope: input.runtimeScope,
       onActivation: input.onActivation,
+      onPulse: input.onPulse,
     })
   }
 
@@ -312,5 +347,6 @@ export async function runLongTaskValidator(input: {
     bundlePath: input.bundlePath,
     runtimeScope: input.runtimeScope,
     onActivation: input.onActivation,
+    onPulse: input.onPulse,
   })
 }

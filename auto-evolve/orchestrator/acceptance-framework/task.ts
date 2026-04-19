@@ -12,6 +12,7 @@ import { runLongTaskValidator } from "../long-task/validators"
 import type { LongTaskSpec, LongTaskWorkUnit, LongTaskValidatorResult } from "../long-task/contract"
 import { recordAcceptanceResult } from "./run"
 import { experienceWorkspacePathsFromRoot, resolveExperienceWorkspaceLayout } from "../experience-workspace"
+import { cleanupRuntimeProcessScope } from "../runtime-process-registry"
 
 function nowISO() {
   return new Date().toISOString()
@@ -217,187 +218,203 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
     allowMissingInitialExpertContextPaths: true,
   })
   const runID = `deployment-${deploymentRunID(spec.title)}`
+  const runtimeScope = `deployment:${runID}`
   const runDir = path.join(input.harnessRoot, runID)
   const bundlePath = path.join(runDir, "deployment_bundle.json")
   const validatorBundleDir = path.join(runDir, "validators")
   const executeDir = path.join(runDir, "session")
-  const selection = resolveModelSelection(config, "solve", spec.execution)
-  const capabilityPaths = capabilityReferencePaths(spec)
-  const capabilityFiles = capabilityAttachedFiles(spec)
+  try {
+    const selection = resolveModelSelection(config, "solve", spec.execution)
+    const capabilityPaths = capabilityReferencePaths(spec)
+    const capabilityFiles = capabilityAttachedFiles(spec)
 
-  const derivedEntryPoints = await deriveFormalSurfaceEntryPoints(input.formalSurfaceRoots)
-  const resolvedInitialExpertContextPaths = uniqueStrings([
-    ...(spec.initialExpertContextPaths ?? []),
-    ...derivedEntryPoints,
-  ])
+    const derivedEntryPoints = await deriveFormalSurfaceEntryPoints(input.formalSurfaceRoots)
+    const resolvedInitialExpertContextPaths = uniqueStrings([
+      ...(spec.initialExpertContextPaths ?? []),
+      ...derivedEntryPoints,
+    ])
 
-  await ensureDirectory(runDir)
-  await ensureDirectory(validatorBundleDir)
-  await resetEditablePaths(runDir, spec)
+    await ensureDirectory(runDir)
+    await ensureDirectory(validatorBundleDir)
+    await resetEditablePaths(runDir, spec)
 
-  await writeJsonFile(bundlePath, {
-    runID,
-    sourceRunID: input.sourceRunID,
-    deploymentSpecPath: specPath,
-    formalSurfaceRoots: input.formalSurfaceRoots,
-    resolvedInitialExpertContextPaths,
-    missingInitialExpertContextPaths,
-    targetKind: input.targetKind,
-    targetID: input.targetID,
-    createdAt: nowISO(),
-  })
-
-  const prompt = buildBlankAgentTaskPrompt({
-    spec,
-    formalSurfaceRoots: input.formalSurfaceRoots,
-    resolvedInitialExpertContextPaths,
-    bundlePath,
-  })
-  const editablePaths = resolveLongTaskEditablePaths(spec)
-
-  const task = await runOpencodeTask({
-    cwd: input.cwd,
-    config,
-    title: `Blank Agent Deployment ${spec.title}`,
-    prompt,
-    referencePaths: uniqueStrings([
-      ...input.formalSurfaceRoots,
-      ...resolvedInitialExpertContextPaths,
-      ...spec.materials.map((item) => item.path),
-      ...(spec.targetPaths ?? []).map((item) => item.path),
-      ...capabilityPaths,
-    ]),
-    attachedFiles: capabilityFiles,
-    permissionReadPaths: uniqueStrings([
-      ...input.formalSurfaceRoots,
-      ...resolvedInitialExpertContextPaths,
-      ...spec.materials.map((item) => item.path),
-      ...(spec.targetPaths ?? []).map((item) => item.path),
-      ...capabilityPaths,
-    ]),
-    permissionEditPaths: editablePaths,
-    model: selection.model,
-    agent: selection.agent,
-    variant: selection.variant,
-  })
-
-  const artifactPaths = await writeTaskArtifacts(executeDir, task, {
-    phase: "deployment_acceptance",
-    taskKind: "deployment_acceptance",
-    methodID: spec.reversePropagation?.recipeID,
-  })
-
-  const unit = syntheticDeploymentUnit(spec)
-  const validatorPayload = {
-    runID,
-    unitID: unit.id,
-    attempt: 1,
-    goal: spec.goal,
-    claim: unit.claim,
-    checkPlan: unit.checkPlan,
-    materials: spec.materials,
-    targetPaths: spec.targetPaths ?? [],
-    expectedArtifacts: unit.expectedArtifacts,
-    editablePaths,
-    bundlePath,
-  }
-
-  const validatorResults: LongTaskValidatorResult[] = []
-  for (const validator of spec.validators) {
-    const result = await runLongTaskValidator({
-      cwd: input.cwd,
-      config,
-      contract: validator,
-      spec,
-      unit,
+    await writeJsonFile(bundlePath, {
       runID,
-      attempt: 1,
-      validatorDir: path.join(validatorBundleDir, validator.id),
-      bundlePath,
-      payload: validatorPayload,
-    })
-    validatorResults.push(result)
-  }
-
-  const passed = validatorResults.every((item) => item.passed)
-  const summary = passed
-    ? "Blank-agent task deployment acceptance passed."
-    : short(validatorResults.filter((item) => !item.passed).map((item) => item.summary).join(" | "), 260)
-  const reason = passed
-    ? "All required deployment validators passed."
-    : validatorResults.find((item) => !item.passed)?.summary ?? "Deployment validators failed."
-  const reasons = passed
-    ? []
-    : uniqueStrings(
-        validatorResults
-          .filter((item) => !item.passed)
-          .flatMap((item) => [item.summary, ...item.details])
-          .map((item) => short(item, 200)),
-      ).slice(0, 10)
-
-  const record = await recordAcceptanceResult({
-    cwd: input.cwd,
-    config,
-    sourceRunID: input.sourceRunID,
-    mode: "deployment",
-    policyID: input.policyID ?? "blank-agent-single-session-task-gate",
-    stageID: "deployment_guard",
-    targetKind: input.targetKind,
-    targetID: input.targetID,
-    passed,
-    outcome: passed ? "promote" : "hold",
-    summary,
-    reason,
-    reasons,
-    evidenceRefs: uniqueStrings([
-      artifactPaths.sessionExecutionReportPath,
-      artifactPaths.responsePath,
-      ...validatorResults.flatMap((item) => item.evidenceRefs),
-    ]),
-    details: {
+      sourceRunID: input.sourceRunID,
       deploymentSpecPath: specPath,
+      formalSurfaceRoots: input.formalSurfaceRoots,
       resolvedInitialExpertContextPaths,
       missingInitialExpertContextPaths,
-      validatorCount: validatorResults.length,
-      toolFailureCount: task.result.toolFailures.length,
-      exitCode: task.result.exitCode,
-      validators: validatorResults.map((item) => ({
-        validatorID: item.validatorID,
-        passed: item.passed,
-        summary: item.summary,
-      })),
-    },
-    notes: [
-      "This deployment harness exposed only the formal expert surface, registered capability assets, and task materials.",
-      "It did not expose runtime-state, shadow memory, candidate packages, or maintenance-request traces.",
-    ],
-    mirrorPath: path.join(runDir, "deployment_acceptance.json"),
-  })
+      targetKind: input.targetKind,
+      targetID: input.targetID,
+      createdAt: nowISO(),
+    })
 
-  await writeJsonFile(path.join(runDir, "deployment_run.json"), {
-    runID,
-    sourceRunID: input.sourceRunID,
-    targetKind: input.targetKind,
-    targetID: input.targetID,
-    deploymentSpecPath: specPath,
-    formalSurfaceRoots: input.formalSurfaceRoots,
-    resolvedInitialExpertContextPaths,
-    missingInitialExpertContextPaths,
-    passed,
-    summary,
-    validatorResults,
-    acceptanceRecordPath: record.path,
-    createdAt: nowISO(),
-  })
+    const prompt = buildBlankAgentTaskPrompt({
+      spec,
+      formalSurfaceRoots: input.formalSurfaceRoots,
+      resolvedInitialExpertContextPaths,
+      bundlePath,
+    })
+    const editablePaths = resolveLongTaskEditablePaths(spec)
 
-  return {
-    runID,
-    runDir,
-    passed,
-    summary,
-    validatorResults,
-    acceptanceRecordPath: record.path,
-    sessionExecutionReportPath: artifactPaths.sessionExecutionReportPath,
+    const task = await runOpencodeTask({
+      cwd: input.cwd,
+      config,
+      title: `Blank Agent Deployment ${spec.title}`,
+      prompt,
+      referencePaths: uniqueStrings([
+        ...input.formalSurfaceRoots,
+        ...resolvedInitialExpertContextPaths,
+        ...spec.materials.map((item) => item.path),
+        ...(spec.targetPaths ?? []).map((item) => item.path),
+        ...capabilityPaths,
+      ]),
+      attachedFiles: capabilityFiles,
+      permissionReadPaths: uniqueStrings([
+        ...input.formalSurfaceRoots,
+        ...resolvedInitialExpertContextPaths,
+        ...spec.materials.map((item) => item.path),
+        ...(spec.targetPaths ?? []).map((item) => item.path),
+        ...capabilityPaths,
+      ]),
+      permissionEditPaths: editablePaths,
+      model: selection.model,
+      agent: selection.agent,
+      variant: selection.variant,
+      runtimeScope,
+      live: {
+        stageDir: executeDir,
+        phase: "deployment_acceptance",
+        taskKind: "deployment_acceptance",
+        methodID: spec.reversePropagation?.recipeID,
+      },
+    })
+
+    const artifactPaths = await writeTaskArtifacts(executeDir, task, {
+      phase: "deployment_acceptance",
+      taskKind: "deployment_acceptance",
+      methodID: spec.reversePropagation?.recipeID,
+    })
+
+    const unit = syntheticDeploymentUnit(spec)
+    const validatorPayload = {
+      runID,
+      unitID: unit.id,
+      attempt: 1,
+      goal: spec.goal,
+      claim: unit.claim,
+      checkPlan: unit.checkPlan,
+      materials: spec.materials,
+      targetPaths: spec.targetPaths ?? [],
+      expectedArtifacts: unit.expectedArtifacts,
+      editablePaths,
+      bundlePath,
+    }
+
+    const validatorResults: LongTaskValidatorResult[] = []
+    for (const validator of spec.validators) {
+      const result = await runLongTaskValidator({
+        cwd: input.cwd,
+        config,
+        contract: validator,
+        spec,
+        unit,
+        runID,
+        attempt: 1,
+        validatorDir: path.join(validatorBundleDir, validator.id),
+        bundlePath,
+        payload: validatorPayload,
+        runtimeScope,
+      })
+      validatorResults.push(result)
+    }
+
+    const passed = validatorResults.every((item) => item.passed)
+    const summary = passed
+      ? "Blank-agent task deployment acceptance passed."
+      : short(validatorResults.filter((item) => !item.passed).map((item) => item.summary).join(" | "), 260)
+    const reason = passed
+      ? "All required deployment validators passed."
+      : validatorResults.find((item) => !item.passed)?.summary ?? "Deployment validators failed."
+    const reasons = passed
+      ? []
+      : uniqueStrings(
+          validatorResults
+            .filter((item) => !item.passed)
+            .flatMap((item) => [item.summary, ...item.details])
+            .map((item) => short(item, 200)),
+        ).slice(0, 10)
+
+    const record = await recordAcceptanceResult({
+      cwd: input.cwd,
+      config,
+      sourceRunID: input.sourceRunID,
+      mode: "deployment",
+      policyID: input.policyID ?? "blank-agent-single-session-task-gate",
+      stageID: "deployment_guard",
+      targetKind: input.targetKind,
+      targetID: input.targetID,
+      passed,
+      outcome: passed ? "promote" : "hold",
+      summary,
+      reason,
+      reasons,
+      evidenceRefs: uniqueStrings([
+        artifactPaths.sessionExecutionReportPath,
+        artifactPaths.responsePath,
+        ...validatorResults.flatMap((item) => item.evidenceRefs),
+      ]),
+      details: {
+        deploymentSpecPath: specPath,
+        resolvedInitialExpertContextPaths,
+        missingInitialExpertContextPaths,
+        validatorCount: validatorResults.length,
+        toolFailureCount: task.result.toolFailures.length,
+        exitCode: task.result.exitCode,
+        validators: validatorResults.map((item) => ({
+          validatorID: item.validatorID,
+          passed: item.passed,
+          summary: item.summary,
+        })),
+      },
+      notes: [
+        "This deployment harness exposed only the formal expert surface, registered capability assets, and task materials.",
+        "It did not expose runtime-state, shadow memory, candidate packages, or maintenance-request traces.",
+      ],
+      mirrorPath: path.join(runDir, "deployment_acceptance.json"),
+    })
+
+    await writeJsonFile(path.join(runDir, "deployment_run.json"), {
+      runID,
+      sourceRunID: input.sourceRunID,
+      targetKind: input.targetKind,
+      targetID: input.targetID,
+      deploymentSpecPath: specPath,
+      formalSurfaceRoots: input.formalSurfaceRoots,
+      resolvedInitialExpertContextPaths,
+      missingInitialExpertContextPaths,
+      passed,
+      summary,
+      validatorResults,
+      acceptanceRecordPath: record.path,
+      createdAt: nowISO(),
+    })
+
+    return {
+      runID,
+      runDir,
+      passed,
+      summary,
+      validatorResults,
+      acceptanceRecordPath: record.path,
+      sessionExecutionReportPath: artifactPaths.sessionExecutionReportPath,
+    }
+  } finally {
+    const cleanup = await cleanupRuntimeProcessScope(runtimeScope)
+    if (cleanup.remainingCount > 0) {
+      await cleanupRuntimeProcessScope(runtimeScope)
+    }
   }
 }
 

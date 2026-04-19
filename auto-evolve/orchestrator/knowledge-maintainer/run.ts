@@ -4,8 +4,10 @@ import { runOpencodeTask } from "../opencode"
 import { buildKnowledgeMaintainerPrompt } from "../prompts"
 import type { KnowledgeMaintainerRequest, KnowledgeMaintainerResult } from "./contract"
 import { resolveKnowledgeMaintainerSystem } from "./system"
+import { cleanupRuntimeProcessScope } from "../runtime-process-registry"
 
 export async function runKnowledgeMaintainer(request: KnowledgeMaintainerRequest): Promise<KnowledgeMaintainerResult> {
+  const runtimeScope = `maintainer:${request.loadedCase.spec.id}:attempt:${request.intent.attempt}:round:${request.intent.maintenanceRound}`
   const beforeSnapshot = request.workspaceSnapshot
   const execution = resolveModelSelection(request.config, "refine", request.loadedCase.spec.execution)
   const system = await resolveKnowledgeMaintainerSystem(request)
@@ -44,42 +46,50 @@ export async function runKnowledgeMaintainer(request: KnowledgeMaintainerRequest
     sessionReports: request.intent.sessionReports,
   })
 
-  const task = await runOpencodeTask({
-    cwd: request.cwd,
-    config: request.config,
-    title: `auto-evolve knowledge maintainer ${request.loadedCase.spec.id} attempt ${request.intent.attempt}`,
-    prompt,
-    referencePaths: system.referencePaths,
-    permissionReadPaths: system.permissionReadPaths,
-    permissionEditPaths: system.permissionEditPaths,
-    model: execution.model,
-    agent: execution.agent,
-    variant: execution.variant,
-  })
+  try {
+    const task = await runOpencodeTask({
+      cwd: request.cwd,
+      config: request.config,
+      title: `auto-evolve knowledge maintainer ${request.loadedCase.spec.id} attempt ${request.intent.attempt}`,
+      prompt,
+      referencePaths: system.referencePaths,
+      permissionReadPaths: system.permissionReadPaths,
+      permissionEditPaths: system.permissionEditPaths,
+      model: execution.model,
+      agent: execution.agent,
+      variant: execution.variant,
+      runtimeScope,
+    })
 
-  const afterSnapshot = await readExperienceWorkspace(request.workspace)
-  const changedFiles = diffExperienceWorkspace(beforeSnapshot, afterSnapshot)
+    const afterSnapshot = await readExperienceWorkspace(request.workspace)
+    const changedFiles = diffExperienceWorkspace(beforeSnapshot, afterSnapshot)
 
-  return {
-    prompt,
-    task,
-    beforeSnapshot,
-    afterSnapshot,
-    changed: changedFiles.length > 0,
-    changedFiles,
-    summary: {
-      caseID: request.loadedCase.spec.id,
-      attempt: request.intent.attempt,
-      maintenanceRound: request.intent.maintenanceRound,
-      preferredFiles: request.intent.preferredFiles,
-      suggestedRoles: request.intent.suggestedRoles,
-      allowNewMarkdownFiles: request.intent.allowNewMarkdownFiles,
-      reversePropagationModuleID: system.reversePropagationModule.descriptor.id,
-      loadingStrategyID: system.loadingStrategy.descriptor.id,
-      scopeLevelID: system.scopeLevel.id,
-      operationIDs: system.maintenanceOps.map((item) => item.id),
-      classification: request.intent.classification,
-      sessionReports: request.intent.sessionReports,
-    },
+    return {
+      prompt,
+      task,
+      beforeSnapshot,
+      afterSnapshot,
+      changed: changedFiles.length > 0,
+      changedFiles,
+      summary: {
+        caseID: request.loadedCase.spec.id,
+        attempt: request.intent.attempt,
+        maintenanceRound: request.intent.maintenanceRound,
+        preferredFiles: request.intent.preferredFiles,
+        suggestedRoles: request.intent.suggestedRoles,
+        allowNewMarkdownFiles: request.intent.allowNewMarkdownFiles,
+        reversePropagationModuleID: system.reversePropagationModule.descriptor.id,
+        loadingStrategyID: system.loadingStrategy.descriptor.id,
+        scopeLevelID: system.scopeLevel.id,
+        operationIDs: system.maintenanceOps.map((item) => item.id),
+        classification: request.intent.classification,
+        sessionReports: request.intent.sessionReports,
+      },
+    }
+  } finally {
+    const cleanup = await cleanupRuntimeProcessScope(runtimeScope)
+    if (cleanup.remainingCount > 0) {
+      await cleanupRuntimeProcessScope(runtimeScope)
+    }
   }
 }

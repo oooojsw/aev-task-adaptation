@@ -7,6 +7,8 @@ import { buildSessionLearningLog } from "./session-learning-log"
 import { buildSessionTaskManifest } from "./session-task-manifest"
 import { createTaskDescriptor, type AutoEvolveTaskKind } from "./task-model"
 
+export type TaskArtifactStatus = "bootstrapping" | "running" | "done" | "error"
+
 export interface TaskArtifactPaths {
   promptPath: string
   stdoutPath: string
@@ -21,33 +23,89 @@ export interface TaskArtifactPaths {
   runJsonPath: string
 }
 
+export interface TaskArtifactInput {
+  phase?: string
+  taskKind?: AutoEvolveTaskKind
+  caseID?: string
+  attempt?: number
+  maintenanceRound?: number
+  methodID?: string
+  evaluation?: import("./evaluator").EvaluationResult
+  status?: TaskArtifactStatus
+  startedAt?: string
+  updatedAt?: string
+  lastOutputAt?: string
+}
+
+type TaskArtifactRunState = {
+  startedAt?: string
+  updatedAt?: string
+  lastOutputAt?: string
+  status?: TaskArtifactStatus
+}
+
+export function resolveTaskArtifactKind(input?: Pick<TaskArtifactInput, "phase" | "taskKind">): AutoEvolveTaskKind {
+  if (input?.taskKind) return input.taskKind
+  switch (input?.phase) {
+    case "bootstrap":
+    case "solve":
+    case "verify":
+    case "regression":
+    case "judge":
+    case "maintain":
+    case "post_judge":
+    case "deployment_acceptance":
+    case "long_task_plan":
+    case "long_task_execute":
+    case "long_task_validate":
+    case "long_task_replan":
+      return input.phase
+    case "campaign_worker":
+      return "solve"
+    case "campaign_lead":
+      return "maintain"
+    case "campaign_review":
+      return "judge"
+    default:
+      return "solve"
+  }
+}
+
+export function taskArtifactPaths(stageDir: string): TaskArtifactPaths {
+  return {
+    promptPath: path.join(stageDir, "prompt.txt"),
+    stdoutPath: path.join(stageDir, "stdout.log"),
+    stderrPath: path.join(stageDir, "stderr.log"),
+    responsePath: path.join(stageDir, "response.txt"),
+    actionTracePath: path.join(stageDir, "action_trace.md"),
+    sessionExecutionReportPath: path.join(stageDir, "session_execution_report.md"),
+    sessionLearningLogPath: path.join(stageDir, "session_learning_log.md"),
+    sessionTaskManifestPath: path.join(stageDir, "session_task_manifest.md"),
+    eventsPath: path.join(stageDir, "events.json"),
+    toolFailuresPath: path.join(stageDir, "tool_failures.json"),
+    runJsonPath: path.join(stageDir, "run.json"),
+  }
+}
+
+async function readRunState(file: string) {
+  try {
+    return (await Bun.file(file).json()) as TaskArtifactRunState
+  } catch {
+    return undefined
+  }
+}
+
 export async function writeTaskArtifacts(
   stageDir: string,
   task: OpencodeTaskRun,
-  input?: {
-    phase?: string
-    taskKind?: AutoEvolveTaskKind
-    caseID?: string
-    attempt?: number
-    maintenanceRound?: number
-    methodID?: string
-    evaluation?: import("./evaluator").EvaluationResult
-  },
+  input?: TaskArtifactInput,
 ): Promise<TaskArtifactPaths> {
   await ensureDirectory(stageDir)
-  const promptPath = path.join(stageDir, "prompt.txt")
-  const stdoutPath = path.join(stageDir, "stdout.log")
-  const stderrPath = path.join(stageDir, "stderr.log")
-  const responsePath = path.join(stageDir, "response.txt")
-  const actionTracePath = path.join(stageDir, "action_trace.md")
-  const sessionExecutionReportPath = path.join(stageDir, "session_execution_report.md")
-  const sessionLearningLogPath = path.join(stageDir, "session_learning_log.md")
-  const sessionTaskManifestPath = path.join(stageDir, "session_task_manifest.md")
-  const eventsPath = path.join(stageDir, "events.json")
-  const toolFailuresPath = path.join(stageDir, "tool_failures.json")
-  const runJsonPath = path.join(stageDir, "run.json")
+  const paths = taskArtifactPaths(stageDir)
+  const run = await readRunState(paths.runJsonPath)
+  const now = new Date().toISOString()
   const descriptor = createTaskDescriptor({
-    kind: input?.taskKind ?? ((input?.phase ?? "solve") as AutoEvolveTaskKind),
+    kind: resolveTaskArtifactKind(input),
     title: task.title,
     phase: input?.phase,
     caseID: input?.caseID,
@@ -56,13 +114,13 @@ export async function writeTaskArtifacts(
     methodID: input?.methodID,
   })
 
-  await writeTextFile(promptPath, task.prompt + "\n")
-  await writeTextFile(stdoutPath, task.result.stdout)
-  await writeTextFile(stderrPath, task.result.stderr)
-  await writeTextFile(responsePath, (task.result.responseText || "").trim() + "\n")
-  await writeTextFile(actionTracePath, buildActionTrace(task.result.events))
+  await writeTextFile(paths.promptPath, task.prompt + "\n")
+  await writeTextFile(paths.stdoutPath, task.result.stdout)
+  await writeTextFile(paths.stderrPath, task.result.stderr)
+  await writeTextFile(paths.responsePath, (task.result.responseText || "").trim() + "\n")
+  await writeTextFile(paths.actionTracePath, buildActionTrace(task.result.events))
   await writeTextFile(
-    sessionExecutionReportPath,
+    paths.sessionExecutionReportPath,
     buildSessionExecutionReport({
       task,
       phase: input?.phase,
@@ -73,7 +131,7 @@ export async function writeTaskArtifacts(
     }),
   )
   await writeTextFile(
-    sessionLearningLogPath,
+    paths.sessionLearningLogPath,
     buildSessionLearningLog({
       task,
       descriptor,
@@ -81,19 +139,23 @@ export async function writeTaskArtifacts(
     }),
   )
   await writeTextFile(
-    sessionTaskManifestPath,
+    paths.sessionTaskManifestPath,
     buildSessionTaskManifest({
       task,
       descriptor,
     }),
   )
-  await writeJsonFile(eventsPath, task.result.events)
-  await writeJsonFile(toolFailuresPath, task.result.toolFailures)
-  await writeJsonFile(runJsonPath, {
+  await writeJsonFile(paths.eventsPath, task.result.events)
+  await writeJsonFile(paths.toolFailuresPath, task.result.toolFailures)
+  await writeJsonFile(paths.runJsonPath, {
     title: task.title,
     task: descriptor,
     sessionID: task.result.sessionID,
     exitCode: task.result.exitCode,
+    status: input?.status ?? (task.result.exitCode === 0 ? "done" : "error"),
+    startedAt: input?.startedAt ?? run?.startedAt ?? now,
+    updatedAt: input?.updatedAt ?? now,
+    lastOutputAt: input?.lastOutputAt ?? run?.lastOutputAt ?? input?.updatedAt ?? now,
     model: task.selectedModel ?? null,
     agent: task.selectedAgent ?? null,
     variant: task.selectedVariant ?? null,
@@ -103,17 +165,5 @@ export async function writeTaskArtifacts(
     permissionEditPaths: task.permissionEditPaths,
   })
 
-  return {
-    promptPath,
-    stdoutPath,
-    stderrPath,
-    responsePath,
-    actionTracePath,
-    sessionExecutionReportPath,
-    sessionLearningLogPath,
-    sessionTaskManifestPath,
-    eventsPath,
-    toolFailuresPath,
-    runJsonPath,
-  }
+  return paths
 }

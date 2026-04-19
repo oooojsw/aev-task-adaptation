@@ -2,6 +2,7 @@ import path from "node:path"
 import process from "node:process"
 import { randomUUID } from "node:crypto"
 import { cp, lstat, readdir, rm } from "node:fs/promises"
+import { setTimeout as sleep } from "node:timers/promises"
 import {
   autoEvolvePath,
   ensureDirectory,
@@ -80,7 +81,7 @@ import { runOpencodeTask } from "../opencode"
 import type { OpencodeTaskInput } from "../opencode"
 import { writeTaskArtifacts } from "../task-artifacts"
 import type { ExecutionSpec, ModelPhase } from "../schema"
-import { campaignRoundRuntimeScope, cleanupRuntimeProcessScope } from "../runtime-process-registry"
+import { campaignRoundRuntimeScope, cleanupRuntimeProcessScope, terminateProcessTree } from "../runtime-process-registry"
 
 function nowISO() {
   return new Date().toISOString()
@@ -102,7 +103,20 @@ function onceActivationCallback(callback?: OpencodeTaskInput["onSpawn"]) {
   }
 }
 
-const STALE_BOOTSTRAP_GRACE_MS = 5 * 60 * 1000
+async function cleanupRuntimeScopeWithRetry(scope: string | undefined) {
+  const first = await cleanupRuntimeProcessScope(scope)
+  if (first.remainingCount <= 0) return
+  await sleep(250)
+  await cleanupRuntimeProcessScope(scope)
+}
+
+const STALE_BOOTSTRAP_GRACE_MS = (() => {
+  const value = Number.parseInt(process.env.AUTO_EVOLVE_STALE_BOOTSTRAP_GRACE_MS ?? "", 10)
+  if (Number.isFinite(value) && value > 0) return value
+  // Bootstrapping on Windows can be slow under heavy IO/model load.
+  // Default to 20 minutes to reduce false stale classification.
+  return 20 * 60 * 1000
+})()
 
 async function isPidAlive(pid: number) {
   if (!Number.isFinite(pid) || pid <= 0) return false
@@ -116,19 +130,25 @@ async function isPidAlive(pid: number) {
 
 async function readProcessCommandLine(pid: number) {
   if (process.platform !== "win32") return undefined
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    `$proc = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"`,
-    "if ($null -eq $proc) { exit 2 }",
-    "Write-Output ($proc.CommandLine ?? '')",
-  ].join("; ")
-  const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
-  if (exitCode !== 0) return undefined
-  return stdout.trim()
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      `$proc = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"`,
+      "if ($null -eq $proc) { exit 2 }",
+      "Write-Output ($proc.CommandLine ?? '')",
+    ].join("; ")
+    const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
+    if (exitCode === 0) {
+      const normalized = stdout.trim()
+      if (normalized.length > 0) return normalized
+    }
+    if (attempt < 3) await sleep(100 * attempt)
+  }
+  return undefined
 }
 
 async function isPidOwnedByHint(pid: number, commandHint?: string) {
@@ -136,7 +156,8 @@ async function isPidOwnedByHint(pid: number, commandHint?: string) {
   if (typeof commandHint !== "string" || commandHint.trim().length === 0) return true
   if (process.platform !== "win32") return true
   const commandLine = await readProcessCommandLine(pid)
-  if (!commandLine) return false
+  // Be conservative on Windows introspection failure to avoid false stale kills.
+  if (!commandLine) return true
   return commandLine.toLowerCase().includes(commandHint.trim().toLowerCase())
 }
 
@@ -204,6 +225,9 @@ async function healStaleRuntimeStates(cwd: string) {
         if (state.ownerPID === process.pid) continue
         if (await isPidOwnedByHint(state.ownerPID, state.ownerCommandHint)) continue
       }
+      if (typeof state.ownerPID === "number" && Number.isFinite(state.ownerPID) && state.ownerPID > 0) {
+        await terminateProcessTree(state.ownerPID)
+      }
 
       await writeJsonFile(campaignStatePath, {
         ...state,
@@ -250,6 +274,9 @@ async function healStaleRuntimeStates(cwd: string) {
       } else {
         if (progress.ownerPID === process.pid) continue
         if (await isPidOwnedByHint(progress.ownerPID, progress.ownerCommandHint)) continue
+      }
+      if (typeof progress.ownerPID === "number" && Number.isFinite(progress.ownerPID) && progress.ownerPID > 0) {
+        await terminateProcessTree(progress.ownerPID)
       }
 
       await writeJsonFile(progressPath, {
@@ -336,6 +363,12 @@ async function updateCampaignStatus(
     status,
     updatedAt: nowISO(),
   })
+}
+
+async function pulseCampaignState(campaignPaths: ReturnType<typeof longTaskCampaignPaths>) {
+  const state = await readLongTaskCampaignState(campaignPaths)
+  if (!isLiveCampaignStatus(state.status)) return
+  await writeLongTaskCampaignState(campaignPaths, state)
 }
 
 function uniqueStrings(items: string[]) {
@@ -865,28 +898,41 @@ function buildRoutingControl(input: {
   reviewerSuggestion?: LongTaskCampaignReviewSuggestion
   roundNumber: number
 }): LongTaskCampaignRoutingControl {
-  const hardBlockerKeywords = [
+  const infrastructureBlockerKeywords = [
     "timeout",
     "timed out",
     "spawn",
     "no structured signal",
-    "validator",
-    "permission",
     "access is denied",
     "eperm",
-    "missing",
-    "not found",
     "exit code",
     "crash",
+    "bootstrap failed",
+    "infrastructure",
+  ]
+  const hardBlockerKeywords = [
+    "validator",
+    "missing",
+    "not found",
+    "mismatch",
+    "placeholder",
     "blocked",
     "failed",
   ]
   const softBlockerHints = ["maybe", "might", "looks like", "seems", "probably", "possibly", "suggest", "guess"]
+  const normalizedBlockers = uniqueStrings(input.digest.blockers.map((item) => item.trim()).filter(Boolean))
+  const infrastructureBlockers = uniqueStrings(
+    normalizedBlockers.filter((item) => {
+      const normalized = item.toLowerCase()
+      return infrastructureBlockerKeywords.some((keyword) => normalized.includes(keyword))
+    }),
+  )
   const hardBlockers = uniqueStrings(
-    input.digest.blockers.filter((item) => {
+    normalizedBlockers.filter((item) => {
       const normalized = item.toLowerCase()
       if (!normalized) return false
       if (softBlockerHints.some((hint) => normalized.includes(hint))) return false
+      if (infrastructureBlockerKeywords.some((keyword) => normalized.includes(keyword))) return false
       return hardBlockerKeywords.some((keyword) => normalized.includes(keyword))
     }),
   ).slice(0, 8)
@@ -915,7 +961,13 @@ function buildRoutingControl(input: {
     readyForFinalAcceptance: input.reviewerSuggestion?.readyForFinalAcceptance === true,
     summary: input.reviewerSuggestion?.summary ?? input.digest.summary,
     evidenceRefs: compactRefs(input.digest.refs),
-    notes: uniqueStrings([...(input.previous.notes ?? []), ...input.digest.pendingPackageImpact.slice(0, 4)]),
+    notes: uniqueStrings([
+      ...(input.previous.notes ?? []),
+      ...input.digest.pendingPackageImpact.slice(0, 4),
+      ...infrastructureBlockers
+        .slice(0, 3)
+        .map((item) => `Infrastructure signal (do not route as domain blocker): ${item}`),
+    ]),
   }
 }
 
@@ -1404,6 +1456,18 @@ function normalizeRoundSummaryForSignature(summary: string) {
   return summary.toLowerCase().replace(/\s+/g, " ").trim()
 }
 
+function isNoSignalRoundSummary(summary: string) {
+  const normalized = normalizeRoundSummaryForSignature(summary)
+  if (!normalized) return false
+  return (
+    normalized.includes("no structured signal") ||
+    normalized.includes("no-structured-signal") ||
+    normalized.includes("did not return a structured claim") ||
+    normalized.includes("did not return structured claim") ||
+    normalized.includes("no events/response")
+  )
+}
+
 function noProgressRoundSignature(record: LongTaskCampaignRoundRecord) {
   if (record.finalStatus !== "stagnation_failure" && record.finalStatus !== "blocked_failure") return undefined
   if (record.failurePacketCount <= 0) return undefined
@@ -1431,11 +1495,20 @@ function detectRepeatedNoProgressLoop(records: LongTaskCampaignRoundRecord[], wi
   }
 }
 
-function shouldAbortCampaignImmediately(record: LongTaskCampaignRoundRecord) {
-  if (record.finalStatus !== "blocked_failure") return undefined
-  const normalized = normalizeRoundSummaryForSignature(record.summary)
-  if (!normalized.includes("no structured signal") && !normalized.includes("no-structured-signal")) return undefined
-  return `Detected non-recoverable blocked_failure with no structured signal in round ${record.roundNumber}.`
+function detectConsecutiveNoSignalRounds(records: LongTaskCampaignRoundRecord[], threshold = 2) {
+  if (threshold <= 0 || records.length < threshold) return undefined
+  const recent = records.slice(-threshold)
+  const allNoSignal = recent.every(
+    (record) =>
+      (record.finalStatus === "blocked_failure" || record.finalStatus === "stagnation_failure") &&
+      isNoSignalRoundSummary(record.summary),
+  )
+  if (!allNoSignal) return undefined
+  return {
+    threshold,
+    startRound: recent[0].roundNumber,
+    endRound: recent[recent.length - 1].roundNumber,
+  }
 }
 
 function buildCampaignFinalAcceptanceSpec(baseSpec: LongTaskSpec, pendingPackageRoot: string): LongTaskSpec {
@@ -1918,6 +1991,7 @@ async function runCampaignSuggestionTask(input: {
   phase: string
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const config = await loadConfig(input.cwd)
   const selection = resolveModelSelection(config, input.selectionPhase, input.execution)
@@ -1935,6 +2009,11 @@ async function runCampaignSuggestionTask(input: {
     variant: selection.variant,
     runtimeScope: input.runtimeScope,
     onSpawn: input.onActivation,
+    onPulse: input.onPulse,
+    live: {
+      stageDir: input.stageDir,
+      phase: input.phase,
+    },
   })
   const artifactPaths = await writeTaskArtifacts(input.stageDir, task, {
     phase: input.phase,
@@ -2129,6 +2208,7 @@ async function runCampaignWorkers(input: {
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const workerRoles = defaultCampaignWorkerRoles()
   const suggestions = await Promise.all(
@@ -2176,6 +2256,7 @@ async function runCampaignWorkers(input: {
         phase: "campaign_worker",
         runtimeScope: input.runtimeScope,
         onActivation: input.onActivation,
+        onPulse: input.onPulse,
       })
       const suggestion = normalizeWorkerSuggestion({
         roundNumber: input.roundNumber,
@@ -2212,6 +2293,7 @@ async function runCampaignLead(input: {
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const workerSuggestionPaths = input.workerSuggestions
     .map((item) => item.suggestionPath ?? item.responsePath)
@@ -2261,6 +2343,7 @@ async function runCampaignLead(input: {
     phase: "campaign_lead",
     runtimeScope: input.runtimeScope,
     onActivation: input.onActivation,
+    onPulse: input.onPulse,
   })
 }
 
@@ -2277,6 +2360,7 @@ async function runCampaignReviewer(input: {
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const stageDir = input.roundPaths.reviewerRoot
   const prompt = buildCampaignReviewerPrompt({
@@ -2313,6 +2397,7 @@ async function runCampaignReviewer(input: {
     phase: "campaign_review",
     runtimeScope: input.runtimeScope,
     onActivation: input.onActivation,
+    onPulse: input.onPulse,
   })
   const suggestion = normalizeReviewerSuggestion({
     roundNumber: input.roundNumber,
@@ -2336,6 +2421,7 @@ async function runCampaignFinalAcceptance(input: {
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const validatorContracts = completionOnlyValidatorContracts(input.baseSpec)
   if (!validatorContracts.length) {
@@ -2383,6 +2469,7 @@ async function runCampaignFinalAcceptance(input: {
       bundlePath,
       runtimeScope: input.runtimeScope,
       onActivation: input.onActivation,
+      onPulse: input.onPulse,
       payload: {
         runID: input.sourceRunID,
         unitID: syntheticUnit.id,
@@ -2507,6 +2594,9 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
           lastRoundSummaryPath: history[history.length - 1]?.roundSummaryPath,
         })
       })
+      const pulseCampaignRound = async () => {
+        await pulseCampaignState(campaignPaths)
+      }
       try {
         await ensureDirectory(roundPaths.root)
         await ensureDirectory(roundPaths.harvestedRoot)
@@ -2559,6 +2649,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
           specPath: roundPaths.generatedSpecPath,
           runtimeScope: roundRuntimeScope,
           onRuntimeActivated: activateCampaignRound,
+          onRuntimePulse: pulseCampaignRound,
         })
         lastRunID = runResult.runID
 
@@ -2576,15 +2667,15 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
         lastRoundSummaryPath = harvested.roundRecord.roundSummaryPath
         await appendLongTaskCampaignHistory(campaignPaths, harvested.roundRecord)
 
-        const immediateAbortReason = shouldAbortCampaignImmediately(harvested.roundRecord)
-        if (immediateAbortReason) {
+        const noSignalDetection = detectConsecutiveNoSignalRounds(history, 2)
+        if (noSignalDetection) {
           const nextState: LongTaskCampaignState = {
             ...initialState,
             currentRound: roundNumber,
             status: "failed",
             updatedAt: nowISO(),
             lastRunID: runResult.runID,
-            lastSummary: immediateAbortReason,
+            lastSummary: `Detected repeated no-structured-signal failures (${noSignalDetection.threshold} consecutive rounds: ${noSignalDetection.startRound}-${noSignalDetection.endRound}); stopped campaign early.`,
             lastRoundSummaryPath: harvested.roundRecord.roundSummaryPath,
           }
           await writeLongTaskCampaignState(campaignPaths, nextState)
@@ -2740,6 +2831,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
               roundPaths,
               runtimeScope: roundRuntimeScope,
               onActivation: activateCampaignRound,
+              onPulse: pulseCampaignRound,
             })
           : []
 
@@ -2763,6 +2855,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
           roundPaths,
           runtimeScope: roundRuntimeScope,
           onActivation: activateCampaignRound,
+          onPulse: pulseCampaignRound,
         })
 
         await promoteRoundPendingAndTreeToCurrent({
@@ -2784,6 +2877,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
               roundPaths,
               runtimeScope: roundRuntimeScope,
               onActivation: activateCampaignRound,
+              onPulse: pulseCampaignRound,
             })
           : undefined
         if (reviewerSuggestion) {
@@ -2816,6 +2910,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
                 roundPaths,
                 runtimeScope: roundRuntimeScope,
                 onActivation: activateCampaignRound,
+                onPulse: pulseCampaignRound,
               })
             : undefined
 
@@ -2849,7 +2944,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
           }
         }
       } finally {
-        await cleanupRuntimeProcessScope(roundRuntimeScope)
+        await cleanupRuntimeScopeWithRetry(roundRuntimeScope)
       }
     }
   } catch (error) {

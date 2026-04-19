@@ -4,12 +4,33 @@ import { randomUUID } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
 import { spawn as nodeSpawn } from "node:child_process"
+import { buildActionTrace } from "./action-trace"
 import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
 import type { ToolFailure } from "./evaluator"
-import { autoEvolvePath, ensureDirectory, pathExists, writeJsonFile } from "./fs"
+import { autoEvolvePath, ensureDirectory, pathExists, writeJsonFile, writeTextFile } from "./fs"
 import { registerRuntimeProcess, terminateProcessTree } from "./runtime-process-registry"
+import {
+  resolveTaskArtifactKind,
+  taskArtifactPaths,
+  type TaskArtifactInput,
+  type TaskArtifactStatus,
+} from "./task-artifacts"
+import { createTaskDescriptor } from "./task-model"
 
-const OPENCODE_TASK_TIMEOUT_MS = 30 * 60 * 1000
+const OPENCODE_TASK_TIMEOUT_MS = 60 * 60 * 1000
+const OPENCODE_PROMPT_SOFT_BUDGET_MS = 30 * 60 * 1000
+const OPENCODE_TASK_SILENT_TIMEOUT_MS = (() => {
+  const value = Number.parseInt(process.env.AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_MS ?? "", 10)
+  if (Number.isFinite(value) && value > 0) return value
+  return 12 * 60 * 1000
+})()
+const OPENCODE_TASK_SILENT_TIMEOUT_AFTER_ACTIVITY_MS = (() => {
+  const value = Number.parseInt(process.env.AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_AFTER_ACTIVITY_MS ?? "", 10)
+  if (Number.isFinite(value) && value > 0) return value
+  // Once runtime output has started, prefer hard-timeout guard and avoid
+  // prematurely terminating long silent compute windows.
+  return Math.min(OPENCODE_TASK_TIMEOUT_MS, Math.max(OPENCODE_TASK_SILENT_TIMEOUT_MS, 55 * 60 * 1000))
+})()
 
 export interface OpencodeEvent {
   type: string
@@ -57,6 +78,10 @@ export interface OpencodeTaskInput {
   variant?: string
   runtimeScope?: string
   onSpawn?: () => Promise<void> | void
+  onPulse?: () => Promise<void> | void
+  live?: TaskArtifactInput & {
+    stageDir: string
+  }
 }
 
 function normalizeAgentForRuntime(agent: string | undefined) {
@@ -102,11 +127,18 @@ function parseEvents(stdout: string) {
   const events: OpencodeEvent[] = []
   for (const line of stdout.split(/\r?\n/)) {
     const trimmed = line.trim()
-    if (!trimmed.startsWith("{")) continue
-    try {
-      events.push(JSON.parse(trimmed))
-    } catch {
-      continue
+    if (!trimmed) continue
+    const candidates: string[] = [trimmed]
+    const braceIndex = trimmed.indexOf("{")
+    if (braceIndex > 0) candidates.push(trimmed.slice(braceIndex))
+    for (const candidate of candidates) {
+      if (!candidate.startsWith("{")) continue
+      try {
+        events.push(JSON.parse(candidate))
+        break
+      } catch {
+        continue
+      }
     }
   }
   return events
@@ -236,11 +268,71 @@ function buildRunLabel(title: string, attempt: number) {
   return `${stamp}-${slugifyTitle(title)}-attempt-${attempt}-${randomUUID().slice(0, 8)}`
 }
 
+function formatLocalTimestamp(input: Date) {
+  return input.toLocaleString("zh-CN", {
+    hour12: false,
+    timeZoneName: "short",
+  })
+}
+
+function buildRuntimeBudgetPromptPrefix(input: { runStart: Date }) {
+  const softDeadline = new Date(input.runStart.getTime() + OPENCODE_PROMPT_SOFT_BUDGET_MS)
+  return [
+    "[Runtime Budget Contract | Mandatory]",
+    "You must treat this as a hard working contract for the current session.",
+    "",
+    "Runtime budget for this session:",
+    "- Soft convergence deadline: 30 minutes from run start (mandatory target).",
+    `- Run start (local): ${formatLocalTimestamp(input.runStart)}`,
+    `- Run start (ISO): ${input.runStart.toISOString()}`,
+    `- 30-minute soft deadline (local): ${formatLocalTimestamp(softDeadline)}`,
+    `- 30-minute soft deadline (ISO): ${softDeadline.toISOString()}`,
+    "",
+    "Mandatory execution policy:",
+    "1. Maintain a tool_call_count counter starting from your first tool call.",
+    "2. At every 25th tool call (25/50/75/...), run an immediate time checkpoint.",
+    '3. Preferred checkpoint command: `Get-Date -Format o`.',
+    '4. Fallback checkpoint command: `python -c \"from datetime import datetime; print(datetime.now().astimezone().isoformat())\"`.',
+    "5. If remaining time to the 30-minute soft deadline is <= 8 minutes: do not open new branches; converge only on this session's required deliverable.",
+    "6. If remaining time <= 5 minutes: stop exploration; run only minimum required checks for this session and prepare structured output.",
+    "7. If remaining time <= 2 minutes: return structured result immediately. If incomplete, return explicit blockers. Never claim success with blockers.",
+    "8. Never break output protocol (for example JSON-only sessions must still return JSON-only output).",
+    "",
+    "[运行时预算硬约束 | 必须遵守]",
+    "你必须把下面规则当作当前 session 的硬约束。",
+    "",
+    "当前 session 预算：",
+    "- 软收敛截止：开始后 30 分钟（强制目标）",
+    `- 开始时间（本地）：${formatLocalTimestamp(input.runStart)}`,
+    `- 开始时间（ISO）：${input.runStart.toISOString()}`,
+    `- 30分钟软截止（本地）：${formatLocalTimestamp(softDeadline)}`,
+    `- 30分钟软截止（ISO）：${softDeadline.toISOString()}`,
+    "",
+    "强制执行策略：",
+    "1. 从第一次工具调用开始维护 tool_call_count。",
+    "2. 每到第 25 次工具调用（25/50/75/...）必须立刻做时间自检。",
+    "3. 优先命令：`Get-Date -Format o`。",
+    '4. 备选命令：`python -c \"from datetime import datetime; print(datetime.now().astimezone().isoformat())\"`。',
+    "5. 距离 30 分钟软截止 <= 8 分钟：禁止开新分支，只允许收敛到本 session 必需产物。",
+    "6. 距离软截止 <= 5 分钟：停止探索，只做本 session 最小必要校验并准备结构化输出。",
+    "7. 距离软截止 <= 2 分钟：立即返回结构化结果；未完成必须明确 blockers，严禁伪成功。",
+    "8. 不能破坏输出协议（例如 JSON-only 场景必须继续 JSON-only）。",
+  ].join("\n")
+}
+
+function withRuntimeBudgetPrompt(input: { prompt: string; runStart: Date }) {
+  return `${buildRuntimeBudgetPromptPrefix({ runStart: input.runStart })}\n\n${input.prompt}`
+}
+
 function isInfrastructureCrash(result: Pick<OpencodeRunResult, "exitCode" | "stderr" | "events">) {
   const stderr = result.stderr.toLowerCase()
   if (stderr.includes("oh no: bun has crashed")) return true
   if (stderr.includes("panic(main thread)")) return true
   if (stderr.includes("segmentation fault")) return true
+  if (stderr.includes("runtime bootstrap failed")) return true
+  if (stderr.includes("infrastructure bootstrap failed")) return true
+  if (stderr.includes("silent output timeout")) return true
+  if (result.exitCode === 124 && result.events.length === 0) return true
   return result.exitCode !== 0 && result.events.length === 0 && stderr.includes("bun")
 }
 
@@ -254,6 +346,72 @@ function uniqueFiles(files: string[]) {
     ordered.push(resolved)
   }
   return ordered
+}
+
+function liveStatus(input: { started: boolean; exitCode?: number }): TaskArtifactStatus {
+  if (typeof input.exitCode === "number") {
+    return input.exitCode === 0 ? "done" : "error"
+  }
+  return input.started ? "running" : "bootstrapping"
+}
+
+async function writeLiveTask(input: {
+  task: OpencodeTaskInput
+  model: string | undefined
+  agent: string | undefined
+  refs: string[]
+  files: string[]
+  reads: string[]
+  edits: string[]
+  stdout: string
+  stderr: string
+  started: boolean
+  startedAt: string
+  lastOutputAt?: string
+  exitCode?: number
+}) {
+  if (!input.task.live) return
+  await ensureDirectory(input.task.live.stageDir)
+  const paths = taskArtifactPaths(input.task.live.stageDir)
+  const events = parseEvents(input.stdout)
+  const response = collectResponseText(events)
+  const now = new Date().toISOString()
+  const descriptor = createTaskDescriptor({
+    kind: resolveTaskArtifactKind(input.task.live),
+    title: input.task.title,
+    phase: input.task.live.phase,
+    caseID: input.task.live.caseID,
+    attempt: input.task.live.attempt,
+    maintenanceRound: input.task.live.maintenanceRound,
+    methodID: input.task.live.methodID,
+  })
+  await writeTextFile(paths.promptPath, input.task.prompt + "\n")
+  await writeTextFile(paths.stdoutPath, input.stdout)
+  await writeTextFile(paths.stderrPath, input.stderr)
+  await writeTextFile(paths.responsePath, response.trim() + "\n")
+  await writeTextFile(paths.actionTracePath, buildActionTrace(events))
+  await writeJsonFile(paths.eventsPath, events)
+  await writeJsonFile(paths.toolFailuresPath, collectToolFailures(events))
+  await writeJsonFile(paths.runJsonPath, {
+    title: input.task.title,
+    task: descriptor,
+    sessionID: events.find((event) => typeof event.sessionID === "string")?.sessionID,
+    exitCode: typeof input.exitCode === "number" ? input.exitCode : null,
+    status: liveStatus({
+      started: input.started,
+      exitCode: input.exitCode,
+    }),
+    startedAt: input.startedAt,
+    updatedAt: now,
+    lastOutputAt: input.lastOutputAt ?? now,
+    model: input.model ?? null,
+    agent: input.agent ?? null,
+    variant: input.task.variant ?? null,
+    referencedPaths: input.refs,
+    attachedFiles: input.files,
+    permissionReadPaths: input.reads,
+    permissionEditPaths: input.edits,
+  })
 }
 
 async function runOpencodeTaskOnce(
@@ -307,10 +465,70 @@ async function runOpencodeTaskOnce(
     args.push("--file", file)
   }
 
-  args.push("--", input.prompt)
+  const runStart = new Date()
+  const startedAt = runStart.toISOString()
+  const runtimePrompt = withRuntimeBudgetPrompt({ prompt: input.prompt, runStart })
+  let started = false
+  let lastOutputAt: string | undefined
+  let stdoutData = ""
+  let stderrData = ""
+  let flushHandle: ReturnType<typeof setTimeout> | undefined
+  let flushTail = Promise.resolve()
+  let lastLiveWriteFailureMessage: string | undefined
+  const recordLiveWriteFailure = async (cause: unknown) => {
+    const error = cause instanceof Error ? cause : new Error(String(cause))
+    const message = `Live artifact flush failed: ${error.message}`
+    if (message === lastLiveWriteFailureMessage) return
+    lastLiveWriteFailureMessage = message
+    stderrData = [stderrData, message].filter(Boolean).join("\n\n")
+    console.warn(message)
+    if (!input.live) return
+    try {
+      await ensureDirectory(input.live.stageDir)
+      await writeTextFile(taskArtifactPaths(input.live.stageDir).stderrPath, stderrData)
+    } catch {}
+  }
+  const flush = (exitCode?: number) => {
+    flushTail = flushTail
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await writeLiveTask({
+            task: input,
+            model: selectedModel,
+            agent: selectedAgent,
+            refs: referencedPaths,
+            files: attachedFiles,
+            reads: permissionReadPaths,
+            edits: permissionEditPaths,
+            stdout: stdoutData,
+            stderr: stderrData,
+            started,
+            startedAt,
+            lastOutputAt,
+            exitCode,
+          })
+          lastLiveWriteFailureMessage = undefined
+        } catch (error) {
+          await recordLiveWriteFailure(error)
+        }
+      })
+    return flushTail
+  }
+  const scheduleFlush = () => {
+    if (!input.live) return
+    if (flushHandle) return
+    flushHandle = setTimeout(() => {
+      flushHandle = undefined
+      void flush()
+    }, 200)
+  }
+
+  await flush()
 
   const child = nodeSpawn(process.execPath, args.slice(1), {
     cwd: path.join(input.cwd, "packages", "opencode"),
+    // Feed prompt via stdin so long prompts do not inflate command-line length on Windows.
     stdio: ["pipe", "pipe", "pipe"],
     env: {
       ...process.env,
@@ -323,46 +541,148 @@ async function runOpencodeTaskOnce(
     },
   })
   registerRuntimeProcess(input.runtimeScope, child.pid, input.title)
-  await input.onSpawn?.()
-
-  let stdoutData = ""
-  let stderrData = ""
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdoutData += chunk.toString()
-  })
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderrData += chunk.toString()
-  })
+  started = true
+  const promptWrite = Promise.resolve()
+    .then(async () => {
+      if (!child.stdin) return
+      child.stdin.setDefaultEncoding("utf8")
+      child.stdin.write(runtimePrompt)
+      child.stdin.end()
+    })
+    .catch((error) => {
+      throw new Error(`Failed to stream prompt to OpenCode stdin: ${error instanceof Error ? error.message : String(error)}`)
+    })
+  const abortAfterSpawn = async (cause: unknown): Promise<never> => {
+    const error = cause instanceof Error ? cause : new Error(String(cause))
+    stderrData = [stderrData, `OpenCode runtime bootstrap failed after spawn: ${error.message}`].filter(Boolean).join(
+      "\n\n",
+    )
+    try {
+      await terminateProcessTree(child.pid)
+    } catch {}
+    try {
+      await writeLiveTask({
+        task: input,
+        model: selectedModel,
+        agent: selectedAgent,
+        refs: referencedPaths,
+        files: attachedFiles,
+        reads: permissionReadPaths,
+        edits: permissionEditPaths,
+        stdout: stdoutData,
+        stderr: stderrData,
+        started,
+        startedAt,
+        lastOutputAt,
+        exitCode: 1,
+      })
+    } catch {}
+    throw error
+  }
+  try {
+    await promptWrite
+    await input.onSpawn?.()
+    await input.onPulse?.()
+    await flush()
+  } catch (error) {
+    return abortAfterSpawn(error)
+  }
 
   let timedOut = false
+  let hardTimedOut = false
+  let silentTimedOut = false
+  let silentTimeoutAfterActivity = false
+  let observedRuntimeOutput = false
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  let silentTimeoutHandle: ReturnType<typeof setTimeout> | undefined
+  let pulseHandle: ReturnType<typeof setInterval> | undefined
+  let refreshSilentTimeout: (() => void) | undefined
 
   const exitPromise = new Promise<number>((resolve) => {
     child.on("exit", (code) => resolve(code ?? 0))
+    child.on("error", () => resolve(1))
   })
 
   const timeoutPromise = new Promise<number>((resolve) => {
-    timeoutHandle = setTimeout(async () => {
+    let settled = false
+    const killAndResolve = async (kind: "hard" | "silent") => {
+      if (settled) return
+      settled = true
       timedOut = true
+      if (kind === "hard") hardTimedOut = true
+      if (kind === "silent") {
+        silentTimedOut = true
+        silentTimeoutAfterActivity = observedRuntimeOutput
+      }
       try {
         await terminateProcessTree(child.pid)
       } catch {}
       resolve(124)
+    }
+
+    timeoutHandle = setTimeout(async () => {
+      await killAndResolve("hard")
     }, OPENCODE_TASK_TIMEOUT_MS)
+
+    refreshSilentTimeout = () => {
+      if (silentTimeoutHandle) clearTimeout(silentTimeoutHandle)
+      const silentTimeoutMs = observedRuntimeOutput
+        ? OPENCODE_TASK_SILENT_TIMEOUT_AFTER_ACTIVITY_MS
+        : OPENCODE_TASK_SILENT_TIMEOUT_MS
+      silentTimeoutHandle = setTimeout(async () => {
+        await killAndResolve("silent")
+      }, silentTimeoutMs)
+    }
+    refreshSilentTimeout()
   })
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdoutData += chunk.toString()
+    observedRuntimeOutput = true
+    lastOutputAt = new Date().toISOString()
+    refreshSilentTimeout?.()
+    scheduleFlush()
+  })
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderrData += chunk.toString()
+    observedRuntimeOutput = true
+    lastOutputAt = new Date().toISOString()
+    refreshSilentTimeout?.()
+    scheduleFlush()
+  })
+
+  pulseHandle = setInterval(() => {
+    void Promise.resolve(input.onPulse?.()).catch(() => undefined)
+    if (observedRuntimeOutput) refreshSilentTimeout?.()
+    scheduleFlush()
+  }, 60_000)
 
   let exitCode = await Promise.race([exitPromise, timeoutPromise])
   if (timeoutHandle) clearTimeout(timeoutHandle)
+  if (silentTimeoutHandle) clearTimeout(silentTimeoutHandle)
+  if (pulseHandle) clearInterval(pulseHandle)
+  if (flushHandle) {
+    clearTimeout(flushHandle)
+    flushHandle = undefined
+  }
 
   const stdout = stdoutData
   const stderr = stderrData
 
   const events = parseEvents(stdout)
-  const normalizedStderr = timedOut
-    ? [`OpenCode task timed out after ${OPENCODE_TASK_TIMEOUT_MS} ms and the full process tree was terminated.`, stderr]
-        .filter(Boolean)
-        .join("\n\n")
-    : stderr
+  const timeoutNotes: string[] = []
+  if (hardTimedOut) {
+    timeoutNotes.push(`OpenCode task timed out after ${OPENCODE_TASK_TIMEOUT_MS} ms and the full process tree was terminated.`)
+  }
+  if (silentTimedOut) {
+    const phaseText = silentTimeoutAfterActivity ? "after runtime output started" : "before any runtime output was observed"
+    timeoutNotes.push(
+      `OpenCode task hit silent output timeout (${phaseText}) and the full process tree was terminated.`,
+    )
+  }
+  const normalizedStderr = timedOut ? [...timeoutNotes, stderr].filter(Boolean).join("\n\n") : stderr
+  stderrData = normalizedStderr
+  await flush(exitCode)
 
   return {
     sessionID: events.find((event) => typeof event.sessionID === "string")?.sessionID,
@@ -396,16 +716,29 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
   const maxAttempts = 3
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const current = await runOpencodeTaskOnce(
-      input,
-      selectedModel,
-      selectedAgent,
-      referencedPaths,
-      attachedFiles,
-      permissionReadPaths,
-      permissionEditPaths,
-      attempt,
-    )
+    let current: OpencodeRunResult
+    try {
+      current = await runOpencodeTaskOnce(
+        input,
+        selectedModel,
+        selectedAgent,
+        referencedPaths,
+        attachedFiles,
+        permissionReadPaths,
+        permissionEditPaths,
+        attempt,
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      current = {
+        exitCode: 1,
+        stdout: "",
+        stderr: `OpenCode infrastructure bootstrap failed on attempt ${attempt}: ${message}`,
+        events: [],
+        responseText: "",
+        toolFailures: [],
+      }
+    }
 
     if (!isInfrastructureCrash(current) || attempt === maxAttempts) {
       result = current

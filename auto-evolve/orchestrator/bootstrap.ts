@@ -124,6 +124,12 @@ export async function runBootstrap(cwd: string, options: RunBootstrapOptions): P
     model: execution.model,
     agent: execution.agent,
     variant: execution.variant,
+    live: {
+      stageDir: runDir,
+      phase: "bootstrap",
+      taskKind: "bootstrap",
+      methodID,
+    },
   })
 
   const rawNextPack = await readExperienceWorkspace(workspacePaths)

@@ -59,8 +59,35 @@ type ArtifactRun = {
   task?: ArtifactRunTask
   sessionID?: string
   exitCode?: number
+  status?: string
+  startedAt?: string
+  updatedAt?: string
+  lastOutputAt?: string
   phase?: string
   methodID?: string
+}
+
+type LifecycleProgressState = {
+  runID?: string
+  status?: string
+  activeUnitID?: string
+  activeAttempt?: number
+  graphRevision?: number
+  noProgressCycles?: number
+  validatorCalls?: number
+  heartbeatAt?: string
+  updatedAt?: string
+  finalSummary?: string
+}
+
+type LifecycleCampaignState = {
+  id?: string
+  title?: string
+  status?: string
+  currentRound?: number
+  heartbeatAt?: string
+  updatedAt?: string
+  lastSummary?: string
 }
 
 type JudgeSummary = {
@@ -147,13 +174,24 @@ function latestUser(messages: MessageV2.WithParts[]) {
   }
 }
 
-function partTimestamp(part: MessageV2.Part) {
+function partTimestamp(part: MessageV2.Part, fallbackTimestamp = 0, sequence = 0) {
   if ("time" in part && part.time) {
     if ("end" in part.time && typeof part.time.end === "number") return part.time.end
     if ("start" in part.time && typeof part.time.start === "number") return part.time.start
     if ("created" in part.time && typeof part.time.created === "number") return part.time.created
   }
-  return 0
+
+  // Tool timing lives under state.time, not part.time.
+  if (part.type === "tool" && "time" in part.state && part.state.time) {
+    if ("end" in part.state.time && typeof part.state.time.end === "number") return part.state.time.end
+    if ("start" in part.state.time && typeof part.state.time.start === "number") return part.state.time.start
+  }
+
+  if (typeof fallbackTimestamp === "number" && Number.isFinite(fallbackTimestamp) && fallbackTimestamp > 0) {
+    return fallbackTimestamp + sequence / 1000
+  }
+
+  return sequence / 1000
 }
 
 function findActiveTool(parts: MessageV2.Part[]) {
@@ -533,7 +571,13 @@ function actionFromEvent(event: any): MonitorAction | undefined {
   }
 
   if (event?.part) {
-    return actionFromPart(event.part as MessageV2.Part)
+    const fallbackTimestamp =
+      typeof event?.timestamp === "number"
+        ? event.timestamp
+        : typeof event?.time === "number"
+          ? event.time
+          : 0
+    return actionFromPart(event.part as MessageV2.Part, fallbackTimestamp)
   }
 }
 
@@ -588,7 +632,7 @@ function buildArtifactStatus(run: ArtifactRun): MonitorStatus {
   if (typeof run.exitCode === "number") {
     return run.exitCode === 0 ? "done" : "error"
   }
-  return "idle"
+  return normalizeLifecycleStatus(run.status)
 }
 
 function buildArtifactDetail(run: ArtifactRun, responsePreview?: string) {
@@ -601,6 +645,50 @@ function buildArtifactDetail(run: ArtifactRun, responsePreview?: string) {
   return parts.join(" | ") || undefined
 }
 
+function normalizeLifecycleStatus(status: string | undefined): MonitorStatus {
+  const normalized = (status ?? "").toLowerCase()
+  if (normalized === "running" || normalized === "bootstrapping" || normalized === "waiting") return "running"
+  if (normalized === "retry" || normalized === "waiting_for_retry") return "retry"
+  if (
+    normalized === "done" ||
+    normalized === "verified_success" ||
+    normalized === "succeeded" ||
+    normalized === "success" ||
+    normalized === "completed"
+  ) {
+    return "done"
+  }
+  if (
+    normalized === "error" ||
+    normalized === "failed" ||
+    normalized === "blocked_failure" ||
+    normalized === "exhausted_failure" ||
+    normalized === "stagnation_failure"
+  ) {
+    return "error"
+  }
+  if (normalized === "archived") return "archived"
+  return "idle"
+}
+
+function parseIsoTimestamp(input: string | undefined) {
+  if (!input) return 0
+  const value = Date.parse(input)
+  return Number.isFinite(value) ? value : 0
+}
+
+function lifecycleAction(label: string, detail: string | undefined, timestamp: number): MonitorAction[] {
+  if (!timestamp) return []
+  return [
+    {
+      kind: "step_start",
+      label,
+      detail,
+      timestamp,
+    },
+  ]
+}
+
 async function buildArtifactRow(runJsonPath: string) {
   const run = await safeReadJson<ArtifactRun>(runJsonPath)
   if (!run || typeof run !== "object") return undefined
@@ -608,6 +696,12 @@ async function buildArtifactRow(runJsonPath: string) {
 
   const stageDir = path.dirname(runJsonPath)
   const info = await stat(runJsonPath).catch(() => undefined)
+  const updated = Math.max(
+    info?.mtimeMs ?? 0,
+    parseIsoTimestamp(run.updatedAt),
+    parseIsoTimestamp(run.lastOutputAt),
+    parseIsoTimestamp(run.startedAt),
+  )
   const id = typeof run.sessionID === "string" && run.sessionID ? run.sessionID : `artifact:${stageDir}`
   const responsePreview = await safeReadPreview(path.join(stageDir, "response.txt"), 120)
   const narrative = await buildArtifactNarrative(run, stageDir)
@@ -619,7 +713,7 @@ async function buildArtifactRow(runJsonPath: string) {
     id,
     title: buildArtifactTitle(run, stageDir),
     directory: stageDir,
-    updated: info?.mtimeMs ?? 0,
+    updated,
     archived: false,
     status: buildArtifactStatus(run),
     step: buildArtifactStep(run),
@@ -635,6 +729,120 @@ async function buildArtifactRow(runJsonPath: string) {
     monitorKind: "pipeline",
     roundNumber,
   } satisfies MonitorRow
+}
+
+async function buildProgressStateRow(progressStatePath: string) {
+  const progress = await safeReadJson<LifecycleProgressState>(progressStatePath)
+  if (!progress?.runID) return undefined
+  const runDir = path.dirname(progressStatePath)
+  const task = await safeReadJson<ArtifactRun>(path.join(runDir, "task.json"))
+  const info = await stat(progressStatePath).catch(() => undefined)
+  const updated = Math.max(
+    info?.mtimeMs ?? 0,
+    parseIsoTimestamp(progress.updatedAt),
+    parseIsoTimestamp(progress.heartbeatAt),
+  )
+  const detail = joinPreviewParts([
+    typeof progress.activeAttempt === "number" ? `attempt:${progress.activeAttempt}` : undefined,
+    typeof progress.noProgressCycles === "number" ? `no-progress:${progress.noProgressCycles}` : undefined,
+    typeof progress.validatorCalls === "number" ? `validators:${progress.validatorCalls}` : undefined,
+  ])
+  const timestamp = parseIsoTimestamp(progress.heartbeatAt) || parseIsoTimestamp(progress.updatedAt) || updated
+  const roundNumber = parseRoundNumber(progress.runID)
+
+  return {
+    id: `lifecycle:run:${progress.runID}`,
+    title: normalizeMonitorTitle(
+      task?.title ? `Long Task ${task.title}` : undefined,
+      task?.task,
+      runDir,
+      `Long Task ${progress.runID}`,
+    ),
+    directory: runDir,
+    updated,
+    archived: false,
+    status: normalizeLifecycleStatus(progress.status),
+    step: progress.activeUnitID ?? progress.status ?? "idle",
+    detail,
+    recentActions: lifecycleAction(
+      "progress_state",
+      joinPreviewParts([progress.status, progress.activeUnitID]),
+      timestamp,
+    ),
+    task: task?.task,
+    titleSource: "progress_state.json",
+    whyStarted: "This row is sourced from long-task progress_state.json so startup state is visible before run.json appears.",
+    statusReason: progress.finalSummary,
+    nextStepTitle: progress.activeUnitID ? `Continue ${progress.activeUnitID}` : undefined,
+    nextStepReason: progress.status ? `Current lifecycle status: ${progress.status}.` : undefined,
+    reasonTrail: progress.finalSummary ? [progress.finalSummary] : undefined,
+    monitorKind: "pipeline",
+    roundNumber,
+  } satisfies MonitorRow
+}
+
+async function buildCampaignStateRow(campaignStatePath: string) {
+  const campaign = await safeReadJson<LifecycleCampaignState>(campaignStatePath)
+  if (!campaign) return undefined
+  const campaignDir = path.dirname(campaignStatePath)
+  const info = await stat(campaignStatePath).catch(() => undefined)
+  const updated = Math.max(
+    info?.mtimeMs ?? 0,
+    parseIsoTimestamp(campaign.updatedAt),
+    parseIsoTimestamp(campaign.heartbeatAt),
+  )
+  const id = campaign.id && campaign.id.trim() ? campaign.id : path.basename(campaignDir)
+  const roundLabel =
+    typeof campaign.currentRound === "number" ? `round-${padCounter(Math.max(1, campaign.currentRound), 3)}` : undefined
+  const timestamp = parseIsoTimestamp(campaign.heartbeatAt) || parseIsoTimestamp(campaign.updatedAt) || updated
+
+  return {
+    id: `lifecycle:campaign:${id}`,
+    title: normalizeMonitorTitle(
+      campaign.title ? `Long Task Campaign ${campaign.title}` : undefined,
+      undefined,
+      campaignDir,
+      `Long Task Campaign ${id}`,
+    ),
+    directory: campaignDir,
+    updated,
+    archived: false,
+    status: normalizeLifecycleStatus(campaign.status),
+    step: roundLabel ?? campaign.status ?? "idle",
+    detail: joinPreviewParts([campaign.status, roundLabel]),
+    recentActions: lifecycleAction(
+      "campaign_state",
+      joinPreviewParts([campaign.status, roundLabel]),
+      timestamp,
+    ),
+    titleSource: "campaign.json",
+    whyStarted: "This row is sourced from campaign.json so campaign startup is visible immediately.",
+    statusReason: previewText(campaign.lastSummary, 220),
+    nextStepTitle: roundLabel ? `Advance ${roundLabel}` : undefined,
+    nextStepReason: campaign.status ? `Campaign lifecycle status: ${campaign.status}.` : undefined,
+    reasonTrail: campaign.lastSummary ? [campaign.lastSummary] : undefined,
+    monitorKind: "pipeline",
+    roundNumber: typeof campaign.currentRound === "number" ? campaign.currentRound : undefined,
+  } satisfies MonitorRow
+}
+
+async function collectLifecycleRows(limit: number) {
+  const maxFiles = Math.max(limit * 8, 80)
+  const [progressCandidates, campaignCandidates] = await Promise.all([
+    listFilesRecursive(LONG_TASK_RUNS_ROOT, "progress_state.json", maxFiles),
+    listFilesRecursive(LONG_TASK_CAMPAIGNS_ROOT, "campaign.json", maxFiles),
+  ])
+  const rows: MonitorRow[] = []
+
+  for (const item of progressCandidates.sort((left, right) => right.updated - left.updated)) {
+    const row = await buildProgressStateRow(item.filePath)
+    if (row) rows.push(row)
+  }
+  for (const item of campaignCandidates.sort((left, right) => right.updated - left.updated)) {
+    const row = await buildCampaignStateRow(item.filePath)
+    if (row) rows.push(row)
+  }
+  return uniqueRows(rows).sort((left, right) => right.updated - left.updated).slice(0, limit)
 }
 
 async function collectArtifactRows(limit: number) {
@@ -670,30 +878,45 @@ async function collectArtifactRows(limit: number) {
 
 function mergeSessionRow(sessionRow: MonitorRow, artifactRow: MonitorRow) {
   const sessionIsLive = sessionRow.status === "running" || sessionRow.status === "retry"
+  const artifactIsTerminal =
+    artifactRow.status === "done" || artifactRow.status === "error" || artifactRow.status === "archived"
+  const preferArtifactNarrative =
+    artifactIsTerminal || sessionRow.status === "idle" || artifactRow.updated >= sessionRow.updated
+  const preferSessionNarrative = sessionIsLive && !preferArtifactNarrative
   return {
     ...sessionRow,
     title: artifactRow.title || sessionRow.title,
     directory: artifactRow.directory || sessionRow.directory,
     updated: Math.max(sessionRow.updated, artifactRow.updated),
-    status: sessionIsLive ? sessionRow.status : artifactRow.status || sessionRow.status,
-    step: sessionIsLive || sessionRow.step !== "idle" ? sessionRow.step : artifactRow.step,
-    detail: sessionRow.detail ?? artifactRow.detail,
-    recentActions: sessionRow.recentActions.length ? sessionRow.recentActions : artifactRow.recentActions,
+    status: preferSessionNarrative ? sessionRow.status : artifactRow.status || sessionRow.status,
+    step: preferSessionNarrative ? sessionRow.step : artifactRow.step || sessionRow.step,
+    detail: preferSessionNarrative ? sessionRow.detail ?? artifactRow.detail : artifactRow.detail ?? sessionRow.detail,
+    recentActions:
+      preferSessionNarrative && sessionRow.recentActions.length
+        ? sessionRow.recentActions
+        : artifactRow.recentActions.length
+          ? artifactRow.recentActions
+          : sessionRow.recentActions,
     lastUser: sessionRow.lastUser ?? artifactRow.lastUser,
     parentID: sessionRow.parentID ?? artifactRow.parentID,
     task: sessionRow.task ?? artifactRow.task,
     titleSource: artifactRow.titleSource ?? sessionRow.titleSource,
     whyStarted: artifactRow.whyStarted ?? sessionRow.whyStarted,
-    statusReason: sessionRow.statusReason ?? artifactRow.statusReason,
+    statusReason: preferSessionNarrative
+      ? sessionRow.statusReason ?? artifactRow.statusReason
+      : artifactRow.statusReason ?? sessionRow.statusReason,
     nextStepTitle: artifactRow.nextStepTitle ?? sessionRow.nextStepTitle,
     nextStepReason: artifactRow.nextStepReason ?? sessionRow.nextStepReason,
-    reasonTrail: sessionRow.reasonTrail?.length ? sessionRow.reasonTrail : artifactRow.reasonTrail,
+    reasonTrail:
+      preferSessionNarrative && sessionRow.reasonTrail?.length
+        ? sessionRow.reasonTrail
+        : artifactRow.reasonTrail ?? sessionRow.reasonTrail,
     monitorKind: artifactRow.monitorKind ?? sessionRow.monitorKind,
     roundNumber: artifactRow.roundNumber ?? sessionRow.roundNumber,
   } satisfies MonitorRow
 }
 
-function actionFromPart(part: MessageV2.Part): MonitorAction | undefined {
+function actionFromPart(part: MessageV2.Part, fallbackTimestamp = 0, sequence = 0): MonitorAction | undefined {
   if (part.type === "tool") {
     const title =
       "title" in part.state && typeof part.state.title === "string" && part.state.title ? part.state.title : undefined
@@ -724,7 +947,7 @@ function actionFromPart(part: MessageV2.Part): MonitorAction | undefined {
       kind: "tool",
       label,
       detail,
-      timestamp: partTimestamp(part),
+      timestamp: partTimestamp(part, fallbackTimestamp, sequence),
     }
   }
 
@@ -735,7 +958,7 @@ function actionFromPart(part: MessageV2.Part): MonitorAction | undefined {
       kind: "text",
       label: "assistant_text",
       detail: text,
-      timestamp: partTimestamp(part),
+      timestamp: partTimestamp(part, fallbackTimestamp, sequence),
     }
   }
 
@@ -746,7 +969,7 @@ function actionFromPart(part: MessageV2.Part): MonitorAction | undefined {
       kind: "reasoning",
       label: "reasoning",
       detail: text,
-      timestamp: partTimestamp(part),
+      timestamp: partTimestamp(part, fallbackTimestamp, sequence),
     }
   }
 
@@ -755,7 +978,7 @@ function actionFromPart(part: MessageV2.Part): MonitorAction | undefined {
       kind: "step_start",
       label: "step_start",
       detail: part.snapshot ? `snapshot:${part.snapshot.slice(0, 10)}` : undefined,
-      timestamp: partTimestamp(part),
+      timestamp: partTimestamp(part, fallbackTimestamp, sequence),
     }
   }
 
@@ -764,7 +987,7 @@ function actionFromPart(part: MessageV2.Part): MonitorAction | undefined {
       kind: "step_finish",
       label: `step_finish:${part.reason}`,
       detail: part.tokens?.total ? `tokens:${part.tokens.total}` : undefined,
-      timestamp: partTimestamp(part),
+      timestamp: partTimestamp(part, fallbackTimestamp, sequence),
     }
   }
 }
@@ -784,22 +1007,88 @@ function collectRecentActions(messages: MessageV2.WithParts[], limit = 20) {
   const actions: MonitorAction[] = []
 
   for (const message of messages) {
+    const messageTimestamp =
+      message.info.role === "assistant"
+        ? message.info.time.completed ?? message.info.time.created
+        : message.info.time.created
+
     if (message.info.role === "assistant" && message.info.error) {
       actions.push({
         kind: "error",
         label: "assistant_error",
         detail: previewText(message.info.error.message, 160),
-        timestamp: message.info.time.completed ?? message.info.time.created,
+        timestamp: messageTimestamp,
       })
     }
 
-    for (const part of message.parts) {
-      const action = actionFromPart(part)
+    for (let index = 0; index < message.parts.length; index++) {
+      const part = message.parts[index]
+      const action = actionFromPart(part, messageTimestamp, index)
       if (action) actions.push(action)
     }
   }
 
   return actions.sort((left, right) => left.timestamp - right.timestamp).slice(-limit)
+}
+
+function collectDetailedActions(messages: MessageV2.WithParts[], limit = 600) {
+  const actions: MonitorAction[] = []
+
+  for (const message of messages) {
+    const messageTimestamp =
+      message.info.role === "assistant"
+        ? message.info.time.completed ?? message.info.time.created
+        : message.info.time.created
+
+    if (message.info.role === "user") {
+      const userText = previewText(
+        message.parts
+          .filter((part): part is MessageV2.TextPart => part.type === "text")
+          .map((part) => part.text)
+          .join(" "),
+        400,
+      )
+      if (userText) {
+        actions.push({
+          kind: "text",
+          label: "user_prompt",
+          detail: userText,
+          timestamp: messageTimestamp,
+        })
+      }
+    }
+
+    if (message.info.role === "assistant" && message.info.error) {
+      actions.push({
+        kind: "error",
+        label: "assistant_error",
+        detail: previewText(message.info.error.message, 240),
+        timestamp: messageTimestamp,
+      })
+    }
+
+    for (let index = 0; index < message.parts.length; index++) {
+      const part = message.parts[index]
+      const action = actionFromPart(part, messageTimestamp, index)
+      if (action) actions.push(action)
+    }
+  }
+
+  return actions.sort((left, right) => left.timestamp - right.timestamp).slice(-limit)
+}
+
+async function collectSessionDetailActions(sessionID: string, messageLimit: number, actionLimit: number) {
+  const effectiveMessageLimit = Math.max(20, Math.min(2000, messageLimit))
+  const effectiveActionLimit = Math.max(50, Math.min(3000, actionLimit))
+  await Session.get(sessionID)
+  const messages = await Session.messages({ sessionID, limit: effectiveMessageLimit })
+  const actions = collectDetailedActions(messages, effectiveActionLimit)
+  return {
+    sessionID,
+    messageCount: messages.length,
+    actionCount: actions.length,
+    actions,
+  }
 }
 
 function summarizeSession(
@@ -1013,11 +1302,18 @@ function finalizeNarrativeRow(row: MonitorRow): MonitorRow {
 async function collectMonitorRows(limit: number) {
   const requestLimit = Math.max(1, limit)
   const expandedLimit = Math.max(requestLimit * 12, 240)
-  const [statuses, artifactRows] = await Promise.all([SessionStatus.list(), collectArtifactRows(expandedLimit)])
+  const [statuses, artifactRows, lifecycleRows] = await Promise.all([
+    SessionStatus.list(),
+    collectArtifactRows(expandedLimit),
+    collectLifecycleRows(expandedLimit),
+  ])
+  const combinedArtifactRows = uniqueRows([...lifecycleRows, ...artifactRows]).sort(
+    (left, right) => right.updated - left.updated,
+  )
   const sessions = [...Session.listGlobal({ limit: expandedLimit, archived: true })]
   const rows: MonitorRow[] = []
   const seen = new Set<string>()
-  const artifactByID = new Map<string, MonitorRow>(artifactRows.map((row) => [row.id, row] as const))
+  const artifactByID = new Map<string, MonitorRow>(combinedArtifactRows.map((row) => [row.id, row] as const))
 
   for (const session of sessions) {
     const messages = await Session.messages({ sessionID: session.id, limit: 20 }).catch(
@@ -1030,7 +1326,7 @@ async function collectMonitorRows(limit: number) {
     seen.add(merged.id)
   }
 
-  for (const artifactRow of artifactRows) {
+  for (const artifactRow of combinedArtifactRows) {
     if (seen.has(artifactRow.id)) continue
     rows.push(finalizeNarrativeRow(artifactRow))
   }
@@ -1080,6 +1376,28 @@ async function main() {
         const rows = await withMonitorInstance(() => collectMonitorRows(requestLimit))
         response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" })
         response.end(JSON.stringify({ generatedAt: Date.now(), rows }))
+        return
+      } catch (error) {
+        response.writeHead(500, { "content-type": "application/json; charset=utf-8" })
+        response.end(JSON.stringify({ error: errorMessage(error) }))
+        return
+      }
+    }
+
+    if (url.pathname === "/api/session-actions") {
+      try {
+        const sessionID = (url.searchParams.get("sessionID") ?? "").trim()
+        if (!sessionID) {
+          response.writeHead(400, { "content-type": "application/json; charset=utf-8" })
+          response.end(JSON.stringify({ error: "Missing sessionID query parameter." }))
+          return
+        }
+
+        const messageLimit = Math.max(20, Math.min(2000, Number(url.searchParams.get("messageLimit") || "400") || 400))
+        const actionLimit = Math.max(50, Math.min(3000, Number(url.searchParams.get("actionLimit") || "800") || 800))
+        const detail = await withMonitorInstance(() => collectSessionDetailActions(sessionID, messageLimit, actionLimit))
+        response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" })
+        response.end(JSON.stringify({ generatedAt: Date.now(), ...detail }))
         return
       } catch (error) {
         response.writeHead(500, { "content-type": "application/json; charset=utf-8" })

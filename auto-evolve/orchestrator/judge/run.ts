@@ -4,8 +4,10 @@ import { runOpencodeTask } from "../opencode"
 import { buildSoftJudgePrompt } from "../prompts"
 import { resolveModelSelection } from "../model-selection"
 import type { SoftJudgeRequest, SoftJudgeResult, SoftJudgeSummary } from "./contract"
+import { cleanupRuntimeProcessScope } from "../runtime-process-registry"
 
 export async function runSoftJudge(request: SoftJudgeRequest): Promise<SoftJudgeResult> {
+  const runtimeScope = `judge:${request.loadedCase.spec.id}:attempt:${request.judgePlan.attempt}`
   const execution = resolveModelSelection(request.config, "refine", request.loadedCase.spec.execution)
   const judgeSkillsRoot = path.join(request.cwd, "auto-evolve", request.config.judgeSkillsDir)
   const judgeSkillsIndexPath = path.join(judgeSkillsRoot, "INDEX.md")
@@ -52,33 +54,49 @@ export async function runSoftJudge(request: SoftJudgeRequest): Promise<SoftJudge
     ...request.hardCheckArtifacts.map((item) => item.outputPath),
   ]
 
-  const task = await runOpencodeTask({
-    cwd: request.cwd,
-    config: request.config,
-    title: `auto-evolve soft judge ${request.loadedCase.spec.id} attempt ${request.judgePlan.attempt}`,
-    prompt,
-    referencePaths,
-    permissionReadPaths: referencePaths,
-    permissionEditPaths: [path.dirname(request.inputPaths.judgeSummaryPath)],
-    model: execution.model,
-    agent: execution.agent,
-    variant: execution.variant,
-  })
+  try {
+    const task = await runOpencodeTask({
+      cwd: request.cwd,
+      config: request.config,
+      title: `auto-evolve soft judge ${request.loadedCase.spec.id} attempt ${request.judgePlan.attempt}`,
+      prompt,
+      referencePaths,
+      permissionReadPaths: referencePaths,
+      permissionEditPaths: [path.dirname(request.inputPaths.judgeSummaryPath)],
+      model: execution.model,
+      agent: execution.agent,
+      variant: execution.variant,
+      runtimeScope,
+      live: {
+        stageDir: path.dirname(request.inputPaths.judgeSummaryPath),
+        phase: "judge",
+        taskKind: "judge",
+        caseID: request.loadedCase.spec.id,
+        attempt: request.judgePlan.attempt,
+        methodID: request.methodID,
+      },
+    })
 
-  let summary: SoftJudgeSummary | undefined
-  if (await pathExists(request.inputPaths.judgeSummaryPath)) {
-    summary = await readJsonFile<SoftJudgeSummary>(request.inputPaths.judgeSummaryPath)
-  }
+    let summary: SoftJudgeSummary | undefined
+    if (await pathExists(request.inputPaths.judgeSummaryPath)) {
+      summary = await readJsonFile<SoftJudgeSummary>(request.inputPaths.judgeSummaryPath)
+    }
 
-  return {
-    prompt,
-    task,
-    summaryPath: request.inputPaths.judgeSummaryPath,
-    reportPath: request.inputPaths.judgeReportPath,
-    hardCheckIndexPath: request.hardCheckArtifacts.length
-      ? path.join(path.dirname(request.inputPaths.judgeSummaryPath), "hard-checks", "hard_checks_index.json")
-      : undefined,
-    hardCheckArtifacts: request.hardCheckArtifacts,
-    summary,
+    return {
+      prompt,
+      task,
+      summaryPath: request.inputPaths.judgeSummaryPath,
+      reportPath: request.inputPaths.judgeReportPath,
+      hardCheckIndexPath: request.hardCheckArtifacts.length
+        ? path.join(path.dirname(request.inputPaths.judgeSummaryPath), "hard-checks", "hard_checks_index.json")
+        : undefined,
+      hardCheckArtifacts: request.hardCheckArtifacts,
+      summary,
+    }
+  } finally {
+    const cleanup = await cleanupRuntimeProcessScope(runtimeScope)
+    if (cleanup.remainingCount > 0) {
+      await cleanupRuntimeProcessScope(runtimeScope)
+    }
   }
 }
