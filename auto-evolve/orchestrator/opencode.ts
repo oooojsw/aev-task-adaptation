@@ -1,7 +1,8 @@
 import path from "node:path"
 import process from "node:process"
+import os from "node:os"
 import { randomUUID } from "node:crypto"
-import { stat } from "node:fs/promises"
+import { readFile, stat } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
 import { spawn as nodeSpawn } from "node:child_process"
 import { buildActionTrace } from "./action-trace"
@@ -17,12 +18,12 @@ import {
 } from "./task-artifacts"
 import { createTaskDescriptor } from "./task-model"
 
-const OPENCODE_TASK_TIMEOUT_MS = 60 * 60 * 1000
+const OPENCODE_TASK_TIMEOUT_MS = 180 * 60 * 1000
 const OPENCODE_PROMPT_SOFT_BUDGET_MS = 30 * 60 * 1000
 const OPENCODE_TASK_SILENT_TIMEOUT_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_MS ?? "", 10)
   if (Number.isFinite(value) && value > 0) return value
-  return 12 * 60 * 1000
+  return 30 * 60 * 1000
 })()
 const OPENCODE_TASK_SILENT_TIMEOUT_AFTER_ACTIVITY_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_AFTER_ACTIVITY_MS ?? "", 10)
@@ -227,7 +228,52 @@ async function ensureOverrideConfig(
   runLabel: string,
 ) {
   const dir = autoEvolvePath(cwd, ".runtime", "opencode-config", runLabel)
+  const runtimeAgentsFallback = [
+    "# AUTO-EVOLVE RUNTIME INSTRUCTIONS",
+    "",
+    "This session is launched by the auto-evolve orchestrator.",
+    "Follow the task prompt and required output contract strictly.",
+    "If the task requires structured output (for example JSON-only), return structured output only.",
+    "Do not depend on host-level user config or host-level custom agent definitions.",
+  ].join("\n")
+  const systemConfigDirCandidates = [
+    process.env.XDG_CONFIG_HOME ? path.join(process.env.XDG_CONFIG_HOME, "opencode") : "",
+    path.join(os.homedir(), ".config", "opencode"),
+  ].filter(Boolean)
+  const systemConfigDir =
+    (await Promise.all(
+      systemConfigDirCandidates.map(async (candidate) => ((await pathExists(candidate)) ? candidate : "")),
+    )).find(Boolean) || ""
+
+  let systemBaseConfig: Record<string, unknown> = {}
+  if (systemConfigDir) {
+    const systemConfigPath = path.join(systemConfigDir, "opencode.json")
+    if (await pathExists(systemConfigPath)) {
+      try {
+        const parsed = JSON.parse(await readFile(systemConfigPath, "utf8"))
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          systemBaseConfig = parsed as Record<string, unknown>
+        }
+      } catch {}
+    }
+  }
+
+  const runtimeAgentsMd = (() => {
+    if (!systemConfigDir) return runtimeAgentsFallback
+    const systemAgentsPath = path.join(systemConfigDir, "AGENTS.md")
+    return systemAgentsPath
+  })()
+
+  let agentsContent = runtimeAgentsFallback
+  if (typeof runtimeAgentsMd === "string" && runtimeAgentsMd.endsWith(".md") && (await pathExists(runtimeAgentsMd))) {
+    try {
+      const loaded = await readFile(runtimeAgentsMd, "utf8")
+      if (loaded.trim().length > 0) agentsContent = loaded
+    } catch {}
+  }
+
   const override: Record<string, unknown> = {
+    ...systemBaseConfig,
     $schema: "https://opencode.ai/config.json",
     ...(model
       ? {
@@ -235,6 +281,8 @@ async function ensureOverrideConfig(
           small_model: model,
         }
       : {}),
+    // Keep runtime deterministic: always use built-in stable primary agent.
+    default_agent: "build",
     permission:
       permissionConfig.mode === "open"
         ? makeOpenPermissions()
@@ -242,15 +290,19 @@ async function ensureOverrideConfig(
             readPaths: permissions.readPaths,
             editPaths: permissions.editPaths,
           }),
-    mcp: {
-      "claude-code": {
-        enabled: false,
-      },
-    },
   }
   await ensureDirectory(dir)
   await writeJsonFile(path.join(dir, "opencode.json"), override)
+  await writeTextFile(path.join(dir, "AGENTS.md"), agentsContent.trimEnd() + "\n")
   return dir
+}
+
+async function ensureRuntimeEnvironment(_cwd: string, _runLabel: string) {
+  // Keep project-level overrides disabled, but preserve host provider state
+  // so MiniMax provider/model resolution stays available at runtime.
+  return {
+    OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+  } as const
 }
 
 function slugifyTitle(input: string) {
@@ -291,7 +343,7 @@ function buildRuntimeBudgetPromptPrefix(input: { runStart: Date }) {
     "Mandatory execution policy:",
     "1. Maintain a tool_call_count counter starting from your first tool call.",
     "2. At every 25th tool call (25/50/75/...), run an immediate time checkpoint.",
-    '3. Preferred checkpoint command: `Get-Date -Format o`.',
+    "3. Preferred checkpoint command: `Get-Date -Format o`.",
     '4. Fallback checkpoint command: `python -c \"from datetime import datetime; print(datetime.now().astimezone().isoformat())\"`.',
     "5. If remaining time to the 30-minute soft deadline is <= 8 minutes: do not open new branches; converge only on this session's required deliverable.",
     "6. If remaining time <= 5 minutes: stop exploration; run only minimum required checks for this session and prepare structured output.",
@@ -333,6 +385,7 @@ function isInfrastructureCrash(result: Pick<OpencodeRunResult, "exitCode" | "std
   if (stderr.includes("infrastructure bootstrap failed")) return true
   if (stderr.includes("silent output timeout")) return true
   if (result.exitCode === 124 && result.events.length === 0) return true
+  if (result.exitCode === 1 && result.events.length === 0 && stderr === "") return true
   return result.exitCode !== 0 && result.events.length === 0 && stderr.includes("bun")
 }
 
@@ -424,6 +477,7 @@ async function runOpencodeTaskOnce(
   permissionEditPaths: string[],
   attempt: number,
 ) {
+  const runLabel = buildRunLabel(input.title, attempt)
   const overrideConfigDir = await ensureOverrideConfig(
     input.cwd,
     selectedModel,
@@ -432,8 +486,9 @@ async function runOpencodeTaskOnce(
       readPaths: permissionReadPaths,
       editPaths: permissionEditPaths,
     },
-    buildRunLabel(input.title, attempt),
+    runLabel,
   )
+  const runtimeEnv = await ensureRuntimeEnvironment(input.cwd, runLabel)
 
   const args = [
     process.execPath,
@@ -532,6 +587,7 @@ async function runOpencodeTaskOnce(
     stdio: ["pipe", "pipe", "pipe"],
     env: {
       ...process.env,
+      ...runtimeEnv,
       OPENCODE_CONFIG_DIR: overrideConfigDir,
       ...(typeof input.config.modelConfig.limits.requestsPerMinute === "number"
         ? {
@@ -550,13 +606,15 @@ async function runOpencodeTaskOnce(
       child.stdin.end()
     })
     .catch((error) => {
-      throw new Error(`Failed to stream prompt to OpenCode stdin: ${error instanceof Error ? error.message : String(error)}`)
+      throw new Error(
+        `Failed to stream prompt to OpenCode stdin: ${error instanceof Error ? error.message : String(error)}`,
+      )
     })
   const abortAfterSpawn = async (cause: unknown): Promise<never> => {
     const error = cause instanceof Error ? cause : new Error(String(cause))
-    stderrData = [stderrData, `OpenCode runtime bootstrap failed after spawn: ${error.message}`].filter(Boolean).join(
-      "\n\n",
-    )
+    stderrData = [stderrData, `OpenCode runtime bootstrap failed after spawn: ${error.message}`]
+      .filter(Boolean)
+      .join("\n\n")
     try {
       await terminateProcessTree(child.pid)
     } catch {}
@@ -672,10 +730,14 @@ async function runOpencodeTaskOnce(
   const events = parseEvents(stdout)
   const timeoutNotes: string[] = []
   if (hardTimedOut) {
-    timeoutNotes.push(`OpenCode task timed out after ${OPENCODE_TASK_TIMEOUT_MS} ms and the full process tree was terminated.`)
+    timeoutNotes.push(
+      `OpenCode task timed out after ${OPENCODE_TASK_TIMEOUT_MS} ms and the full process tree was terminated.`,
+    )
   }
   if (silentTimedOut) {
-    const phaseText = silentTimeoutAfterActivity ? "after runtime output started" : "before any runtime output was observed"
+    const phaseText = silentTimeoutAfterActivity
+      ? "after runtime output started"
+      : "before any runtime output was observed"
     timeoutNotes.push(
       `OpenCode task hit silent output timeout (${phaseText}) and the full process tree was terminated.`,
     )

@@ -93,6 +93,66 @@ function short(text: string, limit = 220) {
   return `${normalized.slice(0, limit - 3)}...`
 }
 
+const BLANK_AGENT_EXECUTION_HINTS = [
+  "blank-agent",
+  "blank agent",
+  "deployment",
+  "single-session",
+  "single session",
+  "harness",
+  "acceptance",
+  "run-blank-agent",
+]
+
+const SYSTEM_RUNTIME_HINTS = [
+  "timeout",
+  "timed out",
+  "spawn",
+  "eperm",
+  "access is denied",
+  "permission denied",
+  "exit code",
+  "no structured signal",
+  "no-structured-signal",
+  "infrastructure",
+  "heartbeat",
+  "stale",
+  "bootstrapping",
+  "startup",
+  "formaterror",
+  "model init",
+  "provider",
+  "process",
+  "crash",
+  "encoding",
+  "unicode",
+  "codepage",
+]
+
+function mentionsAny(input: string, hints: string[]) {
+  const normalized = input.toLowerCase()
+  return hints.some((hint) => normalized.includes(hint))
+}
+
+function isBlankAgentExecutionContext(input: string) {
+  return mentionsAny(input, BLANK_AGENT_EXECUTION_HINTS)
+}
+
+function isSystemRuntimeSignal(input: string) {
+  return mentionsAny(input, SYSTEM_RUNTIME_HINTS)
+}
+
+function extractBlankAgentSystemSignalsFromDigest(digest: LongTaskCampaignRunTraceDigest) {
+  return uniqueStrings([
+    ...digest.blockers.filter((item) => isBlankAgentExecutionContext(item) && isSystemRuntimeSignal(item)),
+    ...digest.keyFailurePaths.filter((item) => isBlankAgentExecutionContext(item) && isSystemRuntimeSignal(item)),
+    ...digest.pendingPackageImpact.filter((item) => isBlankAgentExecutionContext(item) && isSystemRuntimeSignal(item)),
+    ...digest.commandOutcomes
+      .filter((item) => isBlankAgentExecutionContext(item.unitID))
+      .flatMap((item) => item.failedCommands.filter((command) => isSystemRuntimeSignal(command))),
+  ]).slice(0, 12)
+}
+
 function onceActivationCallback(callback?: OpencodeTaskInput["onSpawn"]) {
   if (!callback) return undefined
   let activated = false
@@ -836,6 +896,31 @@ function evolveExplorationTreeDocument(input: {
     })
   }
 
+  const blankAgentSystemSignals = extractBlankAgentSystemSignalsFromDigest(input.digest)
+  if (blankAgentSystemSignals.length > 0) {
+    const region = "blank-agent-system-bypass"
+    const current = nodes.get(region)
+    nodes.set(region, {
+      nodeID: current?.nodeID ?? "region-blank-agent-system-bypass",
+      region,
+      parentID: current?.parentID,
+      summary:
+        "Blank-agent execution exposed system-level blockers. Keep this region active until bypass guidance is encoded in package and validated.",
+      status: "strong_fail",
+      confidence: Math.max(current?.confidence ?? 0.7, 0.85),
+      evidenceRefs: compactRefs([...(current?.evidenceRefs ?? []), ...input.digest.refs]),
+      lastUpdatedRound: input.roundNumber,
+      prerequisites: uniqueStrings([...(current?.prerequisites ?? []), "encode-system-bypass-into-package"]),
+      attemptCount: (current?.attemptCount ?? 0) + 1,
+      successCount: current?.successCount ?? 0,
+      failCount: (current?.failCount ?? 0) + 1,
+      notes: uniqueStrings([
+        ...(current?.notes ?? []),
+        ...blankAgentSystemSignals.slice(0, 6).map((item) => `signal: ${short(item, 180)}`),
+      ]).slice(0, 12),
+    })
+  }
+
   const nodeList = Array.from(nodes.values()).sort((left, right) => left.region.localeCompare(right.region))
   return {
     updatedAt: nowISO(),
@@ -921,6 +1006,7 @@ function buildRoutingControl(input: {
   ]
   const softBlockerHints = ["maybe", "might", "looks like", "seems", "probably", "possibly", "suggest", "guess"]
   const normalizedBlockers = uniqueStrings(input.digest.blockers.map((item) => item.trim()).filter(Boolean))
+  const blankAgentSystemSignals = extractBlankAgentSystemSignalsFromDigest(input.digest)
   const infrastructureBlockers = uniqueStrings(
     normalizedBlockers.filter((item) => {
       const normalized = item.toLowerCase()
@@ -953,6 +1039,7 @@ function buildRoutingControl(input: {
     requiredNextRegions: uniqueStrings([
       ...input.tree.requiredNextRegions,
       ...(input.reviewerSuggestion?.nextAttentionAreas ?? []),
+      ...(blankAgentSystemSignals.length > 0 ? ["blank-agent-system-bypass"] : []),
     ]),
     forbiddenUnits: uniqueStrings([...input.previous.forbiddenUnits, ...repeatedSuccessfulUnits]),
     forbiddenRegions: uniqueStrings([...input.previous.forbiddenRegions, ...input.tree.forbiddenRepeatRegions]),
@@ -967,6 +1054,9 @@ function buildRoutingControl(input: {
       ...infrastructureBlockers
         .slice(0, 3)
         .map((item) => `Infrastructure signal (do not route as domain blocker): ${item}`),
+      ...blankAgentSystemSignals
+        .slice(0, 3)
+        .map((item) => `Blank-agent system blocker (must also be encoded in package bypass guidance): ${item}`),
     ]),
   }
 }
@@ -1449,7 +1539,7 @@ function shouldRunCampaignWorkers(roundNumber: number) {
 }
 
 function shouldRunCampaignReviewer(roundNumber: number) {
-  return roundNumber > 1
+  return roundNumber >= 1
 }
 
 function normalizeRoundSummaryForSignature(summary: string) {
@@ -1623,6 +1713,67 @@ function summarizeLearningUnits(units: Record<string, unknown>[]) {
     .slice(0, 12)
 }
 
+function summarizeBlankAgentSystemBypasses(input: {
+  failures: Record<string, unknown>[]
+  retryLessons: Record<string, unknown>[]
+  learningUnits: Record<string, unknown>[]
+}) {
+  const merged = new Map<string, string | undefined>()
+  const add = (issueRaw: string | undefined, bypassRaw?: string) => {
+    const issue = issueRaw?.trim()
+    if (!issue) return
+    if (!isBlankAgentExecutionContext(issue) || !isSystemRuntimeSignal(issue)) return
+    const key = normalizeCompactStatement(issue).toLowerCase()
+    const bypass = bypassRaw?.trim()
+    const current = merged.get(key)
+    if (current) {
+      if (!current && bypass) merged.set(key, normalizeCompactStatement(bypass))
+      return
+    }
+    merged.set(key, bypass ? normalizeCompactStatement(bypass) : undefined)
+  }
+
+  for (const item of input.failures) {
+    const unitID = extractStringField(item, "unitID") ?? ""
+    const mismatchSummary = extractStringField(item, "mismatchSummary")
+    const nextPriorityFix = extractStringField(item, "nextPriorityFix")
+    const suspectedCauses = Array.isArray(item.suspectedCauses)
+      ? item.suspectedCauses.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      : []
+    const context = [unitID, mismatchSummary ?? "", ...suspectedCauses, nextPriorityFix ?? ""].join(" | ")
+    if (!isBlankAgentExecutionContext(context)) continue
+    add(mismatchSummary, nextPriorityFix)
+    for (const cause of suspectedCauses) add(cause, nextPriorityFix)
+  }
+
+  for (const item of input.retryLessons) {
+    const whatFailed = extractStringField(item, "whatFailed")
+    const whyFailed = Array.isArray(item.whyFailed)
+      ? item.whyFailed.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      : []
+    const doNotRepeat = Array.isArray(item.doNotRepeat)
+      ? item.doNotRepeat.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      : []
+    const nextAttemptStrategy = Array.isArray(item.nextAttemptStrategy)
+      ? item.nextAttemptStrategy.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      : []
+    const context = [whatFailed ?? "", ...whyFailed, ...doNotRepeat, ...nextAttemptStrategy].join(" | ")
+    if (!isBlankAgentExecutionContext(context)) continue
+    add(whatFailed, nextAttemptStrategy[0])
+    for (const reason of whyFailed) add(reason, nextAttemptStrategy[0])
+    for (const reason of doNotRepeat) add(reason, nextAttemptStrategy[0])
+  }
+
+  for (const item of input.learningUnits) {
+    const statement = extractStringField(item, "statement")
+    add(statement)
+  }
+
+  return Array.from(merged.entries())
+    .map(([issue, bypass]) => `- ${short(issue, 220)}${bypass ? ` -> bypass: ${short(bypass, 180)}` : ""}`)
+    .slice(0, 12)
+}
+
 function buildRoundSummaryMarkdown(input: {
   roundNumber: number
   mode: string
@@ -1673,6 +1824,11 @@ function buildCampaignLessonsMarkdown(input: {
   const failureLines = summarizeFailures(input.failures)
   const retryLines = summarizeRetryLessons(input.retryLessons)
   const learningLines = summarizeLearningUnits(input.learningUnits)
+  const systemBypassLines = summarizeBlankAgentSystemBypasses({
+    failures: input.failures,
+    retryLessons: input.retryLessons,
+    learningUnits: input.learningUnits,
+  })
 
   return [
     "<!-- auto-evolve-role: failure_lessons -->",
@@ -1700,6 +1856,12 @@ function buildCampaignLessonsMarkdown(input: {
     "## Retry Guidance That Emerged From Failures",
     "",
     ...(retryLines.length ? retryLines : ["- none yet"]),
+    "",
+    "## Blank-Agent Execution System Blockers and Bypasses",
+    "",
+    "- Keep only system-level blockers observed during blank-agent execution and concrete bypass guidance for next round.",
+    "",
+    ...(systemBypassLines.length ? systemBypassLines : ["- none yet"]),
     "",
     "## Generalized Learning That Survived Across Rounds",
     "",
@@ -2289,6 +2451,8 @@ async function runCampaignLead(input: {
   nextRoutingControlPath: string
   workerSuggestions: LongTaskCampaignWorkerSuggestion[]
   reviewerSuggestionPath?: string
+  acceptanceExperiencePath?: string
+  finalAcceptanceFeedbackPath?: string
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   runtimeScope?: string
@@ -2312,6 +2476,8 @@ async function runCampaignLead(input: {
     nextRoutingControlPath: input.nextRoutingControlPath,
     workerSuggestionPaths,
     reviewerSuggestionPath: input.reviewerSuggestionPath,
+    acceptanceExperiencePath: input.acceptanceExperiencePath,
+    finalAcceptanceFeedbackPath: input.finalAcceptanceFeedbackPath,
   })
   return runCampaignSuggestionTask({
     cwd: input.cwd,
@@ -2328,6 +2494,8 @@ async function runCampaignLead(input: {
       input.previousRoutingControlPath,
       ...workerSuggestionPaths,
       ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
+      ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
+      ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
     ],
     permissionReadPaths: [
       input.runTraceDigestPath,
@@ -2337,6 +2505,8 @@ async function runCampaignLead(input: {
       input.previousRoutingControlPath,
       ...workerSuggestionPaths,
       ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
+      ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
+      ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
     ],
     permissionEditPaths: [input.nextPendingPackageRoot, input.nextExplorationTreePath, input.nextRoutingControlPath],
     stageDir,
@@ -2357,12 +2527,15 @@ async function runCampaignReviewer(input: {
   explorationTreePath: string
   workingMemoryPath: string
   routingControlPath: string
+  acceptanceExperiencePath?: string
+  stageDir?: string
+  suggestionPath?: string
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
   onPulse?: OpencodeTaskInput["onPulse"]
 }) {
-  const stageDir = input.roundPaths.reviewerRoot
+  const stageDir = input.stageDir ?? input.roundPaths.reviewerRoot
   const prompt = buildCampaignReviewerPrompt({
     title: input.campaignSpec.title,
     roundNumber: input.roundNumber,
@@ -2371,6 +2544,7 @@ async function runCampaignReviewer(input: {
     explorationTreePath: input.explorationTreePath,
     workingMemoryPath: input.workingMemoryPath,
     routingControlPath: input.routingControlPath,
+    acceptanceExperiencePath: input.acceptanceExperiencePath,
   })
   const result = await runCampaignSuggestionTask({
     cwd: input.cwd,
@@ -2385,6 +2559,7 @@ async function runCampaignReviewer(input: {
       input.explorationTreePath,
       input.workingMemoryPath,
       input.routingControlPath,
+      ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
     ],
     permissionReadPaths: [
       input.pendingPackageRoot,
@@ -2392,6 +2567,7 @@ async function runCampaignReviewer(input: {
       input.explorationTreePath,
       input.workingMemoryPath,
       input.routingControlPath,
+      ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
     ],
     stageDir,
     phase: "campaign_review",
@@ -2404,7 +2580,7 @@ async function runCampaignReviewer(input: {
     parsed: result.parsed,
     responsePath: result.artifactPaths.responsePath,
   })
-  await writeJsonFile(input.roundPaths.reviewerSuggestionPath, suggestion)
+  await writeJsonFile(input.suggestionPath ?? input.roundPaths.reviewerSuggestionPath, suggestion)
   return suggestion
 }
 
@@ -2418,11 +2594,15 @@ async function runCampaignFinalAcceptance(input: {
   pendingPackageRoot: string
   runTracePath: string
   reviewerSuggestionPath: string
+  finalAcceptanceRoot?: string
+  finalAcceptanceResultPath?: string
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
   onPulse?: OpencodeTaskInput["onPulse"]
 }) {
+  const acceptanceRoot = input.finalAcceptanceRoot ?? input.roundPaths.finalAcceptanceRoot
+  const acceptanceResultPath = input.finalAcceptanceResultPath ?? input.roundPaths.finalAcceptanceResultPath
   const validatorContracts = completionOnlyValidatorContracts(input.baseSpec)
   if (!validatorContracts.length) {
     const emptyResult = {
@@ -2434,15 +2614,15 @@ async function runCampaignFinalAcceptance(input: {
       validatorResults: [] as LongTaskValidatorResult[],
       createdAt: nowISO(),
     }
-    await ensureDirectory(input.roundPaths.finalAcceptanceRoot)
-    await writeJsonFile(input.roundPaths.finalAcceptanceResultPath, emptyResult)
+    await ensureDirectory(acceptanceRoot)
+    await writeJsonFile(acceptanceResultPath, emptyResult)
     return emptyResult
   }
 
-  await ensureDirectory(input.roundPaths.finalAcceptanceRoot)
+  await ensureDirectory(acceptanceRoot)
   const acceptanceSpec = buildCampaignFinalAcceptanceSpec(input.baseSpec, input.pendingPackageRoot)
   const syntheticUnit = syntheticCampaignFinalAcceptanceUnit(input.baseSpec, input.pendingPackageRoot)
-  const bundlePath = path.join(input.roundPaths.finalAcceptanceRoot, "final-acceptance-bundle.json")
+  const bundlePath = path.join(acceptanceRoot, "final-acceptance-bundle.json")
   await writeJsonFile(bundlePath, {
     id: `campaign-final-${randomUUID().slice(0, 8)}`,
     campaignID: input.campaignID,
@@ -2465,7 +2645,7 @@ async function runCampaignFinalAcceptance(input: {
       unit: syntheticUnit,
       runID: input.sourceRunID,
       attempt: 1,
-      validatorDir: path.join(input.roundPaths.finalAcceptanceRoot, validator.id),
+      validatorDir: path.join(acceptanceRoot, validator.id),
       bundlePath,
       runtimeScope: input.runtimeScope,
       onActivation: input.onActivation,
@@ -2505,8 +2685,50 @@ async function runCampaignFinalAcceptance(input: {
     bundlePath,
     createdAt: nowISO(),
   }
-  await writeJsonFile(input.roundPaths.finalAcceptanceResultPath, finalAcceptance)
+  await writeJsonFile(acceptanceResultPath, finalAcceptance)
   return finalAcceptance
+}
+
+function summarizeFailedValidators(
+  validatorResults: Array<{ validatorID: string; passed: boolean; summary: string }>,
+  limit = 3,
+) {
+  const failed = validatorResults.filter((item) => item.passed === false).slice(0, limit)
+  if (!failed.length) return "全部通过"
+  return failed.map((item) => `${item.validatorID}: ${short(item.summary, 90)}`).join(" | ")
+}
+
+async function appendAcceptanceExperience(input: {
+  path: string
+  roundNumber: number
+  passIndex: number
+  runID: string
+  result: {
+    passed: boolean
+    summary: string
+    validatorResults: Array<{ validatorID: string; passed: boolean; summary: string }>
+  }
+  resultPath: string
+}) {
+  const entry = [
+    `- round-${String(input.roundNumber).padStart(3, "0")} pass-${String(input.passIndex).padStart(2, "0")} | ${
+      input.result.passed ? "通过" : "失败"
+    } | ${short(input.result.summary, 200)}`,
+    `  - 失败点: ${summarizeFailedValidators(input.result.validatorResults)}`,
+    `  - run: ${input.runID}`,
+    `  - result: ${input.resultPath}`,
+  ].join("\n")
+  if (!(await pathExists(input.path))) {
+    await writeTextFile(
+      input.path,
+      "<!-- auto-evolve-role: acceptance_experience -->\n# 验收经验\n\n- 尚无验收记录\n",
+    )
+  }
+  const raw = await readTextFile(input.path)
+  const cleaned = raw.includes("- 尚无验收记录")
+    ? raw.replace(/- 尚无验收记录\s*/g, "").trimEnd()
+    : raw.trimEnd()
+  await writeTextFile(input.path, `${cleaned}\n${entry}\n`)
 }
 
 async function promoteRoundPendingAndTreeToCurrent(input: {
@@ -2775,6 +2997,34 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
           learningUnits: allLearningUnits,
         })
         await writeLongTaskCampaignLessons(campaignPaths, campaignLessons)
+        const lessonMirrors: Array<{ root: string; relativePath: string; addManifestPointer: boolean }> = []
+        if (await pathExists(path.join(campaignPaths.pendingCurrentRoot, "manifest.md"))) {
+          lessonMirrors.push({
+            root: campaignPaths.pendingCurrentRoot,
+            relativePath: "lessons/failure_lessons.md",
+            addManifestPointer: true,
+          })
+        }
+        if (campaignSpec.lessonsMirror) {
+          lessonMirrors.push({
+            root: path.resolve(campaignSpec.lessonsMirror.workspaceTargetPath),
+            relativePath: campaignSpec.lessonsMirror.relativePath,
+            addManifestPointer: campaignSpec.lessonsMirror.addManifestPointer !== false,
+          })
+        }
+        const mirroredRoots = new Set<string>()
+        for (const mirror of lessonMirrors) {
+          const dedupeKey = `${mirror.root}::${mirror.relativePath}`
+          if (mirroredRoots.has(dedupeKey)) continue
+          mirroredRoots.add(dedupeKey)
+          await syncLessonsMirror({
+            lessonsContent: campaignLessons,
+            workspaceTargetPath: mirror.root,
+            lessonsRelativePath: mirror.relativePath,
+            addManifestPointer: mirror.addManifestPointer,
+            roundRecord: harvested.roundRecord,
+          })
+        }
         await writeTextFile(
           campaignPaths.carryoverFailurePacketsPath,
           buildFailurePacketsCarryoverMarkdown({
@@ -2835,84 +3085,116 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
             })
           : []
 
-        await runCampaignLead({
-          cwd: input.cwd,
-          campaignSpec,
-          baseSpec,
-          roundNumber,
-          runTracePath: roundPaths.runTraceJsonPath,
-          runTraceDigestPath: roundPaths.runTraceDigestPath,
-          previousPendingPackageRoot: campaignPaths.pendingCurrentRoot,
-          nextPendingPackageRoot: roundPaths.pendingPackageSnapshotRoot,
-          previousExplorationTreePath: campaignPaths.explorationTreePath,
-          nextExplorationTreePath: roundPaths.explorationTreeDraftPath,
-          workingMemoryPath: campaignPaths.campaignWorkingMemoryPath,
-          previousRoutingControlPath: campaignPaths.campaignRoutingControlPath,
-          nextRoutingControlPath: roundPaths.routingControlDraftPath,
-          workerSuggestions,
-          reviewerSuggestionPath: latestReviewerSuggestionPath,
-          campaignPaths,
-          roundPaths,
-          runtimeScope: roundRuntimeScope,
-          onActivation: activateCampaignRound,
-          onPulse: pulseCampaignRound,
-        })
+        let reviewerSuggestion: LongTaskCampaignReviewSuggestion | undefined
+        let finalAcceptance: Awaited<ReturnType<typeof runCampaignFinalAcceptance>> | undefined
+        let reviewerInputPath = latestReviewerSuggestionPath
+        let finalAcceptanceFeedbackPath: string | undefined
+        const maxAcceptancePassesPerRound = 2
 
-        await promoteRoundPendingAndTreeToCurrent({
-          campaignPaths,
-          roundPaths,
-        })
+        for (let passIndex = 1; passIndex <= maxAcceptancePassesPerRound; passIndex += 1) {
+          const passID = `pass-${String(passIndex).padStart(2, "0")}`
+          const reviewerPassRoot = path.join(roundPaths.reviewerRoot, passID)
+          const reviewerPassSuggestionPath = path.join(reviewerPassRoot, "review-suggestion.json")
+          const acceptancePassRoot = path.join(roundPaths.finalAcceptanceRoot, passID)
+          const acceptancePassResultPath = path.join(acceptancePassRoot, "result.json")
 
-        const reviewerSuggestion = shouldRunCampaignReviewer(roundNumber)
-          ? await runCampaignReviewer({
-              cwd: input.cwd,
-              campaignSpec,
-              baseSpec,
-              roundNumber,
-              pendingPackageRoot: campaignPaths.pendingCurrentRoot,
-              runTracePath: roundPaths.runTraceDigestPath,
-              explorationTreePath: campaignPaths.explorationTreePath,
-              workingMemoryPath: campaignPaths.campaignWorkingMemoryPath,
-              routingControlPath: campaignPaths.campaignRoutingControlPath,
-              roundPaths,
-              runtimeScope: roundRuntimeScope,
-              onActivation: activateCampaignRound,
-              onPulse: pulseCampaignRound,
-            })
-          : undefined
-        if (reviewerSuggestion) {
-          await writeLongTaskCampaignReviewerSuggestion(campaignPaths, reviewerSuggestion)
-          const currentRoutingControl = await readLongTaskCampaignRoutingControl(campaignPaths)
-          await writeLongTaskCampaignRoutingControl(
+          await runCampaignLead({
+            cwd: input.cwd,
+            campaignSpec,
+            baseSpec,
+            roundNumber,
+            runTracePath: roundPaths.runTraceJsonPath,
+            runTraceDigestPath: roundPaths.runTraceDigestPath,
+            previousPendingPackageRoot: campaignPaths.pendingCurrentRoot,
+            nextPendingPackageRoot: roundPaths.pendingPackageSnapshotRoot,
+            previousExplorationTreePath: campaignPaths.explorationTreePath,
+            nextExplorationTreePath: roundPaths.explorationTreeDraftPath,
+            workingMemoryPath: campaignPaths.campaignWorkingMemoryPath,
+            previousRoutingControlPath: campaignPaths.campaignRoutingControlPath,
+            nextRoutingControlPath: roundPaths.routingControlDraftPath,
+            workerSuggestions,
+            reviewerSuggestionPath: reviewerInputPath,
+            acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
+            finalAcceptanceFeedbackPath,
             campaignPaths,
-            buildRoutingControl({
-              previous: currentRoutingControl,
-              tree: await readLongTaskCampaignExplorationTree(campaignPaths),
-              digest: harvested.runTraceDigest,
-              reviewerSuggestion,
-              roundNumber,
-            }),
-          )
-        }
+            roundPaths,
+            runtimeScope: roundRuntimeScope,
+            onActivation: activateCampaignRound,
+            onPulse: pulseCampaignRound,
+          })
 
-        const finalAcceptance =
-          reviewerSuggestion?.readyForFinalAcceptance === true && runResult.status === "verified_success"
-            ? await runCampaignFinalAcceptance({
+          await promoteRoundPendingAndTreeToCurrent({
+            campaignPaths,
+            roundPaths,
+          })
+
+          reviewerSuggestion = shouldRunCampaignReviewer(roundNumber)
+            ? await runCampaignReviewer({
                 cwd: input.cwd,
-                campaignID,
                 campaignSpec,
                 baseSpec,
                 roundNumber,
-                sourceRunID: runResult.runID,
                 pendingPackageRoot: campaignPaths.pendingCurrentRoot,
-                runTracePath: roundPaths.runTraceJsonPath,
-                reviewerSuggestionPath: roundPaths.reviewerSuggestionPath,
+                runTracePath: roundPaths.runTraceDigestPath,
+                explorationTreePath: campaignPaths.explorationTreePath,
+                workingMemoryPath: campaignPaths.campaignWorkingMemoryPath,
+                routingControlPath: campaignPaths.campaignRoutingControlPath,
+                acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
+                stageDir: reviewerPassRoot,
+                suggestionPath: reviewerPassSuggestionPath,
                 roundPaths,
                 runtimeScope: roundRuntimeScope,
                 onActivation: activateCampaignRound,
                 onPulse: pulseCampaignRound,
               })
             : undefined
+          if (reviewerSuggestion) {
+            await writeLongTaskCampaignReviewerSuggestion(campaignPaths, reviewerSuggestion)
+            reviewerInputPath = reviewerPassSuggestionPath
+            const currentRoutingControl = await readLongTaskCampaignRoutingControl(campaignPaths)
+            await writeLongTaskCampaignRoutingControl(
+              campaignPaths,
+              buildRoutingControl({
+                previous: currentRoutingControl,
+                tree: await readLongTaskCampaignExplorationTree(campaignPaths),
+                digest: harvested.runTraceDigest,
+                reviewerSuggestion,
+                roundNumber,
+              }),
+            )
+          }
+
+          if (!shouldRunCampaignReviewer(roundNumber)) break
+
+          finalAcceptance = await runCampaignFinalAcceptance({
+            cwd: input.cwd,
+            campaignID,
+            campaignSpec,
+            baseSpec,
+            roundNumber,
+            sourceRunID: runResult.runID,
+            pendingPackageRoot: campaignPaths.pendingCurrentRoot,
+            runTracePath: roundPaths.runTraceJsonPath,
+            reviewerSuggestionPath: reviewerPassSuggestionPath,
+            finalAcceptanceRoot: acceptancePassRoot,
+            finalAcceptanceResultPath: acceptancePassResultPath,
+            roundPaths,
+            runtimeScope: roundRuntimeScope,
+            onActivation: activateCampaignRound,
+            onPulse: pulseCampaignRound,
+          })
+          await writeJsonFile(roundPaths.finalAcceptanceResultPath, finalAcceptance)
+          await appendAcceptanceExperience({
+            path: campaignPaths.acceptanceExperiencePath,
+            roundNumber,
+            passIndex,
+            runID: runResult.runID,
+            result: finalAcceptance,
+            resultPath: acceptancePassResultPath,
+          })
+          finalAcceptanceFeedbackPath = acceptancePassResultPath
+          if (finalAcceptance.passed) break
+        }
 
         const nextStatus =
           finalAcceptance?.passed === true

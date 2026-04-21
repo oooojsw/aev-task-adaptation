@@ -83,6 +83,8 @@ export function buildCampaignWorkerPrompt(input: {
     "- Distinguish verified infrastructure blockers from agent-side inference. Do not treat 'stale heartbeat' wording alone as a confirmed blocker.",
     "- A missing execute/ directory for an in-flight attempt is not by itself proof of no-spawn; mark uncertain runtime diagnostics as tentative, not final.",
     "- Do not leak hidden validator answers or protected reference-only truth.",
+    "- If blank-agent execution hits system-level blockers (timeout/spawn/EPERM/path/encoding/runtime startup), you must propose BOTH: (1) package_advice updates under failure lessons/checklist, and (2) exploration_advice updates so the tree records this region explicitly.",
+    "- For system blockers inside blank-agent execution, do not stop at diagnosis; include concrete bypass-oriented advice that a blank agent can execute next round.",
     ...roleSpecificRules(input.role),
     "",
     "Return JSON only, with this shape:",
@@ -111,6 +113,8 @@ export function buildCampaignLeadPrompt(input: {
   nextRoutingControlPath: string
   workerSuggestionPaths: string[]
   reviewerSuggestionPath?: string
+  acceptanceExperiencePath?: string
+  finalAcceptanceFeedbackPath?: string
 }) {
   return [
     "You are the campaign lead for a multi-round long-task learning campaign.",
@@ -126,6 +130,10 @@ export function buildCampaignLeadPrompt(input: {
       `working_memory_json: ${input.workingMemoryPath}`,
       `previous_routing_control_json: ${input.previousRoutingControlPath}`,
       ...(input.reviewerSuggestionPath ? [`latest_reviewer_suggestion: ${input.reviewerSuggestionPath}`] : []),
+      ...(input.acceptanceExperiencePath ? [`acceptance_experience: ${input.acceptanceExperiencePath}`] : []),
+      ...(input.finalAcceptanceFeedbackPath
+        ? [`latest_final_acceptance_result: ${input.finalAcceptanceFeedbackPath}`]
+        : []),
     ]),
     "",
     "Worker suggestions:",
@@ -141,6 +149,8 @@ export function buildCampaignLeadPrompt(input: {
     "Campaign lead rules:",
     "- You are the only role allowed to rewrite the next pending expert package.",
     "- Write a real expert package, not a review memo.",
+    "- `acceptance_experience` is a compact cross-round acceptance history; use it to spot repeated rejection patterns and avoid reintroducing known failures.",
+    "- Treat `acceptance_experience` as trend memory, not ground truth for the current pass. Current run evidence and latest validator feedback still have priority.",
     "- The package must stay structurally compatible with the formal expert workspace surface.",
     "- Include concrete task logic, data linkage logic, numeric calculation guidance, field-location rules, template-filling rules, and explicit failure-path constraints when justified by evidence.",
     "- Update the exploration tree as a map, not as a rigid lawbook.",
@@ -148,6 +158,9 @@ export function buildCampaignLeadPrompt(input: {
     "- Do not use non-schema statuses such as verified_success, pending, done, success, failed.",
     "- Status mapping rule: if you would write verified_success, write validated_success instead; if you would write pending, write unexplored or in_progress based on actual progress.",
     "- Keep routing control small and hard: only write signals that should directly change the next graph.",
+    "- If latest_final_acceptance_result exists and failed, treat it as the highest-priority concrete repair input for this pass.",
+    "- If this round exposed blank-agent execution system blockers, you must encode them into BOTH targets: pending expert package (failure lessons/checklist with concrete bypass guidance) and exploration tree (explicit region/node update).",
+    "- Do not keep blank-agent system blockers only in tree notes or only in internal memory; the package must also carry executable bypass guidance.",
     "- Do not copy tentative runtime-stall narratives into routing_control.blockedBy as hard blockers unless supported by hard evidence in run trace.",
     "- Do not put round-specific command directives into the package if they belong in routing control instead.",
     "- If a worker suggestion includes memory_advice, treat it as rescue guidance for durable lessons that might otherwise stay trapped in unit-local memory.",
@@ -173,6 +186,7 @@ export function buildCampaignReviewerPrompt(input: {
   explorationTreePath: string
   workingMemoryPath: string
   routingControlPath: string
+  acceptanceExperiencePath?: string
 }) {
   return [
     "You are the round reviewer for a multi-round long-task learning campaign.",
@@ -187,11 +201,14 @@ export function buildCampaignReviewerPrompt(input: {
       `exploration_tree_json: ${input.explorationTreePath}`,
       `working_memory_json: ${input.workingMemoryPath}`,
       `routing_control_json: ${input.routingControlPath}`,
+      ...(input.acceptanceExperiencePath ? [`acceptance_experience: ${input.acceptanceExperiencePath}`] : []),
     ]),
     "",
     "Reviewer rules:",
     "- You do not edit the package.",
     "- You do not accept or reject the package.",
+    "- `acceptance_experience` is a concise history of past acceptance outcomes; use it to check whether repeated historical failures were actually addressed this round.",
+    "- Do not copy old rejection text blindly from `acceptance_experience`; confirm with current package + run trace before keeping the same reason.",
     "- You only assess whether this package looks likely to pass the final blank-agent acceptance.",
     "- Do not treat heartbeat wording alone as decisive failure evidence; require hard run-trace evidence before concluding a true orchestrator stall.",
     "- If it is not ready, explain the reasons in abstract diagnostic language.",

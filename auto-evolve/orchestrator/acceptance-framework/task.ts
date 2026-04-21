@@ -1,6 +1,6 @@
 import path from "node:path"
-import { randomUUID } from "node:crypto"
-import { cp, lstat, rm } from "node:fs/promises"
+import { setTimeout as sleep } from "node:timers/promises"
+import { cp, lstat, rm, mkdir } from "node:fs/promises"
 import { resolveModelSelection } from "../model-selection"
 import { runOpencodeTask } from "../opencode"
 import { loadConfig } from "../schema"
@@ -13,6 +13,66 @@ import type { LongTaskSpec, LongTaskWorkUnit, LongTaskValidatorResult } from "..
 import { recordAcceptanceResult } from "./run"
 import { experienceWorkspacePathsFromRoot, resolveExperienceWorkspaceLayout } from "../experience-workspace"
 import { cleanupRuntimeProcessScope } from "../runtime-process-registry"
+
+function hasNonAsciiChars(str: string) {
+  return /[^\x00-\x7F]/.test(str)
+}
+
+async function writePartialArtifactSnapshot(runDir: string, spec: LongTaskSpec, timedOut: boolean) {
+  const snapshotRoot = path.join(runDir, "partial-artifacts")
+  await mkdir(snapshotRoot, { recursive: true })
+
+  const entries: { path: string; exists: boolean; sizeBytes?: number; error?: string }[] = []
+
+  for (const ref of spec.targetPaths ?? []) {
+    try {
+      const exists = await pathExists(ref.path)
+      if (exists) {
+        const stats = await lstat(ref.path)
+        entries.push({ path: ref.path, exists: true, sizeBytes: Number(stats.size) })
+      } else {
+        entries.push({ path: ref.path, exists: false })
+      }
+    } catch (err) {
+      entries.push({ path: ref.path, exists: false, error: String(err) })
+    }
+  }
+
+  await writeJsonFile(path.join(snapshotRoot, "stall-summary.json"), {
+    snapshotAt: nowISO(),
+    timedOut,
+    entries,
+  })
+
+  for (const ref of spec.targetPaths ?? []) {
+    if (!(await pathExists(ref.path))) continue
+    try {
+      const targetBase = path.join(snapshotRoot, path.basename(ref.path))
+      await cp(ref.path, targetBase, { force: true })
+    } catch {}
+  }
+}
+
+async function normalizePathForWindows(input: string): Promise<string> {
+  if (process.platform !== "win32") return input
+  if (!hasNonAsciiChars(input)) return input
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$p = '${input.replace(/'/g, "''")}'`,
+    "if (Test-Path -LiteralPath $p) {",
+    "(Get-Item -LiteralPath $p).FullName",
+    "} else {",
+    "$p",
+    "}",
+  ].join("; ")
+  const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
+  if (exitCode === 0) return stdout.trim()
+  return input
+}
 
 function nowISO() {
   return new Date().toISOString()
@@ -75,11 +135,12 @@ function capabilityAttachedFiles(spec: LongTaskSpec) {
 function deploymentRunID(title: string) {
   const now = new Date()
   const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}${String(now.getMilliseconds()).padStart(3, "0")}`
-  const slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "deployment"
+  const slug =
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "deployment"
   return `${stamp}-${slug}`
 }
 
@@ -95,7 +156,10 @@ async function resetEditablePaths(runDir: string, spec: LongTaskSpec) {
       continue
     }
 
-    const archivePath = path.join(archiveRoot, `${String(index + 1).padStart(2, "0")}-${path.basename(editablePath) || "editable"}`)
+    const archivePath = path.join(
+      archiveRoot,
+      `${String(index + 1).padStart(2, "0")}-${path.basename(editablePath) || "editable"}`,
+    )
     const stats = await lstat(editablePath)
     await cp(editablePath, archivePath, { recursive: stats.isDirectory(), force: true })
     if (stats.isDirectory()) {
@@ -128,8 +192,9 @@ function buildBlankAgentTaskPrompt(input: {
   formalSurfaceRoots: string[]
   resolvedInitialExpertContextPaths: string[]
   bundlePath: string
+  hasNonAscii?: boolean
 }) {
-  return [
+  const lines = [
     "You are running a highest-level blank-agent deployment acceptance task.",
     "",
     "Global goal:",
@@ -168,6 +233,21 @@ function buildBlankAgentTaskPrompt(input: {
     "- External acceptance validators exist, but their hidden criteria, reference data, and internal configurations are not available to you during deployment execution.",
     "- Before returning, run only local self-checks that you can derive from the formal expert surface, the provided materials, and the declared capability assets.",
     "- If you are blocked, say so explicitly instead of claiming success.",
+  ]
+
+  if (input.hasNonAscii) {
+    lines.push(
+      "",
+      "IMPORTANT — Non-ASCII path encoding:",
+      "- One or more file paths contain non-ASCII characters (Chinese, Unicode).",
+      "- When using ADM-ZIP (or any ZIP library) to read/write DOCX files on Windows, always use UTF-8 encoding explicitly.",
+      "- For Node.js fs operations, use Buffer.from(encodedPath, 'utf-8') or ensure the path is passed as a Buffer for non-ASCII segments.",
+      "- Do NOT rely on the platform default codepage (CP437/CP1252) for file paths with Chinese characters.",
+      "- If a path looks corrupted in logs, re-encode it as UTF-8 before passing to ZIP operations.",
+    )
+  }
+
+  lines.push(
     "",
     "Return JSON only, with this shape:",
     "```json",
@@ -183,7 +263,9 @@ function buildBlankAgentTaskPrompt(input: {
       2,
     ),
     "```",
-  ].join("\n")
+  )
+
+  return lines.join("\n")
 }
 
 function syntheticDeploymentUnit(spec: LongTaskSpec): LongTaskWorkUnit {
@@ -250,52 +332,90 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
       createdAt: nowISO(),
     })
 
+    const editablePaths = resolveLongTaskEditablePaths(spec)
+
+    const allPathsForNorm = uniqueStrings([
+      ...input.formalSurfaceRoots,
+      ...resolvedInitialExpertContextPaths,
+      ...spec.materials.map((item) => item.path),
+      ...(spec.targetPaths ?? []).map((item) => item.path),
+      ...capabilityPaths,
+    ])
+    const normalizedPathsMap: Map<string, string> = new Map()
+    for (const p of allPathsForNorm) {
+      const normalized = await normalizePathForWindows(p)
+      if (normalized !== p) normalizedPathsMap.set(p, normalized)
+    }
+    function normPath(p: string) {
+      return normalizedPathsMap.get(p) ?? p
+    }
+
+    const hasNonAscii = normalizedPathsMap.size > 0
     const prompt = buildBlankAgentTaskPrompt({
       spec,
       formalSurfaceRoots: input.formalSurfaceRoots,
       resolvedInitialExpertContextPaths,
       bundlePath,
+      hasNonAscii,
     })
-    const editablePaths = resolveLongTaskEditablePaths(spec)
 
-    const task = await runOpencodeTask({
-      cwd: input.cwd,
-      config,
-      title: `Blank Agent Deployment ${spec.title}`,
-      prompt,
-      referencePaths: uniqueStrings([
-        ...input.formalSurfaceRoots,
-        ...resolvedInitialExpertContextPaths,
-        ...spec.materials.map((item) => item.path),
-        ...(spec.targetPaths ?? []).map((item) => item.path),
-        ...capabilityPaths,
-      ]),
-      attachedFiles: capabilityFiles,
-      permissionReadPaths: uniqueStrings([
-        ...input.formalSurfaceRoots,
-        ...resolvedInitialExpertContextPaths,
-        ...spec.materials.map((item) => item.path),
-        ...(spec.targetPaths ?? []).map((item) => item.path),
-        ...capabilityPaths,
-      ]),
-      permissionEditPaths: editablePaths,
-      model: selection.model,
-      agent: selection.agent,
-      variant: selection.variant,
-      runtimeScope,
-      live: {
-        stageDir: executeDir,
-        phase: "deployment_acceptance",
-        taskKind: "deployment_acceptance",
-        methodID: spec.reversePropagation?.recipeID,
-      },
-    })
+    const abortController = new AbortController()
+    const pollIntervalMs = 10_000
+    const pollPromise = (async () => {
+      while (!abortController.signal.aborted) {
+        await sleep(pollIntervalMs)
+        if (abortController.signal.aborted) break
+        const cleanup = await cleanupRuntimeProcessScope(runtimeScope)
+        if (cleanup.killedCount > 0) {
+          abortController.abort()
+          break
+        }
+      }
+    })()
+
+    let task: Awaited<ReturnType<typeof runOpencodeTask>>
+    let taskTimedOut = false
+
+    try {
+      task = await runOpencodeTask({
+        cwd: input.cwd,
+        config,
+        title: `Blank Agent Deployment ${spec.title}`,
+        prompt,
+        referencePaths: uniqueStrings(allPathsForNorm.map(normPath)),
+        attachedFiles: capabilityFiles,
+        permissionReadPaths: uniqueStrings(allPathsForNorm.map(normPath)),
+        permissionEditPaths: editablePaths,
+        model: selection.model,
+        agent: selection.agent,
+        variant: selection.variant,
+        runtimeScope,
+        live: {
+          stageDir: executeDir,
+          phase: "deployment_acceptance",
+          taskKind: "deployment_acceptance",
+          methodID: spec.reversePropagation?.recipeID,
+        },
+        signal: abortController.signal,
+      })
+    } catch (err) {
+      abortController.abort()
+      await pollPromise.catch(() => {})
+      throw err
+    }
+    taskTimedOut = (task.result as { timedOut?: boolean }).timedOut ?? false
+    abortController.abort()
+    await pollPromise.catch(() => {})
 
     const artifactPaths = await writeTaskArtifacts(executeDir, task, {
       phase: "deployment_acceptance",
       taskKind: "deployment_acceptance",
       methodID: spec.reversePropagation?.recipeID,
     })
+
+    if (taskTimedOut) {
+      await writePartialArtifactSnapshot(runDir, spec, taskTimedOut)
+    }
 
     const unit = syntheticDeploymentUnit(spec)
     const validatorPayload = {
@@ -333,10 +453,16 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
     const passed = validatorResults.every((item) => item.passed)
     const summary = passed
       ? "Blank-agent task deployment acceptance passed."
-      : short(validatorResults.filter((item) => !item.passed).map((item) => item.summary).join(" | "), 260)
+      : short(
+          validatorResults
+            .filter((item) => !item.passed)
+            .map((item) => item.summary)
+            .join(" | "),
+          260,
+        )
     const reason = passed
       ? "All required deployment validators passed."
-      : validatorResults.find((item) => !item.passed)?.summary ?? "Deployment validators failed."
+      : (validatorResults.find((item) => !item.passed)?.summary ?? "Deployment validators failed.")
     const reasons = passed
       ? []
       : uniqueStrings(

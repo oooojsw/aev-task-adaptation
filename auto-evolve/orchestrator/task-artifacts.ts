@@ -1,11 +1,12 @@
 import path from "node:path"
 import { buildActionTrace } from "./action-trace"
-import { ensureDirectory, writeJsonFile, writeTextFile } from "./fs"
+import { ensureDirectory, pathExists, writeJsonFile, writeTextFile } from "./fs"
 import type { OpencodeTaskRun } from "./opencode"
 import { buildSessionExecutionReport } from "./session-execution-report"
 import { buildSessionLearningLog } from "./session-learning-log"
 import { buildSessionTaskManifest } from "./session-task-manifest"
 import { createTaskDescriptor, type AutoEvolveTaskKind } from "./task-model"
+import { cp, readdir, stat } from "node:fs/promises"
 
 export type TaskArtifactStatus = "bootstrapping" | "running" | "done" | "error"
 
@@ -21,6 +22,7 @@ export interface TaskArtifactPaths {
   eventsPath: string
   toolFailuresPath: string
   runJsonPath: string
+  opencodeProcessLogPath?: string
 }
 
 export interface TaskArtifactInput {
@@ -164,6 +166,34 @@ export async function writeTaskArtifacts(
     permissionReadPaths: task.permissionReadPaths,
     permissionEditPaths: task.permissionEditPaths,
   })
+
+  try {
+    const logBaseDir =
+      process.platform === "win32"
+        ? path.join(
+            process.env.LOCALAPPDATA ?? path.join(process.env.USERPROFILE ?? "", "AppData", "Local"),
+            "opencode",
+            "logs",
+          )
+        : path.join(process.env.HOME ?? "/root", ".local", "share", "opencode", "logs")
+    if (await pathExists(logBaseDir)) {
+      const logDirents = await readdir(logBaseDir)
+      const logFiles = logDirents.filter((d) => d.endsWith(".log") || d.endsWith(".txt"))
+      let latestLog: { name: string; mtime: number } | null = null
+      for (const name of logFiles) {
+        const mtime = (await stat(path.join(logBaseDir, name))).mtimeMs
+        if (!latestLog || mtime > latestLog.mtime) {
+          latestLog = { name, mtime }
+        }
+      }
+      if (latestLog) {
+        const srcLog = path.join(logBaseDir, latestLog.name)
+        const destLog = path.join(stageDir, "opencode_process_log.txt")
+        await cp(srcLog, destLog, { force: true })
+        paths.opencodeProcessLogPath = destLog
+      }
+    }
+  } catch {}
 
   return paths
 }

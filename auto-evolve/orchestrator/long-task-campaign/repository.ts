@@ -17,6 +17,7 @@ export interface LongTaskCampaignPaths {
   root: string
   campaignStatePath: string
   historyPath: string
+  acceptanceExperiencePath: string
   aggregatedFailurePacketsPath: string
   aggregatedRetryLessonsPath: string
   aggregatedLearningUnitsPath: string
@@ -82,6 +83,7 @@ export function longTaskCampaignPaths(cwd: string, campaignID: string): LongTask
     root,
     campaignStatePath: path.join(root, "campaign.json"),
     historyPath: path.join(root, "history.jsonl"),
+    acceptanceExperiencePath: path.join(root, "验收经验.md"),
     aggregatedFailurePacketsPath: path.join(root, "aggregated-failure-packets.jsonl"),
     aggregatedRetryLessonsPath: path.join(root, "aggregated-retry-lessons.jsonl"),
     aggregatedLearningUnitsPath: path.join(root, "aggregated-learning-units.jsonl"),
@@ -134,6 +136,10 @@ export async function initializeLongTaskCampaign(paths: LongTaskCampaignPaths, s
   await ensureDirectory(paths.pendingPackageRoot)
   await ensureDirectory(paths.runTracesRoot)
   await writeLongTaskCampaignState(paths, state)
+  await writeTextFile(
+    paths.acceptanceExperiencePath,
+    "<!-- auto-evolve-role: acceptance_experience -->\n# 验收经验\n\n- 尚无验收记录\n",
+  )
   await writeJsonFile(paths.campaignOperationalMemoryPath, [])
   await writeJsonFile(paths.campaignWorkingMemoryPath, {
     updatedAt: state.createdAt,
