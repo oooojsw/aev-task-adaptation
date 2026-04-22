@@ -705,7 +705,7 @@ export async function writeScratchDerivedViews(run: LongTaskRunPaths) {
 }
 
 export async function buildLongTaskRunSummary(run: LongTaskRunPaths): Promise<LongTaskRunSummary> {
-  const [spec, graph, progress, failures, learning, retryLessons, operationalContext] = await Promise.all([
+  const [spec, graph, progress, failures, learning, retryLessons, operationalContext, validatorResults] = await Promise.all([
     readLongTaskSpec(run),
     readLongTaskWorkGraph(run),
     readLongTaskProgressState(run),
@@ -713,11 +713,33 @@ export async function buildLongTaskRunSummary(run: LongTaskRunPaths): Promise<Lo
     readLearningUnits(run),
     readRetryLessons(run),
     readOperationalContext(run),
+    readValidatorResults(run),
   ])
 
   const verifiedUnits = graph.units.filter((item) => item.status === "verified").length
   const failedUnits = graph.units.filter((item) => item.status === "failed").length
   const blockedUnits = graph.units.filter((item) => item.status === "blocked").length
+  const completionValidatorIDs =
+    graph.completionValidatorIDs.length > 0
+      ? graph.completionValidatorIDs
+      : spec.disableCompletionValidators
+        ? []
+        : spec.validators.filter((item) => item.required !== false).map((item) => item.id)
+  const completionValidatorIDSet = new Set(completionValidatorIDs)
+  const completionResults = validatorResults.filter(
+    (item) => item.unitID === "__completion__" && completionValidatorIDSet.has(item.validatorID),
+  )
+  const completionExecutedValidatorIDs = new Set(completionResults.map((item) => item.validatorID))
+  const completionPassed = completionResults.filter((item) => item.passed).length
+  const completionFailed = completionResults.filter((item) => !item.passed).length
+  const unitsConverged = graph.units.length > 0 && graph.units.every((item) => item.status === "verified")
+  const completionGateMode = completionValidatorIDs.length > 0 ? "required" : "deferred_or_disabled"
+  const completionGatePassed =
+    completionGateMode === "deferred_or_disabled"
+      ? true
+      : completionExecutedValidatorIDs.size >= completionValidatorIDs.length &&
+        completionFailed === 0 &&
+        completionPassed >= completionValidatorIDs.length
 
   return {
     runID: progress.runID,
@@ -737,6 +759,15 @@ export async function buildLongTaskRunSummary(run: LongTaskRunPaths): Promise<Lo
     learningUnitCount: learning.length,
     retryLessonCount: retryLessons.length,
     operationalContextCount: operationalContext.length,
+    verificationSignal: {
+      unitsConverged,
+      completionGateMode,
+      completionValidatorsRequired: completionValidatorIDs.length,
+      completionValidatorsExecuted: completionExecutedValidatorIDs.size,
+      completionValidatorsPassed: completionPassed,
+      completionValidatorsFailed: completionFailed,
+      completionGatePassed,
+    },
     summary:
       progress.finalSummary ??
       `Long-task ended with status ${progress.status}; verified ${verifiedUnits}/${graph.units.length} work units.`,
@@ -761,6 +792,13 @@ export async function writeLongTaskRunSummary(run: LongTaskRunPaths, summary: Lo
     `- learning units: ${summary.learningUnitCount}`,
     `- retry lessons: ${summary.retryLessonCount}`,
     `- run-global context items: ${summary.operationalContextCount}`,
+    `- units converged: ${summary.verificationSignal.unitsConverged}`,
+    `- completion gate mode: ${summary.verificationSignal.completionGateMode}`,
+    `- completion validators required: ${summary.verificationSignal.completionValidatorsRequired}`,
+    `- completion validators executed: ${summary.verificationSignal.completionValidatorsExecuted}`,
+    `- completion validators passed: ${summary.verificationSignal.completionValidatorsPassed}`,
+    `- completion validators failed: ${summary.verificationSignal.completionValidatorsFailed}`,
+    `- completion gate passed: ${summary.verificationSignal.completionGatePassed}`,
     "",
     "## Summary",
     "",

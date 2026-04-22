@@ -937,6 +937,108 @@ function selectLongTaskPlanningContext(spec: LongTaskSpec) {
   return uniqueStrings([...explicitCampaignPlanningContextPaths(spec), ...staticContext])
 }
 
+async function readRequiredRoutingRegions(spec: LongTaskSpec) {
+  if (!spec.campaignRoutingControlPath) return [] as string[]
+  try {
+    const raw = JSON.parse(await readFile(spec.campaignRoutingControlPath, "utf8")) as Record<string, unknown>
+    if (!Array.isArray(raw.requiredNextRegions)) return [] as string[]
+    return raw.requiredNextRegions
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .filter((item) => item.toLowerCase().startsWith("dispatch-repair:"))
+  } catch {
+    return [] as string[]
+  }
+}
+
+function slugifyRegionToken(input: string) {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+}
+
+function unitCoversRequiredRegion(unit: LongTaskWorkUnit, region: string) {
+  const normalized = region.toLowerCase()
+  const haystack = [
+    unit.id,
+    unit.title,
+    unit.goal,
+    unit.claim,
+    unit.checkPlan,
+    ...unit.inputs,
+    ...unit.expectedArtifacts,
+  ]
+    .join(" ")
+    .toLowerCase()
+  return haystack.includes(normalized)
+}
+
+async function enforceRequiredRoutingCoverage(input: { spec: LongTaskSpec; graph: LongTaskWorkGraph }) {
+  const requiredRegions = await readRequiredRoutingRegions(input.spec)
+  if (!requiredRegions.length) return input.graph
+
+  const next = {
+    ...input.graph,
+    units: [...input.graph.units],
+  }
+  const existingIDs = new Set(next.units.map((unit) => unit.id))
+  const fallbackInputs = uniqueStrings([
+    ...input.spec.materials.map((item) => item.path),
+    ...(input.spec.initialExpertContextPaths ?? []),
+    ...(input.spec.editablePaths ?? []),
+  ])
+  const fallbackArtifacts = uniqueStrings([
+    ...(input.spec.targetPaths ?? []).map((item) => item.path),
+    ...(input.spec.editablePaths ?? []),
+  ])
+
+  for (const region of requiredRegions) {
+    const covered = next.units.some((unit) => unitCoversRequiredRegion(unit, region))
+    if (covered) continue
+
+    let baseID = `repair-${slugifyRegionToken(region) || "required-region"}`
+    if (baseID.length > 50) baseID = baseID.slice(0, 50)
+    let id = baseID
+    let suffix = 1
+    while (existingIDs.has(id)) {
+      suffix += 1
+      id = `${baseID}-${suffix}`
+    }
+    existingIDs.add(id)
+    next.units.push(
+      buildLongTaskWorkUnit({
+        id,
+        title: `Repair Required Region: ${short(region, 80)}`,
+        goal: `Address required routing region and produce concrete repair evidence: ${region}`,
+        inputs: fallbackInputs,
+        dependsOn: [],
+        expectedArtifacts: fallbackArtifacts.length > 0 ? fallbackArtifacts : [region],
+        claim: `Required routing region '${region}' has explicit repair execution evidence.`,
+        checkPlan: `Execute concrete repair steps for '${region}' and verify with local checks before returning the claim.`,
+        validatorIDs: [],
+        retryBudget: Math.min(input.spec.budgets?.maxAttemptsPerUnit ?? DEFAULT_LONG_TASK_BUDGETS.maxAttemptsPerUnit, 3),
+      }),
+    )
+  }
+
+  if (next.units.length !== input.graph.units.length) {
+    return {
+      ...next,
+      plannerSummary: [
+        input.graph.plannerSummary ?? "",
+        `Auto-dispatch coverage injected for required routing regions: ${requiredRegions.join(" | ")}`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      updatedAt: nowISO(),
+      revision: input.graph.revision + 1,
+    }
+  }
+
+  return input.graph
+}
+
 async function runPlanningSession(input: {
   cwd: string
   configPathCwd: string
@@ -1020,8 +1122,12 @@ async function runPlanningSession(input: {
     input.spec,
     fallbackReason,
   )
-  await writeLongTaskWorkGraph(input.run, graph)
-  return graph
+  const graphWithRequiredCoverage = await enforceRequiredRoutingCoverage({
+    spec: input.spec,
+    graph,
+  })
+  await writeLongTaskWorkGraph(input.run, graphWithRequiredCoverage)
+  return graphWithRequiredCoverage
 }
 
 async function executeWorkUnit(input: {
@@ -1409,6 +1515,10 @@ async function finalizeLongTaskRun(input: {
   await writeLongTaskProgressState(input.run, nextProgress)
   const summary = await buildLongTaskRunSummary(input.run)
   await writeLongTaskRunSummary(input.run, summary)
+  const isHardVerified =
+    summary.status === "verified_success" &&
+    summary.verificationSignal.completionGateMode === "required" &&
+    summary.verificationSignal.completionGatePassed
 
   const existingFinalization = await readLongTaskFinalizationState(input.run)
   if (existingFinalization && existingFinalization.runID === summary.runID && existingFinalization.status === summary.status) {
@@ -1435,18 +1545,23 @@ async function finalizeLongTaskRun(input: {
     stageID: "candidate_guard",
     targetKind: "candidate_experience",
     targetID: `candidate-${summary.runID}`,
-    passed: summary.status === "verified_success",
-    outcome: summary.status === "verified_success" ? "promote" : "hold",
+    passed: isHardVerified,
+    outcome: isHardVerified ? "promote" : "hold",
     summary:
-      summary.status === "verified_success"
+      isHardVerified
         ? "Long-task candidate satisfied completion validation and is maintainer-ready."
-        : `Long-task candidate is being held after final status ${summary.status}.`,
+        : `Long-task candidate is being held after final status ${summary.status} (completion gate not fully verified).`,
     reason:
-      summary.status === "verified_success"
+      isHardVerified
         ? "Completion validators and candidate preservation checks passed."
-        : `Candidate acceptance held because final status was ${summary.status}.`,
+        : `Candidate acceptance held because completion verification signal was insufficient (status=${summary.status}, gate_mode=${summary.verificationSignal.completionGateMode}, gate_passed=${summary.verificationSignal.completionGatePassed}).`,
     reasons:
-      summary.status === "verified_success" ? [] : [summary.summary || `Long-task final status: ${summary.status}.`],
+      isHardVerified
+        ? []
+        : [
+            summary.summary || `Long-task final status: ${summary.status}.`,
+            `Verification signal: gate_mode=${summary.verificationSignal.completionGateMode}, gate_passed=${summary.verificationSignal.completionGatePassed}.`,
+          ],
     evidenceRefs: [
       input.run.summaryJsonPath,
       input.run.progressStatePath,
@@ -1469,7 +1584,7 @@ async function finalizeLongTaskRun(input: {
   })
   const candidatePackage = await writeLongTaskCandidatePackage(paths, {
     id: `candidate-${summary.runID}`,
-    status: summary.status === "verified_success" ? "ready_for_maintainer" : "hold",
+    status: isHardVerified ? "ready_for_maintainer" : "hold",
     mode: "long",
     runID: summary.runID,
     title: summary.title,
@@ -1488,13 +1603,16 @@ async function finalizeLongTaskRun(input: {
     operationalContextPath: input.run.operationalContextPath,
     shadowMemoryRecordID: persistedShadowRecord.id,
     notes:
-      summary.status === "verified_success"
+      isHardVerified
         ? ["Verified-success long-task run preserved as a maintainer-ready candidate package."]
-        : ["Run preserved for later maintainer review; keep as hold until higher-layer promotion decides otherwise."],
+        : [
+            "Run preserved for later maintainer review; keep as hold until higher-layer promotion decides otherwise.",
+            `Verification signal did not satisfy hard completion gate (mode=${summary.verificationSignal.completionGateMode}, passed=${summary.verificationSignal.completionGatePassed}).`,
+          ],
   })
   const maintenanceRequest = await writeMaintenanceRequest(maintenanceGatewayPaths(input.cwd, config), {
     id: `maint-req-long-${summary.runID}`,
-    status: summary.status === "verified_success" ? "ready_for_maintainer" : "hold",
+    status: isHardVerified ? "ready_for_maintainer" : "hold",
     mode: "long",
     sourceRunID: summary.runID,
     title: summary.title,
@@ -1569,7 +1687,7 @@ async function finalizeLongTaskRun(input: {
     ],
     acceptancePolicyID: longTaskAcceptancePolicyID(input.spec),
     notes:
-      summary.status === "verified_success"
+      isHardVerified
         ? ["Long-task request is maintainer-ready but still isolated from direct canonical commit."]
         : ["Long-task request is preserved as hold for later governance or maintainer review."],
     mirrorPath: path.join(input.run.root, "maintenance_request.json"),

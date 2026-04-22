@@ -1,7 +1,7 @@
 import path from "node:path"
 import process from "node:process"
 import { randomUUID } from "node:crypto"
-import { cp, lstat, readdir, rm } from "node:fs/promises"
+import { appendFile, cp, lstat, readdir, rm } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
 import {
   autoEvolvePath,
@@ -33,6 +33,8 @@ import type {
 import {
   DEFAULT_LONG_TASK_CAMPAIGN_CARRYOVER,
   type LongTaskCampaignConfidence,
+  type LongTaskCampaignDispatchTicket,
+  type LongTaskCampaignDispatchTicketDocument,
   type LongTaskCampaignExplorationTreeDocument,
   type LongTaskCampaignExplorationNode,
   type LongTaskCampaignOperationalMemoryRecord,
@@ -142,15 +144,15 @@ function isSystemRuntimeSignal(input: string) {
   return mentionsAny(input, SYSTEM_RUNTIME_HINTS)
 }
 
-function extractBlankAgentSystemSignalsFromDigest(digest: LongTaskCampaignRunTraceDigest) {
+function extractBlankAgentDriftSignalsFromDigest(digest: LongTaskCampaignRunTraceDigest) {
   return uniqueStrings([
-    ...digest.blockers.filter((item) => isBlankAgentExecutionContext(item) && isSystemRuntimeSignal(item)),
-    ...digest.keyFailurePaths.filter((item) => isBlankAgentExecutionContext(item) && isSystemRuntimeSignal(item)),
-    ...digest.pendingPackageImpact.filter((item) => isBlankAgentExecutionContext(item) && isSystemRuntimeSignal(item)),
+    ...digest.blockers.filter((item) => isBlankAgentExecutionContext(item) && !isSystemRuntimeSignal(item)),
+    ...digest.keyFailurePaths.filter((item) => isBlankAgentExecutionContext(item) && !isSystemRuntimeSignal(item)),
+    ...digest.pendingPackageImpact.filter((item) => isBlankAgentExecutionContext(item) && !isSystemRuntimeSignal(item)),
     ...digest.commandOutcomes
       .filter((item) => isBlankAgentExecutionContext(item.unitID))
-      .flatMap((item) => item.failedCommands.filter((command) => isSystemRuntimeSignal(command))),
-  ]).slice(0, 12)
+      .flatMap((item) => item.failedCommands.filter((command) => !isSystemRuntimeSignal(command))),
+  ]).slice(0, 8)
 }
 
 function onceActivationCallback(callback?: OpencodeTaskInput["onSpawn"]) {
@@ -574,6 +576,167 @@ function compactRefs(refs: string[]) {
   return [unique[0], unique[unique.length - 1]]
 }
 
+function normalizeDispatchTicketKey(raw: string) {
+  return raw.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 180)
+}
+
+function emptyDispatchTicketDocument(updatedThroughRound = 0): LongTaskCampaignDispatchTicketDocument {
+  return {
+    updatedAt: nowISO(),
+    updatedThroughRound,
+    tickets: [],
+  }
+}
+
+function coerceDispatchTicketDocument(
+  raw: unknown,
+  fallback: LongTaskCampaignDispatchTicketDocument,
+): LongTaskCampaignDispatchTicketDocument {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return fallback
+  const value = raw as Record<string, unknown>
+  const tickets = Array.isArray(value.tickets)
+    ? value.tickets
+        .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item))
+        .map((item, index) => {
+          const key = typeof item.key === "string" && item.key.trim().length > 0 ? item.key.trim() : `ticket-${index + 1}`
+          const id =
+            typeof item.id === "string" && item.id.trim().length > 0
+              ? item.id.trim()
+              : `dispatch-${randomUUID().slice(0, 8)}`
+          return {
+            id,
+            key,
+            status: item.status === "resolved" ? "resolved" : "open",
+            createdAt: typeof item.createdAt === "string" ? item.createdAt : nowISO(),
+            updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : nowISO(),
+            firstSeenRound: typeof item.firstSeenRound === "number" ? item.firstSeenRound : fallback.updatedThroughRound,
+            lastSeenRound: typeof item.lastSeenRound === "number" ? item.lastSeenRound : fallback.updatedThroughRound,
+            resolvedRound: typeof item.resolvedRound === "number" ? item.resolvedRound : undefined,
+            occurrenceCount: typeof item.occurrenceCount === "number" && item.occurrenceCount > 0 ? item.occurrenceCount : 1,
+            validatorID: typeof item.validatorID === "string" ? item.validatorID : undefined,
+            title: typeof item.title === "string" && item.title.trim().length > 0 ? item.title.trim() : key,
+            issue:
+              typeof item.issue === "string" && item.issue.trim().length > 0 ? item.issue.trim() : "Unspecified issue.",
+            actionableFix:
+              typeof item.actionableFix === "string" && item.actionableFix.trim().length > 0
+                ? item.actionableFix.trim()
+                : "Apply the latest failed validator feedback and re-run acceptance.",
+            evidenceRefs: Array.isArray(item.evidenceRefs)
+              ? compactRefs(
+                  item.evidenceRefs.filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0),
+                )
+              : [],
+          } satisfies LongTaskCampaignDispatchTicket
+        })
+    : fallback.tickets
+  return {
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : fallback.updatedAt,
+    updatedThroughRound:
+      typeof value.updatedThroughRound === "number" ? value.updatedThroughRound : fallback.updatedThroughRound,
+    tickets,
+  }
+}
+
+async function readDispatchTicketDocument(campaignPaths: ReturnType<typeof longTaskCampaignPaths>, roundNumber: number) {
+  if (!(await pathExists(campaignPaths.dispatchTicketsPath))) {
+    return emptyDispatchTicketDocument(roundNumber)
+  }
+  const raw = await readJsonFile<unknown>(campaignPaths.dispatchTicketsPath).catch(() => undefined)
+  return coerceDispatchTicketDocument(raw, emptyDispatchTicketDocument(roundNumber))
+}
+
+function mergeDispatchTicketsFromFinalAcceptance(input: {
+  previous: LongTaskCampaignDispatchTicketDocument
+  roundNumber: number
+  feedbackPath: string
+  finalAcceptance: {
+    passed: boolean
+    summary: string
+    validatorResults: Array<{
+      validatorID: string
+      passed: boolean
+      summary: string
+      details: string[]
+      evidenceRefs: string[]
+    }>
+  }
+}): LongTaskCampaignDispatchTicketDocument {
+  const now = nowISO()
+  const next = new Map<string, LongTaskCampaignDispatchTicket>()
+  for (const ticket of input.previous.tickets) next.set(ticket.key, ticket)
+
+  if (input.finalAcceptance.passed) {
+    for (const [key, ticket] of next.entries()) {
+      if (ticket.status !== "open") continue
+      next.set(key, {
+        ...ticket,
+        status: "resolved",
+        resolvedRound: input.roundNumber,
+        updatedAt: now,
+        lastSeenRound: input.roundNumber,
+      })
+    }
+  } else {
+    const failedResults = input.finalAcceptance.validatorResults.filter((item) => !item.passed)
+    for (const failed of failedResults) {
+      const key = normalizeDispatchTicketKey(`validator:${failed.validatorID}`)
+      const current = next.get(key)
+      const actionableFix =
+        failed.details.find((item) => item.trim().length > 0) ??
+        failed.summary ??
+        "Apply the failed validator feedback and re-run acceptance."
+      const issue = failed.summary || input.finalAcceptance.summary
+      if (current) {
+        next.set(key, {
+          ...current,
+          status: "open",
+          updatedAt: now,
+          lastSeenRound: input.roundNumber,
+          resolvedRound: undefined,
+          occurrenceCount: current.occurrenceCount + 1,
+          issue: short(issue, 220),
+          actionableFix: short(actionableFix, 220),
+          evidenceRefs: compactRefs([...current.evidenceRefs, ...failed.evidenceRefs, input.feedbackPath]),
+        })
+        continue
+      }
+      next.set(key, {
+        id: `dispatch-${randomUUID().slice(0, 8)}`,
+        key,
+        status: "open",
+        createdAt: now,
+        updatedAt: now,
+        firstSeenRound: input.roundNumber,
+        lastSeenRound: input.roundNumber,
+        occurrenceCount: 1,
+        validatorID: failed.validatorID,
+        title: `Repair validator ${failed.validatorID}`,
+        issue: short(issue, 220),
+        actionableFix: short(actionableFix, 220),
+        evidenceRefs: compactRefs([...failed.evidenceRefs, input.feedbackPath]),
+      })
+    }
+  }
+
+  const tickets = Array.from(next.values()).sort((left, right) => {
+    if (left.status !== right.status) return left.status === "open" ? -1 : 1
+    if (left.lastSeenRound !== right.lastSeenRound) return right.lastSeenRound - left.lastSeenRound
+    return left.key.localeCompare(right.key)
+  })
+
+  return {
+    updatedAt: now,
+    updatedThroughRound: input.roundNumber,
+    tickets,
+  }
+}
+
+function dispatchRequiredRegions(document: LongTaskCampaignDispatchTicketDocument) {
+  return document.tickets
+    .filter((item) => item.status === "open")
+    .map((item) => `dispatch-repair:${item.key}`)
+}
+
 function normalizeCompactStatement(raw: string) {
   return raw
     .replace(/\s+/g, " ")
@@ -701,11 +864,70 @@ function buildWorkingMemoryDocument(input: {
   }
 }
 
+function treeBranchFromRegion(region: string): "solution" | "anti_drift" | "acceptance" {
+  const normalized = region.trim().toLowerCase()
+  if (normalized.startsWith("anti_drift:")) return "anti_drift"
+  if (normalized.startsWith("acceptance:")) return "acceptance"
+  return "solution"
+}
+
+function defaultTreeBranchSummaries() {
+  return [
+    { branch: "solution" as const, summary: "No solution-path evidence yet.", focusRegions: [] as string[] },
+    { branch: "anti_drift" as const, summary: "No anti-drift evidence yet.", focusRegions: [] as string[] },
+    { branch: "acceptance" as const, summary: "No acceptance evidence yet.", focusRegions: [] as string[] },
+  ]
+}
+
+function defaultTreeRolePositions() {
+  return [
+    {
+      role: "planner" as const,
+      branch: "solution" as const,
+      focusRegions: [] as string[],
+      note: "Read the full tree, then plan from solution branch.",
+    },
+    {
+      role: "executor" as const,
+      branch: "solution" as const,
+      focusRegions: [] as string[],
+      note: "Read the full tree, then execute from solution branch.",
+    },
+    {
+      role: "campaign_worker" as const,
+      branch: "solution" as const,
+      focusRegions: [] as string[],
+      note: "Read the full tree, then follow role-specific focus.",
+    },
+    {
+      role: "campaign_lead" as const,
+      branch: "acceptance" as const,
+      focusRegions: [] as string[],
+      note: "Read full tree and merge updates; only lead rewrites tree.",
+    },
+    {
+      role: "campaign_reviewer" as const,
+      branch: "acceptance" as const,
+      focusRegions: [] as string[],
+      note: "Read full tree and verify readiness alignment.",
+    },
+    {
+      role: "blank_agent" as const,
+      branch: "anti_drift" as const,
+      focusRegions: [] as string[],
+      note: "Read full tree and avoid anti-drift failures.",
+    },
+  ]
+}
+
 function emptyExplorationTreeDocument(roundNumber = 0): LongTaskCampaignExplorationTreeDocument {
   return {
     updatedAt: nowISO(),
     updatedThroughRound: roundNumber,
     currentPhase: "bootstrap",
+    globalSummary: "No exploration progress yet.",
+    branchSummaries: defaultTreeBranchSummaries(),
+    rolePositions: defaultTreeRolePositions(),
     frontierRegions: [],
     requiredNextRegions: [],
     forbiddenRepeatRegions: [],
@@ -735,6 +957,12 @@ function coerceExplorationTreeDocument(
               : typeof item.hypothesis === "string" && item.hypothesis.trim().length > 0
                 ? item.hypothesis
                 : `region-${index + 1}`,
+          branch:
+            item.branch === "solution" || item.branch === "anti_drift" || item.branch === "acceptance"
+              ? item.branch
+              : treeBranchFromRegion(
+                  typeof item.region === "string" && item.region.trim().length > 0 ? item.region : `region-${index + 1}`,
+                ),
           parentID: typeof item.parentID === "string" && item.parentID.trim().length > 0 ? item.parentID : undefined,
           summary:
             typeof item.summary === "string" && item.summary.trim().length > 0
@@ -780,6 +1008,49 @@ function coerceExplorationTreeDocument(
     updatedThroughRound:
       typeof value.updatedThroughRound === "number" ? value.updatedThroughRound : fallback.updatedThroughRound,
     currentPhase: typeof value.currentPhase === "string" ? value.currentPhase : fallback.currentPhase,
+    globalSummary: typeof value.globalSummary === "string" ? value.globalSummary : fallback.globalSummary,
+    branchSummaries: Array.isArray(value.branchSummaries)
+      ? value.branchSummaries
+          .filter(
+            (item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item),
+          )
+          .map((item) => ({
+            branch: item.branch === "solution" || item.branch === "anti_drift" || item.branch === "acceptance"
+              ? item.branch
+              : "solution",
+            summary:
+              typeof item.summary === "string" && item.summary.trim().length > 0
+                ? item.summary.trim()
+                : "No summary recorded.",
+            focusRegions: Array.isArray(item.focusRegions)
+              ? item.focusRegions.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+              : [],
+          }))
+      : fallback.branchSummaries,
+    rolePositions: Array.isArray(value.rolePositions)
+      ? value.rolePositions
+          .filter(
+            (item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item),
+          )
+          .map((item) => ({
+            role:
+              item.role === "planner" ||
+              item.role === "executor" ||
+              item.role === "campaign_worker" ||
+              item.role === "campaign_lead" ||
+              item.role === "campaign_reviewer" ||
+              item.role === "blank_agent"
+                ? item.role
+                : "planner",
+            branch: item.branch === "solution" || item.branch === "anti_drift" || item.branch === "acceptance"
+              ? item.branch
+              : "solution",
+            focusRegions: Array.isArray(item.focusRegions)
+              ? item.focusRegions.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+              : [],
+            note: typeof item.note === "string" && item.note.trim().length > 0 ? item.note.trim() : "No note recorded.",
+          }))
+      : fallback.rolePositions,
     frontierRegions: Array.isArray(value.frontierRegions)
       ? value.frontierRegions.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
       : fallback.frontierRegions,
@@ -808,6 +1079,7 @@ function buildRunTraceDigest(trace: LongTaskCampaignRunTrace): LongTaskCampaignR
     keyFailurePaths: uniqueStrings(trace.keyFailurePaths),
     blockers: uniqueStrings(trace.blockers),
     pendingPackageImpact: uniqueStrings(trace.pendingPackageImpact),
+    runVerificationSignal: trace.runVerificationSignal,
     validatedMethods: uniqueStrings(
       trace.attempts.flatMap((attempt) =>
         attempt.operationalContext
@@ -876,6 +1148,7 @@ function evolveExplorationTreeDocument(input: {
     nodes.set(region, {
       nodeID: current?.nodeID ?? `region-${region.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`,
       region,
+      branch: current?.branch ?? treeBranchFromRegion(region),
       parentID: current?.parentID,
       summary:
         current?.summary ??
@@ -892,48 +1165,136 @@ function evolveExplorationTreeDocument(input: {
       attemptCount: (current?.attemptCount ?? 0) + 1,
       successCount: (current?.successCount ?? 0) + (success ? 1 : 0),
       failCount: (current?.failCount ?? 0) + (fail ? 1 : 0),
-      notes: current?.notes ?? [],
+      notes: (current?.notes ?? []).slice(0, 3).map((item) => short(item, 140)),
     })
   }
 
-  const blankAgentSystemSignals = extractBlankAgentSystemSignalsFromDigest(input.digest)
-  if (blankAgentSystemSignals.length > 0) {
-    const region = "blank-agent-system-bypass"
+  const blankAgentDriftSignals = extractBlankAgentDriftSignalsFromDigest(input.digest)
+  if (blankAgentDriftSignals.length > 0) {
+    const region = "anti_drift:blank-agent-repeat-drift"
     const current = nodes.get(region)
     nodes.set(region, {
-      nodeID: current?.nodeID ?? "region-blank-agent-system-bypass",
+      nodeID: current?.nodeID ?? "region-anti-drift-blank-agent-repeat-drift",
       region,
+      branch: "anti_drift",
       parentID: current?.parentID,
-      summary:
-        "Blank-agent execution exposed system-level blockers. Keep this region active until bypass guidance is encoded in package and validated.",
-      status: "strong_fail",
-      confidence: Math.max(current?.confidence ?? 0.7, 0.85),
+      summary: "Blank-agent execution repeated avoidable drift. Next rounds must follow anti-drift guardrails.",
+      status: "weak_fail",
+      confidence: Math.max(current?.confidence ?? 0.7, 0.82),
       evidenceRefs: compactRefs([...(current?.evidenceRefs ?? []), ...input.digest.refs]),
       lastUpdatedRound: input.roundNumber,
-      prerequisites: uniqueStrings([...(current?.prerequisites ?? []), "encode-system-bypass-into-package"]),
+      prerequisites: uniqueStrings([...(current?.prerequisites ?? []), "follow-anti-drift-guardrails"]),
       attemptCount: (current?.attemptCount ?? 0) + 1,
       successCount: current?.successCount ?? 0,
       failCount: (current?.failCount ?? 0) + 1,
       notes: uniqueStrings([
         ...(current?.notes ?? []),
-        ...blankAgentSystemSignals.slice(0, 6).map((item) => `signal: ${short(item, 180)}`),
-      ]).slice(0, 12),
+        ...blankAgentDriftSignals.slice(0, 4).map((item) => `drift: ${short(item, 160)}`),
+      ])
+        .slice(0, 4)
+        .map((item) => short(item, 140)),
     })
   }
 
-  const nodeList = Array.from(nodes.values()).sort((left, right) => left.region.localeCompare(right.region))
+  const acceptanceRegion = "acceptance:completion-gate"
+  const acceptanceCurrent = nodes.get(acceptanceRegion)
+  if (input.digest.runVerificationSignal) {
+    const gate = input.digest.runVerificationSignal
+    nodes.set(acceptanceRegion, {
+      nodeID: acceptanceCurrent?.nodeID ?? "region-acceptance-completion-gate",
+      region: acceptanceRegion,
+      branch: "acceptance",
+      parentID: acceptanceCurrent?.parentID,
+      summary: gate.completionGatePassed
+        ? "Completion gate passed in this round."
+        : "Completion gate did not fully pass in this round.",
+      status: gate.completionGatePassed ? "validated_success" : "in_progress",
+      confidence: gate.completionGatePassed ? 0.9 : 0.7,
+      evidenceRefs: compactRefs([...(acceptanceCurrent?.evidenceRefs ?? []), ...input.digest.refs]),
+      lastUpdatedRound: input.roundNumber,
+      prerequisites: acceptanceCurrent?.prerequisites ?? [],
+      attemptCount: (acceptanceCurrent?.attemptCount ?? 0) + 1,
+      successCount: (acceptanceCurrent?.successCount ?? 0) + (gate.completionGatePassed ? 1 : 0),
+      failCount: (acceptanceCurrent?.failCount ?? 0) + (gate.completionGatePassed ? 0 : 1),
+      notes: [
+        `validators_required=${gate.completionValidatorsRequired}, executed=${gate.completionValidatorsExecuted}, passed=${gate.completionValidatorsPassed}, failed=${gate.completionValidatorsFailed}`,
+      ].map((item) => short(item, 140)),
+    })
+  }
+
+  const nodeList = Array.from(nodes.values())
+    .map((node) => ({
+      ...node,
+      branch: node.branch ?? treeBranchFromRegion(node.region),
+      notes: (node.notes ?? []).slice(0, 3).map((item) => short(item, 140)),
+      evidenceRefs: compactRefs(node.evidenceRefs ?? []),
+    }))
+    .sort((left, right) => {
+      if ((left.lastUpdatedRound ?? 0) !== (right.lastUpdatedRound ?? 0)) {
+        return (right.lastUpdatedRound ?? 0) - (left.lastUpdatedRound ?? 0)
+      }
+      return left.region.localeCompare(right.region)
+    })
+
+  const compactByBranch = (branch: "solution" | "anti_drift" | "acceptance", limit: number) =>
+    nodeList.filter((node) => (node.branch ?? treeBranchFromRegion(node.region)) === branch).slice(0, limit)
+  const compactNodes = [
+    ...compactByBranch("solution", 12),
+    ...compactByBranch("anti_drift", 8),
+    ...compactByBranch("acceptance", 6),
+  ].sort((left, right) => left.region.localeCompare(right.region))
+
+  const solutionFocus = compactNodes.filter((node) => node.branch === "solution").map((node) => node.region).slice(0, 4)
+  const antiDriftFocus = compactNodes
+    .filter((node) => node.branch === "anti_drift")
+    .map((node) => node.region)
+    .slice(0, 4)
+  const acceptanceFocus = compactNodes
+    .filter((node) => node.branch === "acceptance")
+    .map((node) => node.region)
+    .slice(0, 4)
+
   return {
     updatedAt: nowISO(),
     updatedThroughRound: input.roundNumber,
     currentPhase: input.previous.currentPhase === "bootstrap" ? "iterating" : input.previous.currentPhase,
-    frontierRegions: nodeList
+    globalSummary: short(
+      `${input.digest.summary} | solution=${solutionFocus.length}, anti_drift=${antiDriftFocus.length}, acceptance=${acceptanceFocus.length}`,
+      200,
+    ),
+    branchSummaries: [
+      {
+        branch: "solution",
+        summary: short("Solution branch tracks explored and promising solution regions.", 120),
+        focusRegions: solutionFocus,
+      },
+      {
+        branch: "anti_drift",
+        summary: short("Anti-drift branch tracks repeatable blank-agent drift patterns and guardrails.", 120),
+        focusRegions: antiDriftFocus,
+      },
+      {
+        branch: "acceptance",
+        summary: short("Acceptance branch tracks current completion-gate progress and readiness.", 120),
+        focusRegions: acceptanceFocus,
+      },
+    ],
+    rolePositions: [
+      { role: "planner", branch: "solution", focusRegions: solutionFocus, note: "Read full tree, then plan from solution branch." },
+      { role: "executor", branch: "solution", focusRegions: [...solutionFocus, ...antiDriftFocus].slice(0, 4), note: "Read full tree, execute while respecting anti-drift branch." },
+      { role: "campaign_worker", branch: "anti_drift", focusRegions: [...antiDriftFocus, ...solutionFocus].slice(0, 4), note: "Read full tree and produce role-specific structured suggestions." },
+      { role: "campaign_lead", branch: "acceptance", focusRegions: [...acceptanceFocus, ...antiDriftFocus].slice(0, 4), note: "Read full tree; lead is the only tree editor." },
+      { role: "campaign_reviewer", branch: "acceptance", focusRegions: [...acceptanceFocus, ...antiDriftFocus].slice(0, 4), note: "Read full tree and verify round readiness against tree evidence." },
+      { role: "blank_agent", branch: "anti_drift", focusRegions: [...antiDriftFocus, ...acceptanceFocus].slice(0, 4), note: "Read full tree and avoid anti-drift failures before claiming completion." },
+    ],
+    frontierRegions: compactNodes
       .filter((node) => node.status === "promising" || node.status === "unexplored")
       .map((node) => node.region),
     requiredNextRegions: input.previous.requiredNextRegions,
-    forbiddenRepeatRegions: nodeList
+    forbiddenRepeatRegions: compactNodes
       .filter((node) => (node.successCount ?? 0) >= 2 || node.status === "deprecated")
       .map((node) => node.region),
-    nodes: nodeList,
+    nodes: compactNodes,
   }
 }
 
@@ -981,6 +1342,7 @@ function buildRoutingControl(input: {
   tree: LongTaskCampaignExplorationTreeDocument
   digest: LongTaskCampaignRunTraceDigest
   reviewerSuggestion?: LongTaskCampaignReviewSuggestion
+  dispatchTickets?: LongTaskCampaignDispatchTicketDocument
   roundNumber: number
 }): LongTaskCampaignRoutingControl {
   const infrastructureBlockerKeywords = [
@@ -1006,7 +1368,6 @@ function buildRoutingControl(input: {
   ]
   const softBlockerHints = ["maybe", "might", "looks like", "seems", "probably", "possibly", "suggest", "guess"]
   const normalizedBlockers = uniqueStrings(input.digest.blockers.map((item) => item.trim()).filter(Boolean))
-  const blankAgentSystemSignals = extractBlankAgentSystemSignalsFromDigest(input.digest)
   const infrastructureBlockers = uniqueStrings(
     normalizedBlockers.filter((item) => {
       const normalized = item.toLowerCase()
@@ -1039,7 +1400,7 @@ function buildRoutingControl(input: {
     requiredNextRegions: uniqueStrings([
       ...input.tree.requiredNextRegions,
       ...(input.reviewerSuggestion?.nextAttentionAreas ?? []),
-      ...(blankAgentSystemSignals.length > 0 ? ["blank-agent-system-bypass"] : []),
+      ...dispatchRequiredRegions(input.dispatchTickets ?? emptyDispatchTicketDocument(input.roundNumber)),
     ]),
     forbiddenUnits: uniqueStrings([...input.previous.forbiddenUnits, ...repeatedSuccessfulUnits]),
     forbiddenRegions: uniqueStrings([...input.previous.forbiddenRegions, ...input.tree.forbiddenRepeatRegions]),
@@ -1054,9 +1415,10 @@ function buildRoutingControl(input: {
       ...infrastructureBlockers
         .slice(0, 3)
         .map((item) => `Infrastructure signal (do not route as domain blocker): ${item}`),
-      ...blankAgentSystemSignals
-        .slice(0, 3)
-        .map((item) => `Blank-agent system blocker (must also be encoded in package bypass guidance): ${item}`),
+      ...(input.dispatchTickets?.tickets ?? [])
+        .filter((item) => item.status === "open")
+        .slice(0, 4)
+        .map((item) => `Open dispatch ticket: ${item.title} -> ${item.actionableFix}`),
     ]),
   }
 }
@@ -1166,6 +1528,7 @@ function defaultCampaignWorkerRoles(): LongTaskCampaignWorkerRole[] {
     "forbidden_path_synthesizer",
     "learning_promoter",
     "exploration_tree_synthesizer",
+    "drift_guard_synthesizer",
   ]
 }
 
@@ -1229,6 +1592,7 @@ async function buildCampaignRunTrace(input: {
   spec: LongTaskSpec
   finalStatus: LongTaskRunStatus
   summary: string
+  runVerificationSignal?: LongTaskCampaignRunTrace["runVerificationSignal"]
 }): Promise<LongTaskCampaignRunTrace> {
   const [graph, claims, failures, scratchUnits, learningUnits, retryLessons, operationalContext] = await Promise.all([
     readJsonFile<LongTaskWorkGraph>(input.run.workGraphPath),
@@ -1408,6 +1772,7 @@ async function buildCampaignRunTrace(input: {
         .map((item) => (typeof item.statement === "string" ? item.statement : ""))
         .filter((item) => item.trim().length > 0),
     ).slice(0, 24),
+    runVerificationSignal: input.runVerificationSignal,
     attempts: attempts.sort((left, right) =>
       left.unitID === right.unitID ? left.attempt - right.attempt : left.unitID.localeCompare(right.unitID),
     ),
@@ -1779,6 +2144,7 @@ function buildRoundSummaryMarkdown(input: {
   mode: string
   finalStatus: LongTaskRunStatus
   summary: string
+  runVerificationSignal?: LongTaskCampaignRunTrace["runVerificationSignal"]
   failures: Record<string, unknown>[]
   retryLessons: Record<string, unknown>[]
   learningUnits: Record<string, unknown>[]
@@ -1793,6 +2159,9 @@ function buildRoundSummaryMarkdown(input: {
     `- mode: ${input.mode}`,
     `- status: ${input.finalStatus}`,
     `- summary: ${input.summary}`,
+    `- units_converged: ${input.runVerificationSignal?.unitsConverged ?? "unknown"}`,
+    `- completion_gate_mode: ${input.runVerificationSignal?.completionGateMode ?? "unknown"}`,
+    `- completion_gate_passed: ${input.runVerificationSignal?.completionGatePassed ?? "unknown"}`,
     `- failure_packets: ${input.failures.length}`,
     `- retry_lessons: ${input.retryLessons.length}`,
     `- learning_units: ${input.learningUnits.length}`,
@@ -2021,6 +2390,7 @@ async function harvestRound(input: {
     spec: input.baseSpec,
     finalStatus: input.runResult.status,
     summary: input.runResult.summary.summary,
+    runVerificationSignal: input.runResult.summary.verificationSignal,
   })
   const runTraceDigest = buildRunTraceDigest(runTrace)
 
@@ -2029,6 +2399,7 @@ async function harvestRound(input: {
     mode: input.campaignSpec.mode,
     finalStatus: input.runResult.status,
     summary: input.runResult.summary.summary,
+    runVerificationSignal: input.runResult.summary.verificationSignal,
     failures: failurePackets,
     retryLessons,
     learningUnits,
@@ -2066,6 +2437,7 @@ async function harvestRound(input: {
       failurePacketCount: failurePackets.length,
       retryLessonCount: retryLessons.length,
       learningUnitCount: learningUnits.length,
+      runVerificationSignal: input.runResult.summary.verificationSignal,
       roundSummaryPath: input.roundPaths.roundSummaryPath,
       snapshotPaths,
       createdAt: nowISO(),
@@ -2087,6 +2459,7 @@ function buildGeneratedRoundSpec(input: {
   explorationTreePath: string
   workingMemoryPath: string
   routingControlPath: string
+  dispatchTicketsPath: string
 }): LongTaskSpec {
   const isFirstRound = input.roundNumber === 1
   const roundValidators = input.baseSpec.validators.map((validator) => {
@@ -2112,6 +2485,7 @@ function buildGeneratedRoundSpec(input: {
       input.pendingPackageRoot,
       input.explorationTreePath,
       input.routingControlPath,
+      input.dispatchTicketsPath,
       ...staticBaseContext,
     ]),
     initialGraph:
@@ -2365,6 +2739,7 @@ async function runCampaignWorkers(input: {
   explorationTreePath: string
   workingMemoryPath: string
   routingControlPath: string
+  dispatchTicketsPath: string
   reviewerSuggestionPath?: string
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
@@ -2387,6 +2762,7 @@ async function runCampaignWorkers(input: {
         explorationTreePath: input.explorationTreePath,
         workingMemoryPath: input.workingMemoryPath,
         routingControlPath: input.routingControlPath,
+        dispatchTicketsPath: input.dispatchTicketsPath,
         reviewerSuggestionPath: input.reviewerSuggestionPath,
       })
       const result = await runCampaignSuggestionTask({
@@ -2403,6 +2779,7 @@ async function runCampaignWorkers(input: {
           input.explorationTreePath,
           input.workingMemoryPath,
           input.routingControlPath,
+          input.dispatchTicketsPath,
           ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
         ],
         permissionReadPaths: [
@@ -2412,6 +2789,7 @@ async function runCampaignWorkers(input: {
           input.explorationTreePath,
           input.workingMemoryPath,
           input.routingControlPath,
+          input.dispatchTicketsPath,
           ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
         ],
         stageDir,
@@ -2449,9 +2827,11 @@ async function runCampaignLead(input: {
   workingMemoryPath: string
   previousRoutingControlPath: string
   nextRoutingControlPath: string
+  dispatchTicketsPath: string
   workerSuggestions: LongTaskCampaignWorkerSuggestion[]
   reviewerSuggestionPath?: string
   acceptanceExperiencePath?: string
+  acceptanceExperienceJsonlPath?: string
   finalAcceptanceFeedbackPath?: string
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
@@ -2474,6 +2854,7 @@ async function runCampaignLead(input: {
     workingMemoryPath: input.workingMemoryPath,
     previousRoutingControlPath: input.previousRoutingControlPath,
     nextRoutingControlPath: input.nextRoutingControlPath,
+    dispatchTicketsPath: input.dispatchTicketsPath,
     workerSuggestionPaths,
     reviewerSuggestionPath: input.reviewerSuggestionPath,
     acceptanceExperiencePath: input.acceptanceExperiencePath,
@@ -2492,9 +2873,11 @@ async function runCampaignLead(input: {
       input.previousExplorationTreePath,
       input.workingMemoryPath,
       input.previousRoutingControlPath,
+      input.dispatchTicketsPath,
       ...workerSuggestionPaths,
       ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
       ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
+      ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
       ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
     ],
     permissionReadPaths: [
@@ -2503,9 +2886,11 @@ async function runCampaignLead(input: {
       input.previousExplorationTreePath,
       input.workingMemoryPath,
       input.previousRoutingControlPath,
+      input.dispatchTicketsPath,
       ...workerSuggestionPaths,
       ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
       ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
+      ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
       ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
     ],
     permissionEditPaths: [input.nextPendingPackageRoot, input.nextExplorationTreePath, input.nextRoutingControlPath],
@@ -2527,7 +2912,9 @@ async function runCampaignReviewer(input: {
   explorationTreePath: string
   workingMemoryPath: string
   routingControlPath: string
+  dispatchTicketsPath: string
   acceptanceExperiencePath?: string
+  acceptanceExperienceJsonlPath?: string
   stageDir?: string
   suggestionPath?: string
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
@@ -2544,6 +2931,7 @@ async function runCampaignReviewer(input: {
     explorationTreePath: input.explorationTreePath,
     workingMemoryPath: input.workingMemoryPath,
     routingControlPath: input.routingControlPath,
+    dispatchTicketsPath: input.dispatchTicketsPath,
     acceptanceExperiencePath: input.acceptanceExperiencePath,
   })
   const result = await runCampaignSuggestionTask({
@@ -2559,7 +2947,9 @@ async function runCampaignReviewer(input: {
       input.explorationTreePath,
       input.workingMemoryPath,
       input.routingControlPath,
+      input.dispatchTicketsPath,
       ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
+      ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
     ],
     permissionReadPaths: [
       input.pendingPackageRoot,
@@ -2567,7 +2957,9 @@ async function runCampaignReviewer(input: {
       input.explorationTreePath,
       input.workingMemoryPath,
       input.routingControlPath,
+      input.dispatchTicketsPath,
       ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
+      ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
     ],
     stageDir,
     phase: "campaign_review",
@@ -2609,8 +3001,8 @@ async function runCampaignFinalAcceptance(input: {
       campaignID: input.campaignID,
       roundNumber: input.roundNumber,
       runID: input.sourceRunID,
-      passed: true,
-      summary: "No completion-only validators were configured for campaign final acceptance.",
+      passed: false,
+      summary: "Campaign final acceptance is not configured: no completion-only validators were found.",
       validatorResults: [] as LongTaskValidatorResult[],
       createdAt: nowISO(),
     }
@@ -2731,6 +3123,63 @@ async function appendAcceptanceExperience(input: {
   await writeTextFile(input.path, `${cleaned}\n${entry}\n`)
 }
 
+function summarizeFailedValidatorsV2(
+  validatorResults: Array<{ validatorID: string; passed: boolean; summary: string }>,
+  limit = 3,
+) {
+  const failed = validatorResults.filter((item) => item.passed === false).slice(0, limit)
+  if (!failed.length) return "all passed"
+  return failed.map((item) => `${item.validatorID}: ${short(item.summary, 90)}`).join(" | ")
+}
+
+async function appendAcceptanceExperienceV2(input: {
+  markdownPath: string
+  jsonlPath: string
+  roundNumber: number
+  passIndex: number
+  runID: string
+  result: {
+    passed: boolean
+    summary: string
+    validatorResults: Array<{ validatorID: string; passed: boolean; summary: string }>
+  }
+  resultPath: string
+}) {
+  const jsonEntry = {
+    roundNumber: input.roundNumber,
+    passIndex: input.passIndex,
+    runID: input.runID,
+    passed: input.result.passed,
+    summary: input.result.summary,
+    failedValidators: input.result.validatorResults.filter((item) => !item.passed).map((item) => item.validatorID),
+    resultPath: input.resultPath,
+    createdAt: nowISO(),
+  }
+  await ensureDirectory(path.dirname(input.jsonlPath))
+  await appendFile(input.jsonlPath, `${JSON.stringify(jsonEntry)}\n`, "utf8")
+
+  const entry = [
+    `- round-${String(input.roundNumber).padStart(3, "0")} pass-${String(input.passIndex).padStart(2, "0")} | ${
+      input.result.passed ? "passed" : "failed"
+    } | ${short(input.result.summary, 200)}`,
+    `  - failed validators: ${summarizeFailedValidatorsV2(input.result.validatorResults)}`,
+    `  - run: ${input.runID}`,
+    `  - result: ${input.resultPath}`,
+  ].join("\n")
+
+  if (!(await pathExists(input.markdownPath))) {
+    await writeTextFile(
+      input.markdownPath,
+      "<!-- auto-evolve-role: acceptance_experience -->\n# Acceptance Experience\n\n- no acceptance records yet\n",
+    )
+  }
+  const raw = await readTextFile(input.markdownPath)
+  const cleaned = raw.includes("- no acceptance records yet")
+    ? raw.replace(/- no acceptance records yet\s*/g, "").trimEnd()
+    : raw.trimEnd()
+  await writeTextFile(input.markdownPath, `${cleaned}\n${entry}\n`)
+}
+
 async function promoteRoundPendingAndTreeToCurrent(input: {
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
@@ -2844,6 +3293,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
           campaignPaths,
           roundPaths,
         })
+        let dispatchTickets = await readDispatchTicketDocument(campaignPaths, roundNumber)
 
         const generatedSpec = buildGeneratedRoundSpec({
           baseSpec,
@@ -2853,6 +3303,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
           explorationTreePath: campaignPaths.explorationTreePath,
           workingMemoryPath: campaignPaths.campaignWorkingMemoryPath,
           routingControlPath: campaignPaths.campaignRoutingControlPath,
+          dispatchTicketsPath: campaignPaths.dispatchTicketsPath,
         })
         await writeJsonFile(roundPaths.generatedSpecPath, generatedSpec)
 
@@ -2975,6 +3426,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
           previous: currentRoutingControl,
           tree: evolvedExplorationTree,
           digest: harvested.runTraceDigest,
+          dispatchTickets,
           roundNumber,
         })
         await writeJsonFile(roundPaths.routingControlDraftPath, evolvedRoutingControl)
@@ -3076,6 +3528,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
               explorationTreePath: campaignPaths.explorationTreePath,
               workingMemoryPath: campaignPaths.campaignWorkingMemoryPath,
               routingControlPath: campaignPaths.campaignRoutingControlPath,
+              dispatchTicketsPath: campaignPaths.dispatchTicketsPath,
               reviewerSuggestionPath: latestReviewerSuggestionPath,
               campaignPaths,
               roundPaths,
@@ -3112,9 +3565,11 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
             workingMemoryPath: campaignPaths.campaignWorkingMemoryPath,
             previousRoutingControlPath: campaignPaths.campaignRoutingControlPath,
             nextRoutingControlPath: roundPaths.routingControlDraftPath,
+            dispatchTicketsPath: campaignPaths.dispatchTicketsPath,
             workerSuggestions,
             reviewerSuggestionPath: reviewerInputPath,
             acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
+            acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
             finalAcceptanceFeedbackPath,
             campaignPaths,
             roundPaths,
@@ -3139,7 +3594,9 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
                 explorationTreePath: campaignPaths.explorationTreePath,
                 workingMemoryPath: campaignPaths.campaignWorkingMemoryPath,
                 routingControlPath: campaignPaths.campaignRoutingControlPath,
+                dispatchTicketsPath: campaignPaths.dispatchTicketsPath,
                 acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
+                acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
                 stageDir: reviewerPassRoot,
                 suggestionPath: reviewerPassSuggestionPath,
                 roundPaths,
@@ -3159,6 +3616,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
                 tree: await readLongTaskCampaignExplorationTree(campaignPaths),
                 digest: harvested.runTraceDigest,
                 reviewerSuggestion,
+                dispatchTickets,
                 roundNumber,
               }),
             )
@@ -3184,14 +3642,31 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
             onPulse: pulseCampaignRound,
           })
           await writeJsonFile(roundPaths.finalAcceptanceResultPath, finalAcceptance)
-          await appendAcceptanceExperience({
-            path: campaignPaths.acceptanceExperiencePath,
+          await appendAcceptanceExperienceV2({
+            markdownPath: campaignPaths.acceptanceExperiencePath,
+            jsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
             roundNumber,
             passIndex,
             runID: runResult.runID,
             result: finalAcceptance,
             resultPath: acceptancePassResultPath,
           })
+          dispatchTickets = mergeDispatchTicketsFromFinalAcceptance({
+            previous: dispatchTickets,
+            roundNumber,
+            feedbackPath: acceptancePassResultPath,
+            finalAcceptance,
+          })
+          await writeJsonFile(campaignPaths.dispatchTicketsPath, dispatchTickets)
+          const routingAfterAcceptance = buildRoutingControl({
+            previous: await readLongTaskCampaignRoutingControl(campaignPaths),
+            tree: await readLongTaskCampaignExplorationTree(campaignPaths),
+            digest: harvested.runTraceDigest,
+            reviewerSuggestion,
+            dispatchTickets,
+            roundNumber,
+          })
+          await writeLongTaskCampaignRoutingControl(campaignPaths, routingAfterAcceptance)
           finalAcceptanceFeedbackPath = acceptancePassResultPath
           if (finalAcceptance.passed) break
         }
@@ -3202,6 +3677,9 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
             : roundNumber >= campaignSpec.maxRounds
               ? "round_limit_reached"
               : "running"
+        const lastRunHardVerified =
+          harvested.roundRecord.runVerificationSignal?.completionGateMode === "required" &&
+          harvested.roundRecord.runVerificationSignal?.completionGatePassed === true
 
         const state: LongTaskCampaignState = {
           ...initialState,
@@ -3211,6 +3689,9 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
           lastRunID: runResult.runID,
           lastSummary: finalAcceptance?.summary ?? harvested.roundRecord.summary,
           lastRoundSummaryPath: harvested.roundRecord.roundSummaryPath,
+          lastRunHardVerified,
+          lastFinalAcceptancePassed: finalAcceptance?.passed === true,
+          lastFinalAcceptanceResultPath: finalAcceptanceFeedbackPath,
         }
         await writeLongTaskCampaignState(campaignPaths, state)
 

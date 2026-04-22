@@ -3,6 +3,7 @@ import process from "node:process"
 import { appendFile } from "node:fs/promises"
 import { autoEvolvePath, ensureDirectory, readJsonFile, writeJsonFile, writeTextFile } from "../fs"
 import type {
+  LongTaskCampaignDispatchTicketDocument,
   LongTaskCampaignExplorationTreeDocument,
   LongTaskCampaignRoutingControl,
   LongTaskCampaignWorkingMemoryDocument,
@@ -18,6 +19,8 @@ export interface LongTaskCampaignPaths {
   campaignStatePath: string
   historyPath: string
   acceptanceExperiencePath: string
+  acceptanceExperienceJsonlPath: string
+  dispatchTicketsPath: string
   aggregatedFailurePacketsPath: string
   aggregatedRetryLessonsPath: string
   aggregatedLearningUnitsPath: string
@@ -83,7 +86,9 @@ export function longTaskCampaignPaths(cwd: string, campaignID: string): LongTask
     root,
     campaignStatePath: path.join(root, "campaign.json"),
     historyPath: path.join(root, "history.jsonl"),
-    acceptanceExperiencePath: path.join(root, "验收经验.md"),
+    acceptanceExperienceJsonlPath: path.join(root, "acceptance-experience.jsonl"),
+    dispatchTicketsPath: path.join(root, "dispatch-tickets.json"),
+    acceptanceExperiencePath: path.join(root, "acceptance-experience.md"),
     aggregatedFailurePacketsPath: path.join(root, "aggregated-failure-packets.jsonl"),
     aggregatedRetryLessonsPath: path.join(root, "aggregated-retry-lessons.jsonl"),
     aggregatedLearningUnitsPath: path.join(root, "aggregated-learning-units.jsonl"),
@@ -138,8 +143,9 @@ export async function initializeLongTaskCampaign(paths: LongTaskCampaignPaths, s
   await writeLongTaskCampaignState(paths, state)
   await writeTextFile(
     paths.acceptanceExperiencePath,
-    "<!-- auto-evolve-role: acceptance_experience -->\n# 验收经验\n\n- 尚无验收记录\n",
+    "<!-- auto-evolve-role: acceptance_experience -->\n# Acceptance Experience\n\n- no acceptance records yet\n",
   )
+  await writeTextFile(paths.acceptanceExperienceJsonlPath, "")
   await writeJsonFile(paths.campaignOperationalMemoryPath, [])
   await writeJsonFile(paths.campaignWorkingMemoryPath, {
     updatedAt: state.createdAt,
@@ -165,11 +171,30 @@ export async function initializeLongTaskCampaign(paths: LongTaskCampaignPaths, s
     updatedAt: state.createdAt,
     updatedThroughRound: 0,
     currentPhase: "bootstrap",
+    globalSummary: "No exploration progress yet.",
+    branchSummaries: [
+      { branch: "solution", summary: "No solution-path evidence yet.", focusRegions: [] },
+      { branch: "anti_drift", summary: "No anti-drift evidence yet.", focusRegions: [] },
+      { branch: "acceptance", summary: "No acceptance evidence yet.", focusRegions: [] },
+    ],
+    rolePositions: [
+      { role: "planner", branch: "solution", focusRegions: [], note: "Read full tree, then plan from solution branch." },
+      { role: "executor", branch: "solution", focusRegions: [], note: "Read full tree, execute with solution focus." },
+      { role: "campaign_worker", branch: "solution", focusRegions: [], note: "Read full tree, then follow role-specific focus." },
+      { role: "campaign_lead", branch: "acceptance", focusRegions: [], note: "Read full tree; only lead may rewrite the tree." },
+      { role: "campaign_reviewer", branch: "acceptance", focusRegions: [], note: "Read full tree and verify readiness alignment." },
+      { role: "blank_agent", branch: "anti_drift", focusRegions: [], note: "Read full tree and avoid anti-drift failures." },
+    ],
     frontierRegions: [],
     requiredNextRegions: [],
     forbiddenRepeatRegions: [],
     nodes: [],
   } satisfies LongTaskCampaignExplorationTreeDocument)
+  await writeJsonFile(paths.dispatchTicketsPath, {
+    updatedAt: state.createdAt,
+    updatedThroughRound: 0,
+    tickets: [],
+  } satisfies LongTaskCampaignDispatchTicketDocument)
   await writeTextFile(paths.campaignReviewSuggestionsPath, "")
 }
 

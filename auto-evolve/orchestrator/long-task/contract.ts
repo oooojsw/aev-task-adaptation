@@ -388,6 +388,16 @@ export interface LongTaskShadowMemoryRecord {
   evidenceRef: string
 }
 
+export interface LongTaskRunVerificationSignal {
+  unitsConverged: boolean
+  completionGateMode: "required" | "deferred_or_disabled"
+  completionValidatorsRequired: number
+  completionValidatorsExecuted: number
+  completionValidatorsPassed: number
+  completionValidatorsFailed: number
+  completionGatePassed: boolean
+}
+
 export interface LongTaskRunSummary {
   runID: string
   title: string
@@ -406,6 +416,7 @@ export interface LongTaskRunSummary {
   learningUnitCount: number
   retryLessonCount: number
   operationalContextCount: number
+  verificationSignal: LongTaskRunVerificationSignal
   summary: string
 }
 

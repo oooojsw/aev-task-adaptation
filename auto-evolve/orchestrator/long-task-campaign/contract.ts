@@ -1,4 +1,9 @@
-import type { LongTaskBudgets, LongTaskOperationalContextItem, LongTaskRunStatus } from "../long-task/contract"
+import type {
+  LongTaskBudgets,
+  LongTaskOperationalContextItem,
+  LongTaskRunStatus,
+  LongTaskRunVerificationSignal,
+} from "../long-task/contract"
 
 export type LongTaskCampaignMode = "graph_iterative" | "single_session_iterative"
 
@@ -82,6 +87,7 @@ export type LongTaskCampaignWorkerRole =
   | "forbidden_path_synthesizer"
   | "learning_promoter"
   | "exploration_tree_synthesizer"
+  | "drift_guard_synthesizer"
   | "custom"
 
 export interface LongTaskCampaignWorkerSuggestion {
@@ -114,6 +120,7 @@ export interface LongTaskCampaignReviewSuggestion {
 export interface LongTaskCampaignExplorationNode {
   nodeID: string
   region: string
+  branch?: LongTaskCampaignTreeBranch
   parentID?: string
   summary: string
   status: "unexplored" | "in_progress" | "weak_fail" | "strong_fail" | "promising" | "validated_success" | "deprecated"
@@ -127,10 +134,36 @@ export interface LongTaskCampaignExplorationNode {
   notes?: string[]
 }
 
+export type LongTaskCampaignTreeBranch = "solution" | "anti_drift" | "acceptance"
+
+export type LongTaskCampaignTreeViewerRole =
+  | "planner"
+  | "executor"
+  | "campaign_worker"
+  | "campaign_lead"
+  | "campaign_reviewer"
+  | "blank_agent"
+
+export interface LongTaskCampaignTreeBranchSummary {
+  branch: LongTaskCampaignTreeBranch
+  summary: string
+  focusRegions: string[]
+}
+
+export interface LongTaskCampaignTreeRolePosition {
+  role: LongTaskCampaignTreeViewerRole
+  branch: LongTaskCampaignTreeBranch
+  focusRegions: string[]
+  note: string
+}
+
 export interface LongTaskCampaignExplorationTreeDocument {
   updatedAt: string
   updatedThroughRound: number
   currentPhase: string
+  globalSummary?: string
+  branchSummaries: LongTaskCampaignTreeBranchSummary[]
+  rolePositions: LongTaskCampaignTreeRolePosition[]
   frontierRegions: string[]
   requiredNextRegions: string[]
   forbiddenRepeatRegions: string[]
@@ -218,6 +251,7 @@ export interface LongTaskCampaignRunTrace {
   keyFailurePaths: string[]
   blockers: string[]
   pendingPackageImpact: string[]
+  runVerificationSignal?: LongTaskRunVerificationSignal
   attempts: LongTaskCampaignRunTraceAttemptRecord[]
 }
 
@@ -233,6 +267,7 @@ export interface LongTaskCampaignRunTraceDigest {
   keyFailurePaths: string[]
   blockers: string[]
   pendingPackageImpact: string[]
+  runVerificationSignal?: LongTaskRunVerificationSignal
   validatedMethods: string[]
   forbiddenPaths: string[]
   packageGaps: string[]
@@ -270,6 +305,13 @@ export interface LongTaskCampaignRoundRecord {
   failurePacketCount: number
   retryLessonCount: number
   learningUnitCount: number
+  runVerificationSignal?: LongTaskRunVerificationSignal
+  finalAcceptanceSignal?: {
+    executed: boolean
+    passed: boolean
+    failedValidatorIDs: string[]
+    feedbackPath?: string
+  }
   roundSummaryPath: string
   snapshotPaths: Array<{
     targetPath: string
@@ -277,6 +319,31 @@ export interface LongTaskCampaignRoundRecord {
     kind: "experience_workspace" | "path_copy"
   }>
   createdAt: string
+}
+
+export type LongTaskCampaignDispatchTicketStatus = "open" | "resolved"
+
+export interface LongTaskCampaignDispatchTicket {
+  id: string
+  key: string
+  status: LongTaskCampaignDispatchTicketStatus
+  createdAt: string
+  updatedAt: string
+  firstSeenRound: number
+  lastSeenRound: number
+  resolvedRound?: number
+  occurrenceCount: number
+  validatorID?: string
+  title: string
+  issue: string
+  actionableFix: string
+  evidenceRefs: string[]
+}
+
+export interface LongTaskCampaignDispatchTicketDocument {
+  updatedAt: string
+  updatedThroughRound: number
+  tickets: LongTaskCampaignDispatchTicket[]
 }
 
 export interface LongTaskCampaignState {
@@ -297,6 +364,9 @@ export interface LongTaskCampaignState {
   lastRunID?: string
   lastSummary?: string
   lastRoundSummaryPath?: string
+  lastRunHardVerified?: boolean
+  lastFinalAcceptancePassed?: boolean
+  lastFinalAcceptanceResultPath?: string
 }
 
 export const DEFAULT_LONG_TASK_CAMPAIGN_CARRYOVER: LongTaskCampaignCarryoverConfig = {
