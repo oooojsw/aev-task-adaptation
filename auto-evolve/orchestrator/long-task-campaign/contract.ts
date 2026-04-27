@@ -84,6 +84,7 @@ export interface LongTaskCampaignRoutingControl {
 export type LongTaskCampaignWorkerRole =
   | "success_synthesizer"
   | "failure_synthesizer"
+  | "tool_failure_synthesizer"
   | "forbidden_path_synthesizer"
   | "learning_promoter"
   | "exploration_tree_synthesizer"

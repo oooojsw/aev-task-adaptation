@@ -752,9 +752,25 @@
         return "status-" + status
       }
 
+      function rowKind(row) {
+        const explicit = row?.monitorKind
+        if (explicit === "pipeline" || explicit === "ad_hoc") return explicit
+        if (row?.task) return "pipeline"
+
+        const title = String(row?.title || "").toLowerCase()
+        const step = String(row?.step || "").toLowerCase()
+        const directory = String(row?.directory || "").toLowerCase()
+
+        const hasPipelineSignal =
+          /blank agent deployment|long task|campaign/.test(title) ||
+          /long_task_|campaign_|deployment/.test(step) ||
+          /runtime-state[\\/](long-task|long-task-campaigns|acceptance-framework[\\/]deployment-runs)/.test(directory)
+
+        return hasPipelineSignal ? "pipeline" : "ad_hoc"
+      }
+
       function rowTrack(row) {
-        const kind = row.monitorKind || (row.task ? "pipeline" : "ad_hoc")
-        return kind === "pipeline" ? "PIPELINE" : "AD HOC"
+        return rowKind(row) === "pipeline" ? "PIPELINE" : "AD HOC"
       }
 
       function phaseLabel(row) {
@@ -891,7 +907,7 @@
               esc(row.status) +
               "</span>" +
               '<span class="badge kind-' +
-              esc((row.monitorKind || (row.task ? "pipeline" : "ad_hoc")).replace(/[^a-z_]/g, "")) +
+              esc(rowKind(row).replace(/[^a-z_]/g, "")) +
               '">' +
               esc(kind) +
               "</span>" +

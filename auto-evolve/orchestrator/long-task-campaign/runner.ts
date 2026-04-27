@@ -176,8 +176,8 @@ const STALE_BOOTSTRAP_GRACE_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_STALE_BOOTSTRAP_GRACE_MS ?? "", 10)
   if (Number.isFinite(value) && value > 0) return value
   // Bootstrapping on Windows can be slow under heavy IO/model load.
-  // Default to 20 minutes to reduce false stale classification.
-  return 20 * 60 * 1000
+  // Default to 60 minutes to reduce false stale classification under long startup windows.
+  return 60 * 60 * 1000
 })()
 
 async function isPidAlive(pid: number) {
@@ -1525,6 +1525,7 @@ function defaultCampaignWorkerRoles(): LongTaskCampaignWorkerRole[] {
   return [
     "success_synthesizer",
     "failure_synthesizer",
+    "tool_failure_synthesizer",
     "forbidden_path_synthesizer",
     "learning_promoter",
     "exploration_tree_synthesizer",

@@ -18,6 +18,8 @@ function roleDescription(role: LongTaskCampaignWorkerRole) {
       return "Extract stable successful paths, validated methods, and reusable command/tool entrypoints from the run trace."
     case "failure_synthesizer":
       return "Extract the real failure paths, blockers, and failure causes from the run trace."
+    case "tool_failure_synthesizer":
+      return "Extract recurring tool-call failures and convert them into compact, executable bypass guidance for the next round."
     case "forbidden_path_synthesizer":
       return "Extract high-confidence do-not-repeat paths that should become explicit negative guidance."
     case "learning_promoter":
@@ -39,6 +41,14 @@ function roleSpecificRules(role: LongTaskCampaignWorkerRole) {
         "- Focus on durable lessons that should survive beyond one unit even if they were not promoted automatically.",
         "- Prefer compact canonical statements instead of copying raw logs or long historical prose.",
         "- Use memory_advice to say what should be promoted into campaign memory, seed context, failure lessons, routing control, or the pending expert package.",
+      ]
+    case "tool_failure_synthesizer":
+      return [
+        "- Focus on command/tool failures only (glob, shell syntax, dotnet invocation, encoding/path/runtime startup), not business correctness.",
+        "- Read run_trace_full.attempts[].commandRecords and follow attempts[].toolFailuresPath refs for raw failure evidence.",
+        "- Deduplicate repeated errors into canonical patterns; do not repeat the same issue in different wording.",
+        "- Every finding should be actionable: failure pattern -> concrete bypass or guardrail for next round.",
+        "- In package_advice, write short instructions that blank-agent can execute directly under the same environment.",
       ]
     case "drift_guard_synthesizer":
       return [

@@ -23,14 +23,14 @@ const OPENCODE_PROMPT_SOFT_BUDGET_MS = 30 * 60 * 1000
 const OPENCODE_TASK_SILENT_TIMEOUT_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_MS ?? "", 10)
   if (Number.isFinite(value) && value > 0) return value
-  return 30 * 60 * 1000
+  return 60 * 60 * 1000
 })()
 const OPENCODE_TASK_SILENT_TIMEOUT_AFTER_ACTIVITY_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_AFTER_ACTIVITY_MS ?? "", 10)
   if (Number.isFinite(value) && value > 0) return value
   // Once runtime output has started, prefer hard-timeout guard and avoid
   // prematurely terminating long silent compute windows.
-  return Math.min(OPENCODE_TASK_TIMEOUT_MS, Math.max(OPENCODE_TASK_SILENT_TIMEOUT_MS, 55 * 60 * 1000))
+  return Math.min(OPENCODE_TASK_TIMEOUT_MS, Math.max(OPENCODE_TASK_SILENT_TIMEOUT_MS, 60 * 60 * 1000))
 })()
 
 export interface OpencodeEvent {

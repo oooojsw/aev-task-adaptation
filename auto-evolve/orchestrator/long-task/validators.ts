@@ -19,7 +19,19 @@ import { buildLongTaskPromptValidatorPrompt } from "./prompts"
 import { extractJsonObject } from "./json-extract"
 import { registerRuntimeProcess, terminateProcessTree } from "../runtime-process-registry"
 
-const DEFAULT_SCRIPT_VALIDATOR_TIMEOUT_MS = 10 * 60 * 1000
+const GLOBAL_SCRIPT_VALIDATOR_TIMEOUT_MS = (() => {
+  const value = Number.parseInt(process.env.AUTO_EVOLVE_SCRIPT_VALIDATOR_TIMEOUT_MS ?? "", 10)
+  if (Number.isFinite(value) && value > 0) return value
+  return 60 * 60 * 1000
+})()
+
+function resolveScriptValidatorTimeoutMs(timeoutMs: number | undefined) {
+  if (typeof timeoutMs === "number" && timeoutMs > 0) {
+    // Enforce a global lower bound so per-task specs cannot shrink script validators below platform policy.
+    return Math.max(timeoutMs, GLOBAL_SCRIPT_VALIDATOR_TIMEOUT_MS)
+  }
+  return GLOBAL_SCRIPT_VALIDATOR_TIMEOUT_MS
+}
 
 function nowISO() {
   return new Date().toISOString()
@@ -140,7 +152,7 @@ async function runScriptValidator(input: {
 
   const stdoutPromise = new Response(child.stdout).text()
   const stderrPromise = new Response(child.stderr).text()
-  const timeoutMs = input.contract.timeoutMs ?? DEFAULT_SCRIPT_VALIDATOR_TIMEOUT_MS
+  const timeoutMs = resolveScriptValidatorTimeoutMs(input.contract.timeoutMs)
   let timedOut = false
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined
   const pulseHandle = setInterval(() => {
