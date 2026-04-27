@@ -40,6 +40,7 @@ auto-evolve/runtime-state/
 auto-evolve/runtime-logs/
 auto-evolve/runtime-export/
 runtime-logs/
+auto-evolve/task-packs/real-long-tasks/*/deployment/work/
 
 # Local temp/debug artifacts (project root)
 tmp_check/
