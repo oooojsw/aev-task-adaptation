@@ -1,6 +1,6 @@
 {
   "title": "try4-expert-bootstrap-round2",
-  "goal": "Learn a formal expert experience workspace from the workbook, the two finished expert Word documents, and the two blank templates, so that a blank agent can later generate the required Word outputs in one uninterrupted session.",
+  "goal": "Learn a formal expert experience workspace from declared materials so that a blank agent can finish deployment in one uninterrupted session using only formal experience and registered capabilities. Task-specific output scope and style boundaries are defined in materials/human-guidance.md.",
   "taskFamily": "try4-expert-bootstrap",
   "domainTags": [
     "expert-bootstrap",
@@ -49,6 +49,7 @@
   "initialExpertContextPaths": [
     "./00-task-entry.md",
     "./goal/task_goal.txt",
+    "./materials/human-guidance.md",
     "./seed-expert-workspace-round2/manifest.md",
     "./seed-expert-workspace-round2/change_log.md",
     "./seed-expert-workspace-round2/workbook-data-extract.json",
@@ -64,7 +65,7 @@
       "id": "docx-capability",
       "title": "DOCX capability package",
       "kind": "transform",
-      "description": "Use the registered DOCX skill package to inspect templates, inspect finished Word references, and generate or edit final Word outputs through formal capability assets instead of hidden runtime memory.",
+      "description": "Use the registered DOCX skill package to inspect declared Word materials and generate or edit declared outputs through formal capability assets instead of hidden runtime memory.",
       "referencePaths": [
         "./capabilities/minimax-docx"
       ]
@@ -99,6 +100,7 @@
       "placement": "completion_only",
       "required": true,
       "blocking": true,
+      "timeoutMs": 3600000,
       "args": [
         "./auto-evolve/task-packs/real-long-tasks/try4-expert-bootstrap/deployment/deployment-spec.json"
       ]
@@ -114,7 +116,7 @@
     "agent": "top"
   },
   "initialGraph": {
-    "planner_summary": "Start by extracting stable obligations from the workbook, expert references, and blank templates, then synthesize a formal expert workspace that can later survive deployment acceptance.",
+    "planner_summary": "Start by extracting stable obligations from declared materials and official guidance, then synthesize a formal expert workspace that can survive deployment acceptance.",
     "completion_validator_ids": [
       "workspace-layout",
       "blank-agent-deployment"
@@ -123,13 +125,14 @@
       {
         "id": "inspect-learning-materials",
         "title": "Inspect Learning Materials",
-        "goal": "Extract the stable task obligations, data mappings, output contracts, and failure-sensitive document requirements from the workbook, expert references, and templates.",
+        "goal": "Extract stable obligations, data mappings, output contracts, and failure-sensitive document requirements from declared materials and human guidance.",
         "inputs": [
           "./materials/source.xlsx",
           "./materials/report-reference.doc",
           "./materials/explanation-reference.doc",
           "./materials/report-template.docx",
-          "./materials/explanation-template.docx"
+          "./materials/explanation-template.docx",
+          "./materials/human-guidance.md"
         ],
         "depends_on": [],
         "expected_artifacts": [
@@ -143,7 +146,7 @@
       {
         "id": "synthesize-expert-workspace",
         "title": "Synthesize Expert Workspace",
-        "goal": "Write a formal expert workspace that teaches a blank agent how to use the approved capability assets to go from workbook plus templates to the required Word outputs.",
+        "goal": "Write a formal expert workspace that teaches a blank agent how to use approved capability assets to complete declared deliverables under human-guidance constraints.",
         "inputs": [
           "./workspace",
           "./seed-expert-workspace/manifest.md",

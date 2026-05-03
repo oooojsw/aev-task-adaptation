@@ -1,6 +1,6 @@
 import path from "node:path"
 import process from "node:process"
-import { appendFile } from "node:fs/promises"
+import { appendFile, readFile } from "node:fs/promises"
 import { autoEvolvePath, ensureDirectory, readJsonFile, writeJsonFile, writeTextFile } from "../fs"
 import type {
   LongTaskCampaignDispatchTicketDocument,
@@ -216,6 +216,31 @@ export async function readLongTaskCampaignState(paths: LongTaskCampaignPaths) {
 export async function appendLongTaskCampaignHistory(paths: LongTaskCampaignPaths, record: LongTaskCampaignRoundRecord) {
   await ensureDirectory(path.dirname(paths.historyPath))
   await appendFile(paths.historyPath, JSON.stringify(record) + "\n", "utf8")
+}
+
+export async function rewriteLongTaskCampaignHistoryRecord(
+  paths: LongTaskCampaignPaths,
+  roundNumber: number,
+  updater: (record: LongTaskCampaignRoundRecord) => LongTaskCampaignRoundRecord,
+) {
+  await ensureDirectory(path.dirname(paths.historyPath))
+  const raw = await readFile(paths.historyPath, "utf8").catch((error: unknown) => {
+    const code =
+      typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : undefined
+    if (code === "ENOENT") return ""
+    throw error
+  })
+  if (!raw.trim()) return false
+  const records = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as LongTaskCampaignRoundRecord)
+  const index = records.findIndex((record) => record.roundNumber === roundNumber)
+  if (index < 0) return false
+  records[index] = updater(records[index])
+  await writeTextFile(paths.historyPath, records.map((record) => JSON.stringify(record)).join("\n") + "\n")
+  return true
 }
 
 export async function appendLinesToAggregate(target: string, lines: string[]) {

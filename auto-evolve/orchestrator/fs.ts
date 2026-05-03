@@ -1,4 +1,5 @@
 import path from "node:path"
+import { existsSync, realpathSync } from "node:fs"
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import type { AutoEvolveConfig } from "./schema"
 
@@ -11,8 +12,39 @@ function normalizeSlash(input: string) {
   return input.replace(/\\/g, "/")
 }
 
+function normalizeComparePath(input: string) {
+  const normalized = normalizeSlash(path.resolve(input)).replace(/\/+$/g, "")
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized
+}
+
+export function resolvePathTruth(target: string) {
+  const absoluteTarget = path.resolve(target)
+  const missingSegments: string[] = []
+  let probe = absoluteTarget
+  while (true) {
+    if (existsSync(probe)) {
+      try {
+        const resolved = realpathSync.native(probe)
+        return missingSegments.length ? path.join(resolved, ...missingSegments.reverse()) : resolved
+      } catch {
+        return absoluteTarget
+      }
+    }
+    const parent = path.dirname(probe)
+    if (parent === probe) return absoluteTarget
+    missingSegments.push(path.basename(probe))
+    probe = parent
+  }
+}
+
+export function isPathWithinTruthRoot(root: string, candidate: string) {
+  const normalizedRoot = normalizeComparePath(resolvePathTruth(root))
+  const normalizedCandidate = normalizeComparePath(resolvePathTruth(candidate))
+  return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}/`)
+}
+
 export function autoEvolvePath(cwd: string, ...segments: string[]) {
-  return path.join(cwd, "auto-evolve", ...segments)
+  return resolvePathTruth(path.join(cwd, "auto-evolve", ...segments))
 }
 
 export function caseMetadataPath(caseDir: string) {

@@ -36,6 +36,8 @@ export namespace Snapshot {
   const log = Log.create({ service: "snapshot" })
   const prune = "7.days"
   const limit = 2 * 1024 * 1024
+  const staleIndexLockMs = 5 * 60 * 1000
+  const indexLockBusyLogIntervalMs = 30 * 1000
   const core = ["-c", "core.longpaths=true", "-c", "core.symlinks=true"]
   const cfg = ["-c", "core.autocrlf=false", ...core]
   const quote = [...cfg, "-c", "core.quotepath=false"]
@@ -71,6 +73,7 @@ export namespace Snapshot {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const config = yield* Config.Service
       const locks = new Map<string, Semaphore.Semaphore>()
+      let lastIndexLockBusyLog = 0
 
       const lock = (key: string) => {
         const hit = locks.get(key)
@@ -121,6 +124,71 @@ export namespace Snapshot {
           const read = (file: string) => fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")))
           const remove = (file: string) => fs.remove(file).pipe(Effect.catch(() => Effect.void))
           const locked = <A, E, R>(fx: Effect.Effect<A, E, R>) => lock(state.gitdir).withPermits(1)(fx)
+          const isIndexLockConflict = (stderr: string) =>
+            /index\.lock/i.test(stderr) && (/file exists/i.test(stderr) || /another git process/i.test(stderr))
+          const indexLockPathFromStderr = (stderr: string) => {
+            const match = stderr.match(/Unable to create ['"]([^'"]*index\.lock)['"]:\s*File exists/i)
+            if (match?.[1]) return match[1]
+            return isIndexLockConflict(stderr) ? path.join(state.gitdir, "index.lock") : undefined
+          }
+
+          const recoverStaleIndexLock = Effect.fnUntraced(function* (command: string, stderr: string) {
+            if (!isIndexLockConflict(stderr)) return false
+            const lockfile = indexLockPathFromStderr(stderr)
+            if (!lockfile) return false
+            const lockInfo = yield* fs.stat(lockfile).pipe(Effect.catch(() => Effect.void))
+            if (!lockInfo || lockInfo.type !== "File") return false
+            const mtimeRaw = (lockInfo as { mtimeMs?: number | bigint }).mtimeMs
+            if (typeof mtimeRaw !== "number" && typeof mtimeRaw !== "bigint") return false
+            const mtime = typeof mtimeRaw === "bigint" ? Number(mtimeRaw) : mtimeRaw
+            if (!Number.isFinite(mtime)) return false
+            const ageMs = Date.now() - mtime
+            if (ageMs < staleIndexLockMs) {
+              const now = Date.now()
+              if (now - lastIndexLockBusyLog >= indexLockBusyLogIntervalMs) {
+                lastIndexLockBusyLog = now
+                log.info("snapshot index lock busy, preserving lock", {
+                  command,
+                  lockfile,
+                  ageMs: Math.round(ageMs),
+                })
+              }
+              return false
+            }
+            const removed = yield* fs.remove(lockfile).pipe(
+              Effect.as(true),
+              Effect.catch(() => Effect.succeed(false)),
+            )
+            if (!removed) return false
+            log.info("removed stale snapshot index lock", {
+              command,
+              lockfile,
+              ageMs: Math.round(ageMs),
+            })
+            return true
+          })
+
+          const runGit = Effect.fnUntraced(function* (
+            command: string,
+            cmd: string[],
+            opts?: { cwd?: string; env?: Record<string, string> },
+          ) {
+            const first = yield* git(cmd, opts)
+            if (first.code === 0) return first
+            const recovered = yield* recoverStaleIndexLock(command, first.stderr)
+            if (!recovered) return first
+            const retry = yield* git(cmd, opts)
+            if (retry.code !== 0 && isIndexLockConflict(retry.stderr)) {
+              const now = Date.now()
+              if (now - lastIndexLockBusyLog >= indexLockBusyLogIntervalMs) {
+                lastIndexLockBusyLog = now
+                log.info("snapshot index lock still busy after recovery retry", {
+                  command,
+                })
+              }
+            }
+            return retry
+          })
 
           const enabled = Effect.fnUntraced(function* () {
             if (state.vcs !== "git") return false
@@ -194,8 +262,9 @@ export namespace Snapshot {
               { concurrency: 8 },
             )).filter((item): item is string => Boolean(item))
             yield* sync(large)
-            const result = yield* git([...cfg, ...args(["add", "--sparse", "."])], { cwd: state.directory })
+            const result = yield* runGit("add", [...cfg, ...args(["add", "--sparse", "."])], { cwd: state.directory })
             if (result.code !== 0) {
+              if (isIndexLockConflict(result.stderr)) return
               log.warn("failed to add snapshot files", {
                 exitCode: result.code,
                 stderr: result.stderr,
@@ -238,8 +307,17 @@ export namespace Snapshot {
                   log.info("initialized")
                 }
                 yield* add()
-                const result = yield* git(args(["write-tree"]), { cwd: state.directory })
+                const result = yield* runGit("write-tree", args(["write-tree"]), { cwd: state.directory })
+                if (result.code !== 0) {
+                  if (isIndexLockConflict(result.stderr)) return
+                  log.warn("failed to write snapshot tree", {
+                    exitCode: result.code,
+                    stderr: result.stderr,
+                  })
+                  return
+                }
                 const hash = result.text.trim()
+                if (!hash) return
                 log.info("tracking", { hash, cwd: state.directory, git: state.gitdir })
                 return hash
               }),
@@ -277,9 +355,11 @@ export namespace Snapshot {
             return yield* locked(
               Effect.gen(function* () {
                 log.info("restore", { commit: snapshot })
-                const result = yield* git([...core, ...args(["read-tree", snapshot])], { cwd: state.worktree })
+                const result = yield* runGit("read-tree", [...core, ...args(["read-tree", snapshot])], {
+                  cwd: state.worktree,
+                })
                 if (result.code === 0) {
-                  const checkout = yield* git([...core, ...args(["checkout-index", "-a", "-f"])], {
+                  const checkout = yield* runGit("checkout-index", [...core, ...args(["checkout-index", "-a", "-f"])], {
                     cwd: state.worktree,
                   })
                   if (checkout.code === 0) return

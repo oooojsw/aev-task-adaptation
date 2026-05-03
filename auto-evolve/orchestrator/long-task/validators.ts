@@ -15,9 +15,9 @@ import { runOpencodeTask, type OpencodeTaskInput } from "../opencode"
 import type { AutoEvolveConfig } from "../schema"
 import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
+import { runManagedProcess } from "../managed-process"
 import { buildLongTaskPromptValidatorPrompt } from "./prompts"
 import { extractJsonObject } from "./json-extract"
-import { registerRuntimeProcess, terminateProcessTree } from "../runtime-process-registry"
 
 const GLOBAL_SCRIPT_VALIDATOR_TIMEOUT_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_SCRIPT_VALIDATOR_TIMEOUT_MS ?? "", 10)
@@ -124,57 +124,31 @@ async function runScriptValidator(input: {
   await writeJsonFile(payloadPath, input.payload)
 
   const command = buildScriptCommand(input.contract, payloadPath)
-  const child = Bun.spawn(command, {
-    cwd: input.contract.cwd ?? input.cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: process.env,
-  })
-  registerRuntimeProcess(input.runtimeScope, child.pid, input.contract.path)
-  const abortAfterSpawn = async (cause: unknown): Promise<never> => {
-    const error = cause instanceof Error ? cause : new Error(String(cause))
-    try {
-      await terminateProcessTree(child.pid)
-    } catch {}
+  const timeoutMs = resolveScriptValidatorTimeoutMs(input.contract.timeoutMs)
+  let managed
+  try {
+    managed = await runManagedProcess({
+      title: input.contract.title,
+      command,
+      cwd: input.contract.cwd ?? input.cwd,
+      runtimeScope: input.runtimeScope,
+      timeoutMs,
+      onSpawn: async () => {
+        await input.onActivation?.()
+        await input.onPulse?.()
+      },
+      onPulse: input.onPulse,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
     await writeTextFile(stdoutPath, "")
-    await writeTextFile(
-      stderrPath,
-      [`Validator runtime bootstrap failed after spawn: ${error.message}`].filter(Boolean).join("\n\n"),
-    )
+    await writeTextFile(stderrPath, [`Validator runtime bootstrap failed after spawn: ${message}`].join("\n\n"))
     throw error
   }
-  try {
-    await input.onActivation?.()
-    await input.onPulse?.()
-  } catch (error) {
-    return abortAfterSpawn(error)
-  }
-
-  const stdoutPromise = new Response(child.stdout).text()
-  const stderrPromise = new Response(child.stderr).text()
-  const timeoutMs = resolveScriptValidatorTimeoutMs(input.contract.timeoutMs)
-  let timedOut = false
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-  const pulseHandle = setInterval(() => {
-    void Promise.resolve(input.onPulse?.()).catch(() => undefined)
-  }, 60_000)
-  const timeoutPromise = new Promise<number>((resolve) => {
-    let settled = false
-    timeoutHandle = setTimeout(async () => {
-      if (settled) return
-      settled = true
-      timedOut = true
-      try {
-        await terminateProcessTree(child.pid)
-      } catch {}
-      resolve(124)
-    }, timeoutMs)
-  })
-
-  const exitCode = await Promise.race([child.exited, timeoutPromise])
-  if (timeoutHandle) clearTimeout(timeoutHandle)
-  clearInterval(pulseHandle)
-  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise])
+  const stdout = managed.stdout
+  const stderr = managed.stderr
+  const exitCode = managed.exitCode
+  const timedOut = managed.timedOut
   const normalizedStderr = timedOut
     ? [`Validator timed out after ${timeoutMs} ms and the full process tree was terminated.`, stderr]
         .filter(Boolean)
@@ -208,9 +182,9 @@ async function runScriptValidator(input: {
       ? (readStringField(parsed, "summary", "message", "result_summary") as string)
       : timedOut
         ? `${input.contract.title} timed out after ${timeoutMs} ms.`
-      : passedFromExit
-        ? `${input.contract.title} passed.`
-        : `${input.contract.title} failed with exit code ${exitCode}.`,
+        : passedFromExit
+          ? `${input.contract.title} passed.`
+          : `${input.contract.title} failed with exit code ${exitCode}.`,
     details:
       readDetailsField(parsed).length > 0
         ? readDetailsField(parsed)

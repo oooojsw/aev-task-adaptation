@@ -1,20 +1,20 @@
 {
   "id": "try4-blank-agent-deployment",
   "title": "try4 blank-agent deployment",
-  "goal": "Use only the formal expert workspace, the registered capability assets, the source workbook, and the blank templates to generate both required Word outputs in one uninterrupted session.",
+  "goal": "Use only the formal expert workspace, registered capability assets, and declared materials to complete declared output targets in one uninterrupted session, following materials/human-guidance.md for task-specific scope.",
   "materials": [
     {
-      "path": "C:/Users/ZhuanZ/Desktop/try4 - \u526f\u672c/\u6750\u6599/\u6069\u745e\u7279\u62df\u5904\u7f6e\u5e9f\u65e7\u7269\u8d44\u9879\u76ee\u8bc4\u4f30\u8ba1\u7b97\u88680330.xlsx",
+      "path": "../materials/source.xlsx",
       "label": "source workbook",
       "role": "source-artifact"
     },
     {
-      "path": "C:/Users/ZhuanZ/Desktop/try4 - \u526f\u672c/\u6750\u6599/\u673a\u5668\u8bbe\u5907\u8d44\u4ea7\u8bc4\u4f30\u62a5\u544a-\u7a7a\u6570\u636e\u6a21\u677f.docx",
+      "path": "../materials/report-template.docx",
       "label": "report template",
       "role": "target-template"
     },
     {
-      "path": "C:/Users/ZhuanZ/Desktop/try4 - \u526f\u672c/\u6750\u6599/\u673a\u5668\u8bbe\u5907\u8d44\u4ea7\u8bc4\u4f30\u8bf4\u660e-\u7a7a\u6570\u636e\u6a21\u677f.docx",
+      "path": "../materials/explanation-template.docx",
       "label": "explanation template",
       "role": "target-template"
     }
@@ -34,7 +34,8 @@
   "editablePaths": ["./outputs"],
   "initialExpertContextPaths": [
     "../expert-workspace/manifest.md",
-    "../expert-workspace/lessons/failure_lessons.md"
+    "../expert-workspace/lessons/failure_lessons.md",
+    "../materials/human-guidance.md"
   ],
   "capabilities": [
     {
@@ -42,14 +43,14 @@
       "title": "DOCX capability package",
       "kind": "transform",
       "description": "Use the registered DOCX skill package to inspect, edit, and generate Word outputs without relying on hidden system memory.",
-      "referencePaths": ["C:/Users/ZhuanZ/Desktop/try4 - \u526f\u672c/\u811a\u672c/minimax-docx"]
+      "referencePaths": ["../capabilities/minimax-docx"]
     },
     {
       "id": "xlsx-capability",
       "title": "XLSX capability package",
       "kind": "inspect",
       "description": "Use the registered XLSX skill package to inspect workbook structure and source values.",
-      "referencePaths": ["C:/Users/ZhuanZ/Desktop/try4 - \u526f\u672c/\u811a\u672c/minimax-xlsx"]
+      "referencePaths": ["../capabilities/minimax-xlsx"]
     }
   ],
   "validators": [
@@ -86,7 +87,20 @@
       "blocking": true,
       "cwd": "./",
       "args": ["./configs/reference-mapping.json"]
+    },
+    {
+      "id": "soft-document-quality",
+      "type": "prompt_json",
+      "title": "Generated Word targets are structurally plausible and complete",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "referencePaths": [
+        "../materials/report-reference.doc",
+        "../materials/explanation-reference.doc"
+      ],
+      "prompt": "You are validating non-numeric quality for blank-agent deployment outputs. Read all declared generated Word targets, compare them with declared templates and expert references, and judge only non-data aspects. Ignore exact numeric correctness and hidden answer values; other validators already handle numeric alignment and placeholder checks. Focus on structural completeness, section coverage, coherence (not scratch/debug text), and obvious corruption/truncation/template misuse. Return passed=true only when all declared generated targets are structurally complete and professionally plausible as final deliverables. Return JSON only with passed, summary, details, and blocking."
     }
   ],
-  "notes": "This deployment spec intentionally exposes only the formal expert workspace, capability packages, workbook, and blank templates. The expert reference docs are reserved for deployment validators only."
+  "notes": "This deployment spec intentionally exposes only formal expert workspace, capability packages, and declared materials. Task-specific output scope must be taken from materials/human-guidance.md. Expert reference docs are reserved for deployment validators only."
 }

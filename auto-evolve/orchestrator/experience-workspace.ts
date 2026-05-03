@@ -1,7 +1,8 @@
 import path from "node:path"
 import { readdir, rm } from "node:fs/promises"
-import { autoEvolvePath, ensureDirectory, pathExists, readJsonFile, readTextFile, writeTextFile } from "./fs"
+import { autoEvolvePath, ensureDirectory, pathExists, readTextFile, writeTextFile } from "./fs"
 import type { AutoEvolveConfig } from "./schema"
+import { extractJsonObject } from "./long-task/json-extract"
 
 export type ExperienceWorkspaceRole =
   | "entry"
@@ -80,6 +81,8 @@ export interface ExperienceWorkspaceLayout extends ExperienceWorkspacePaths {
   unsupportedFiles: string[]
   surfaceContract: ExperienceSurfaceContract | null
   surfaceContractPath: string | null
+  surfaceContractReadMode: "missing" | "parsed" | "salvaged_json" | "invalid"
+  surfaceContractError: string | null
   resolvedAssetRoots: string[]
   resolvedRuntimeSidecarRoots: string[]
 }
@@ -281,16 +284,51 @@ function isSupportedWorkspaceAssetPath(relativePath: string, assetRoots: string[
 async function readExperienceSurfaceContract(root: string): Promise<{
   path: string | null
   contract: ExperienceSurfaceContract | null
+  readMode: "missing" | "parsed" | "salvaged_json" | "invalid"
+  error: string | null
 }> {
   const contractPath = path.join(root, EXPERIENCE_SURFACE_CONTRACT_FILE)
   if (!(await pathExists(contractPath))) {
     return {
       path: null,
       contract: null,
+      readMode: "missing",
+      error: null,
     }
   }
 
-  const raw = await readJsonFile<Record<string, unknown>>(contractPath)
+  const rawText = await readTextFile(contractPath)
+  let raw: Record<string, unknown> | null = null
+  let readMode: "parsed" | "salvaged_json" | "invalid" = "parsed"
+  let error: string | null = null
+
+  try {
+    const parsed = JSON.parse(rawText.replace(/^\uFEFF/, "")) as unknown
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("surface_contract.json must contain a top-level JSON object.")
+    }
+    raw = parsed as Record<string, unknown>
+  } catch (parseError) {
+    const salvaged = extractJsonObject(rawText, {
+      preferredKeys: ["version", "entry", "changeLog", "documents", "assetRoots", "runtimeSidecarRoots"],
+    })
+    if (!salvaged) {
+      return {
+        path: EXPERIENCE_SURFACE_CONTRACT_FILE,
+        contract: null,
+        readMode: "invalid",
+        error:
+          parseError instanceof Error
+            ? parseError.message
+            : "surface_contract.json is not machine-readable JSON.",
+      }
+    }
+    raw = salvaged
+    readMode = "salvaged_json"
+    error =
+      "surface_contract.json contained extra narrative or markup around the JSON contract. Keep this file as raw JSON only."
+  }
+
   const documents = Array.isArray(raw.documents)
     ? raw.documents
         .filter((item): item is Record<string, unknown> => typeof item === "object" && !!item)
@@ -343,6 +381,8 @@ async function readExperienceSurfaceContract(root: string): Promise<{
         : undefined,
       notes: Array.isArray(raw.notes) ? raw.notes.filter((item): item is string => typeof item === "string") : undefined,
     },
+    readMode,
+    error,
   }
 }
 
@@ -590,7 +630,12 @@ export async function listExperienceWorkspaceAssets(paths: ExperienceWorkspacePa
 
 export async function resolveExperienceWorkspaceLayout(paths: ExperienceWorkspacePaths): Promise<ExperienceWorkspaceLayout> {
   const allFiles = await collectWorkspaceFiles(paths.root)
-  const { path: surfaceContractPath, contract: surfaceContract } = await readExperienceSurfaceContract(paths.root)
+  const {
+    path: surfaceContractPath,
+    contract: surfaceContract,
+    readMode: surfaceContractReadMode,
+    error: surfaceContractError,
+  } = await readExperienceSurfaceContract(paths.root)
   const { assetRoots, runtimeSidecarRoots } = resolveSurfaceRoots(surfaceContract)
   const contractDocuments = buildContractDocumentMap(surfaceContract)
   const explicitEntryRelativePath = surfaceContract?.entry ? normalizeRelativeSurfacePath(surfaceContract.entry) : undefined
@@ -633,6 +678,8 @@ export async function resolveExperienceWorkspaceLayout(paths: ExperienceWorkspac
     unsupportedFiles,
     surfaceContract,
     surfaceContractPath,
+    surfaceContractReadMode,
+    surfaceContractError,
     resolvedAssetRoots: assetRoots,
     resolvedRuntimeSidecarRoots: runtimeSidecarRoots,
   }
@@ -655,6 +702,20 @@ export function validateExperienceWorkspaceLayout(
   const profile = resolveValidationProfile(layout, options)
   const documentPathSet = new Set(layout.documents.map((item) => item.relativePath))
   const contract = layout.surfaceContract
+
+  if (layout.surfaceContractPath && layout.surfaceContractReadMode === "invalid") {
+    errors.push(
+      `Experience surface contract is unreadable. ${EXPERIENCE_SURFACE_CONTRACT_FILE} must be pure machine-readable JSON. ${
+        layout.surfaceContractError ?? ""
+      }`.trim(),
+    )
+  }
+
+  if (layout.surfaceContractReadMode === "salvaged_json") {
+    const message = `Experience surface contract is wrapped in extra narrative or markup. ${EXPERIENCE_SURFACE_CONTRACT_FILE} must contain raw JSON only.`
+    if (profile === "governed") errors.push(message)
+    else warnings.push(message)
+  }
 
   if (!layout.documents.length) {
     errors.push("Experience surface has no expert Markdown documents.")
@@ -713,7 +774,7 @@ export function validateExperienceWorkspaceLayout(
     errors,
     warnings,
     profile,
-    contractPresent: !!layout.surfaceContract,
+    contractPresent: !!layout.surfaceContractPath,
   }
 }
 

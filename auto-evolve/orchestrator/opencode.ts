@@ -2,14 +2,13 @@ import path from "node:path"
 import process from "node:process"
 import os from "node:os"
 import { randomUUID } from "node:crypto"
-import { readFile, stat } from "node:fs/promises"
+import { copyFile, readFile, stat } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
-import { spawn as nodeSpawn } from "node:child_process"
 import { buildActionTrace } from "./action-trace"
 import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
 import type { ToolFailure } from "./evaluator"
 import { autoEvolvePath, ensureDirectory, pathExists, writeJsonFile, writeTextFile } from "./fs"
-import { registerRuntimeProcess, terminateProcessTree } from "./runtime-process-registry"
+import { runManagedProcess } from "./managed-process"
 import {
   resolveTaskArtifactKind,
   taskArtifactPaths,
@@ -78,6 +77,8 @@ export interface OpencodeTaskInput {
   agent?: string
   variant?: string
   runtimeScope?: string
+  injectPlatformSafetyRules?: boolean
+  isolateHostRuntime?: boolean
   onSpawn?: () => Promise<void> | void
   onPulse?: () => Promise<void> | void
   live?: TaskArtifactInput & {
@@ -192,7 +193,10 @@ function buildEditPermissionRules(cwd: string, paths: string[]) {
   return rules
 }
 
-async function makeOverridePermissions(cwd: string, input: { readPaths: string[]; editPaths: string[] }) {
+async function makeOverridePermissions(
+  cwd: string,
+  input: { readPaths: string[]; editPaths: string[]; allowShell?: boolean },
+) {
   return {
     "*": "deny",
     read: await buildReadListPermissionRules(input.readPaths),
@@ -201,7 +205,7 @@ async function makeOverridePermissions(cwd: string, input: { readPaths: string[]
     external_directory: {
       "*": "deny",
     },
-    bash: "deny",
+    bash: input.allowShell ? "allow" : "deny",
     glob: "deny",
     grep: "deny",
     task: "deny",
@@ -220,12 +224,82 @@ function makeOpenPermissions() {
   } as const
 }
 
+function filterProviderPlugins(input: unknown, model: string | undefined) {
+  if (!Array.isArray(input)) return undefined
+  const providerHint = model?.split("/")[0]?.toLowerCase()
+  const filtered = input.filter((item) => {
+    const text = JSON.stringify(item).toLowerCase()
+    if (text.includes("minimax")) return true
+    return !!providerHint && text.includes(providerHint)
+  })
+  return filtered.length ? filtered : undefined
+}
+
+function minimalProviderConfig(input: Record<string, unknown>, model: string | undefined) {
+  const result: Record<string, unknown> = {}
+  if (typeof input.provider === "object" && input.provider && !Array.isArray(input.provider)) {
+    result.provider = input.provider
+  }
+  const plugin = filterProviderPlugins(input.plugin, model)
+  if (plugin) result.plugin = plugin
+  return result
+}
+
+function hostAuthCandidates() {
+  return uniqueFiles([
+    process.env.XDG_DATA_HOME ? path.join(process.env.XDG_DATA_HOME, "opencode", "auth.json") : "",
+    path.join(os.homedir(), ".local", "share", "opencode", "auth.json"),
+    process.env.APPDATA ? path.join(process.env.APPDATA, "opencode", "auth.json") : "",
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "opencode", "auth.json") : "",
+  ].filter(Boolean))
+}
+
+async function prepareIsolatedHostRuntime(cwd: string, runLabel: string) {
+  const root = autoEvolvePath(cwd, ".runtime", "opencode-isolated-env", runLabel)
+  const home = path.join(root, "home")
+  const xdgConfig = path.join(root, "config")
+  const xdgData = path.join(root, "data")
+  const xdgCache = path.join(root, "cache")
+  const xdgState = path.join(root, "state")
+  const opencodeData = path.join(xdgData, "opencode")
+  await Promise.all([home, xdgConfig, xdgData, xdgCache, xdgState, opencodeData].map((dir) => ensureDirectory(dir)))
+
+  for (const candidate of hostAuthCandidates()) {
+    if (!(await pathExists(candidate))) continue
+    await copyFile(candidate, path.join(opencodeData, "auth.json")).catch(() => undefined)
+    break
+  }
+
+  return {
+    OPENCODE_TEST_HOME: home,
+    XDG_CONFIG_HOME: xdgConfig,
+    XDG_DATA_HOME: xdgData,
+    XDG_CACHE_HOME: xdgCache,
+    XDG_STATE_HOME: xdgState,
+    HOME: home,
+    USERPROFILE: home,
+    OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+    OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: "1",
+    OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1",
+    OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
+    OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
+    OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
+    OPENCODE_CONFIG: undefined,
+    OPENCODE_CONFIG_CONTENT: undefined,
+    OPENCODE_PERMISSION: undefined,
+    OPENCODE_TUI_CONFIG: undefined,
+    OPENCODE_PLUGIN_META_FILE: path.join(xdgState, "opencode", "plugin-meta.json"),
+  } satisfies NodeJS.ProcessEnv
+}
+
 async function ensureOverrideConfig(
   cwd: string,
   model: string | undefined,
   permissionConfig: LoadedPermissionConfig,
   permissions: { readPaths: string[]; editPaths: string[] },
   runLabel: string,
+  injectPlatformSafetyRules = true,
+  isolateHostRuntime = false,
 ) {
   const dir = autoEvolvePath(cwd, ".runtime", "opencode-config", runLabel)
   const runtimeAgentsFallback = [
@@ -236,14 +310,31 @@ async function ensureOverrideConfig(
     "If the task requires structured output (for example JSON-only), return structured output only.",
     "Do not depend on host-level user config or host-level custom agent definitions.",
   ].join("\n")
+  const runtimeSafetyRules = [
+    "# AUTO-EVOLVE PLATFORM SAFETY RULES",
+    "",
+    "These rules are injected by auto-evolve and apply to orchestrator-managed sessions unless explicitly disabled by the caller.",
+    "- The runtime shell is Windows PowerShell. Use PowerShell-native commands.",
+    "- Do not use Unix shell syntax such as `ls -la`, `||`, `&&`, `grep`, `find`, or bash-only redirection patterns.",
+    "- Do not rely on `rg`, `grep`, `glob`, or tool-based file search. On this platform those paths may be denied or backed by an unavailable rg.exe.",
+    "- File listing fallback: `Get-ChildItem -LiteralPath <path> -Recurse -File`.",
+    "- Text search fallback: `Get-ChildItem -LiteralPath <path> -Recurse -File | Select-String -Pattern <pattern>`.",
+    "- Path checks fallback: `Test-Path -LiteralPath <path>`.",
+    "- JSON read fallback: `Get-Content -LiteralPath <path> -Raw -Encoding UTF8 | ConvertFrom-Json`.",
+    "- Document and spreadsheet handling must be headless-only.",
+    "- Do not launch Word, Excel, Explorer, or any desktop GUI.",
+    "- Do not use `Start-Process`, `Invoke-Item`, file association opens, `explorer.exe`, `WINWORD`, `EXCEL`, or equivalent GUI-launch paths.",
+  ].join("\n")
   const systemConfigDirCandidates = [
     process.env.XDG_CONFIG_HOME ? path.join(process.env.XDG_CONFIG_HOME, "opencode") : "",
     path.join(os.homedir(), ".config", "opencode"),
   ].filter(Boolean)
   const systemConfigDir =
-    (await Promise.all(
-      systemConfigDirCandidates.map(async (candidate) => ((await pathExists(candidate)) ? candidate : "")),
-    )).find(Boolean) || ""
+    (
+      await Promise.all(
+        systemConfigDirCandidates.map(async (candidate) => ((await pathExists(candidate)) ? candidate : "")),
+      )
+    ).find(Boolean) || ""
 
   let systemBaseConfig: Record<string, unknown> = {}
   if (systemConfigDir) {
@@ -259,7 +350,7 @@ async function ensureOverrideConfig(
   }
 
   const runtimeAgentsMd = (() => {
-    if (!systemConfigDir) return runtimeAgentsFallback
+    if (!injectPlatformSafetyRules || !systemConfigDir) return runtimeAgentsFallback
     const systemAgentsPath = path.join(systemConfigDir, "AGENTS.md")
     return systemAgentsPath
   })()
@@ -271,9 +362,12 @@ async function ensureOverrideConfig(
       if (loaded.trim().length > 0) agentsContent = loaded
     } catch {}
   }
+  if (injectPlatformSafetyRules) {
+    agentsContent = `${runtimeSafetyRules}\n\n${agentsContent}`
+  }
 
   const override: Record<string, unknown> = {
-    ...systemBaseConfig,
+    ...(isolateHostRuntime ? minimalProviderConfig(systemBaseConfig, model) : systemBaseConfig),
     $schema: "https://opencode.ai/config.json",
     ...(model
       ? {
@@ -284,11 +378,12 @@ async function ensureOverrideConfig(
     // Keep runtime deterministic: always use built-in stable primary agent.
     default_agent: "build",
     permission:
-      permissionConfig.mode === "open"
+      permissionConfig.mode === "open" && !isolateHostRuntime
         ? makeOpenPermissions()
         : await makeOverridePermissions(cwd, {
             readPaths: permissions.readPaths,
             editPaths: permissions.editPaths,
+            allowShell: isolateHostRuntime,
           }),
   }
   await ensureDirectory(dir)
@@ -386,6 +481,8 @@ function isInfrastructureCrash(result: Pick<OpencodeRunResult, "exitCode" | "std
   if (stderr.includes("silent output timeout")) return true
   if (result.exitCode === 124 && result.events.length === 0) return true
   if (result.exitCode === 1 && result.events.length === 0 && stderr === "") return true
+  const hasStepFinish = result.events.some((e) => e.type === "step_finish")
+  if (result.exitCode === 1 && result.events.length > 0 && !hasStepFinish && stderr === "") return true
   return result.exitCode !== 0 && result.events.length === 0 && stderr.includes("bun")
 }
 
@@ -487,8 +584,13 @@ async function runOpencodeTaskOnce(
       editPaths: permissionEditPaths,
     },
     runLabel,
+    input.injectPlatformSafetyRules !== false,
+    input.isolateHostRuntime === true,
   )
-  const runtimeEnv = await ensureRuntimeEnvironment(input.cwd, runLabel)
+  const runtimeEnv = {
+    ...(await ensureRuntimeEnvironment(input.cwd, runLabel)),
+    ...(input.isolateHostRuntime ? await prepareIsolatedHostRuntime(input.cwd, runLabel) : {}),
+  }
 
   const args = [
     process.execPath,
@@ -581,12 +683,12 @@ async function runOpencodeTaskOnce(
 
   await flush()
 
-  const child = nodeSpawn(process.execPath, args.slice(1), {
+  started = true
+  const managed = await runManagedProcess({
+    title: input.title,
+    command: [process.execPath, ...args.slice(1)],
     cwd: path.join(input.cwd, "packages", "opencode"),
-    // Feed prompt via stdin so long prompts do not inflate command-line length on Windows.
-    stdio: ["pipe", "pipe", "pipe"],
     env: {
-      ...process.env,
       ...runtimeEnv,
       OPENCODE_CONFIG_DIR: overrideConfigDir,
       ...(typeof input.config.modelConfig.limits.requestsPerMinute === "number"
@@ -595,135 +697,40 @@ async function runOpencodeTaskOnce(
           }
         : {}),
     },
-  })
-  registerRuntimeProcess(input.runtimeScope, child.pid, input.title)
-  started = true
-  const promptWrite = Promise.resolve()
-    .then(async () => {
-      if (!child.stdin) return
-      child.stdin.setDefaultEncoding("utf8")
-      child.stdin.write(runtimePrompt)
-      child.stdin.end()
-    })
-    .catch((error) => {
-      throw new Error(
-        `Failed to stream prompt to OpenCode stdin: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    })
-  const abortAfterSpawn = async (cause: unknown): Promise<never> => {
-    const error = cause instanceof Error ? cause : new Error(String(cause))
-    stderrData = [stderrData, `OpenCode runtime bootstrap failed after spawn: ${error.message}`]
-      .filter(Boolean)
-      .join("\n\n")
-    try {
-      await terminateProcessTree(child.pid)
-    } catch {}
-    try {
-      await writeLiveTask({
-        task: input,
-        model: selectedModel,
-        agent: selectedAgent,
-        refs: referencedPaths,
-        files: attachedFiles,
-        reads: permissionReadPaths,
-        edits: permissionEditPaths,
-        stdout: stdoutData,
-        stderr: stderrData,
-        started,
-        startedAt,
-        lastOutputAt,
-        exitCode: 1,
-      })
-    } catch {}
-    throw error
-  }
-  try {
-    await promptWrite
-    await input.onSpawn?.()
-    await input.onPulse?.()
-    await flush()
-  } catch (error) {
-    return abortAfterSpawn(error)
-  }
-
-  let timedOut = false
-  let hardTimedOut = false
-  let silentTimedOut = false
-  let silentTimeoutAfterActivity = false
-  let observedRuntimeOutput = false
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-  let silentTimeoutHandle: ReturnType<typeof setTimeout> | undefined
-  let pulseHandle: ReturnType<typeof setInterval> | undefined
-  let refreshSilentTimeout: (() => void) | undefined
-
-  const exitPromise = new Promise<number>((resolve) => {
-    child.on("exit", (code) => resolve(code ?? 0))
-    child.on("error", () => resolve(1))
+    stdinText: runtimePrompt,
+    runtimeScope: input.runtimeScope,
+    timeoutMs: OPENCODE_TASK_TIMEOUT_MS,
+    silentTimeoutMs: OPENCODE_TASK_SILENT_TIMEOUT_MS,
+    silentTimeoutAfterActivityMs: OPENCODE_TASK_SILENT_TIMEOUT_AFTER_ACTIVITY_MS,
+    onSpawn: async () => {
+      await input.onSpawn?.()
+      await input.onPulse?.()
+      await flush()
+    },
+    onPulse: input.onPulse,
+    onStdoutChunk: (chunk) => {
+      stdoutData += chunk.toString()
+      lastOutputAt = new Date().toISOString()
+      scheduleFlush()
+    },
+    onStderrChunk: (chunk) => {
+      stderrData += chunk.toString()
+      lastOutputAt = new Date().toISOString()
+      scheduleFlush()
+    },
   })
 
-  const timeoutPromise = new Promise<number>((resolve) => {
-    let settled = false
-    const killAndResolve = async (kind: "hard" | "silent") => {
-      if (settled) return
-      settled = true
-      timedOut = true
-      if (kind === "hard") hardTimedOut = true
-      if (kind === "silent") {
-        silentTimedOut = true
-        silentTimeoutAfterActivity = observedRuntimeOutput
-      }
-      try {
-        await terminateProcessTree(child.pid)
-      } catch {}
-      resolve(124)
-    }
-
-    timeoutHandle = setTimeout(async () => {
-      await killAndResolve("hard")
-    }, OPENCODE_TASK_TIMEOUT_MS)
-
-    refreshSilentTimeout = () => {
-      if (silentTimeoutHandle) clearTimeout(silentTimeoutHandle)
-      const silentTimeoutMs = observedRuntimeOutput
-        ? OPENCODE_TASK_SILENT_TIMEOUT_AFTER_ACTIVITY_MS
-        : OPENCODE_TASK_SILENT_TIMEOUT_MS
-      silentTimeoutHandle = setTimeout(async () => {
-        await killAndResolve("silent")
-      }, silentTimeoutMs)
-    }
-    refreshSilentTimeout()
-  })
-
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdoutData += chunk.toString()
-    observedRuntimeOutput = true
-    lastOutputAt = new Date().toISOString()
-    refreshSilentTimeout?.()
-    scheduleFlush()
-  })
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderrData += chunk.toString()
-    observedRuntimeOutput = true
-    lastOutputAt = new Date().toISOString()
-    refreshSilentTimeout?.()
-    scheduleFlush()
-  })
-
-  pulseHandle = setInterval(() => {
-    void Promise.resolve(input.onPulse?.()).catch(() => undefined)
-    if (observedRuntimeOutput) refreshSilentTimeout?.()
-    scheduleFlush()
-  }, 60_000)
-
-  let exitCode = await Promise.race([exitPromise, timeoutPromise])
-  if (timeoutHandle) clearTimeout(timeoutHandle)
-  if (silentTimeoutHandle) clearTimeout(silentTimeoutHandle)
-  if (pulseHandle) clearInterval(pulseHandle)
   if (flushHandle) {
     clearTimeout(flushHandle)
     flushHandle = undefined
   }
 
+  const timedOut = managed.timedOut
+  const hardTimedOut = managed.hardTimedOut
+  const silentTimedOut = managed.silentTimedOut
+  const silentTimeoutAfterActivity = managed.silentTimeoutAfterActivity
+  const observedRuntimeOutput = managed.observedRuntimeOutput
+  const exitCode = managed.exitCode
   const stdout = stdoutData
   const stderr = stderrData
 

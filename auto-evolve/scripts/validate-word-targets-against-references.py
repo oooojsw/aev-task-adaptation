@@ -1,6 +1,7 @@
 import json
 import re
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from word_text_utils import extract_word_text, normalize_text
@@ -8,6 +9,15 @@ from word_text_utils import extract_word_text, normalize_text
 
 NUMBER_RE = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?%?")
 STRICT_NUMBER_RE = re.compile(r"^[-+]?\d[\d,]*(?:\.\d+)?%?$")
+NUMERIC_TRANSLATION = str.maketrans(
+    {
+        "，": ",",
+        "％": "%",
+        "\uff05": "%",
+        "﹪": "%",
+        " ": "",
+    }
+)
 
 
 def load_json(path_value: str):
@@ -40,7 +50,25 @@ def resolve_target(item, payload_targets):
 
 
 def normalize_number_token(token: str) -> str:
-    return token.replace(",", "").replace("锛?", "%").strip()
+    return token.strip().translate(NUMERIC_TRANSLATION)
+
+
+def canonicalize_numeric_token(token: str) -> str | None:
+    normalized = normalize_number_token(token)
+    if not normalized:
+        return None
+    is_percent = normalized.endswith("%")
+    number_part = normalized[:-1] if is_percent else normalized
+    try:
+        decimal_value = Decimal(number_part)
+    except InvalidOperation:
+        return None
+    canonical = format(decimal_value.normalize(), "f")
+    if "." in canonical:
+        canonical = canonical.rstrip("0").rstrip(".")
+    if canonical == "-0":
+        canonical = "0"
+    return f"{canonical}%" if is_percent else canonical
 
 
 def is_strict_numeric_token(token: str) -> bool:
@@ -54,7 +82,10 @@ def extract_number_tokens(text: str, min_digits: int) -> list[str]:
         digit_count = sum(1 for char in normalized if char.isdigit())
         if digit_count < min_digits:
             continue
-        values.append(normalized)
+        canonical = canonicalize_numeric_token(normalized)
+        if canonical is None:
+            continue
+        values.append(canonical)
     return sorted(set(values))
 
 
@@ -63,7 +94,8 @@ def contains_expected_token(token: str, normalized_target_text: str, target_numb
     if not normalized_token:
         return False
     if is_strict_numeric_token(normalized_token):
-        return normalize_number_token(normalized_token) in target_numbers
+        canonical = canonicalize_numeric_token(normalized_token)
+        return canonical in target_numbers if canonical is not None else False
     return normalize_text(normalized_token) in normalized_target_text
 
 
@@ -166,9 +198,11 @@ def main():
                 details.append(f"{label}: reference extraction skipped ({exc})")
 
         required_numeric_tokens = [
-            normalize_number_token(token)
+            canonical
             for token in required_tokens
             if is_strict_numeric_token(token)
+            for canonical in [canonicalize_numeric_token(token)]
+            if canonical is not None
         ]
         numeric_basis = reference_numbers or required_numeric_tokens
         matched_numbers = [token for token in numeric_basis if token in target_numbers]

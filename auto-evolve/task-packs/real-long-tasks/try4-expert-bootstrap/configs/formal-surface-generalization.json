@@ -1,0 +1,32 @@
+{
+  "rootRoles": ["experience-workspace"],
+  "allowedExtensions": [".md", ".txt", ".json", ".jsonl", ".yaml", ".yml"],
+  "ignorePathSubstrings": ["\\evidence\\", "/evidence/", "change_log", "failure_lessons"],
+  "maxHitsPerFile": 4,
+  "maxTotalHits": 12,
+  "forbiddenLiterals": [
+    { "value": "20,260", "label": "task-specific result amount" },
+    { "value": "20260.00", "label": "task-specific result amount" },
+    { "value": "20,665.20", "label": "task-specific taxed amount" },
+    { "value": "20665.20", "label": "task-specific taxed amount" },
+    { "value": "10.13", "label": "task-specific explanation value" }
+  ],
+  "forbiddenPatterns": [
+    {
+      "label": "task-specific bare result amount",
+      "pattern": "(?<!\\d)20260(?:\\.0+)?(?!\\d)"
+    },
+    {
+      "label": "task-specific bare taxed amount",
+      "pattern": "(?<!\\d)20665(?:\\.20?)?(?!\\d)"
+    }
+  ],
+  "allowedDomainConstants": [
+    { "value": "1.02", "label": "tax rate 2% applied to revenue" },
+    { "value": "1.13", "label": "tax adjustment factor 13%" },
+    { "value": "2000", "label": "unit price category A" },
+    { "value": "1900", "label": "unit price category B and C" },
+    { "value": "14", "label": "item count in Sheet2" },
+    { "value": "2026-03-23", "label": "valuation date" }
+  ]
+}

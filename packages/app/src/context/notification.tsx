@@ -105,6 +105,42 @@ function buildNotificationIndex(list: Notification[]) {
   return index
 }
 
+function isSessionlessErrorNotification(notification: {
+  type?: unknown
+  session?: unknown
+  viewed?: unknown
+}) {
+  return (
+    notification.type === "error" &&
+    (notification.session === "global" || notification.session === undefined || notification.session === null) &&
+    notification.viewed === false
+  )
+}
+
+function migrateNotificationStore(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value
+
+  const data = value as { list?: unknown }
+  if (!Array.isArray(data.list)) return value
+
+  let changed = false
+  const list = data.list.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item
+    const notification = item as {
+      type?: unknown
+      session?: unknown
+      viewed?: unknown
+    }
+    if (!isSessionlessErrorNotification(notification)) return item
+
+    changed = true
+    return { ...notification, viewed: true }
+  })
+
+  if (!changed) return value
+  return { ...data, list }
+}
+
 export const { use: useNotification, provider: NotificationProvider } = createSimpleContext({
   name: "Notification",
   init: () => {
@@ -124,7 +160,10 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
     const currentSession = createMemo(() => params.id)
 
     const [store, setStore, _, ready] = persisted(
-      Persist.global("notification", ["notification.v1"]),
+      {
+        ...Persist.global("notification", ["notification.v1"]),
+        migrate: migrateNotificationStore,
+      },
       createStore({
         list: [] as Notification[],
       }),
@@ -186,7 +225,10 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
       if (!ready()) return
       if (meta.pruned) return
       meta.pruned = true
-      const list = pruneNotifications(store.list)
+      const normalized = store.list.map((notification) =>
+        isSessionlessErrorNotification(notification) ? { ...notification, viewed: true } : notification,
+      )
+      const list = pruneNotifications(normalized)
       batch(() => {
         setStore("list", list)
         setIndex(reconcile(buildNotificationIndex(list), { merge: false }))
@@ -270,9 +312,10 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
         append({
           directory,
           time,
-          viewed: viewedInCurrentSession(directory, sessionID),
+          // Session-less errors are usually global/runtime noise and should not pin a red dot on every project forever.
+          viewed: !sessionID || viewedInCurrentSession(directory, sessionID),
           type: "error",
-          session: sessionID ?? "global",
+          session: sessionID,
           error,
         })
         const description =

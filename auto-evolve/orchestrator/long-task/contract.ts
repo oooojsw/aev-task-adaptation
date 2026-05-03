@@ -5,6 +5,7 @@ export type LongTaskRunStatus =
   | "bootstrapping"
   | "running"
   | "waiting_for_retry"
+  | "graph_completed"
   | "verified_success"
   | "exhausted_failure"
   | "stagnation_failure"
@@ -398,6 +399,12 @@ export interface LongTaskRunVerificationSignal {
   completionGatePassed: boolean
 }
 
+export type LongTaskRoundClosure =
+  | "closed_success"
+  | "closed_repairable"
+  | "closed_blocked"
+  | "closed_infra_failure"
+
 export interface LongTaskRunSummary {
   runID: string
   title: string
@@ -417,6 +424,9 @@ export interface LongTaskRunSummary {
   retryLessonCount: number
   operationalContextCount: number
   verificationSignal: LongTaskRunVerificationSignal
+  roundClosure: LongTaskRoundClosure
+  gateFailureKind?: "completion_gate_failed" | "execution_blocked" | "infrastructure_failure"
+  gateFailureSummary?: string
   summary: string
 }
 

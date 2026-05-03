@@ -6,9 +6,39 @@ from pathlib import Path
 from word_text_utils import extract_word_text
 
 
+DEFAULT_PATTERNS = [
+    r"【[^【】\r\n]{1,120}】",
+    r"ЁО[^ЁОЁП\r\n]{1,120}ЁП",
+]
+
+
 def load_json(path_value: str):
     with open(path_value, "r", encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def has_orphan_corner_bracket(text: str) -> bool:
+    depth = 0
+    for char in text:
+        if char in ("【", "ЁО"):
+            depth += 1
+            continue
+        if char in ("】", "ЁП"):
+            if depth == 0:
+                return True
+            depth -= 1
+    return depth != 0
+
+
+def build_patterns(config: dict) -> list[re.Pattern]:
+    configured = config.get("patterns")
+    raw_patterns = configured if isinstance(configured, list) and configured else DEFAULT_PATTERNS
+    patterns: list[re.Pattern] = []
+    for raw in raw_patterns:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        patterns.append(re.compile(raw))
+    return patterns
 
 
 def resolve_target_paths(payload, config):
@@ -79,7 +109,8 @@ def main():
 
     payload = load_json(sys.argv[1])
     config = load_json(sys.argv[2])
-    patterns = [re.compile(pattern) for pattern in config.get("patterns", [r"【", r"】", r"XXXX"])]
+    patterns = build_patterns(config)
+    reject_orphan_brackets = bool(config.get("rejectOrphanBrackets", True))
     targets = resolve_target_paths(payload, config)
 
     if not targets:
@@ -110,7 +141,11 @@ def main():
             failures.append(f"{item['label']}:unreadable")
             details.append(f"{item['label']}: cannot extract text from target ({exc})")
             continue
+
         matched = [pattern.pattern for pattern in patterns if pattern.search(text)]
+        if reject_orphan_brackets and has_orphan_corner_bracket(text):
+            matched.append("orphan_corner_bracket")
+
         if matched:
             failures.append(f"{item['label']}:placeholder")
             details.append(f"{item['label']}: disallowed patterns found {matched}")

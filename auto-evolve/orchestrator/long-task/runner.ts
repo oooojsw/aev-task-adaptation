@@ -171,6 +171,7 @@ async function updateLongTaskProgressStatus(run: ReturnType<typeof longTaskRunPa
   const [graph, previous] = await Promise.all([readLongTaskWorkGraph(run), readLongTaskProgressState(run)])
   if (previous.status === status) return
   if (
+    previous.status === "graph_completed" ||
     previous.status === "verified_success" ||
     previous.status === "exhausted_failure" ||
     previous.status === "stagnation_failure" ||
@@ -1516,7 +1517,7 @@ async function finalizeLongTaskRun(input: {
   const summary = await buildLongTaskRunSummary(input.run)
   await writeLongTaskRunSummary(input.run, summary)
   const isHardVerified =
-    summary.status === "verified_success" &&
+    summary.status === "graph_completed" &&
     summary.verificationSignal.completionGateMode === "required" &&
     summary.verificationSignal.completionGatePassed
 
@@ -1731,6 +1732,7 @@ async function continueLongTaskLoop(input: {
       let progress = await readLongTaskProgressState(input.run)
 
       if (
+        progress.status === "graph_completed" ||
         progress.status === "verified_success" ||
         progress.status === "exhausted_failure" ||
         progress.status === "stagnation_failure" ||
@@ -1780,7 +1782,7 @@ async function continueLongTaskLoop(input: {
               cwd: input.cwd,
               run: input.run,
               spec: input.spec,
-              status: "verified_success",
+              status: "graph_completed",
               summaryText: completionSummary,
             })
           }
@@ -2228,15 +2230,29 @@ export async function runLongTask(input: {
   }
 }
 
-export async function resumeLongTask(input: { cwd: string; runID: string }) {
+export async function resumeLongTask(input: {
+  cwd: string
+  runID: string
+  runtimeScope?: string
+  onRuntimeActivated?: OpencodeTaskInput["onSpawn"]
+  onRuntimePulse?: OpencodeTaskInput["onPulse"]
+}) {
   const resolved = resolveExistingLongTaskRun(input.cwd, input.runID)
   const spec = await readLongTaskSpec(resolved.run)
-  const runtimeScope = longTaskRunRuntimeScope(input.runID)
+  const runtimeScope = input.runtimeScope ?? longTaskRunRuntimeScope(input.runID)
+  const currentProgress = await readLongTaskProgressState(resolved.run)
+  await writeLongTaskProgressState(resolved.run, {
+    ...currentProgress,
+    ownerPID: undefined,
+    ownerCommandHint: undefined,
+  })
   const activateRun = onceActivationCallback(async () => {
     await updateLongTaskProgressStatus(resolved.run, "running")
+    await input.onRuntimeActivated?.()
   })
   const pulseRun = async () => {
     await pulseLongTaskProgress(resolved.run)
+    await input.onRuntimePulse?.()
   }
   await pulseRun()
   return continueLongTaskLoop({

@@ -1,5 +1,32 @@
 # CLAUDE.md
 
+1----当我要求你生成任何新文件或者是解包这些，默认地址都是现在工作文件夹
+
+
+2----文件本身是 UTF-8 编码，没问题。终端显示乱码通常是终端编码问题。
+解决方案：
+Windows CMD/Terminal 设置UTF-8：
+chcp 65001
+
+3---- 当我说准确名词“持续监控”这个词的时候，意思是：在你检测到这个现在正在处理的任务或者命令需要长时间运行的时候（持续在跑而不是卡死了），你必须先在此电脑的全局配置文件修改区（"C:\Users\ZhuanZ\.codex\AGENTS.md"）里面，写好我给你的运行时间，次数，当前次数（运行完每一次之后，自动的改当前次数，当运行完所有的次数之后，结束持续监控任务，然后吧这三个运行时间，次数，当前次数清零），然后的自动运行sleep 一小时这个命令（例如$ Start-Sleep -Seconds 3600，或者半小时，二十分钟，十分做，五分钟，最短五分钟，选择时间的时候你自己决定时长），不对任何人或者任何任务或者任何的脚本，就是直接在命令行里面运行！！！然后这个命令运行完直接回去检查这个任务的情况，不准套到任何其他命令嵌套，不准和任何脚本本身勾稽，就是单纯的在命令行运行这个命令！！！！
+
+3-----监控区,你的记录填写在这里，单次运行时间（xxx），次数（xxx），当前次数（xxx）
+
+
+4，我不是一个专业的软件工程师，我只是略懂一些简单的编程语言，懂一些agent设计，所以你跟我解释的各种专业变化我看不懂，你只需要告诉我是怎么回事，让我明白这个逻辑就行了，可以略微穿插一些专业术语
+
+5，常用脚本位置：
+- 导出整个项目源码：C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\script\export-project-source-to-desktop.mjs
+- 导出前端源码：C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\script\export-frontend-source-to-desktop.mjs
+- 停止并核查所有运行 session：C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\script\stop-auto-evolve-sessions.ps1
+- try4 环境初始化（含影子经验清理）：C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\scripts\init-try4-clean-state.ps1
+
+
+6，我没看过代码，你说的那些文件名称，什么狗皮英文名称，我一个都不知道，直接给我大白话讲这个节点是什么节点，这个函数是什么函数位于什么逻辑之内
+
+
+
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
@@ -44,11 +71,37 @@ bun run cli.ts restore-experience                  # Restore from latest archive
    - `round-runner.ts` — Traverses cases in order, evolving the experience workspace across the round.
    - `baseline-runner.ts` — Full baseline: train round + test round + knowledge snapshot.
    - `knowledge-maintainer/` — OpenCode agent that refines experience files after case failures.
-   - `long-task/` — Validator-driven long-running task framework. Bootstraps a work graph from a spec file and validators.
-   - `long-task-campaign/` — Multi-round long-task campaign that harvests failure evidence and carries it forward.
+   - `long-task/` — Validator-driven long-running task framework. Bootstraps a work graph (`work-graph.ts`) from a spec file (`spec.ts`) and validators (`validators.ts`). Key files: `contract.ts` (state/status types), `runner.ts` (main loop), `repository.ts` (persistence), `json-extract.ts` (robust JSON extraction from LLM output).
+   - `long-task-campaign/` — Multi-round long-task campaign (`spec.ts`, `contract.ts`, `runner.ts`, `repository.ts`, `prompts.ts`). Produces: `pending-expert-package/current`, `exploration-tree.json`, `campaign-working-memory.json`, `routing-control.json`.
    - `acceptance-framework/` — Framework for deploying and validating OpenCode agents against a defined acceptance contract.
    - `reverse-propagation-control/` — Layer-3 propagation control plane with state channels and recipes.
    - `propagation/` — Layer-3 propagation campaign runner.
+   - `runtime-process-registry.ts` — Tracks all spawned subprocess lifetimes with runtime scopes; round-end cleanup via scopes.
+   - `monitor.ts` — Monitor integration for process health checks.
+   - `session-execution-report.ts`, `session-learning-log.ts`, `session-task-manifest.ts` — Per-session artifact tracking.
+   - `fs.ts` — Path resolution utilities; note: `autoEvolvePath()` appends `auto-evolve/` to cwd, meaning commands may need to run from the parent repo root.
+   - `primitive-ops/`, `primitives.ts` — Low-level operation building blocks.
+   - `batch-*` — Parallel batch execution and post-judge infrastructure.
+   - `execution-strategies.ts`, `method-runtime.ts`, `method-strategies.ts`, `method-strategy-helpers.ts` — Method dispatching and execution strategy resolution.
+
+### Task Packs
+
+Real task definitions live in `task-packs/real-long-tasks/`. Current primary task: `try4-expert-bootstrap` — learns expert experience from source materials (`.xlsx`, reference Word docs, blank Word templates) to produce a reusable expert package. Also contains `campaign-smoke` for lightweight campaign validation.
+
+### Monitor Server
+
+`monitor-server.ts` — Standalone HTTP server for real-time monitoring. Scans `runtime-state/runs` and `runtime-state/propagation/workspaces`. Does **not** natively scan `runtime-state/long-task/` or `runtime-state/long-task-campaigns/` — long-task/campaign monitoring relies on live session inspection.
+
+### Runtime State
+
+`runtime-state/` is a **symlink** to `/e/opencode-auto-evolve-history/runtime-state` (large historical artifacts stored externally). Contains:
+- `runs/` — Run artifacts by timestamp
+- `long-task/` — Long-task runs, candidates, archive, shadow memory
+- `long-task-campaigns/` — Campaign runs with control surfaces
+- `maintenance-gateway/` — Maintenance requests and transactions
+- `acceptance-framework/` — Deployment runs and validation
+- `propagation/` — Layer-3 propagation workspaces
+- `experience-transaction/` — Experience workspace change transactions
 
 ### Method / Recipe System
 
@@ -75,10 +128,10 @@ Located at `experience/workspace/`. Contains Markdown expert knowledge files. Pe
 
 ### Configuration
 
-- `config.json` — Main config (paths, limits, defaults). `maxRetriesPerCase`, `maxMaintenanceRoundsPerAttempt`, `roundCaseLimit`, `regressionSampleSize`.
-- `permission-config.json` — `"open"` (no restrictions) or `"restricted"` (phase-based read/write boundaries).
-- `judge-config.json` — Judge mode (`soft_only` or `soft_plus_hard`) and auto-run skill IDs.
-- `model-config.json` — Per-phase model selection.
+- `config.json` — Main config (paths, limits, defaults). `maxRetriesPerCase: 3`, `maxMaintenanceRoundsPerAttempt: 3`, `roundCaseLimit: 5`, `regressionSampleSize: 3`, `defaultMethod: "sequential-refine"`.
+- `permission-config.json` — `"open"` (no restrictions) or `"restricted"` (phase-based read/write boundaries). Default: `"open"`.
+- `judge-config.json` — Judge mode (`soft_only` or `soft_plus_hard`) and auto-run skill IDs. Default: `"soft_plus_hard"` with skills `exact-output`, `tool-failures`, `session-behavior`.
+- `model-config.json` — Per-phase model selection (bootstrap, solve, refine, verify, regression). Default model: `minimax-cn-coding-plan/MiniMax-M2.7`, rate limit: 14 RPM.
 
 ### OpenCode Integration
 
@@ -102,6 +155,14 @@ Long tasks differ from case-based tasks:
 - `text_exact` — Exact text match.
 - `text_contains` — Substring presence.
 - `json_exact` — Exact JSON match.
+
+## Implementation Details (AGENTS.md Reference)
+
+The file `AGENTS.md` at project root contains deep implementation notes, particularly about:
+- **Long-task campaign control surfaces**: `pending-expert-package/current`, `exploration-tree.json`, `campaign-working-memory.json`, `routing-control.json` — these are the 4 files that carry state between campaign rounds.
+- **Known risks**: `collectCarryoverContext()` returns empty (carryover not wired); monitor-server doesn't scan long-task/campaign directories; restricted-mode edit permission gaps; resumption idempotency issues.
+- **Stale-running detection**: Check for real subprocesses (not just `campaign.json`/`progress_state.json` set to "running").
+- **Campaign cleanup before rerun**: Kill old processes → delete `runtime-state` directories → restore seed workspace → verify source materials.
 
 ## Patterns to Follow
 

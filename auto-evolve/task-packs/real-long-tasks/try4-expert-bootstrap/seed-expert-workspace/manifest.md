@@ -22,7 +22,7 @@ The learned workspace should grow into a formal expert surface that includes, wh
 - tool guidance
 - task routing hints
 
-The formal surface may describe itself with inline markers, a root-level `surface_contract.json`, or both. Do not assume every document must carry inline markers if the contract already declares the role map.
+The formal surface may describe itself with inline markers, a root-level `surface_contract.json`, or a mixed mode. Do not assume every document must carry inline markers if the contract already declares the role map.
 
 ## Deployment requirement
 
@@ -30,8 +30,8 @@ The final workspace must be strong enough for a blank agent to complete the depl
 
 - the formal workspace,
 - the registered capability assets,
-- the source workbook,
-- the blank templates.
+- the declared task materials,
+- the task-specific scope in `../materials/human-guidance.md`.
 
 ## Cross-Round Lessons
 

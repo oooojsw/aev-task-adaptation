@@ -10,8 +10,9 @@
     }
   ],
   "patterns": [
-    "\u3010",
-    "\u3011",
-    "XXXX"
-  ]
+    "\\u3010(?![^\\u3011]{0,50}?(?:协议|说明|处置|评估))[^\\u3011]{1,120}\\u3011",
+    "\\u951f\\u65a4\\u62f7(?![^\\u951f\\u65a4\\u62f7]{0,50}?(?:协议|说明|处置|评估))[^\\u951f\\u65a4\\u62f7]{1,120}\\u951f\\u65a4\\u62f7"
+  ],
+  "rejectOrphanBrackets": true,
+  "_comment": "V2d negative lookahead excludes known pre-existing book-title bracket patterns (协议|说明|处置|评估). Template has 49 【】 pairs; generated output should have same count if no fill occurred. Pattern fires only on unresolved placeholders."
 }

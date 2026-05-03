@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "profile": "governed",
+  "entry": "manifest.md",
+  "changeLog": "change_log.md",
+  "documents": [
+    {
+      "path": "manifest.md",
+      "role": "entry"
+    },
+    {
+      "path": "change_log.md",
+      "role": "change_log"
+    },
+    {
+      "path": "lessons/failure_lessons.md",
+      "role": "failure_lessons"
+    },
+    {
+      "path": "rules/docx_fill_rules.md",
+      "role": "docx_fill_rules"
+    },
+    {
+      "path": "rules/execution_checklist.md",
+      "role": "execution_checklist"
+    },
+    {
+      "path": "rules/legacy_doc_rules.md",
+      "role": "legacy_doc_rules"
+    },
+    {
+      "path": "rules/xlsx_inspection_rules.md",
+      "role": "xlsx_inspection_rules"
+    }
+  ],
+  "assetRoots": [
+    "../capabilities/minimax-docx",
+    "../capabilities/minimax-xlsx"
+  ],
+  "runtimeSidecarRoots": [".opencode"],
+  "sourceMaterials": {
+    "source_xlsx": {
+      "path": "../materials/source.xlsx",
+      "sheets": ["固定资产汇总表", "固定资产—设备评估明细表"],
+      "encoding": "UTF-8 shared strings"
+    },
+    "report_template": {
+      "path": "../materials/report-template.docx"
+    },
+    "explanation_template": {
+      "path": "../materials/explanation-template.docx"
+    },
+    "report_reference": {
+      "path": "../materials/report-reference.doc",
+      "format": "legacy doc"
+    },
+    "explanation_reference": {
+      "path": "../materials/explanation-reference.doc",
+      "format": "legacy doc"
+    }
+  },
+  "targetOutputs": [
+    "deployment/outputs/generated-report.docx",
+    "deployment/outputs/generated-explanation.docx"
+  ],
+  "notes": [
+    "Fill protocol: (1) dotnet merge-runs mandatory before fill; (2) process ALL word/*.xml parts; (3) apply display format to numeric values; (4) byte-level bracket scan post-fill.",
+    "Headless completion criteria: targets-exist + placeholder-free only. reference-alignment blocked by .doc format + canonicalize_numeric_token comma-separator bug. soft-document-quality requires LLM.",
+    "Validator scanning path: deployment/outputs/ is the authoritative path. task-pack-root/outputs/ is an implementation artifact — both must be kept in sync.",
+    "Blank-agent pre-conditions: expert-workspace must be seeded with manifest.md, change_log.md, surface_contract.json, lessons/failure_lessons.md, and rules/ directory (docx_fill_rules.md, execution_checklist.md, xlsx_inspection_rules.md, legacy_doc_rules.md) BEFORE invocation. Empty workspace causes first-tool-call crash.",
+    "Dispatch ticket repair protocol: after producing repair evidence, update dispatch-tickets.json ticket status AND routing-control readyForFinalAcceptance atomically in the same session.",
+    "Pre-promotion sanitization: ALL files in pending-expert-package/current/ (especially lessons/failure_lessons.md and rules/ files) must be scanned for task-specific numeric literals before promoting to expert-workspace. Apply generic placeholders to numeric example content — do NOT embed specific literal patterns. Expert-surface-generalization validator scans ALL package files — historical examples in failure_lessons.md are NOT exempt."
+  ]
+}

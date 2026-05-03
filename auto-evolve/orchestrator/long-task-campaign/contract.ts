@@ -1,13 +1,34 @@
 import type {
   LongTaskBudgets,
   LongTaskOperationalContextItem,
+  LongTaskRoundClosure,
   LongTaskRunStatus,
   LongTaskRunVerificationSignal,
 } from "../long-task/contract"
 
 export type LongTaskCampaignMode = "graph_iterative" | "single_session_iterative"
 
-export type LongTaskCampaignStatus = "bootstrapping" | "running" | "verified_success" | "round_limit_reached" | "failed"
+export type LongTaskCampaignStatus =
+  | "bootstrapping"
+  | "running"
+  | "recovery_pending"
+  | "verified_success"
+  | "round_limit_reached"
+  | "failed"
+
+export type LongTaskCampaignRecoveryAction =
+  | "restart_round"
+  | "resume_round_run"
+  | "harvest_round_run"
+  | "resume_round_postrun"
+
+export interface LongTaskCampaignRecoveryDecision {
+  action: LongTaskCampaignRecoveryAction
+  roundNumber: number
+  runID?: string
+  reason: string
+  detectedAt: string
+}
 
 export interface LongTaskCampaignSeedTarget {
   targetPath: string
@@ -307,6 +328,9 @@ export interface LongTaskCampaignRoundRecord {
   retryLessonCount: number
   learningUnitCount: number
   runVerificationSignal?: LongTaskRunVerificationSignal
+  roundClosure?: LongTaskRoundClosure
+  gateFailureKind?: "completion_gate_failed" | "execution_blocked" | "infrastructure_failure" | "final_acceptance_failed"
+  gateFailureSummary?: string
   finalAcceptanceSignal?: {
     executed: boolean
     passed: boolean
@@ -368,6 +392,10 @@ export interface LongTaskCampaignState {
   lastRunHardVerified?: boolean
   lastFinalAcceptancePassed?: boolean
   lastFinalAcceptanceResultPath?: string
+  lastRoundClosure?: LongTaskRoundClosure
+  lastGateFailureKind?: LongTaskCampaignRoundRecord["gateFailureKind"]
+  lastGateFailureSummary?: string
+  recovery?: LongTaskCampaignRecoveryDecision
 }
 
 export const DEFAULT_LONG_TASK_CAMPAIGN_CARRYOVER: LongTaskCampaignCarryoverConfig = {

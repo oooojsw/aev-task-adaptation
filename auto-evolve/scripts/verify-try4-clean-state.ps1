@@ -83,12 +83,46 @@ $checkedAt = (Get-Date).ToString("o")
 
 $repoRootFull = [System.IO.Path]::GetFullPath($RepoRoot)
 $runtimeRoot = Join-Path $repoRootFull "auto-evolve\\runtime-state"
+$autoEvolveRuntimeRoot = Join-Path $repoRootFull "auto-evolve\\.runtime"
 $taskRoot = Join-Path $repoRootFull $TaskPackRelativePath
 $seedRoot = Join-Path $taskRoot "seed-expert-workspace"
 $liveRoot = Join-Path $taskRoot "expert-workspace"
 $workspaceRoot = Join-Path $taskRoot "workspace"
 $outputsRoot = Join-Path $taskRoot "outputs"
 $deployWorkRoot = Join-Path $taskRoot "deployment\\work"
+$deploymentRoot = Join-Path $taskRoot "deployment"
+$deployOutputsRoot = Join-Path $deploymentRoot "outputs"
+
+$taskRootAllowedFiles = @(
+  "00-task-entry.md",
+  "campaign.json",
+  "spec.json",
+  "spec-round2.json"
+)
+$taskRootAllowedDirs = @(
+  "capabilities",
+  "configs",
+  "deployment",
+  "experience-workspace",
+  "expert-workspace",
+  "goal",
+  "materials",
+  "outputs",
+  "preview",
+  "seed-campaign-evidence",
+  "seed-expert-workspace",
+  "seed-expert-workspace-round2",
+  "seed-round2-evidence",
+  "workspace"
+)
+$deploymentAllowedFiles = @(
+  "deployment-spec.json"
+)
+$deploymentAllowedDirs = @(
+  "configs",
+  "outputs",
+  "work"
+)
 
 $metrics.repoRoot = $repoRootFull
 $metrics.runtimeRoot = $runtimeRoot
@@ -102,13 +136,92 @@ if (-not (Test-Path -LiteralPath $taskRoot)) {
   $findings += New-Finding -Code "task_root_missing" -Message "try4 task root is missing." -Path $taskRoot
 }
 
+$rootTransientFilePattern = "^(?:&1|null|dummy\.json|context\d*\.txt|debug_|check_|temp_|tmp_|extract_|generate_|validate_|verify_|placeholder|placeholders|remaining|report_|exp_|scan_|search_|inspect_|list_|parse_)"
+$rootTransientDirPattern = "^(?:temp_|tmp_|workspace$|task-packs$)"
+$rootTransientItems = @()
+if (Test-Path -LiteralPath $repoRootFull) {
+  $rootTransientItems += @(Get-ChildItem -LiteralPath $repoRootFull -File -Force -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -match $rootTransientFilePattern -or $_.Extension -in @(".log")
+  })
+  $rootTransientItems += @(Get-ChildItem -LiteralPath $repoRootFull -Directory -Force -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -match $rootTransientDirPattern
+  })
+}
+$metrics.rootTransientItemCount = $rootTransientItems.Count
+if ($rootTransientItems.Count -gt 0) {
+  foreach ($item in ($rootTransientItems | Select-Object -First 30)) {
+    $findings += New-Finding -Code "repo_root_transient_item" -Message "Project root still contains a temporary/debug artifact that can pollute agent search." -Path $item.FullName
+  }
+}
+
+$autoRuntimeResidue = @()
+if (Test-Path -LiteralPath $autoEvolveRuntimeRoot) {
+  $autoRuntimeResidue = @(Get-ChildItem -LiteralPath $autoEvolveRuntimeRoot -Force -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -in @("opencode-config", "opencode-isolated-env", "probe-config", "probe-iso-env") -or
+    $_.Name -like "probe-*.txt"
+  })
+}
+$metrics.autoRuntimeResidueCount = $autoRuntimeResidue.Count
+if ($autoRuntimeResidue.Count -gt 0) {
+  foreach ($item in ($autoRuntimeResidue | Select-Object -First 20)) {
+    $findings += New-Finding -Code "auto_runtime_cache_residue" -Message "auto-evolve .runtime still contains old OpenCode/probe cache." -Path $item.FullName
+  }
+}
+
+# 0) strict surface checks for root/deployment (block hidden pollution)
+if (Test-Path -LiteralPath $taskRoot) {
+  $allowedFiles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($name in $taskRootAllowedFiles) { [void]$allowedFiles.Add($name) }
+  $allowedDirs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($name in $taskRootAllowedDirs) { [void]$allowedDirs.Add($name) }
+
+  $rootChildren = Get-ChildItem -LiteralPath $taskRoot -Force -ErrorAction SilentlyContinue
+  foreach ($child in $rootChildren) {
+    if ($child.PSIsContainer) {
+      if (-not $allowedDirs.Contains($child.Name)) {
+        $findings += New-Finding -Code "task_root_unexpected_dir" -Message "Unexpected directory exists under task root." -Path $child.FullName
+      }
+      continue
+    }
+    if (-not $allowedFiles.Contains($child.Name)) {
+      $findings += New-Finding -Code "task_root_unexpected_file" -Message "Unexpected file exists under task root." -Path $child.FullName
+    }
+  }
+}
+
+if (Test-Path -LiteralPath $deploymentRoot) {
+  $allowedFiles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($name in $deploymentAllowedFiles) { [void]$allowedFiles.Add($name) }
+  $allowedDirs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($name in $deploymentAllowedDirs) { [void]$allowedDirs.Add($name) }
+
+  $deploymentChildren = Get-ChildItem -LiteralPath $deploymentRoot -Force -ErrorAction SilentlyContinue
+  foreach ($child in $deploymentChildren) {
+    if ($child.PSIsContainer) {
+      if (-not $allowedDirs.Contains($child.Name)) {
+        $findings += New-Finding -Code "deployment_unexpected_dir" -Message "Unexpected directory exists under deployment root." -Path $child.FullName
+      }
+      continue
+    }
+    if (-not $allowedFiles.Contains($child.Name)) {
+      $findings += New-Finding -Code "deployment_unexpected_file" -Message "Unexpected file exists under deployment root." -Path $child.FullName
+    }
+  }
+}
+
 # 1) Residual runtime processes
 $selfPid = $PID
 $processMatches = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+  $cmd = ""
+  if ($null -ne $_.CommandLine) { $cmd = [string]$_.CommandLine }
   $_.ProcessId -ne $selfPid -and
+  -not (Contains-AnyKeyword -Text $cmd -Keywords @(
+    "verify-try4-clean-state.ps1",
+    "Get-CimInstance Win32_Process"
+  )) -and
   ($_.Name -match "bun.exe|node.exe|powershell.exe|opencode-cli.exe") -and
   (
-    Contains-AnyKeyword -Text $_.CommandLine -Keywords @(
+    Contains-AnyKeyword -Text $cmd -Keywords @(
       "run-long-task-campaign",
       "run-long-task",
       "Long Task Execute",
@@ -147,6 +260,19 @@ foreach ($check in $dirChecks) {
     }
   }
   $metrics["residue_$($check.id)"] = $matchCount
+}
+
+$runtimeResidueItems = @()
+if (Test-Path -LiteralPath $runtimeRoot) {
+  $runtimeResidueItems = @(Get-ChildItem -LiteralPath $runtimeRoot -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
+    Contains-AnyKeyword -Text $_.FullName -Keywords $RuntimeKeywords
+  })
+}
+$metrics.residue_runtime_items = $runtimeResidueItems.Count
+if ($runtimeResidueItems.Count -gt 0) {
+  foreach ($item in ($runtimeResidueItems | Select-Object -First 30)) {
+    $findings += New-Finding -Code "runtime_keyword_residue" -Message "Runtime-state still contains a task/deployment keyword residue." -Path $item.FullName
+  }
 }
 
 $pendingSmokePath = Join-Path $runtimeRoot "campaign-pending-smoke"
@@ -192,7 +318,7 @@ foreach ($item in $requiredMaterials) {
 $metrics.missingMaterialCount = $missingMaterials.Count
 
 # 5) working directories must be empty
-$workingDirs = @($workspaceRoot, $outputsRoot, $deployWorkRoot)
+$workingDirs = @($workspaceRoot, $outputsRoot, $deployWorkRoot, $deployOutputsRoot)
 foreach ($dir in $workingDirs) {
   if (-not (Test-Path -LiteralPath $dir)) {
     $findings += New-Finding -Code "working_dir_missing" -Message "Working directory should exist and be empty." -Path $dir

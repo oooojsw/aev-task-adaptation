@@ -1,15 +1,8 @@
-Learn a formal expert experience workspace that allows a blank agent to go from:
+Learn a formal expert experience workspace that allows a blank agent to go from declared source materials to declared target outputs in one uninterrupted session, using only the learned expert workspace plus the registered capability assets.
 
-- source.xlsx
-- report-template.docx
-- explanation-template.docx
+Detailed output scope, template coverage requirements, and document-modification boundaries are defined only in:
 
-to:
-
-- generated-report.docx
-- generated-explanation.docx
-
-in one uninterrupted session, using only the learned expert workspace plus the registered capability assets.
+- materials/human-guidance.md
 
 The generated documents do not need to be byte-identical to the expert references, but they must:
 

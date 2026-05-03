@@ -6,9 +6,11 @@ import { setTimeout as sleep } from "node:timers/promises"
 import {
   autoEvolvePath,
   ensureDirectory,
+  isPathWithinTruthRoot,
   pathExists,
   readJsonFile,
   readTextFile,
+  resolvePathTruth,
   writeJsonFile,
   writeTextFile,
 } from "../fs"
@@ -17,7 +19,7 @@ import {
   readExperienceWorkspace,
   writeExperienceWorkspaceSnapshot,
 } from "../experience-workspace"
-import { runLongTask } from "../long-task/runner"
+import { resumeLongTask, runLongTask } from "../long-task/runner"
 import { runLongTaskValidator } from "../long-task/validators"
 import { readOperationalContext, resolveExistingLongTaskRun } from "../long-task/repository"
 import { loadLongTaskSpec } from "../long-task/spec"
@@ -38,6 +40,7 @@ import {
   type LongTaskCampaignExplorationTreeDocument,
   type LongTaskCampaignExplorationNode,
   type LongTaskCampaignOperationalMemoryRecord,
+  type LongTaskCampaignRecoveryDecision,
   type LongTaskCampaignReviewSuggestion,
   type LongTaskCampaignRoundRecord,
   type LongTaskCampaignRoutingControl,
@@ -65,6 +68,7 @@ import {
   readLongTaskCampaignState,
   readLongTaskCampaignRoutingControl,
   readLongTaskCampaignWorkingMemory,
+  rewriteLongTaskCampaignHistoryRecord,
   writeLongTaskCampaignLessons,
   writeLongTaskCampaignExplorationTree,
   writeLongTaskCampaignOperationalMemory,
@@ -261,7 +265,8 @@ async function healStaleRuntimeStates(cwd: string) {
     const campaignEntries = await readdir(campaignsRoot, { withFileTypes: true })
     for (const entry of campaignEntries) {
       if (!entry.isDirectory()) continue
-      const campaignStatePath = path.join(campaignsRoot, entry.name, "campaign.json")
+      const campaignPaths = longTaskCampaignPaths(cwd, entry.name)
+      const campaignStatePath = campaignPaths.campaignStatePath
       if (!(await pathExists(campaignStatePath))) continue
       let state: LongTaskCampaignState
       try {
@@ -290,18 +295,32 @@ async function healStaleRuntimeStates(cwd: string) {
       if (typeof state.ownerPID === "number" && Number.isFinite(state.ownerPID) && state.ownerPID > 0) {
         await terminateProcessTree(state.ownerPID)
       }
+      const history = await readJsonLinesIfExists<LongTaskCampaignRoundRecord>(campaignPaths.historyPath)
+      const recovery =
+        (await determineCampaignRecoveryDecision({
+          cwd,
+          campaignPaths,
+          state,
+          history,
+        })) ??
+        ({
+          action: "restart_round",
+          roundNumber: Math.max(1, state.currentRound || 1),
+          reason:
+            typeof state.ownerPID === "number"
+              ? `Campaign owner process ${state.ownerPID} disappeared; restart the current round from its latest safe checkpoint.`
+              : "Campaign stalled before a stable owner was recorded; restart the current round from its latest safe checkpoint.",
+          detectedAt: now,
+        } satisfies LongTaskCampaignRecoveryDecision)
 
       await writeJsonFile(campaignStatePath, {
         ...state,
-        status: "failed",
+        status: "recovery_pending",
         ownerPID: process.pid,
         heartbeatAt: now,
         updatedAt: now,
-        lastSummary:
-          state.lastSummary ??
-          (typeof state.ownerPID === "number"
-            ? `Campaign owner process ${state.ownerPID} is no longer alive. Marked stale campaign as failed.`
-            : "Campaign stalled in bootstrapping without ownerPID. Marked stale campaign as failed."),
+        lastSummary: recovery.reason,
+        recovery,
       } satisfies LongTaskCampaignState)
     }
   }
@@ -340,18 +359,24 @@ async function healStaleRuntimeStates(cwd: string) {
       if (typeof progress.ownerPID === "number" && Number.isFinite(progress.ownerPID) && progress.ownerPID > 0) {
         await terminateProcessTree(progress.ownerPID)
       }
-
+      const hadMeaningfulProgress =
+        Boolean(progress.activeUnitID) ||
+        Boolean(progress.lastProgressAt) ||
+        (progress.totalUnitAttempts ?? 0) > 0 ||
+        (progress.graphRevision ?? 0) > 0
+      const recoveredStatus: LongTaskProgressState["status"] =
+        progress.status === "planning" ? "planning" : hadMeaningfulProgress ? "waiting_for_retry" : "bootstrapping"
       await writeJsonFile(progressPath, {
         ...progress,
-        status: "blocked_failure",
+        status: recoveredStatus,
         ownerPID: process.pid,
         heartbeatAt: now,
         updatedAt: now,
         finalSummary:
           progress.finalSummary ??
           (typeof progress.ownerPID === "number"
-            ? `Run owner process ${progress.ownerPID} is no longer alive. Marked stale run as blocked_failure.`
-            : "Run stalled in bootstrapping without ownerPID. Marked stale run as blocked_failure."),
+            ? `Run owner process ${progress.ownerPID} disappeared; changed stale run into ${recoveredStatus} so it can be resumed from the latest safe checkpoint.`
+            : `Run stalled before a stable owner was recorded; changed stale run into ${recoveredStatus} so it can be resumed from the latest safe checkpoint.`),
       } satisfies LongTaskProgressState)
     }
   }
@@ -403,6 +428,211 @@ async function findExistingLiveCampaign(input: { cwd: string; title: string; bas
   if (!candidates.length) return undefined
   candidates.sort((left, right) => right.freshnessMs - left.freshnessMs)
   return candidates[0]
+}
+
+function isRecoverableCampaignStatus(status: LongTaskCampaignState["status"]) {
+  return status === "recovery_pending"
+}
+
+function isTerminalLongTaskStatus(status: LongTaskRunStatus) {
+  return (
+    status === "graph_completed" ||
+    status === "verified_success" ||
+    status === "exhausted_failure" ||
+    status === "stagnation_failure" ||
+    status === "blocked_failure" ||
+    status === "archived"
+  )
+}
+
+function expectedCampaignRoundTitle(campaignTitle: string, roundNumber: number) {
+  return `${campaignTitle}-${roundID(roundNumber)}`
+}
+
+async function findLatestLongTaskRunForCampaignRound(input: {
+  cwd: string
+  expectedTitle: string
+  pendingPackageRoot: string
+}) {
+  const runsRoot = autoEvolvePath(input.cwd, "runtime-state", "long-task", "runs")
+  if (!(await pathExists(runsRoot))) return undefined
+  const expectedPendingRoot = resolvePathTruth(input.pendingPackageRoot)
+  const entries = await readdir(runsRoot, { withFileTypes: true })
+  const candidates: Array<{
+    runID: string
+    progress: LongTaskProgressState
+    freshnessMs: number
+  }> = []
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const taskPath = path.join(runsRoot, entry.name, "task.json")
+    const progressPath = path.join(runsRoot, entry.name, "progress_state.json")
+    if (!(await pathExists(taskPath)) || !(await pathExists(progressPath))) continue
+    let spec: LongTaskSpec
+    let progress: LongTaskProgressState
+    try {
+      spec = await readJsonFile<LongTaskSpec>(taskPath)
+      progress = await readJsonFile<LongTaskProgressState>(progressPath)
+    } catch {
+      continue
+    }
+    if (spec.title !== input.expectedTitle) continue
+    const specPendingRoot =
+      typeof spec.campaignPendingPackageRoot === "string" && spec.campaignPendingPackageRoot.trim().length > 0
+        ? resolvePathTruth(spec.campaignPendingPackageRoot)
+        : undefined
+    if (specPendingRoot !== expectedPendingRoot) continue
+    const freshnessMs =
+      parseTimestampMs(progress.heartbeatAt) ??
+      parseTimestampMs(progress.updatedAt) ??
+      parseTimestampMs(progress.createdAt) ??
+      0
+    candidates.push({
+      runID: entry.name,
+      progress,
+      freshnessMs,
+    })
+  }
+  if (!candidates.length) return undefined
+  candidates.sort((left, right) => right.freshnessMs - left.freshnessMs)
+  return candidates[0]
+}
+
+async function determineCampaignRecoveryDecision(input: {
+  cwd: string
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+  state: LongTaskCampaignState
+  history: LongTaskCampaignRoundRecord[]
+}) {
+  const activeRound = Math.max(1, input.state.currentRound || 1)
+  const latestRoundRecord = [...input.history]
+    .filter((record) => record.roundNumber === activeRound)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+
+  if (latestRoundRecord && !latestRoundRecord.finalAcceptanceSignal) {
+    return {
+      action: "resume_round_postrun",
+      roundNumber: activeRound,
+      runID: latestRoundRecord.sourceRunID,
+      reason: `Round ${roundID(activeRound)} already produced run artifacts, but lead/reviewer/final acceptance did not finish cleanly.`,
+      detectedAt: nowISO(),
+    } satisfies LongTaskCampaignRecoveryDecision
+  }
+
+  const completedRound = input.history.reduce((max, item) => Math.max(max, item.roundNumber), 0)
+  if (activeRound > completedRound) {
+    const latestRun = await findLatestLongTaskRunForCampaignRound({
+      cwd: input.cwd,
+      expectedTitle: expectedCampaignRoundTitle(input.state.title, activeRound),
+      pendingPackageRoot: input.campaignPaths.pendingCurrentRoot,
+    })
+    if (!latestRun) {
+      return {
+        action: "restart_round",
+        roundNumber: activeRound,
+        reason: `Round ${roundID(activeRound)} had no resumable inner run, so the safest recovery point is to restart that round.`,
+        detectedAt: nowISO(),
+      } satisfies LongTaskCampaignRecoveryDecision
+    }
+    return {
+      action: isTerminalLongTaskStatus(latestRun.progress.status) ? "harvest_round_run" : "resume_round_run",
+      roundNumber: activeRound,
+      runID: latestRun.runID,
+      reason: isTerminalLongTaskStatus(latestRun.progress.status)
+        ? `Round ${roundID(activeRound)} already finished the inner long-task run; resume from the harvested round boundary.`
+        : `Round ${roundID(activeRound)} was mid-run when the owner died; resume that inner long-task run directly.`,
+      detectedAt: nowISO(),
+    } satisfies LongTaskCampaignRecoveryDecision
+  }
+
+  return undefined
+}
+
+async function findRecoverableCampaignForTarget(input: { cwd: string; title: string; baseSpecPath: string }) {
+  const campaignsRoot = autoEvolvePath(input.cwd, "runtime-state", "long-task-campaigns")
+  if (!(await pathExists(campaignsRoot))) return undefined
+  const normalizedTitle = input.title.trim()
+  const normalizedBaseSpecPath = path.resolve(input.baseSpecPath)
+  const entries = await readdir(campaignsRoot, { withFileTypes: true })
+  const candidates: Array<{
+    campaignID: string
+    campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+    state: LongTaskCampaignState
+    freshnessMs: number
+  }> = []
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const campaignID = entry.name
+    const campaignPaths = longTaskCampaignPaths(input.cwd, campaignID)
+    if (!(await pathExists(campaignPaths.campaignStatePath))) continue
+    let state: LongTaskCampaignState
+    try {
+      state = await readLongTaskCampaignState(campaignPaths)
+    } catch {
+      continue
+    }
+    if (!isRecoverableCampaignStatus(state.status)) continue
+    const stateTitle = typeof state.title === "string" ? state.title.trim() : ""
+    const stateBaseSpecPath = typeof state.baseSpecPath === "string" ? path.resolve(state.baseSpecPath) : ""
+    const sameTarget = stateTitle === normalizedTitle || stateBaseSpecPath === normalizedBaseSpecPath
+    if (!sameTarget) continue
+    const freshnessMs =
+      parseTimestampMs(state.heartbeatAt) ??
+      parseTimestampMs(state.updatedAt) ??
+      parseTimestampMs(state.createdAt) ??
+      0
+    candidates.push({
+      campaignID,
+      campaignPaths,
+      state,
+      freshnessMs,
+    })
+  }
+  if (!candidates.length) return undefined
+  candidates.sort((left, right) => right.freshnessMs - left.freshnessMs)
+  return candidates[0]
+}
+
+async function rehydrateExistingLongTaskRunResult(input: { cwd: string; runID: string }) {
+  const resolved = resolveExistingLongTaskRun(input.cwd, input.runID)
+  const [progress, summary] = await Promise.all([
+    readJsonFile<LongTaskProgressState>(resolved.run.progressStatePath),
+    readJsonFile<Awaited<ReturnType<typeof runLongTask>>["summary"]>(resolved.run.summaryJsonPath),
+  ])
+  return {
+    runID: input.runID,
+    runDir: resolved.run.root,
+    status: progress.status,
+    summaryPath: resolved.run.summaryJsonPath,
+    summary,
+  } satisfies Awaited<ReturnType<typeof runLongTask>>
+}
+
+type LongTaskCampaignRunResult = {
+  campaignID: string
+  campaignDir: string
+  status: LongTaskCampaignState["status"]
+  roundsCompleted: number
+  lastRunID?: string
+  lessonsPath: string
+  roundSummaryPath?: string
+}
+
+function toCampaignRunResult(input: {
+  campaignID: string
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+  state: LongTaskCampaignState
+  roundsCompleted?: number
+}): LongTaskCampaignRunResult {
+  return {
+    campaignID: input.campaignID,
+    campaignDir: input.campaignPaths.root,
+    status: input.state.status,
+    roundsCompleted: input.roundsCompleted ?? input.state.currentRound,
+    lastRunID: input.state.lastRunID,
+    lessonsPath: input.campaignPaths.campaignLessonsPath,
+    roundSummaryPath: input.state.lastRoundSummaryPath,
+  }
 }
 
 async function updateCampaignStatus(
@@ -1482,6 +1712,45 @@ async function copyPathIntoTarget(sourcePath: string, targetPath: string) {
   await cp(sourcePath, targetPath, { force: true })
 }
 
+function assertCampaignTruthPath(label: string, truthRoot: string, candidate: string) {
+  if (isPathWithinTruthRoot(truthRoot, candidate)) return
+  const resolvedCandidate = resolvePathTruth(candidate)
+  throw new Error(
+    `${label} escaped the current campaign truth root. expected_under=${truthRoot} actual=${resolvedCandidate}`,
+  )
+}
+
+function enforceCampaignTruthPaths(input: {
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+  roundPaths?: ReturnType<typeof longTaskCampaignRoundPaths>
+}) {
+  const truthRoot = resolvePathTruth(input.campaignPaths.root)
+  const corePaths = [
+    ["campaign root", input.campaignPaths.root],
+    ["pending expert package", input.campaignPaths.pendingCurrentRoot],
+    ["exploration tree", input.campaignPaths.explorationTreePath],
+    ["routing control", input.campaignPaths.campaignRoutingControlPath],
+    ["campaign working memory", input.campaignPaths.campaignWorkingMemoryPath],
+    ["dispatch tickets", input.campaignPaths.dispatchTicketsPath],
+    ["acceptance experience", input.campaignPaths.acceptanceExperienceJsonlPath],
+  ] as const
+  for (const [label, candidate] of corePaths) {
+    assertCampaignTruthPath(label, truthRoot, candidate)
+  }
+  if (!input.roundPaths) return truthRoot
+  const roundPaths = [
+    ["round root", input.roundPaths.root],
+    ["round pending package snapshot", input.roundPaths.pendingPackageSnapshotRoot],
+    ["round tree draft", input.roundPaths.explorationTreeDraftPath],
+    ["round routing draft", input.roundPaths.routingControlDraftPath],
+    ["round final acceptance root", input.roundPaths.finalAcceptanceRoot],
+  ] as const
+  for (const [label, candidate] of roundPaths) {
+    assertCampaignTruthPath(label, truthRoot, candidate)
+  }
+  return truthRoot
+}
+
 async function seedCampaignCurrentPendingPackage(input: {
   currentRoot: string
   seedTarget: LongTaskCampaignSeedTarget | undefined
@@ -2146,6 +2415,10 @@ function buildRoundSummaryMarkdown(input: {
   finalStatus: LongTaskRunStatus
   summary: string
   runVerificationSignal?: LongTaskCampaignRunTrace["runVerificationSignal"]
+  roundClosure?: LongTaskCampaignRoundRecord["roundClosure"]
+  gateFailureKind?: LongTaskCampaignRoundRecord["gateFailureKind"]
+  gateFailureSummary?: string
+  finalAcceptanceSignal?: LongTaskCampaignRoundRecord["finalAcceptanceSignal"]
   failures: Record<string, unknown>[]
   retryLessons: Record<string, unknown>[]
   learningUnits: Record<string, unknown>[]
@@ -2163,6 +2436,13 @@ function buildRoundSummaryMarkdown(input: {
     `- units_converged: ${input.runVerificationSignal?.unitsConverged ?? "unknown"}`,
     `- completion_gate_mode: ${input.runVerificationSignal?.completionGateMode ?? "unknown"}`,
     `- completion_gate_passed: ${input.runVerificationSignal?.completionGatePassed ?? "unknown"}`,
+    `- round_closure: ${input.roundClosure ?? "unknown"}`,
+    `- gate_failure_kind: ${input.gateFailureKind ?? "none"}`,
+    `- gate_failure_summary: ${input.gateFailureSummary ?? "none"}`,
+    `- final_acceptance_executed: ${input.finalAcceptanceSignal?.executed ?? false}`,
+    `- final_acceptance_passed: ${input.finalAcceptanceSignal?.passed ?? false}`,
+    `- final_acceptance_failed_validators: ${input.finalAcceptanceSignal?.failedValidatorIDs.join(", ") || "none"}`,
+    `- final_acceptance_feedback_path: ${input.finalAcceptanceSignal?.feedbackPath ?? "none"}`,
     `- failure_packets: ${input.failures.length}`,
     `- retry_lessons: ${input.retryLessons.length}`,
     `- learning_units: ${input.learningUnits.length}`,
@@ -2180,6 +2460,47 @@ function buildRoundSummaryMarkdown(input: {
     ...(learningLines.length ? learningLines : ["- none"]),
     "",
   ].join("\n")
+}
+
+function finalizeRoundRecordWithAcceptance(input: {
+  roundRecord: LongTaskCampaignRoundRecord
+  finalAcceptance?: {
+    passed: boolean
+    summary: string
+    validatorResults: Array<{
+      validatorID: string
+      passed: boolean
+    }>
+  }
+  feedbackPath?: string
+}) {
+  if (!input.finalAcceptance) {
+    return {
+      ...input.roundRecord,
+      finalAcceptanceSignal: {
+        executed: false,
+        passed: false,
+        failedValidatorIDs: [],
+        feedbackPath: input.feedbackPath,
+      },
+    } satisfies LongTaskCampaignRoundRecord
+  }
+  const failedValidatorIDs = input.finalAcceptance.validatorResults
+    .filter((item) => !item.passed)
+    .map((item) => item.validatorID)
+  return {
+    ...input.roundRecord,
+    summary: input.finalAcceptance.summary,
+    roundClosure: input.finalAcceptance.passed ? "closed_success" : "closed_repairable",
+    gateFailureKind: input.finalAcceptance.passed ? undefined : "final_acceptance_failed",
+    gateFailureSummary: input.finalAcceptance.passed ? undefined : input.finalAcceptance.summary,
+    finalAcceptanceSignal: {
+      executed: true,
+      passed: input.finalAcceptance.passed,
+      failedValidatorIDs,
+      feedbackPath: input.feedbackPath,
+    },
+  } satisfies LongTaskCampaignRoundRecord
 }
 
 function buildCampaignLessonsMarkdown(input: {
@@ -2241,7 +2562,7 @@ function buildCampaignLessonsMarkdown(input: {
     "",
     ...input.records.map(
       (record) =>
-        `- ${record.roundID}: ${record.finalStatus} | ${record.summary} | failures=${record.failurePacketCount} retry_lessons=${record.retryLessonCount} learning_units=${record.learningUnitCount}`,
+        `- ${record.roundID}: ${record.finalStatus} | closure=${record.roundClosure ?? "unknown"} | ${record.summary} | failures=${record.failurePacketCount} retry_lessons=${record.retryLessonCount} learning_units=${record.learningUnitCount}`,
     ),
     "",
   ].join("\n")
@@ -2401,6 +2722,9 @@ async function harvestRound(input: {
     finalStatus: input.runResult.status,
     summary: input.runResult.summary.summary,
     runVerificationSignal: input.runResult.summary.verificationSignal,
+    roundClosure: input.runResult.summary.roundClosure,
+    gateFailureKind: input.runResult.summary.gateFailureKind,
+    gateFailureSummary: input.runResult.summary.gateFailureSummary,
     failures: failurePackets,
     retryLessons,
     learningUnits,
@@ -2439,6 +2763,9 @@ async function harvestRound(input: {
       retryLessonCount: retryLessons.length,
       learningUnitCount: learningUnits.length,
       runVerificationSignal: input.runResult.summary.verificationSignal,
+      roundClosure: input.runResult.summary.roundClosure,
+      gateFailureKind: input.runResult.summary.gateFailureKind,
+      gateFailureSummary: input.runResult.summary.gateFailureSummary,
       roundSummaryPath: input.roundPaths.roundSummaryPath,
       snapshotPaths,
       createdAt: nowISO(),
@@ -3205,7 +3532,7 @@ async function promoteRoundPendingAndTreeToCurrent(input: {
   await writeLongTaskCampaignRoutingControl(input.campaignPaths, routingControl)
 }
 
-export async function runLongTaskCampaign(input: { cwd: string; specPath: string }) {
+export async function runLongTaskCampaign(input: { cwd: string; specPath: string }): Promise<LongTaskCampaignRunResult> {
   await healStaleRuntimeStates(input.cwd)
   const { spec: campaignSpec } = await loadLongTaskCampaignSpec(input.specPath)
   const { spec: baseSpec } = await loadLongTaskSpec(campaignSpec.baseSpecPath)
@@ -3215,15 +3542,23 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
     baseSpecPath: campaignSpec.baseSpecPath,
   })
   if (existingLiveCampaign) {
-    return {
+    return toCampaignRunResult({
       campaignID: existingLiveCampaign.campaignID,
-      campaignDir: existingLiveCampaign.campaignPaths.root,
-      status: existingLiveCampaign.state.status,
-      roundsCompleted: existingLiveCampaign.state.currentRound,
-      lastRunID: existingLiveCampaign.state.lastRunID,
-      lessonsPath: existingLiveCampaign.campaignPaths.campaignLessonsPath,
-      roundSummaryPath: existingLiveCampaign.state.lastRoundSummaryPath,
-    }
+      campaignPaths: existingLiveCampaign.campaignPaths,
+      state: existingLiveCampaign.state,
+    })
+  }
+  const recoverableCampaign = await findRecoverableCampaignForTarget({
+    cwd: input.cwd,
+    title: campaignSpec.title,
+    baseSpecPath: campaignSpec.baseSpecPath,
+  })
+  if (recoverableCampaign) {
+    return resumeLongTaskCampaign({
+      cwd: input.cwd,
+      campaignID: recoverableCampaign.campaignID,
+      specPath: input.specPath,
+    })
   }
   const campaignID = createLongTaskCampaignID(campaignSpec.title)
   const campaignPaths = longTaskCampaignPaths(input.cwd, campaignID)
@@ -3240,9 +3575,11 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
     createdAt: nowISO(),
     updatedAt: nowISO(),
     notes: campaignSpec.notes,
+    recovery: undefined,
   }
 
   await initializeLongTaskCampaign(campaignPaths, initialState)
+  enforceCampaignTruthPaths({ campaignPaths })
   await seedCampaignCurrentPendingPackage({
     currentRoot: campaignPaths.pendingCurrentRoot,
     seedTarget: primaryExperienceWorkspaceSeedTarget(campaignSpec.seedTargets),
@@ -3252,9 +3589,10 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
   let lastRoundNumber = 0
   let lastRunID: string | undefined
   let lastRoundSummaryPath: string | undefined
+  const startRound = 1
 
   try {
-    for (let roundNumber = 1; roundNumber <= campaignSpec.maxRounds; roundNumber += 1) {
+    for (let roundNumber = startRound; roundNumber <= campaignSpec.maxRounds; roundNumber += 1) {
       lastRoundNumber = roundNumber
       const roundRuntimeScope = campaignRoundRuntimeScope(campaignID, roundNumber)
       const roundPaths = longTaskCampaignRoundPaths(campaignPaths, roundNumber)
@@ -3276,6 +3614,7 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
         await ensureDirectory(roundPaths.workersRoot)
         await ensureDirectory(roundPaths.reviewerRoot)
         await ensureDirectory(roundPaths.finalAcceptanceRoot)
+        enforceCampaignTruthPaths({ campaignPaths, roundPaths })
 
         await prepareCampaignRoundState({
           baseSpec,
@@ -3353,15 +3692,12 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
             lastRoundSummaryPath: harvested.roundRecord.roundSummaryPath,
           }
           await writeLongTaskCampaignState(campaignPaths, nextState)
-          return {
+          return toCampaignRunResult({
             campaignID,
-            campaignDir: campaignPaths.root,
-            status: nextState.status,
+            campaignPaths,
+            state: nextState,
             roundsCompleted: roundNumber,
-            lastRunID: runResult.runID,
-            lessonsPath: campaignPaths.campaignLessonsPath,
-            roundSummaryPath: harvested.roundRecord.roundSummaryPath,
-          }
+          })
         }
 
         const loopDetection = detectRepeatedNoProgressLoop(history)
@@ -3376,15 +3712,12 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
             lastRoundSummaryPath: harvested.roundRecord.roundSummaryPath,
           }
           await writeLongTaskCampaignState(campaignPaths, nextState)
-          return {
+          return toCampaignRunResult({
             campaignID,
-            campaignDir: campaignPaths.root,
-            status: nextState.status,
+            campaignPaths,
+            state: nextState,
             roundsCompleted: roundNumber,
-            lastRunID: runResult.runID,
-            lessonsPath: campaignPaths.campaignLessonsPath,
-            roundSummaryPath: harvested.roundRecord.roundSummaryPath,
-          }
+          })
         }
 
         await appendLinesToAggregate(
@@ -3672,15 +4005,55 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
           if (finalAcceptance.passed) break
         }
 
+        const finalizedRoundRecord = finalizeRoundRecordWithAcceptance({
+          roundRecord: harvested.roundRecord,
+          finalAcceptance,
+          feedbackPath: finalAcceptanceFeedbackPath,
+        })
+        harvested.roundRecord = finalizedRoundRecord
+        history[history.length - 1] = finalizedRoundRecord
+        await rewriteLongTaskCampaignHistoryRecord(campaignPaths, roundNumber, () => finalizedRoundRecord)
+        await writeTextFile(
+          roundPaths.roundSummaryPath,
+          buildRoundSummaryMarkdown({
+            roundNumber,
+            mode: campaignSpec.mode,
+            finalStatus: finalizedRoundRecord.finalStatus,
+            summary: finalizedRoundRecord.summary,
+            runVerificationSignal: finalizedRoundRecord.runVerificationSignal,
+            roundClosure: finalizedRoundRecord.roundClosure,
+            gateFailureKind: finalizedRoundRecord.gateFailureKind,
+            gateFailureSummary: finalizedRoundRecord.gateFailureSummary,
+            finalAcceptanceSignal: finalizedRoundRecord.finalAcceptanceSignal,
+            failures: harvested.failurePackets,
+            retryLessons: harvested.retryLessons,
+            learningUnits: harvested.learningUnits,
+          }),
+        )
+
         const nextStatus =
           finalAcceptance?.passed === true
             ? "verified_success"
             : roundNumber >= campaignSpec.maxRounds
               ? "round_limit_reached"
               : "running"
+        const lastRoundClosure =
+          finalAcceptance?.passed === true
+            ? "closed_success"
+            : finalAcceptance
+              ? "closed_repairable"
+              : (finalizedRoundRecord.roundClosure ?? "closed_blocked")
+        const lastGateFailureKind =
+          finalAcceptance && !finalAcceptance.passed
+            ? "final_acceptance_failed"
+            : finalizedRoundRecord.gateFailureKind
+        const lastGateFailureSummary =
+          finalAcceptance && !finalAcceptance.passed
+            ? finalAcceptance.summary
+            : finalizedRoundRecord.gateFailureSummary
         const lastRunHardVerified =
-          harvested.roundRecord.runVerificationSignal?.completionGateMode === "required" &&
-          harvested.roundRecord.runVerificationSignal?.completionGatePassed === true
+          finalizedRoundRecord.runVerificationSignal?.completionGateMode === "required" &&
+          finalizedRoundRecord.runVerificationSignal?.completionGatePassed === true
 
         const state: LongTaskCampaignState = {
           ...initialState,
@@ -3688,24 +4061,24 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
           status: nextStatus,
           updatedAt: nowISO(),
           lastRunID: runResult.runID,
-          lastSummary: finalAcceptance?.summary ?? harvested.roundRecord.summary,
-          lastRoundSummaryPath: harvested.roundRecord.roundSummaryPath,
+          lastSummary: finalAcceptance?.summary ?? finalizedRoundRecord.summary,
+          lastRoundSummaryPath: finalizedRoundRecord.roundSummaryPath,
           lastRunHardVerified,
           lastFinalAcceptancePassed: finalAcceptance?.passed === true,
           lastFinalAcceptanceResultPath: finalAcceptanceFeedbackPath,
+          lastRoundClosure,
+          lastGateFailureKind,
+          lastGateFailureSummary,
         }
         await writeLongTaskCampaignState(campaignPaths, state)
 
         if (nextStatus === "verified_success") {
-          return {
+          return toCampaignRunResult({
             campaignID,
-            campaignDir: campaignPaths.root,
-            status: nextStatus,
+            campaignPaths,
+            state,
             roundsCompleted: roundNumber,
-            lastRunID: runResult.runID,
-            lessonsPath: campaignPaths.campaignLessonsPath,
-            roundSummaryPath: harvested.roundRecord.roundSummaryPath,
-          }
+          })
         }
       } finally {
         await cleanupRuntimeScopeWithRetry(roundRuntimeScope)
@@ -3723,15 +4096,12 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
       lastRoundSummaryPath,
     }
     await writeLongTaskCampaignState(campaignPaths, failureState)
-    return {
+    return toCampaignRunResult({
       campaignID,
-      campaignDir: campaignPaths.root,
-      status: failureState.status,
+      campaignPaths,
+      state: failureState,
       roundsCompleted: history.length,
-      lastRunID: failureState.lastRunID,
-      lessonsPath: campaignPaths.campaignLessonsPath,
-      roundSummaryPath: failureState.lastRoundSummaryPath,
-    }
+    })
   }
 
   const finalState: LongTaskCampaignState = {
@@ -3745,13 +4115,665 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
   }
   await writeLongTaskCampaignState(campaignPaths, finalState)
 
-  return {
+  return toCampaignRunResult({
     campaignID,
-    campaignDir: campaignPaths.root,
-    status: finalState.status,
+    campaignPaths,
+    state: finalState,
     roundsCompleted: campaignSpec.maxRounds,
-    lastRunID: finalState.lastRunID,
-    lessonsPath: campaignPaths.campaignLessonsPath,
-    roundSummaryPath: finalState.lastRoundSummaryPath,
+  })
+}
+
+export async function resumeLongTaskCampaign(input: {
+  cwd: string
+  campaignID: string
+  specPath: string
+}): Promise<LongTaskCampaignRunResult> {
+  await healStaleRuntimeStates(input.cwd)
+  const { spec: campaignSpec } = await loadLongTaskCampaignSpec(input.specPath)
+  const { spec: baseSpec } = await loadLongTaskSpec(campaignSpec.baseSpecPath)
+  const campaignPaths = longTaskCampaignPaths(input.cwd, input.campaignID)
+  if (!(await pathExists(campaignPaths.campaignStatePath))) {
+    throw new Error(`Campaign not found: ${input.campaignID}`)
   }
+  enforceCampaignTruthPaths({ campaignPaths })
+  const existingState = await readLongTaskCampaignState(campaignPaths)
+  const specBaseResolved = path.resolve(campaignSpec.baseSpecPath)
+  const stateBaseResolved = path.resolve(existingState.baseSpecPath)
+  if (specBaseResolved !== stateBaseResolved) {
+    throw new Error(
+      `Resume spec mismatch: campaign base spec is ${existingState.baseSpecPath}, but provided spec points to ${campaignSpec.baseSpecPath}.`,
+    )
+  }
+  if (existingState.mode !== campaignSpec.mode) {
+    throw new Error(
+      `Resume spec mismatch: campaign mode is ${existingState.mode}, but provided spec mode is ${campaignSpec.mode}.`,
+    )
+  }
+
+  if (existingState.status === "verified_success" || existingState.status === "round_limit_reached") {
+    return toCampaignRunResult({
+      campaignID: input.campaignID,
+      campaignPaths,
+      state: existingState,
+    })
+  }
+
+  const existingLiveCampaign = await findExistingLiveCampaign({
+    cwd: input.cwd,
+    title: existingState.title,
+    baseSpecPath: existingState.baseSpecPath,
+  })
+  if (existingLiveCampaign && existingLiveCampaign.campaignID === input.campaignID) {
+    return toCampaignRunResult({
+      campaignID: existingLiveCampaign.campaignID,
+      campaignPaths: existingLiveCampaign.campaignPaths,
+      state: existingLiveCampaign.state,
+    })
+  }
+
+  const history = await readJsonLinesIfExists<LongTaskCampaignRoundRecord>(campaignPaths.historyPath)
+  const recoveryPlan = await determineCampaignRecoveryDecision({
+    cwd: input.cwd,
+    campaignPaths,
+    state: existingState,
+    history,
+  })
+  const completedRound = history.reduce((max, item) => Math.max(max, item.roundNumber), 0)
+  const startRound = recoveryPlan
+    ? recoveryPlan.roundNumber
+    : Math.max(existingState.currentRound, completedRound + 1)
+  if (startRound > campaignSpec.maxRounds) {
+    const cappedState: LongTaskCampaignState = {
+      ...existingState,
+      maxRounds: campaignSpec.maxRounds,
+      status: "round_limit_reached",
+      currentRound: campaignSpec.maxRounds,
+      updatedAt: nowISO(),
+      lastSummary: existingState.lastSummary ?? "Campaign reached maxRounds before resume.",
+    }
+    await writeLongTaskCampaignState(campaignPaths, cappedState)
+    return toCampaignRunResult({
+      campaignID: input.campaignID,
+      campaignPaths,
+      state: cappedState,
+      roundsCompleted: campaignSpec.maxRounds,
+    })
+  }
+
+  const initialState: LongTaskCampaignState = {
+    ...existingState,
+    mode: campaignSpec.mode,
+    taskFamily: campaignSpec.taskFamily ?? baseSpec.taskFamily ?? existingState.taskFamily,
+    maxRounds: campaignSpec.maxRounds,
+    currentRound: Math.max(0, startRound - 1),
+    status: "bootstrapping",
+    ownerPID: undefined,
+    ownerCommandHint: undefined,
+    heartbeatAt: undefined,
+    updatedAt: nowISO(),
+    notes: campaignSpec.notes ?? existingState.notes,
+    recovery: undefined,
+  }
+
+  let lastRoundNumber = initialState.currentRound
+  let lastRunID = existingState.lastRunID
+  let lastRoundSummaryPath = existingState.lastRoundSummaryPath
+
+  try {
+    for (let roundNumber = startRound; roundNumber <= campaignSpec.maxRounds; roundNumber += 1) {
+      lastRoundNumber = roundNumber
+      const activeRecoveryPlan = recoveryPlan && recoveryPlan.roundNumber === roundNumber ? recoveryPlan : undefined
+      const roundRuntimeScope = campaignRoundRuntimeScope(input.campaignID, roundNumber)
+      const roundPaths = longTaskCampaignRoundPaths(campaignPaths, roundNumber)
+      const activateCampaignRound = onceActivationCallback(async () => {
+        await updateCampaignStatus(campaignPaths, "running", {
+          currentRound: roundNumber,
+          lastSummary: history[history.length - 1]?.summary,
+          lastRunID: history[history.length - 1]?.sourceRunID,
+          lastRoundSummaryPath: history[history.length - 1]?.roundSummaryPath,
+        })
+      })
+      const pulseCampaignRound = async () => {
+        await pulseCampaignState(campaignPaths)
+      }
+      try {
+        await ensureDirectory(roundPaths.root)
+        await ensureDirectory(roundPaths.harvestedRoot)
+        await ensureDirectory(roundPaths.snapshotsRoot)
+        await ensureDirectory(roundPaths.workersRoot)
+        await ensureDirectory(roundPaths.reviewerRoot)
+        await ensureDirectory(roundPaths.finalAcceptanceRoot)
+        enforceCampaignTruthPaths({ campaignPaths, roundPaths })
+
+        await prepareCampaignRoundState({
+          baseSpec,
+          campaignSpec,
+          campaignPaths,
+        })
+        await seedRoundPendingPackageFromCurrent({
+          campaignPaths,
+          roundPaths,
+        })
+        await seedRoundExplorationTreeFromCurrent({
+          campaignPaths,
+          roundPaths,
+        })
+        await seedRoundRoutingControlFromCurrent({
+          campaignPaths,
+          roundPaths,
+        })
+        let dispatchTickets = await readDispatchTicketDocument(campaignPaths, roundNumber)
+
+        const generatedSpec = buildGeneratedRoundSpec({
+          baseSpec,
+          campaignSpec,
+          roundNumber,
+          pendingPackageRoot: campaignPaths.pendingCurrentRoot,
+          explorationTreePath: campaignPaths.explorationTreePath,
+          workingMemoryPath: campaignPaths.campaignWorkingMemoryPath,
+          routingControlPath: campaignPaths.campaignRoutingControlPath,
+          dispatchTicketsPath: campaignPaths.dispatchTicketsPath,
+        })
+        await writeJsonFile(roundPaths.generatedSpecPath, generatedSpec)
+
+        await writeLongTaskCampaignState(campaignPaths, {
+          ...initialState,
+          currentRound: roundNumber,
+          status: "bootstrapping",
+          updatedAt: nowISO(),
+          lastSummary: activeRecoveryPlan?.reason ?? history[history.length - 1]?.summary,
+          lastRunID: history[history.length - 1]?.sourceRunID,
+          lastRoundSummaryPath: history[history.length - 1]?.roundSummaryPath,
+        })
+
+        const runResult =
+          activeRecoveryPlan?.action === "resume_round_run" && activeRecoveryPlan.runID
+            ? await resumeLongTask({
+                cwd: input.cwd,
+                runID: activeRecoveryPlan.runID,
+                runtimeScope: roundRuntimeScope,
+                onRuntimeActivated: activateCampaignRound,
+                onRuntimePulse: pulseCampaignRound,
+              })
+            : activeRecoveryPlan?.action === "harvest_round_run" && activeRecoveryPlan.runID
+              ? await rehydrateExistingLongTaskRunResult({
+                  cwd: input.cwd,
+                  runID: activeRecoveryPlan.runID,
+                })
+              : activeRecoveryPlan?.action === "resume_round_postrun" && activeRecoveryPlan.runID
+                ? await rehydrateExistingLongTaskRunResult({
+                    cwd: input.cwd,
+                    runID: activeRecoveryPlan.runID,
+                  })
+                : await runLongTask({
+                    cwd: input.cwd,
+                    specPath: roundPaths.generatedSpecPath,
+                    runtimeScope: roundRuntimeScope,
+                    onRuntimeActivated: activateCampaignRound,
+                    onRuntimePulse: pulseCampaignRound,
+                  })
+        lastRunID = runResult.runID
+
+        const harvested = await harvestRound({
+          cwd: input.cwd,
+          campaignID: input.campaignID,
+          campaignSpec,
+          baseSpec,
+          roundNumber,
+          roundPaths,
+          runResult,
+          seedTargets: campaignSpec.seedTargets,
+        })
+        const existingRoundIndex = history.findIndex((record) => record.roundNumber === roundNumber)
+        if (existingRoundIndex >= 0) {
+          history[existingRoundIndex] = harvested.roundRecord
+        } else {
+          history.push(harvested.roundRecord)
+        }
+        lastRoundSummaryPath = harvested.roundRecord.roundSummaryPath
+        if (existingRoundIndex < 0) {
+          await appendLongTaskCampaignHistory(campaignPaths, harvested.roundRecord)
+        }
+
+        const noSignalDetection = detectConsecutiveNoSignalRounds(history, 2)
+        if (noSignalDetection) {
+          const nextState: LongTaskCampaignState = {
+            ...initialState,
+            currentRound: roundNumber,
+            status: "failed",
+            updatedAt: nowISO(),
+            lastRunID: runResult.runID,
+            lastSummary: `Detected repeated no-structured-signal failures (${noSignalDetection.threshold} consecutive rounds: ${noSignalDetection.startRound}-${noSignalDetection.endRound}); stopped campaign early.`,
+            lastRoundSummaryPath: harvested.roundRecord.roundSummaryPath,
+          }
+          await writeLongTaskCampaignState(campaignPaths, nextState)
+          return toCampaignRunResult({
+            campaignID: input.campaignID,
+            campaignPaths,
+            state: nextState,
+            roundsCompleted: roundNumber,
+          })
+        }
+
+        const loopDetection = detectRepeatedNoProgressLoop(history)
+        if (loopDetection) {
+          const nextState: LongTaskCampaignState = {
+            ...initialState,
+            currentRound: roundNumber,
+            status: "failed",
+            updatedAt: nowISO(),
+            lastRunID: runResult.runID,
+            lastSummary: `Detected repeated no-progress loop (${loopDetection.windowSize} rounds: ${loopDetection.startRound}-${loopDetection.endRound}); stopped campaign early.`,
+            lastRoundSummaryPath: harvested.roundRecord.roundSummaryPath,
+          }
+          await writeLongTaskCampaignState(campaignPaths, nextState)
+          return toCampaignRunResult({
+            campaignID: input.campaignID,
+            campaignPaths,
+            state: nextState,
+            roundsCompleted: roundNumber,
+          })
+        }
+
+        await appendLinesToAggregate(
+          campaignPaths.aggregatedFailurePacketsPath,
+          harvested.failurePackets.map((item) => JSON.stringify(item)),
+        )
+        await appendLinesToAggregate(
+          campaignPaths.aggregatedRetryLessonsPath,
+          harvested.retryLessons.map((item) => JSON.stringify(item)),
+        )
+        await appendLinesToAggregate(
+          campaignPaths.aggregatedLearningUnitsPath,
+          harvested.learningUnits.map((item) => JSON.stringify(item)),
+        )
+
+        const existingOperationalMemory = await readLongTaskCampaignOperationalMemory(campaignPaths)
+        const promotedOperationalMemory = promoteCampaignOperationalMemory({
+          existing: existingOperationalMemory,
+          incoming: harvested.operationalContext,
+          roundNumber,
+          runID: runResult.runID,
+        })
+        await writeLongTaskCampaignOperationalMemory(campaignPaths, promotedOperationalMemory)
+        const workingMemory = buildWorkingMemoryDocument({
+          operationalMemory: promotedOperationalMemory,
+          updatedThroughRound: roundNumber,
+        })
+        await writeLongTaskCampaignWorkingMemory(campaignPaths, workingMemory)
+
+        const currentExplorationTree = await readLongTaskCampaignExplorationTree(campaignPaths)
+        const evolvedExplorationTree = evolveExplorationTreeDocument({
+          previous: currentExplorationTree,
+          digest: harvested.runTraceDigest,
+          roundNumber,
+        })
+        await writeJsonFile(roundPaths.explorationTreeDraftPath, evolvedExplorationTree)
+
+        const currentRoutingControl = await readLongTaskCampaignRoutingControl(campaignPaths)
+        const evolvedRoutingControl = buildRoutingControl({
+          previous: currentRoutingControl,
+          tree: evolvedExplorationTree,
+          digest: harvested.runTraceDigest,
+          dispatchTickets,
+          roundNumber,
+        })
+        await writeJsonFile(roundPaths.routingControlDraftPath, evolvedRoutingControl)
+
+        const allFailures = await readJsonLinesIfExists<Record<string, unknown>>(
+          campaignPaths.aggregatedFailurePacketsPath,
+        )
+        const allRetryLessons = await readJsonLinesIfExists<Record<string, unknown>>(
+          campaignPaths.aggregatedRetryLessonsPath,
+        )
+        const allLearningUnits = await readJsonLinesIfExists<Record<string, unknown>>(
+          campaignPaths.aggregatedLearningUnitsPath,
+        )
+        const campaignLessons = buildCampaignLessonsMarkdown({
+          title: campaignSpec.title,
+          latestRound: roundNumber,
+          records: history,
+          failures: allFailures,
+          retryLessons: allRetryLessons,
+          learningUnits: allLearningUnits,
+        })
+        await writeLongTaskCampaignLessons(campaignPaths, campaignLessons)
+        const lessonMirrors: Array<{ root: string; relativePath: string; addManifestPointer: boolean }> = []
+        if (await pathExists(path.join(campaignPaths.pendingCurrentRoot, "manifest.md"))) {
+          lessonMirrors.push({
+            root: campaignPaths.pendingCurrentRoot,
+            relativePath: "lessons/failure_lessons.md",
+            addManifestPointer: true,
+          })
+        }
+        if (campaignSpec.lessonsMirror) {
+          lessonMirrors.push({
+            root: path.resolve(campaignSpec.lessonsMirror.workspaceTargetPath),
+            relativePath: campaignSpec.lessonsMirror.relativePath,
+            addManifestPointer: campaignSpec.lessonsMirror.addManifestPointer !== false,
+          })
+        }
+        const mirroredRoots = new Set<string>()
+        for (const mirror of lessonMirrors) {
+          const dedupeKey = `${mirror.root}::${mirror.relativePath}`
+          if (mirroredRoots.has(dedupeKey)) continue
+          mirroredRoots.add(dedupeKey)
+          await syncLessonsMirror({
+            lessonsContent: campaignLessons,
+            workspaceTargetPath: mirror.root,
+            lessonsRelativePath: mirror.relativePath,
+            addManifestPointer: mirror.addManifestPointer,
+            roundRecord: harvested.roundRecord,
+          })
+        }
+        await writeTextFile(
+          campaignPaths.carryoverFailurePacketsPath,
+          buildFailurePacketsCarryoverMarkdown({
+            title: campaignSpec.title,
+            latestRound: roundNumber,
+            records: history,
+            failures: allFailures,
+          }),
+        )
+        await writeTextFile(
+          campaignPaths.carryoverRetryLessonsPath,
+          buildRetryLessonsCarryoverMarkdown({
+            title: campaignSpec.title,
+            latestRound: roundNumber,
+            records: history,
+            retryLessons: allRetryLessons,
+          }),
+        )
+        await writeTextFile(
+          campaignPaths.carryoverLearningUnitsPath,
+          buildLearningUnitsCarryoverMarkdown({
+            title: campaignSpec.title,
+            latestRound: roundNumber,
+            records: history,
+            learningUnits: allLearningUnits,
+          }),
+        )
+        await writeLongTaskCampaignSeedContext(
+          campaignPaths,
+          buildCampaignSeedContextMarkdown({
+            title: campaignSpec.title,
+            latestRound: roundNumber,
+            operationalMemory: promotedOperationalMemory,
+            records: history,
+          }),
+        )
+
+        const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths)
+        const workerSuggestions = shouldRunCampaignWorkers(roundNumber)
+          ? await runCampaignWorkers({
+              cwd: input.cwd,
+              campaignID: input.campaignID,
+              campaignSpec,
+              baseSpec,
+              roundNumber,
+              runTracePath: roundPaths.runTraceJsonPath,
+              runTraceDigestPath: roundPaths.runTraceDigestPath,
+              pendingPackageRoot: campaignPaths.pendingCurrentRoot,
+              explorationTreePath: campaignPaths.explorationTreePath,
+              workingMemoryPath: campaignPaths.campaignWorkingMemoryPath,
+              routingControlPath: campaignPaths.campaignRoutingControlPath,
+              dispatchTicketsPath: campaignPaths.dispatchTicketsPath,
+              reviewerSuggestionPath: latestReviewerSuggestionPath,
+              campaignPaths,
+              roundPaths,
+              runtimeScope: roundRuntimeScope,
+              onActivation: activateCampaignRound,
+              onPulse: pulseCampaignRound,
+            })
+          : []
+
+        let reviewerSuggestion: LongTaskCampaignReviewSuggestion | undefined
+        let finalAcceptance: Awaited<ReturnType<typeof runCampaignFinalAcceptance>> | undefined
+        let reviewerInputPath = latestReviewerSuggestionPath
+        let finalAcceptanceFeedbackPath: string | undefined
+        const maxAcceptancePassesPerRound = 2
+
+        for (let passIndex = 1; passIndex <= maxAcceptancePassesPerRound; passIndex += 1) {
+          const passID = `pass-${String(passIndex).padStart(2, "0")}`
+          const reviewerPassRoot = path.join(roundPaths.reviewerRoot, passID)
+          const reviewerPassSuggestionPath = path.join(reviewerPassRoot, "review-suggestion.json")
+          const acceptancePassRoot = path.join(roundPaths.finalAcceptanceRoot, passID)
+          const acceptancePassResultPath = path.join(acceptancePassRoot, "result.json")
+
+          await runCampaignLead({
+            cwd: input.cwd,
+            campaignSpec,
+            baseSpec,
+            roundNumber,
+            runTracePath: roundPaths.runTraceJsonPath,
+            runTraceDigestPath: roundPaths.runTraceDigestPath,
+            previousPendingPackageRoot: campaignPaths.pendingCurrentRoot,
+            nextPendingPackageRoot: roundPaths.pendingPackageSnapshotRoot,
+            previousExplorationTreePath: campaignPaths.explorationTreePath,
+            nextExplorationTreePath: roundPaths.explorationTreeDraftPath,
+            workingMemoryPath: campaignPaths.campaignWorkingMemoryPath,
+            previousRoutingControlPath: campaignPaths.campaignRoutingControlPath,
+            nextRoutingControlPath: roundPaths.routingControlDraftPath,
+            dispatchTicketsPath: campaignPaths.dispatchTicketsPath,
+            workerSuggestions,
+            reviewerSuggestionPath: reviewerInputPath,
+            acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
+            acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
+            finalAcceptanceFeedbackPath,
+            campaignPaths,
+            roundPaths,
+            runtimeScope: roundRuntimeScope,
+            onActivation: activateCampaignRound,
+            onPulse: pulseCampaignRound,
+          })
+
+          await promoteRoundPendingAndTreeToCurrent({
+            campaignPaths,
+            roundPaths,
+          })
+
+          reviewerSuggestion = shouldRunCampaignReviewer(roundNumber)
+            ? await runCampaignReviewer({
+                cwd: input.cwd,
+                campaignSpec,
+                baseSpec,
+                roundNumber,
+                pendingPackageRoot: campaignPaths.pendingCurrentRoot,
+                runTracePath: roundPaths.runTraceDigestPath,
+                explorationTreePath: campaignPaths.explorationTreePath,
+                workingMemoryPath: campaignPaths.campaignWorkingMemoryPath,
+                routingControlPath: campaignPaths.campaignRoutingControlPath,
+                dispatchTicketsPath: campaignPaths.dispatchTicketsPath,
+                acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
+                acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
+                stageDir: reviewerPassRoot,
+                suggestionPath: reviewerPassSuggestionPath,
+                roundPaths,
+                runtimeScope: roundRuntimeScope,
+                onActivation: activateCampaignRound,
+                onPulse: pulseCampaignRound,
+              })
+            : undefined
+          if (reviewerSuggestion) {
+            await writeLongTaskCampaignReviewerSuggestion(campaignPaths, reviewerSuggestion)
+            reviewerInputPath = reviewerPassSuggestionPath
+            const currentRoutingControl = await readLongTaskCampaignRoutingControl(campaignPaths)
+            await writeLongTaskCampaignRoutingControl(
+              campaignPaths,
+              buildRoutingControl({
+                previous: currentRoutingControl,
+                tree: await readLongTaskCampaignExplorationTree(campaignPaths),
+                digest: harvested.runTraceDigest,
+                reviewerSuggestion,
+                dispatchTickets,
+                roundNumber,
+              }),
+            )
+          }
+
+          if (!shouldRunCampaignReviewer(roundNumber)) break
+
+          finalAcceptance = await runCampaignFinalAcceptance({
+            cwd: input.cwd,
+            campaignID: input.campaignID,
+            campaignSpec,
+            baseSpec,
+            roundNumber,
+            sourceRunID: runResult.runID,
+            pendingPackageRoot: campaignPaths.pendingCurrentRoot,
+            runTracePath: roundPaths.runTraceJsonPath,
+            reviewerSuggestionPath: reviewerPassSuggestionPath,
+            finalAcceptanceRoot: acceptancePassRoot,
+            finalAcceptanceResultPath: acceptancePassResultPath,
+            roundPaths,
+            runtimeScope: roundRuntimeScope,
+            onActivation: activateCampaignRound,
+            onPulse: pulseCampaignRound,
+          })
+          await writeJsonFile(roundPaths.finalAcceptanceResultPath, finalAcceptance)
+          await appendAcceptanceExperienceV2({
+            markdownPath: campaignPaths.acceptanceExperiencePath,
+            jsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
+            roundNumber,
+            passIndex,
+            runID: runResult.runID,
+            result: finalAcceptance,
+            resultPath: acceptancePassResultPath,
+          })
+          dispatchTickets = mergeDispatchTicketsFromFinalAcceptance({
+            previous: dispatchTickets,
+            roundNumber,
+            feedbackPath: acceptancePassResultPath,
+            finalAcceptance,
+          })
+          await writeJsonFile(campaignPaths.dispatchTicketsPath, dispatchTickets)
+          const routingAfterAcceptance = buildRoutingControl({
+            previous: await readLongTaskCampaignRoutingControl(campaignPaths),
+            tree: await readLongTaskCampaignExplorationTree(campaignPaths),
+            digest: harvested.runTraceDigest,
+            reviewerSuggestion,
+            dispatchTickets,
+            roundNumber,
+          })
+          await writeLongTaskCampaignRoutingControl(campaignPaths, routingAfterAcceptance)
+          finalAcceptanceFeedbackPath = acceptancePassResultPath
+          if (finalAcceptance.passed) break
+        }
+
+        const finalizedRoundRecord = finalizeRoundRecordWithAcceptance({
+          roundRecord: harvested.roundRecord,
+          finalAcceptance,
+          feedbackPath: finalAcceptanceFeedbackPath,
+        })
+        harvested.roundRecord = finalizedRoundRecord
+        history[history.length - 1] = finalizedRoundRecord
+        await rewriteLongTaskCampaignHistoryRecord(campaignPaths, roundNumber, () => finalizedRoundRecord)
+        await writeTextFile(
+          roundPaths.roundSummaryPath,
+          buildRoundSummaryMarkdown({
+            roundNumber,
+            mode: campaignSpec.mode,
+            finalStatus: finalizedRoundRecord.finalStatus,
+            summary: finalizedRoundRecord.summary,
+            runVerificationSignal: finalizedRoundRecord.runVerificationSignal,
+            roundClosure: finalizedRoundRecord.roundClosure,
+            gateFailureKind: finalizedRoundRecord.gateFailureKind,
+            gateFailureSummary: finalizedRoundRecord.gateFailureSummary,
+            finalAcceptanceSignal: finalizedRoundRecord.finalAcceptanceSignal,
+            failures: harvested.failurePackets,
+            retryLessons: harvested.retryLessons,
+            learningUnits: harvested.learningUnits,
+          }),
+        )
+
+        const nextStatus =
+          finalAcceptance?.passed === true
+            ? "verified_success"
+            : roundNumber >= campaignSpec.maxRounds
+              ? "round_limit_reached"
+              : "running"
+        const lastRoundClosure =
+          finalAcceptance?.passed === true
+            ? "closed_success"
+            : finalAcceptance
+              ? "closed_repairable"
+              : (finalizedRoundRecord.roundClosure ?? "closed_blocked")
+        const lastGateFailureKind =
+          finalAcceptance && !finalAcceptance.passed
+            ? "final_acceptance_failed"
+            : finalizedRoundRecord.gateFailureKind
+        const lastGateFailureSummary =
+          finalAcceptance && !finalAcceptance.passed
+            ? finalAcceptance.summary
+            : finalizedRoundRecord.gateFailureSummary
+        const lastRunHardVerified =
+          finalizedRoundRecord.runVerificationSignal?.completionGateMode === "required" &&
+          finalizedRoundRecord.runVerificationSignal?.completionGatePassed === true
+
+        const state: LongTaskCampaignState = {
+          ...initialState,
+          currentRound: roundNumber,
+          status: nextStatus,
+          updatedAt: nowISO(),
+          lastRunID: runResult.runID,
+          lastSummary: finalAcceptance?.summary ?? finalizedRoundRecord.summary,
+          lastRoundSummaryPath: finalizedRoundRecord.roundSummaryPath,
+          lastRunHardVerified,
+          lastFinalAcceptancePassed: finalAcceptance?.passed === true,
+          lastFinalAcceptanceResultPath: finalAcceptanceFeedbackPath,
+          lastRoundClosure,
+          lastGateFailureKind,
+          lastGateFailureSummary,
+        }
+        await writeLongTaskCampaignState(campaignPaths, state)
+
+        if (nextStatus === "verified_success") {
+          return toCampaignRunResult({
+            campaignID: input.campaignID,
+            campaignPaths,
+            state,
+            roundsCompleted: roundNumber,
+          })
+        }
+      } finally {
+        await cleanupRuntimeScopeWithRetry(roundRuntimeScope)
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const failureState: LongTaskCampaignState = {
+      ...initialState,
+      currentRound: lastRoundNumber,
+      status: "failed",
+      updatedAt: nowISO(),
+      lastRunID,
+      lastSummary: `Campaign aborted unexpectedly: ${short(message, 240)}`,
+      lastRoundSummaryPath,
+    }
+    await writeLongTaskCampaignState(campaignPaths, failureState)
+    return toCampaignRunResult({
+      campaignID: input.campaignID,
+      campaignPaths,
+      state: failureState,
+      roundsCompleted: history.length,
+    })
+  }
+
+  const finalState: LongTaskCampaignState = {
+    ...initialState,
+    currentRound: campaignSpec.maxRounds,
+    status: "round_limit_reached",
+    updatedAt: nowISO(),
+    lastRunID: history[history.length - 1]?.sourceRunID,
+    lastSummary: history[history.length - 1]?.summary,
+    lastRoundSummaryPath: history[history.length - 1]?.roundSummaryPath,
+  }
+  await writeLongTaskCampaignState(campaignPaths, finalState)
+
+  return toCampaignRunResult({
+    campaignID: input.campaignID,
+    campaignPaths,
+    state: finalState,
+    roundsCompleted: campaignSpec.maxRounds,
+  })
 }

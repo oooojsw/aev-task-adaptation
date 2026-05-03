@@ -1,0 +1,25 @@
+{
+  "runID": "20260502-132154721-try4-expert-bootstrap-campaign-round-006",
+  "unitID": "run-final-acceptance-validators",
+  "attempt": 1,
+  "goal": "Run all three final-acceptance validators against expert-workspace to confirm cleaned package passes",
+  "targetPaths": [
+    {
+      "path": "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\task-packs\\real-long-tasks\\try4-expert-bootstrap\\expert-workspace",
+      "label": "experience-workspace",
+      "role": "experience-workspace"
+    },
+    {
+      "path": "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\task-packs\\real-long-tasks\\try4-expert-bootstrap\\deployment\\outputs\\generated-report.docx",
+      "label": "generated report"
+    },
+    {
+      "path": "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\task-packs\\real-long-tasks\\try4-expert-bootstrap\\deployment\\outputs\\generated-explanation.docx",
+      "label": "generated explanation"
+    }
+  ],
+  "editablePaths": [
+    "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\task-packs\\real-long-tasks\\try4-expert-bootstrap\\workspace"
+  ],
+  "expectedArtifacts": []
+}

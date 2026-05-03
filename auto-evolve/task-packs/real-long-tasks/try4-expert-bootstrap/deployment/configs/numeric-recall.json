@@ -1,0 +1,9 @@
+{
+  "targets": [
+    {
+      "label": "generated report",
+      "targetLabel": "generated report"
+    }
+  ],
+  "threshold": 5
+}

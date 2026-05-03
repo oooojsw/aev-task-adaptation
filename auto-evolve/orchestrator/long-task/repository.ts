@@ -740,12 +740,39 @@ export async function buildLongTaskRunSummary(run: LongTaskRunPaths): Promise<Lo
       : completionExecutedValidatorIDs.size >= completionValidatorIDs.length &&
         completionFailed === 0 &&
         completionPassed >= completionValidatorIDs.length
+  const normalizedStatus = progress.status === "verified_success" ? "graph_completed" : progress.status
+  const roundClosure =
+    normalizedStatus === "graph_completed"
+      ? completionGatePassed
+        ? "closed_success"
+        : "closed_repairable"
+      : normalizedStatus === "blocked_failure" || normalizedStatus === "stagnation_failure"
+        ? "closed_blocked"
+        : normalizedStatus === "exhausted_failure"
+          ? "closed_infra_failure"
+          : "closed_blocked"
+  const gateFailureKind =
+    normalizedStatus === "graph_completed" && !completionGatePassed
+      ? "completion_gate_failed"
+      : normalizedStatus === "exhausted_failure"
+        ? "infrastructure_failure"
+        : normalizedStatus === "blocked_failure" || normalizedStatus === "stagnation_failure"
+          ? "execution_blocked"
+          : undefined
+  const gateFailureSummary =
+    gateFailureKind === "completion_gate_failed"
+      ? `Execution graph completed, but the required completion gate did not pass (executed=${completionExecutedValidatorIDs.size}/${completionValidatorIDs.length}, failed=${completionFailed}).`
+      : gateFailureKind === "infrastructure_failure"
+        ? "Execution stopped after exhausting retries or budgets before a clean round closure."
+        : gateFailureKind === "execution_blocked"
+          ? "Execution stopped before closure because the run became blocked or stagnated."
+          : undefined
 
   return {
     runID: progress.runID,
     title: spec.title,
     goal: spec.goal,
-    status: progress.status,
+    status: normalizedStatus,
     taskFamily: spec.taskFamily,
     domainTags: spec.domainTags ?? [],
     graphRevision: progress.graphRevision,
@@ -768,9 +795,12 @@ export async function buildLongTaskRunSummary(run: LongTaskRunPaths): Promise<Lo
       completionValidatorsFailed: completionFailed,
       completionGatePassed,
     },
+    roundClosure,
+    gateFailureKind,
+    gateFailureSummary,
     summary:
       progress.finalSummary ??
-      `Long-task ended with status ${progress.status}; verified ${verifiedUnits}/${graph.units.length} work units.`,
+      `Long-task ended with status ${normalizedStatus}; verified ${verifiedUnits}/${graph.units.length} work units.`,
   }
 }
 
@@ -799,6 +829,9 @@ export async function writeLongTaskRunSummary(run: LongTaskRunPaths, summary: Lo
     `- completion validators passed: ${summary.verificationSignal.completionValidatorsPassed}`,
     `- completion validators failed: ${summary.verificationSignal.completionValidatorsFailed}`,
     `- completion gate passed: ${summary.verificationSignal.completionGatePassed}`,
+    `- round closure: ${summary.roundClosure}`,
+    `- gate failure kind: ${summary.gateFailureKind ?? "none"}`,
+    `- gate failure summary: ${summary.gateFailureSummary ?? "none"}`,
     "",
     "## Summary",
     "",
@@ -907,7 +940,7 @@ export function defaultShadowMemoryRecord(input: {
     namespace: scope.namespace,
     tags: scope.tags,
     retrievalMode: scope.retrievalMode,
-    status: input.summary.status === "verified_success" ? "candidate" : "hold",
+    status: input.summary.status === "graph_completed" ? "candidate" : "hold",
     summary: input.summary.summary,
     evidenceRef: input.run.summaryJsonPath,
   }
