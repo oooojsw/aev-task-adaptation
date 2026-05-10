@@ -267,6 +267,9 @@ async function stageEditablePathsForFreshRun(run: LongTaskRunPaths, spec: LongTa
   }> = []
 
   const editablePaths = resolveLongTaskEditablePaths(spec)
+  const preservedEditablePaths = new Set(
+    (spec.preservePreseededEditablePaths ?? []).map((item) => path.resolve(item)),
+  )
 
   for (const [index, editablePath] of editablePaths.entries()) {
     if (!(await pathExists(editablePath))) {
@@ -286,6 +289,16 @@ async function stageEditablePathsForFreshRun(run: LongTaskRunPaths, spec: LongTa
       recursive: kind === "directory",
       force: true,
     })
+
+    if (preservedEditablePaths.has(path.resolve(editablePath))) {
+      entries.push({
+        originalPath: editablePath,
+        archivePath,
+        kind,
+        existed: true,
+      })
+      continue
+    }
 
     if (kind === "directory") {
       await rm(editablePath, { recursive: true, force: true })

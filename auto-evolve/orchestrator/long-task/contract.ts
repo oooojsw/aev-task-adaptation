@@ -139,6 +139,9 @@ export interface LongTaskSpec {
   materials: LongTaskPathRef[]
   targetPaths?: LongTaskPathRef[]
   editablePaths?: string[]
+  // Paths pre-seeded by the outer campaign round bootstrap.
+  // initializeLongTaskRun should not wipe these again in the same round.
+  preservePreseededEditablePaths?: string[]
   initialExpertContextPaths?: string[]
   formalPackageRoots?: string[]
   campaignPendingPackageRoot?: string

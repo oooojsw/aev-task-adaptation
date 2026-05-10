@@ -2829,6 +2829,12 @@ function buildGeneratedRoundSpec(input: {
     }
   })
   const staticBaseContext = collectStaticBaseContextPaths(input.baseSpec)
+  const preservePreseededEditablePaths = uniqueStrings(
+    input.campaignSpec.seedTargets
+      .filter((seed) => (seed.kind ?? "experience_workspace") === "experience_workspace")
+      .map((seed) => seed.targetPath),
+  )
+
   return {
     ...input.baseSpec,
     title: `${input.campaignSpec.title}-${roundID(input.roundNumber)}`,
@@ -2852,6 +2858,7 @@ function buildGeneratedRoundSpec(input: {
     campaignExplorationTreePath: input.explorationTreePath,
     campaignWorkingMemoryPath: input.workingMemoryPath,
     campaignRoutingControlPath: input.routingControlPath,
+    preservePreseededEditablePaths,
     budgets: applyBudgetOverrides(input.baseSpec.budgets, input.campaignSpec.roundBudgetOverrides),
     notes: [
       input.baseSpec.notes,
