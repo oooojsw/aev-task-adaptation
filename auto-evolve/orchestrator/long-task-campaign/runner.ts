@@ -29,6 +29,7 @@ import type {
   LongTaskProgressState,
   LongTaskRunStatus,
   LongTaskSpec,
+  LongTaskValidatorContract,
   LongTaskValidatorResult,
   LongTaskWorkUnit,
 } from "../long-task/contract"
@@ -595,10 +596,19 @@ async function findRecoverableCampaignForTarget(input: { cwd: string; title: str
 
 async function rehydrateExistingLongTaskRunResult(input: { cwd: string; runID: string }) {
   const resolved = resolveExistingLongTaskRun(input.cwd, input.runID)
-  const [progress, summary] = await Promise.all([
-    readJsonFile<LongTaskProgressState>(resolved.run.progressStatePath),
-    readJsonFile<Awaited<ReturnType<typeof runLongTask>>["summary"]>(resolved.run.summaryJsonPath),
-  ])
+  let progress: LongTaskProgressState
+  let summary: Awaited<ReturnType<typeof runLongTask>>["summary"]
+  try {
+    ;[progress, summary] = await Promise.all([
+      readJsonFile<LongTaskProgressState>(resolved.run.progressStatePath),
+      readJsonFile<Awaited<ReturnType<typeof runLongTask>>["summary"]>(resolved.run.summaryJsonPath),
+    ])
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      `Failed to rehydrate long-task run ${input.runID}: ${message}. The run state files may be corrupted from a previous crash.`,
+    )
+  }
   return {
     runID: input.runID,
     runDir: resolved.run.root,
@@ -653,6 +663,7 @@ async function updateCampaignStatus(
     ...current,
     ...patch,
     status,
+    heartbeatAt: nowISO(),
     updatedAt: nowISO(),
   })
 }
@@ -660,7 +671,7 @@ async function updateCampaignStatus(
 async function pulseCampaignState(campaignPaths: ReturnType<typeof longTaskCampaignPaths>) {
   const state = await readLongTaskCampaignState(campaignPaths)
   if (!isLiveCampaignStatus(state.status)) return
-  await writeLongTaskCampaignState(campaignPaths, state)
+  await writeLongTaskCampaignState(campaignPaths, { ...state, heartbeatAt: nowISO() })
 }
 
 function uniqueStrings(items: string[]) {
@@ -1804,7 +1815,11 @@ function defaultCampaignWorkerRoles(): LongTaskCampaignWorkerRole[] {
 
 async function readEventsIfExists(target: string) {
   if (!(await pathExists(target))) return [] as Array<Record<string, unknown>>
-  return readJsonFile<Array<Record<string, unknown>>>(target)
+  try {
+    return await readJsonFile<Array<Record<string, unknown>>>(target)
+  } catch {
+    return [] as Array<Record<string, unknown>>
+  }
 }
 
 function extractCommandRecordsFromEvents(input: {
@@ -1864,8 +1879,13 @@ async function buildCampaignRunTrace(input: {
   summary: string
   runVerificationSignal?: LongTaskCampaignRunTrace["runVerificationSignal"]
 }): Promise<LongTaskCampaignRunTrace> {
-  const [graph, claims, failures, scratchUnits, learningUnits, retryLessons, operationalContext] = await Promise.all([
-    readJsonFile<LongTaskWorkGraph>(input.run.workGraphPath),
+  let graph: LongTaskWorkGraph
+  try {
+    graph = await readJsonFile<LongTaskWorkGraph>(input.run.workGraphPath)
+  } catch {
+    graph = { units: [] } as unknown as LongTaskWorkGraph
+  }
+  const [claims, failures, scratchUnits, learningUnits, retryLessons, operationalContext] = await Promise.all([
     readJsonLinesIfExists<Record<string, unknown>>(input.run.claimsPath),
     readJsonLinesIfExists<Record<string, unknown>>(input.run.failurePacketsPath),
     readJsonLinesIfExists<Record<string, unknown>>(input.run.scratchUnitsPath),
@@ -1893,9 +1913,14 @@ async function buildCampaignRunTrace(input: {
       const toolFailuresPath = path.join(executeDir, "tool_failures.json")
       const runJsonPath = path.join(executeDir, "run.json")
       const events = await readEventsIfExists(eventsPath)
-      const runJson = (await pathExists(runJsonPath))
-        ? await readJsonFile<Record<string, unknown>>(runJsonPath)
-        : undefined
+      let runJson: Record<string, unknown> | undefined
+      if (await pathExists(runJsonPath)) {
+        try {
+          runJson = await readJsonFile<Record<string, unknown>>(runJsonPath)
+        } catch {
+          runJson = undefined
+        }
+      }
       const claim = claims.find((item) => item.unitID === unit.id && item.attempt === attemptNumber)
       const failure = failures.find((item) => item.unitID === unit.id && item.attempt === attemptNumber)
       const scratchStatements = scratchUnits
@@ -2937,6 +2962,29 @@ function normalizeReviewerSuggestion(input: {
   }
 }
 
+async function resolvePendingPackageEntryFile(pendingCurrentRoot: string): Promise<string | null> {
+  const contractPath = path.join(pendingCurrentRoot, "surface_contract.json")
+  try {
+    if (!(await pathExists(contractPath))) return null
+    const contract = await readJsonFile<{ entry?: string }>(contractPath)
+    if (!contract || typeof contract.entry !== "string" || !contract.entry.trim()) return null
+    const entryPath = path.join(pendingCurrentRoot, ...contract.entry.trim().split("/"))
+    if (await pathExists(entryPath)) return contract.entry.trim()
+    return null
+  } catch {
+    return null
+  }
+}
+
+async function hasEvolvedPendingPackage(pendingCurrentRoot: string): Promise<boolean> {
+  // Check surface_contract.json first to find where the entry file should be
+  const entryRel = await resolvePendingPackageEntryFile(pendingCurrentRoot)
+  if (entryRel) return true
+  // Fallback: old-style package with manifest.md at root
+  if (await pathExists(path.join(pendingCurrentRoot, "manifest.md"))) return true
+  return false
+}
+
 async function prepareCampaignRoundState(input: {
   baseSpec: LongTaskSpec
   campaignSpec: LongTaskCampaignSpec
@@ -2950,7 +2998,7 @@ async function prepareCampaignRoundState(input: {
       primarySeed &&
       seedTarget.targetPath === primarySeed.targetPath &&
       (seedTarget.kind ?? "experience_workspace") === "experience_workspace" &&
-      (await pathExists(path.join(input.campaignPaths.pendingCurrentRoot, "manifest.md")))
+      (await hasEvolvedPendingPackage(input.campaignPaths.pendingCurrentRoot))
     ) {
       await copyExperienceWorkspaceRoot(input.campaignPaths.pendingCurrentRoot, seedTarget.targetPath)
       continue
@@ -3032,7 +3080,7 @@ async function seedRoundPendingPackageFromCurrent(input: {
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
 }) {
-  if (!(await pathExists(path.join(input.campaignPaths.pendingCurrentRoot, "manifest.md")))) {
+  if (!(await hasEvolvedPendingPackage(input.campaignPaths.pendingCurrentRoot))) {
     await ensureDirectory(input.roundPaths.pendingPackageSnapshotRoot)
     return
   }
@@ -3141,6 +3189,54 @@ async function runCampaignWorkers(input: {
   return suggestions
 }
 
+function buildRepairChecklistFromFinalAcceptance(
+  result: Record<string, unknown>,
+): string[] {
+  const items: string[] = []
+  const validatorResults = Array.isArray(result.validatorResults) ? result.validatorResults : []
+  for (const vr of validatorResults) {
+    if (!vr || typeof vr !== "object") continue
+    if (vr.passed !== false && vr.passed !== "false") continue
+    const validatorID = typeof vr.validatorID === "string" ? vr.validatorID : "unknown-validator"
+    const summary = typeof vr.summary === "string" ? vr.summary : ""
+    const details: string[] = Array.isArray(vr.details) ? vr.details.filter((d): d is string => typeof d === "string") : []
+    const blocking = vr.blocking === true || vr.blocking === "true"
+    const tag = blocking ? "BLOCKING" : "non-blocking"
+    items.push(`[${tag}] ${validatorID}: ${summary}`)
+    for (const detail of details) {
+      items.push(`  -> ${detail}`)
+    }
+    const fixHint = validatorRepairHint(validatorID, details)
+    if (fixHint) items.push(`  REPAIR_HINT: ${fixHint}`)
+  }
+  return items
+}
+
+function validatorRepairHint(validatorID: string, details: string[]): string {
+  if (validatorID === "workspace-layout") {
+    if (details.some((d) => d.includes("missing: manifest.md") || d.includes("entry file is missing"))) {
+      return "surface_contract.json declares entry and document paths. Ensure those files exist at the declared relative paths inside the pending package. Check surface_contract.json 'entry' and 'documents' fields, then verify each declared file exists on disk."
+    }
+    if (details.some((d) => d.includes("invalid under the governed profile"))) {
+      return "Verify pending package structure matches what surface_contract.json declares. Move any files that are at root but belong inside expert-workspace/, or update the contract."
+    }
+  }
+  if (validatorID === "expert-surface-generalization") {
+    if (details.some((d) => d.includes("hardcoded") || d.includes("task-answer"))) {
+      return "Search the expert workspace files for hardcoded task-answer literals (e.g. specific numbers, dates, names from source data). Replace them with source-locator descriptions (e.g. 'value from Sheet1!A6' instead of '20,260')."
+    }
+  }
+  if (validatorID === "blank-agent-deployment") {
+    if (details.some((d) => d.includes("missing required task values"))) {
+      return "The blank agent is not producing correctly filled DOCX files. Check the execution checklist and fill-edit guidance in the expert workspace. Ensure it teaches: (1) which capability to use, (2) exact fill locations in templates, (3) how to verify values were inserted."
+    }
+    if (details.some((d) => d.includes("placeholder"))) {
+      return "DOCX files still contain U+3010/U+3011 placeholder markers. Ensure the expert workspace has clear instructions to use fill-edit (not template-copy-only) and to verify zero placeholders before declaring completion."
+    }
+  }
+  return ""
+}
+
 async function runCampaignLead(input: {
   cwd: string
   campaignSpec: LongTaskCampaignSpec
@@ -3161,6 +3257,7 @@ async function runCampaignLead(input: {
   acceptanceExperiencePath?: string
   acceptanceExperienceJsonlPath?: string
   finalAcceptanceFeedbackPath?: string
+  repairChecklist?: string[]
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   runtimeScope?: string
@@ -3187,6 +3284,7 @@ async function runCampaignLead(input: {
     reviewerSuggestionPath: input.reviewerSuggestionPath,
     acceptanceExperiencePath: input.acceptanceExperiencePath,
     finalAcceptanceFeedbackPath: input.finalAcceptanceFeedbackPath,
+    repairChecklist: input.repairChecklist,
   })
   return runCampaignSuggestionTask({
     cwd: input.cwd,
@@ -3512,7 +3610,7 @@ async function promoteRoundPendingAndTreeToCurrent(input: {
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
 }) {
-  if (await pathExists(path.join(input.roundPaths.pendingPackageSnapshotRoot, "manifest.md"))) {
+  if (await hasEvolvedPendingPackage(input.roundPaths.pendingPackageSnapshotRoot)) {
     await copyExperienceWorkspaceRoot(
       input.roundPaths.pendingPackageSnapshotRoot,
       input.campaignPaths.pendingCurrentRoot,
@@ -3520,14 +3618,24 @@ async function promoteRoundPendingAndTreeToCurrent(input: {
   }
   const currentTree = await readLongTaskCampaignExplorationTree(input.campaignPaths)
   const currentRoutingControl = await readLongTaskCampaignRoutingControl(input.campaignPaths)
-  const rawExplorationTree = (await pathExists(input.roundPaths.explorationTreeDraftPath))
-    ? await readJsonFile<unknown>(input.roundPaths.explorationTreeDraftPath)
-    : currentTree
+  let rawExplorationTree: unknown = currentTree
+  if (await pathExists(input.roundPaths.explorationTreeDraftPath)) {
+    try {
+      rawExplorationTree = await readJsonFile<unknown>(input.roundPaths.explorationTreeDraftPath)
+    } catch {
+      // Agent-written JSON may have unescaped Windows backslashes; fall back to current
+    }
+  }
   const explorationTree = coerceExplorationTreeDocument(rawExplorationTree, currentTree)
   await writeLongTaskCampaignExplorationTree(input.campaignPaths, explorationTree)
-  const rawRoutingControl = (await pathExists(input.roundPaths.routingControlDraftPath))
-    ? await readJsonFile<unknown>(input.roundPaths.routingControlDraftPath)
-    : currentRoutingControl
+  let rawRoutingControl: unknown = currentRoutingControl
+  if (await pathExists(input.roundPaths.routingControlDraftPath)) {
+    try {
+      rawRoutingControl = await readJsonFile<unknown>(input.roundPaths.routingControlDraftPath)
+    } catch {
+      // Agent-written JSON may have unescaped Windows backslashes; fall back to current
+    }
+  }
   const routingControl = coerceRoutingControl(rawRoutingControl, currentRoutingControl)
   await writeLongTaskCampaignRoutingControl(input.campaignPaths, routingControl)
 }
@@ -3885,7 +3993,18 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
           const acceptancePassRoot = path.join(roundPaths.finalAcceptanceRoot, passID)
           const acceptancePassResultPath = path.join(acceptancePassRoot, "result.json")
 
-          await runCampaignLead({
+          // Build repair checklist from previous pass failure for pass-02 lead
+          let repairChecklist: string[] | undefined
+          if (passIndex >= 2 && finalAcceptanceFeedbackPath) {
+            try {
+              const prevResult = await readJsonFile<Record<string, unknown>>(finalAcceptanceFeedbackPath)
+              repairChecklist = buildRepairChecklistFromFinalAcceptance(prevResult)
+            } catch {
+              // If previous result is unreadable, lead will still get finalAcceptanceFeedbackPath
+            }
+          }
+
+          const leadResult = await runCampaignLead({
             cwd: input.cwd,
             campaignSpec,
             baseSpec,
@@ -3905,12 +4024,133 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
             acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
             acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
             finalAcceptanceFeedbackPath,
+            repairChecklist,
             campaignPaths,
             roundPaths,
             runtimeScope: roundRuntimeScope,
             onActivation: activateCampaignRound,
             onPulse: pulseCampaignRound,
           })
+
+          // Guard: if pass-02 lead had a repair checklist but updated no files, record it
+          const leadUpdatedFiles: unknown[] = Array.isArray(leadResult.parsed?.updated_files)
+            ? (leadResult.parsed!.updated_files as unknown[])
+            : []
+          const hadRepairChecklist = Boolean(repairChecklist && repairChecklist.length)
+          if (passIndex >= 2 && hadRepairChecklist && leadUpdatedFiles.length === 0) {
+            const existingOpMemory = await readLongTaskCampaignOperationalMemory(campaignPaths)
+            existingOpMemory.push({
+              id: `sys-warning-${roundNumber}-pass02-no-repair`,
+              runID: runResult.runID,
+              createdAt: nowISO(),
+              updatedAt: nowISO(),
+              kind: "failed_path",
+              status: "candidate",
+              statement: `Round ${roundNumber} pass-02 lead returned updated_files: [] despite ${repairChecklist!.length} repair items.`,
+              rationale: "Lead did not act on pass-01 validation failures.",
+              refs: [finalAcceptanceFeedbackPath].filter((p): p is string => Boolean(p)),
+              tags: ["lead-pass02-no-repair"],
+              roundNumber,
+              lastRound: roundNumber,
+              occurrenceCount: 1,
+              sourceRunIDs: [runResult.runID],
+            })
+            await writeLongTaskCampaignOperationalMemory(campaignPaths, existingOpMemory)
+          }
+
+          // Pre-check: run surface-generalization validator on lead's pending package
+          // Non-blocking: failure is recorded to operational memory but does not stop the pass
+          const precheckValidatorDir = path.join(roundPaths.root, "surface-precheck")
+          const precheckValidatorId = `surface-precheck-${passID}`
+          const precheckResultPath = path.join(precheckValidatorDir, "result.json")
+          const precheckConfigPath = autoEvolvePath(
+            input.cwd,
+            "task-packs/real-long-tasks/try4-expert-bootstrap/configs/formal-surface-generalization.json",
+          )
+          await ensureDirectory(precheckValidatorDir)
+          try {
+            const precheckContract: LongTaskValidatorContract = {
+              id: precheckValidatorId,
+              type: "script",
+              title: "Surface Generalization Pre-Check",
+              path: autoEvolvePath(input.cwd, "scripts/validate-experience-surface-generalization.py"),
+              runner: "python",
+              args: [precheckConfigPath],
+              timeoutMs: 60000,
+            }
+            const precheckUnit: LongTaskWorkUnit = {
+              id: precheckValidatorId,
+              title: "Surface Generalization Pre-Check",
+              goal: "Verify lead's pending package has no hardcoded task-answer literals",
+              inputs: [],
+              dependsOn: [],
+              expectedArtifacts: [],
+              claim: "Surface generalization pre-check",
+              checkPlan: "Run surface generalization validator",
+              validatorIDs: [],
+              retryBudget: 0,
+              status: "active",
+              attemptCount: 1,
+            }
+            const precheckResult = await runLongTaskValidator({
+              cwd: input.cwd,
+              config: await loadConfig(input.cwd),
+              contract: precheckContract,
+              spec: baseSpec,
+              unit: precheckUnit,
+              runID: runResult.runID ?? roundPaths.runTraceJsonPath,
+              attempt: 1,
+              validatorDir: precheckValidatorDir,
+              bundlePath: precheckResultPath,
+              payload: {
+                targetPaths: [
+                  { path: roundPaths.pendingPackageSnapshotRoot, role: "experience-workspace" },
+                ],
+              },
+              runtimeScope: roundRuntimeScope,
+            })
+            if (!precheckResult.passed) {
+              const opMemory = await readLongTaskCampaignOperationalMemory(campaignPaths)
+              opMemory.push({
+                id: `surface-fail-${roundNumber}-${passID}`,
+                runID: runResult.runID ?? "",
+                createdAt: nowISO(),
+                updatedAt: nowISO(),
+                kind: "blocking_issue",
+                status: "confirmed",
+                statement: `Lead's pending package (${passID}) contains hardcoded task-answer literals.`,
+                rationale: "Surface generalization validator detected forbidden literals in lead output.",
+                refs: [precheckResultPath],
+                tags: ["surface-generalization-fail"],
+                roundNumber,
+                lastRound: roundNumber,
+                occurrenceCount: 1,
+                sourceRunIDs: [runResult.runID],
+              })
+              await writeLongTaskCampaignOperationalMemory(campaignPaths, opMemory)
+            }
+          } catch (precheckError) {
+            // If pre-check itself fails (e.g. missing script), log but don't crash
+            const precheckMessage = precheckError instanceof Error ? precheckError.message : String(precheckError)
+            const opMemory = await readLongTaskCampaignOperationalMemory(campaignPaths)
+            opMemory.push({
+              id: `surface-skip-${roundNumber}-${passID}`,
+              runID: runResult.runID ?? "",
+              createdAt: nowISO(),
+              updatedAt: nowISO(),
+              kind: "package_gap",
+              status: "candidate",
+              statement: `Surface generalization pre-check could not run: ${precheckMessage}`,
+              rationale: "Pre-check script or config may be missing.",
+              refs: [],
+              tags: ["surface-precheck-error"],
+              roundNumber,
+              lastRound: roundNumber,
+              occurrenceCount: 1,
+              sourceRunIDs: [runResult.runID],
+            })
+            await writeLongTaskCampaignOperationalMemory(campaignPaths, opMemory)
+          }
 
           await promoteRoundPendingAndTreeToCurrent({
             campaignPaths,

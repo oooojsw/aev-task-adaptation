@@ -70,7 +70,56 @@ export async function readTextFile(target: string) {
 
 export async function readJsonFile<T = any>(target: string): Promise<T> {
   const raw = await readTextFile(target)
-  return JSON.parse(raw.replace(/^\uFEFF/, "")) as T
+  const cleaned = raw.replace(/^\uFEFF/, "").trim()
+  // Empty or BOM-only file: return empty object instead of crashing
+  if (!cleaned) {
+    console.warn(`[warn] ${target}: empty or BOM-only file, returning empty object`)
+    return {} as T
+  }
+  try {
+    return JSON.parse(cleaned) as T
+  } catch (parseError) {
+    // Attempt salvage: extract the first valid JSON object from the text
+    const { extractJsonObject } = await import("./long-task/json-extract")
+    let salvaged = extractJsonObject(cleaned)
+    if (salvaged) {
+      console.warn(`[warn] ${target}: JSON corrupted (${(parseError as Error).message}), salvaged first valid object`)
+      return salvaged as T
+    }
+    // Attempt salvage 2: strip invalid escape sequences (e.g. \Ԫ, \非, or \e in paths)
+    const stripped = cleaned.replace(/\\([^"\\/bfnrtu])/g, "$1")
+    if (stripped !== cleaned) {
+      try {
+        const result = JSON.parse(stripped) as T
+        console.warn(`[warn] ${target}: JSON had invalid escapes, stripped and parsed OK`)
+        return result
+      } catch {
+        salvaged = extractJsonObject(stripped)
+        if (salvaged) {
+          console.warn(`[warn] ${target}: invalid escapes + extractJsonObject salvage succeeded`)
+          return salvaged as T
+        }
+      }
+    }
+    // Attempt salvage 3: \r\n\t in Windows paths (LLM agents often write \path\runtime instead of \\path\\runtime)
+    // Replace \r \n \t with their literal character equivalents to un-break path-like content
+    const deEscaped = cleaned.replace(/\\r/g, "\r").replace(/\\n/g, "\n").replace(/\\t/g, "\t")
+    if (deEscaped !== cleaned) {
+      try {
+        const result = JSON.parse(deEscaped) as T
+        console.warn(`[warn] ${target}: JSON had literal \\r\\n\\t in paths, de-escaped and parsed OK`)
+        return result
+      } catch {
+        salvaged = extractJsonObject(deEscaped)
+        if (salvaged) {
+          console.warn(`[warn] ${target}: de-escape + extractJsonObject salvage succeeded`)
+          return salvaged as T
+        }
+      }
+    }
+    // If salvage also fails, throw a clear error
+    throw new Error(`Cannot read ${target}: ${(parseError as Error).message}`)
+  }
 }
 
 export async function writeTextFile(target: string, content: string) {

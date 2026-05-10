@@ -138,6 +138,7 @@ export function buildCampaignLeadPrompt(input: {
   reviewerSuggestionPath?: string
   acceptanceExperiencePath?: string
   finalAcceptanceFeedbackPath?: string
+  repairChecklist?: string[]
 }) {
   return [
     "You are the campaign lead for a multi-round long-task learning campaign.",
@@ -145,6 +146,25 @@ export function buildCampaignLeadPrompt(input: {
     `Campaign title: ${input.title}`,
     `Round: ${input.roundNumber}`,
     "",
+    ...(input.repairChecklist && input.repairChecklist.length
+      ? [
+          "==================== MANDATORY REPAIR CHECKLIST (pass-02) ====================",
+          "",
+          "The previous pass validation FAILED. The failures have been parsed into",
+          "concrete repair instructions below. You MUST address every item.",
+          "",
+          "HARD RULE: If this checklist is non-empty, you MUST NOT return updated_files: []. ",
+          "Each repair item requires at least one file change.",
+          "",
+          "If you genuinely believe an item should NOT be fixed (system-level blocker, not",
+          "content-level), you MUST explain why in package_highlights for each skipped item.",
+          "",
+          ...input.repairChecklist.map((item, i) => `REPAIR-${String(i + 1).padStart(3, "0")}: ${item}`),
+          "",
+          "=============================================================================",
+          "",
+        ]
+      : []),
     "Primary inputs:",
     bullet([
       `run_trace: ${input.runTracePath}`,
@@ -180,6 +200,9 @@ export function buildCampaignLeadPrompt(input: {
     "- The package must stay structurally compatible with the formal expert workspace surface.",
     "- The formal package must teach how to locate, derive, verify, and fill values. Do not bake final task-answer literals, fixed result numbers, or reference-only truth directly into the package.",
     "- If a rule can be written as a source locator, field mapping, calculation recipe, fill order, or self-check, prefer that form over embedding the answer itself.",
+    "- BEFORE declaring completion, you MUST self-check: search all files you wrote for any literal task-answer values (exact numbers like 20,260, dates like 2026-03-23, proper names from source data). If you find any, replace them with source-locator descriptions.",
+    "- Report your self-check result in the JSON fields 'surface_precheck_passed' (boolean) and 'surface_precheck_details' (string array listing any forbidden literals you found and removed).",
+    "- The expert-surface-generalization validator scans for forbidden literals. If this validator failed in a previous pass or round, do NOT claim success without first verifying you have eliminated ALL instances of the forbidden values listed in the validator config.",
     "- Include concrete task logic, data linkage logic, numeric calculation guidance, field-location rules, template-filling rules, and explicit failure-path constraints when justified by evidence.",
     "- Keep the package high-cohesion and low-coupling: each file should have a clear role, repeated rules should have one canonical home, and other files should point to that home instead of cloning the same prose.",
     "- surface_contract.json is a machine-only control file. It must remain raw JSON only with the platform schema fields such as entry, changeLog, and documents. Never wrap it in Markdown, HTML comments, or prose.",
@@ -204,6 +227,8 @@ export function buildCampaignLeadPrompt(input: {
       package_highlights: ["important package changes"],
       tree_highlights: ["important exploration-tree changes"],
       refs: ["absolute/path/or/reference"],
+      surface_precheck_passed: "true or false (REQUIRED - did you self-check for hardcoded literals?)",
+      surface_precheck_details: ["list any forbidden literals found and removed"],
     }),
     "",
   ].join("\n")

@@ -96,9 +96,8 @@ function short(text: string, limit = 200) {
 const NO_SIGNAL_BLOCK_FAILURE_THRESHOLD = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_NO_SIGNAL_BLOCK_THRESHOLD ?? "", 10)
   if (Number.isFinite(value) && value >= 2) return value
-  // Prefer resilience by default: require 3 consecutive hard no-signal failures
-  // before marking the entire long-task run as blocked.
-  return 3
+  // Default threshold lowered from 3 to 2 to terminate unresponsive units faster
+  return 2
 })()
 
 interface TaskSignalHealth {

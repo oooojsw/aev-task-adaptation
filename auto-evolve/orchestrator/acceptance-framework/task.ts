@@ -144,8 +144,17 @@ function deploymentRunID(title: string) {
   return `${stamp}-${slug}`
 }
 
-async function resetEditablePaths(runDir: string, spec: LongTaskSpec) {
-  const editablePaths = resolveLongTaskEditablePaths(spec)
+async function resetEditablePaths(runDir: string, spec: LongTaskSpec, specDir: string) {
+  const rawPaths = [...(spec.editablePaths ?? []), ...(spec.targetPaths ?? []).map((item) => item.path)]
+  const resolved = rawPaths.map((p) => path.resolve(specDir, p))
+  const unique = Array.from(new Set(resolved)).sort((a, b) => a.length - b.length)
+
+  const editablePaths: string[] = []
+  for (const candidate of unique) {
+    const covered = editablePaths.some((existing) => candidate === existing || candidate.startsWith(existing + path.sep))
+    if (!covered) editablePaths.push(candidate)
+  }
+
   const archiveRoot = path.join(runDir, "preexisting")
   await ensureDirectory(archiveRoot)
 
@@ -309,7 +318,7 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
 
     await ensureDirectory(runDir)
     await ensureDirectory(validatorBundleDir)
-    await resetEditablePaths(runDir, spec)
+    await resetEditablePaths(runDir, spec, path.dirname(specPath))
 
     await writeJsonFile(bundlePath, {
       runID,
@@ -323,7 +332,12 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
       createdAt: nowISO(),
     })
 
-    const editablePaths = resolveLongTaskEditablePaths(spec)
+    const specEditablePaths = resolveLongTaskEditablePaths(spec)
+    // Also add target output paths as editable so the blank agent can write to them.
+    const editablePaths = uniqueStrings([
+      ...specEditablePaths,
+      ...(spec.targetPaths ?? []).map((item) => item.path),
+    ])
 
     const allPathsForNorm = uniqueStrings([
       ...input.formalSurfaceRoots,
@@ -381,7 +395,9 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
         agent: selection.agent,
         variant: selection.variant,
         injectPlatformSafetyRules: false,
-        isolateHostRuntime: true,
+        // Use non-isolated runtime so model resolution works (models.dev is not reachable).
+        // Permission sandboxing is handled by the override config's restricted read/edit rules.
+        isolateHostRuntime: false,
         runtimeScope,
         live: {
           stageDir: executeDir,

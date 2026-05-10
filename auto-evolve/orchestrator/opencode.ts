@@ -184,10 +184,17 @@ function buildEditPermissionRules(cwd: string, paths: string[]) {
     "*": "deny",
   }
 
+  // OpenCode resolves edit paths relative to the process cwd (packages/opencode).
+  // Normalize from project root but make relative to the OpenCode process cwd.
+  const opencodeCwd = path.join(cwd, "packages", "opencode")
   for (const item of paths) {
-    const relative = path.relative(cwd, path.resolve(item)).replace(/\\/g, "/")
-    if (!relative) continue
-    rules[relative] = "allow"
+    const absolute = path.resolve(item)
+    const relative = path.relative(opencodeCwd, absolute).replace(/\\/g, "/")
+    if (relative && !relative.startsWith("..")) {
+      rules[relative] = "allow"
+    }
+    // Also allow absolute path as fallback
+    rules[absolute.replace(/\\/g, "/")] = "allow"
   }
 
   return rules
@@ -262,12 +269,20 @@ async function prepareIsolatedHostRuntime(cwd: string, runLabel: string) {
   const xdgCache = path.join(root, "cache")
   const xdgState = path.join(root, "state")
   const opencodeData = path.join(xdgData, "opencode")
-  await Promise.all([home, xdgConfig, xdgData, xdgCache, xdgState, opencodeData].map((dir) => ensureDirectory(dir)))
+  const opencodeCache = path.join(xdgCache, "opencode")
+  await Promise.all([home, xdgConfig, xdgData, xdgCache, xdgState, opencodeData, opencodeCache].map((dir) => ensureDirectory(dir)))
 
   for (const candidate of hostAuthCandidates()) {
     if (!(await pathExists(candidate))) continue
     await copyFile(candidate, path.join(opencodeData, "auth.json")).catch(() => undefined)
     break
+  }
+
+  // Copy host model cache so the isolated runtime can resolve models without
+  // fetching https://models.dev/api.json (which often fails with ECONNRESET).
+  const hostModelCache = path.join(os.homedir(), ".cache", "opencode", "models.json")
+  if (await pathExists(hostModelCache)) {
+    await copyFile(hostModelCache, path.join(opencodeCache, "models.json")).catch(() => undefined)
   }
 
   return {
@@ -282,7 +297,9 @@ async function prepareIsolatedHostRuntime(cwd: string, runLabel: string) {
     OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: "1",
     OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1",
     OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
-    OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
+    // Keep default plugins enabled (model resolution needs them).
+    // Disabling them forces OpenCode to fetch models.dev/api.json which may ECONNRESET.
+    // OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
     OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
     OPENCODE_CONFIG: undefined,
     OPENCODE_CONFIG_CONTENT: undefined,
@@ -367,7 +384,10 @@ async function ensureOverrideConfig(
   }
 
   const override: Record<string, unknown> = {
-    ...(isolateHostRuntime ? minimalProviderConfig(systemBaseConfig, model) : systemBaseConfig),
+    // Always pass the full system config. Isolated runtime already handles
+    // sandboxing via separate HOME/XDG dirs + restricted permissions.
+    // Stripping to minimalProviderConfig breaks model resolution (ECONNRESET on models.dev).
+    ...systemBaseConfig,
     $schema: "https://opencode.ai/config.json",
     ...(model
       ? {
@@ -378,12 +398,14 @@ async function ensureOverrideConfig(
     // Keep runtime deterministic: always use built-in stable primary agent.
     default_agent: "build",
     permission:
-      permissionConfig.mode === "open" && !isolateHostRuntime
+      permissionConfig.mode === "open" && !isolateHostRuntime && permissions.readPaths.length === 0
         ? makeOpenPermissions()
         : await makeOverridePermissions(cwd, {
             readPaths: permissions.readPaths,
             editPaths: permissions.editPaths,
-            allowShell: isolateHostRuntime,
+            // Allow shell when we have explicit read paths (blank agent, workers with capabilities).
+            // Deny shell only when truly open (no restrictions).
+            allowShell: permissions.readPaths.length > 0 || isolateHostRuntime,
           }),
   }
   await ensureDirectory(dir)
@@ -393,11 +415,33 @@ async function ensureOverrideConfig(
 }
 
 async function ensureRuntimeEnvironment(_cwd: string, _runLabel: string) {
-  // Keep project-level overrides disabled, but preserve host provider state
-  // so MiniMax provider/model resolution stays available at runtime.
-  return {
+  const env: Record<string, string> = {
     OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-  } as const
+  }
+
+  // Pass through proxy settings so OpenCode can reach external APIs when VPN is up.
+  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"]) {
+    const value = process.env[key]
+    if (value) env[key] = value
+  }
+
+  // If a valid models.json cache exists, disable the fetch of models.dev/api.json.
+  // This makes OpenCode resilient to VPN drops — it reads from cache instead of
+  // from the network, which is unreachable from China without VPN.
+  const cachePath = path.join(os.homedir(), ".cache", "opencode", "models.json")
+  try {
+    if (await pathExists(cachePath)) {
+      const raw = await readFile(cachePath, "utf8")
+      const trimmed = raw.trim()
+      if (trimmed.length > 0 && trimmed.startsWith("{")) {
+        env.OPENCODE_DISABLE_MODELS_FETCH = "true"
+      }
+    }
+  } catch {
+    // If we can't read the cache, leave models fetch enabled (will need VPN).
+  }
+
+  return env
 }
 
 function slugifyTitle(input: string) {
@@ -471,7 +515,7 @@ function withRuntimeBudgetPrompt(input: { prompt: string; runStart: Date }) {
   return `${buildRuntimeBudgetPromptPrefix({ runStart: input.runStart })}\n\n${input.prompt}`
 }
 
-function isInfrastructureCrash(result: Pick<OpencodeRunResult, "exitCode" | "stderr" | "events">) {
+function isInfrastructureCrash(result: Pick<OpencodeRunResult, "exitCode" | "stderr" | "events" | "responseText">) {
   const stderr = result.stderr.toLowerCase()
   if (stderr.includes("oh no: bun has crashed")) return true
   if (stderr.includes("panic(main thread)")) return true
@@ -479,11 +523,21 @@ function isInfrastructureCrash(result: Pick<OpencodeRunResult, "exitCode" | "std
   if (stderr.includes("runtime bootstrap failed")) return true
   if (stderr.includes("infrastructure bootstrap failed")) return true
   if (stderr.includes("silent output timeout")) return true
+  // Network-level infrastructure failures
+  if (stderr.includes("econnreset") || stderr.includes("econnrefused") || stderr.includes("enotfound")) return true
+  // OpenCode startup failure: process exited but produced no events and no response
   if (result.exitCode === 124 && result.events.length === 0) return true
   if (result.exitCode === 1 && result.events.length === 0 && stderr === "") return true
+  if (result.exitCode !== 0 && result.events.length === 0 && stderr.includes("bun")) return true
+  // Silent failure: process ran but produced no tool calls and no response text at all
+  if (result.events.length === 0 && result.responseText.length === 0 && stderr.startsWith("")) return true
+  if (result.events.length > 0 && !result.responseText.length) {
+    const hasTextOrToolEvent = result.events.some((e) => e.type === "text" || (e.type === "tool_use" && e.part?.tool))
+    if (!hasTextOrToolEvent) return true
+  }
   const hasStepFinish = result.events.some((e) => e.type === "step_finish")
   if (result.exitCode === 1 && result.events.length > 0 && !hasStepFinish && stderr === "") return true
-  return result.exitCode !== 0 && result.events.length === 0 && stderr.includes("bun")
+  return false
 }
 
 function uniqueFiles(files: string[]) {
