@@ -163,6 +163,7 @@ export async function writeTaskArtifacts(
     variant: task.selectedVariant ?? null,
     referencedPaths: task.referencedPaths,
     attachedFiles: task.attachedFiles,
+    promptInlineFiles: task.promptInlineFiles,
     permissionReadPaths: task.permissionReadPaths,
     permissionEditPaths: task.permissionEditPaths,
   })

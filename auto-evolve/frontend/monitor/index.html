@@ -628,6 +628,11 @@
           grid-template-columns: 1fr;
         }
       }
+      @keyframes pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.04); }
+      }
+      .refreshing { animation: pulse .4s ease-in-out 3; }
     </style>
   </head>
   <body>
@@ -1267,7 +1272,21 @@
 
       intervalEl.addEventListener("change", restartTimer)
       limitEl.addEventListener("change", () => load().catch(() => {}))
-      refreshBtn.addEventListener("click", () => load().catch(() => {}))
+      refreshBtn.addEventListener("click", async () => {
+        refreshBtn.disabled = true
+        refreshBtn.textContent = "Refreshing\u2026"
+        refreshBtn.classList.add("refreshing")
+        const origBg = refreshBtn.style.background
+        refreshBtn.style.background = "var(--accent)"
+        const start = Date.now()
+        try { await load() } catch {}
+        const elapsed = Date.now() - start
+        if (elapsed < 600) await new Promise((r) => setTimeout(r, 600 - elapsed))
+        refreshBtn.disabled = false
+        refreshBtn.textContent = "Refresh now"
+        refreshBtn.classList.remove("refreshing")
+        refreshBtn.style.background = origBg
+      })
 
       let dragStartX = 0
       let dragStartLeft = 0

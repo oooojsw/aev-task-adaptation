@@ -213,7 +213,10 @@ def main():
             (
                 f"{label}: numeric_recall={numeric_recall:.3f}, matched_numbers={len(matched_numbers)}/{len(numeric_basis)}, "
                 f"numeric_basis={numeric_basis_label if reference_numbers else 'required_tokens'}, "
-                f"required_token_recall={required_token_recall:.3f}, matched_required_tokens={len(matched_required_tokens)}/{len(required_tokens)}"
+                f"required_token_recall={required_token_recall:.3f}, matched_required_tokens={len(matched_required_tokens)}/{len(required_tokens)}, "
+                f"expected_tokens={required_tokens}, "
+                f"found_numbers={sorted(target_numbers)}, "
+                f"missing_tokens={[t for t in required_tokens if t not in matched_required_tokens]}"
             )
         )
         if numeric_recall < min_numeric_recall:

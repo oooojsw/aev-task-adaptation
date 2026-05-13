@@ -1,16 +1,7 @@
 {
-  "runID": "manual-validation",
-  "unitID": "deployment-validation",
+  "runID": "20260511-confirm-surface-generalization-post-sync",
+  "unitID": "confirm-surface-generalization-post-sync",
   "targetPaths": [
-    {
-      "label": "generated report",
-      "path": "C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/auto-evolve/task-packs/real-long-tasks/try4-expert-bootstrap/deployment/outputs/generated-report.docx",
-      "role": "target-artifact"
-    },
-    {
-      "label": "generated explanation",
-      "path": "C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/auto-evolve/task-packs/real-long-tasks/try4-expert-bootstrap/deployment/outputs/generated-explanation.docx",
-      "role": "target-artifact"
-    }
+    "C:\\\\Users\\\\ZhuanZ\\\\Desktop\\\\opencode re\\\\opencode latest\\\\auto-evolve\\\\task-packs\\\\real-long-tasks\\\\try4-expert-bootstrap\\\\expert-workspace"
   ]
 }

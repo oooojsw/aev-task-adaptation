@@ -46,7 +46,7 @@ def iter_surface_roots(payload: dict, config: dict) -> list[Path]:
     return unique
 
 
-def iter_candidate_files(roots: list[Path], config: dict) -> list[Path]:
+def iter_candidate_files(roots: list[Path], config: dict) -> tuple[list[Path], list[dict]]:
     allowed_extensions = {
         ext.lower() for ext in config.get("allowedExtensions", DEFAULT_ALLOWED_EXTENSIONS) if isinstance(ext, str)
     }
@@ -54,6 +54,7 @@ def iter_candidate_files(roots: list[Path], config: dict) -> list[Path]:
         str(item).lower() for item in config.get("ignorePathSubstrings", []) if isinstance(item, str) and item.strip()
     ]
     candidates: list[Path] = []
+    ignored: list[dict] = []
 
     for root in roots:
         if not root.exists():
@@ -64,21 +65,25 @@ def iter_candidate_files(roots: list[Path], config: dict) -> list[Path]:
             items = [item for item in root.rglob("*") if item.is_file()]
         for item in items:
             item_str = str(item).lower()
-            if ignore_path_substrings and any(token in item_str for token in ignore_path_substrings):
-                continue
+            if ignore_path_substrings:
+                matched_token = next((tok for tok in ignore_path_substrings if tok in item_str), None)
+                if matched_token:
+                    ignored.append({"path": str(item), "reason": f"matched ignorePathSubstring: {matched_token}"})
+                    continue
             if item.suffix.lower() not in allowed_extensions:
+                ignored.append({"path": str(item), "reason": f"extension not allowed: {item.suffix}"})
                 continue
             candidates.append(item)
 
-    unique: list[Path] = []
+    unique_candidates: list[Path] = []
     seen = set()
     for item in candidates:
         key = str(item)
         if key in seen:
             continue
         seen.add(key)
-        unique.append(item)
-    return unique
+        unique_candidates.append(item)
+    return unique_candidates, ignored
 
 
 def compile_patterns(config: dict):
@@ -173,9 +178,14 @@ def main():
         )
         return 1
 
-    files = iter_candidate_files(roots, config)
+    files, ignored = iter_candidate_files(roots, config)
     compiled_patterns = compile_patterns(config)
     details = [f"scanned_roots: {len(roots)}", f"scanned_files: {len(files)}"]
+    if ignored:
+        details.append(f"skipped_files: {len(ignored)}")
+        if config.get("warnOnIgnoredHits", False):
+            for entry in ignored:
+                details.append(f"  skip: {entry['path']} ({entry['reason']})")
     all_hits: list[str] = []
     max_total_hits = int(config.get("maxTotalHits", 12))
 

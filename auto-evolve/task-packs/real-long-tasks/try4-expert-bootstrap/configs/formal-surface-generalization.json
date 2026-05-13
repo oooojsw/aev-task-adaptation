@@ -1,15 +1,49 @@
 {
-  "rootRoles": ["experience-workspace"],
-  "allowedExtensions": [".md", ".txt", ".json", ".jsonl", ".yaml", ".yml"],
-  "ignorePathSubstrings": ["\\evidence\\", "/evidence/", "change_log", "failure_lessons"],
+  "rootRoles": [
+    "experience-workspace"
+  ],
+  "rootPaths": [
+    "E:/opencode-auto-evolve-history/runtime-state/long-task-campaigns/20260510-003632946-try4-expert-bootstrap-campaign/pending-expert-package/current"
+  ],
+  "allowedExtensions": [
+    ".md",
+    ".txt",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml"
+  ],
+  "ignorePathSubstrings": [
+    "\\evidence\\\\",
+    "/evidence/",
+    "change_log",
+    "lessons/",
+    "lessons"
+  ],
+  "warnOnIgnoredHits": true,
   "maxHitsPerFile": 4,
   "maxTotalHits": 12,
   "forbiddenLiterals": [
-    { "value": "20,260", "label": "task-specific result amount" },
-    { "value": "20260.00", "label": "task-specific result amount" },
-    { "value": "20,665.20", "label": "task-specific taxed amount" },
-    { "value": "20665.20", "label": "task-specific taxed amount" },
-    { "value": "10.13", "label": "task-specific explanation value" }
+    {
+      "value": "20,260",
+      "label": "task-specific result amount"
+    },
+    {
+      "value": "20260.00",
+      "label": "task-specific result amount"
+    },
+    {
+      "value": "20,665.20",
+      "label": "task-specific taxed amount"
+    },
+    {
+      "value": "20665.20",
+      "label": "task-specific taxed amount"
+    },
+    {
+      "value": "10.13",
+      "label": "task-specific explanation value"
+    }
   ],
   "forbiddenPatterns": [
     {
@@ -22,11 +56,29 @@
     }
   ],
   "allowedDomainConstants": [
-    { "value": "1.02", "label": "tax rate 2% applied to revenue" },
-    { "value": "1.13", "label": "tax adjustment factor 13%" },
-    { "value": "2000", "label": "unit price category A" },
-    { "value": "1900", "label": "unit price category B and C" },
-    { "value": "14", "label": "item count in Sheet2" },
-    { "value": "2026-03-23", "label": "valuation date" }
+    {
+      "value": "1.02",
+      "label": "tax rate 2% applied to revenue"
+    },
+    {
+      "value": "1.13",
+      "label": "tax adjustment factor 13%"
+    },
+    {
+      "value": "2000",
+      "label": "unit price category A"
+    },
+    {
+      "value": "1900",
+      "label": "unit price category B and C"
+    },
+    {
+      "value": "14",
+      "label": "item count in Sheet2"
+    },
+    {
+      "value": "2026-03-23",
+      "label": "valuation date"
+    }
   ]
 }

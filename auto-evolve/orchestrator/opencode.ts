@@ -31,6 +31,8 @@ const OPENCODE_TASK_SILENT_TIMEOUT_AFTER_ACTIVITY_MS = (() => {
   // prematurely terminating long silent compute windows.
   return Math.min(OPENCODE_TASK_TIMEOUT_MS, Math.max(OPENCODE_TASK_SILENT_TIMEOUT_MS, 60 * 60 * 1000))
 })()
+const OPENCODE_PROMPT_INLINE_TEXT_FILE_MAX_BYTES = 256 * 1024
+const OPENCODE_PROMPT_INLINE_TEXT_EXTENSIONS = new Set([".md", ".txt", ".json", ".jsonl", ".yaml", ".yml"])
 
 export interface OpencodeEvent {
   type: string
@@ -59,6 +61,7 @@ export interface OpencodeTaskRun {
   selectedVariant?: string
   referencedPaths: string[]
   attachedFiles: string[]
+  promptInlineFiles: string[]
   permissionReadPaths: string[]
   permissionEditPaths: string[]
   result: OpencodeRunResult
@@ -71,6 +74,7 @@ export interface OpencodeTaskInput {
   prompt: string
   referencePaths?: string[]
   attachedFiles?: string[]
+  promptInlineFiles?: string[]
   permissionReadPaths?: string[]
   permissionEditPaths?: string[]
   model?: string
@@ -552,6 +556,57 @@ function uniqueFiles(files: string[]) {
   return ordered
 }
 
+async function buildPromptInlineFileSection(files: string[]) {
+  const blocks: string[] = []
+  for (const file of uniqueFiles(files)) {
+    const ext = path.extname(file).toLowerCase()
+    if (!OPENCODE_PROMPT_INLINE_TEXT_EXTENSIONS.has(ext)) continue
+
+    try {
+      const info = await stat(file)
+      if (!info.isFile()) continue
+      if (info.size > OPENCODE_PROMPT_INLINE_TEXT_FILE_MAX_BYTES) {
+        blocks.push(
+          [
+            `--- REQUIRED FILE TOO LARGE TO INLINE: ${file} ---`,
+            `size_bytes: ${info.size}`,
+            `max_inline_bytes: ${OPENCODE_PROMPT_INLINE_TEXT_FILE_MAX_BYTES}`,
+            "--- END REQUIRED FILE NOTICE ---",
+          ].join("\n"),
+        )
+        continue
+      }
+
+      const content = await readFile(file, "utf8")
+      blocks.push(
+        [
+          `--- BEGIN REQUIRED FILE: ${file} ---`,
+          content.trimEnd(),
+          `--- END REQUIRED FILE: ${file} ---`,
+        ].join("\n"),
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      blocks.push(
+        [
+          `--- REQUIRED FILE COULD NOT BE LOADED: ${file} ---`,
+          message,
+          "--- END REQUIRED FILE NOTICE ---",
+        ].join("\n"),
+      )
+    }
+  }
+
+  if (!blocks.length) return ""
+  return [
+    "[Required Files Inlined At Session Start]",
+    "The following required files have already been loaded into this prompt as plain text.",
+    "Use these contents directly. Do not spend tool calls reading these same files before applying them.",
+    "",
+    ...blocks,
+  ].join("\n")
+}
+
 function liveStatus(input: { started: boolean; exitCode?: number }): TaskArtifactStatus {
   if (typeof input.exitCode === "number") {
     return input.exitCode === 0 ? "done" : "error"
@@ -613,6 +668,7 @@ async function writeLiveTask(input: {
     variant: input.task.variant ?? null,
     referencedPaths: input.refs,
     attachedFiles: input.files,
+    promptInlineFiles: input.task.promptInlineFiles ?? [],
     permissionReadPaths: input.reads,
     permissionEditPaths: input.edits,
   })
@@ -831,8 +887,15 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
   const selectedAgent = normalizeAgentForRuntime(input.agent ?? input.config.defaultAgent)
   const referencedPaths = uniqueFiles(input.referencePaths ?? [])
   const attachedFiles = uniqueFiles(input.attachedFiles ?? [])
+  const promptInlineFiles = uniqueFiles(input.promptInlineFiles ?? [])
   const permissionReadPaths = uniqueFiles(input.permissionReadPaths ?? referencedPaths)
   const permissionEditPaths = uniqueFiles(input.permissionEditPaths ?? [])
+  const promptInlineSection = await buildPromptInlineFileSection(promptInlineFiles)
+  const effectiveInput: OpencodeTaskInput = {
+    ...input,
+    prompt: promptInlineSection ? `${promptInlineSection}\n\n${input.prompt}` : input.prompt,
+    promptInlineFiles,
+  }
 
   const infrastructureNotes: string[] = []
   let result: OpencodeRunResult | undefined
@@ -842,7 +905,7 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
     let current: OpencodeRunResult
     try {
       current = await runOpencodeTaskOnce(
-        input,
+        effectiveInput,
         selectedModel,
         selectedAgent,
         referencedPaths,
@@ -886,13 +949,14 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
   }
 
   return {
-    title: input.title,
-    prompt: input.prompt,
+    title: effectiveInput.title,
+    prompt: effectiveInput.prompt,
     selectedModel,
     selectedAgent,
     selectedVariant: input.variant,
     referencedPaths,
     attachedFiles,
+    promptInlineFiles,
     permissionReadPaths,
     permissionEditPaths,
     result,

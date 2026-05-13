@@ -132,6 +132,14 @@ function capabilityAttachedFiles(spec: LongTaskSpec) {
   return uniqueStrings((spec.capabilities ?? []).flatMap((capability) => capability.attachedFiles ?? []))
 }
 
+function deploymentGuidanceAttachedFiles(spec: LongTaskSpec) {
+  return uniqueStrings(
+    (spec.materials ?? [])
+      .map((item) => item.path)
+      .filter((item) => path.basename(item).toLowerCase() === "human-guidance.md"),
+  )
+}
+
 function deploymentRunID(title: string) {
   const now = new Date()
   const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}${String(now.getMilliseconds()).padStart(3, "0")}`
@@ -200,6 +208,7 @@ function buildBlankAgentTaskPrompt(input: {
   spec: LongTaskSpec
   formalSurfaceRoots: string[]
   resolvedInitialExpertContextPaths: string[]
+  promptInlineFiles: string[]
   bundlePath: string
   hasNonAscii?: boolean
 }) {
@@ -229,11 +238,20 @@ function buildBlankAgentTaskPrompt(input: {
     "",
     "Minimal deployment contract:",
     "- Treat yourself as a blank agent. Use only the listed formal expert surface, declared materials, and registered capability assets.",
-    "- First read the resolved expert context entry points. In this task pack, materials/human-guidance.md is the human-readable task guidance.",
+    "- Required text files are embedded directly in this startup prompt. Use those inlined contents immediately; do not spend tool calls re-reading them before acting.",
+    "- The human guidance file is the human-readable task guidance and has hard-constraint priority for deployment execution.",
     "- Write final outputs only to the declared target output paths, and edit only declared editable paths.",
     "- External acceptance validators exist, but hidden criteria, reference data, and internal configurations are not available during deployment execution.",
     "- Before returning, run local self-checks derived only from the allowed inputs. If blocked, report blockers instead of claiming success.",
   ]
+
+  if (input.promptInlineFiles.length) {
+    lines.push(
+      "",
+      "Required files already inlined into this startup prompt:",
+      bullet(input.promptInlineFiles),
+    )
+  }
 
   if (input.hasNonAscii) {
     lines.push(
@@ -309,6 +327,7 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
     const selection = resolveModelSelection(config, "solve", spec.execution)
     const capabilityPaths = capabilityReferencePaths(spec)
     const capabilityFiles = capabilityAttachedFiles(spec)
+    const guidanceFiles = deploymentGuidanceAttachedFiles(spec)
 
     const derivedEntryPoints = await deriveFormalSurfaceEntryPoints(input.formalSurfaceRoots)
     const resolvedInitialExpertContextPaths = uniqueStrings([
@@ -345,6 +364,8 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
       ...spec.materials.map((item) => item.path),
       ...(spec.targetPaths ?? []).map((item) => item.path),
       ...capabilityPaths,
+      ...capabilityFiles,
+      ...guidanceFiles,
     ])
     const normalizedPathsMap: Map<string, string> = new Map()
     for (const p of allPathsForNorm) {
@@ -360,9 +381,13 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
       spec,
       formalSurfaceRoots: input.formalSurfaceRoots,
       resolvedInitialExpertContextPaths,
+      promptInlineFiles: uniqueStrings([...guidanceFiles, ...resolvedInitialExpertContextPaths].map(normPath)),
       bundlePath,
       hasNonAscii,
     })
+
+    const attachedFiles = uniqueStrings(capabilityFiles.map(normPath))
+    const promptInlineFiles = uniqueStrings([...guidanceFiles, ...resolvedInitialExpertContextPaths].map(normPath))
 
     const abortController = new AbortController()
     const pollIntervalMs = 10_000
@@ -388,7 +413,8 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
         title: `Blank Agent Deployment ${spec.title}`,
         prompt,
         referencePaths: uniqueStrings(allPathsForNorm.map(normPath)),
-        attachedFiles: capabilityFiles,
+        attachedFiles,
+        promptInlineFiles,
         permissionReadPaths: uniqueStrings(allPathsForNorm.map(normPath)),
         permissionEditPaths: editablePaths,
         model: selection.model,

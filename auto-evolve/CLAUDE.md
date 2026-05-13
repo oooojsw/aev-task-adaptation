@@ -12,12 +12,14 @@ chcp 65001
 
 3-----监控区,你的记录填写在这里，单次运行时间（xxx），次数（xxx），当前次数（xxx）
 
+3.5----当我说"前端"或"前端页面"时，特指 auto-evolve 监控面板页面（frontend/monitor/index.html），不是 OpenCode 主应用（packages/app/）。不要修改 packages/ 下的任何前端文件。
+
 
 4，我不是一个专业的软件工程师，我只是略懂一些简单的编程语言，懂一些agent设计，所以你跟我解释的各种专业变化我看不懂，你只需要告诉我是怎么回事，让我明白这个逻辑就行了，可以略微穿插一些专业术语
 
 5，常用脚本位置：
-- 导出整个项目源码：C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\script\export-project-source-to-desktop.mjs
-- 导出前端源码：C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\script\export-frontend-source-to-desktop.mjs
+- 导出源码：在文件夹上右键 → "收集所有代码文件"（工具位置：E:\project\收集某个文件下所有代码文件右键项目\）
+- 一键安装右键菜单：运行 install_right_click.bat
 - 停止并核查所有运行 session：C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\script\stop-auto-evolve-sessions.ps1
 - try4 环境初始化（含影子经验清理）：C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\scripts\init-try4-clean-state.ps1
 
