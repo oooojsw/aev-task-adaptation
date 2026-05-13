@@ -3580,8 +3580,10 @@ async function runCampaignFinalAcceptance(input: {
   }
 
   await ensureDirectory(acceptanceRoot)
-  const acceptanceSpec = buildCampaignFinalAcceptanceSpec(input.baseSpec, input.pendingPackageRoot)
-  const syntheticUnit = syntheticCampaignFinalAcceptanceUnit(input.baseSpec, input.pendingPackageRoot)
+  const validationPackageRoot = path.join(acceptanceRoot, "validation-expert-workspace")
+  await copyExperienceWorkspaceRoot(input.pendingPackageRoot, validationPackageRoot)
+  const acceptanceSpec = buildCampaignFinalAcceptanceSpec(input.baseSpec, validationPackageRoot)
+  const syntheticUnit = syntheticCampaignFinalAcceptanceUnit(input.baseSpec, validationPackageRoot)
   const bundlePath = path.join(acceptanceRoot, "final-acceptance-bundle.json")
   await writeJsonFile(bundlePath, {
     id: `campaign-final-${randomUUID().slice(0, 8)}`,
@@ -3589,6 +3591,7 @@ async function runCampaignFinalAcceptance(input: {
     roundNumber: input.roundNumber,
     sourceRunID: input.sourceRunID,
     pendingPackageRoot: input.pendingPackageRoot,
+    validationPackageRoot,
     runTracePath: input.runTracePath,
     reviewerSuggestionPath: input.reviewerSuggestionPath,
     createdAt: nowISO(),
@@ -3643,6 +3646,7 @@ async function runCampaignFinalAcceptance(input: {
     summary,
     validatorResults,
     bundlePath,
+    validationPackageRoot,
     createdAt: nowISO(),
   }
   await writeJsonFile(acceptanceResultPath, finalAcceptance)

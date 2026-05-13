@@ -1,6 +1,6 @@
 import path from "node:path"
 import { randomUUID } from "node:crypto"
-import { readFile } from "node:fs/promises"
+import { readFile, rm } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
 import type {
   LongTaskFailurePacket,
@@ -82,6 +82,11 @@ import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
 import { extractJsonObject } from "./json-extract"
 import { cleanupRuntimeProcessScope, longTaskRunRuntimeScope } from "../runtime-process-registry"
+import {
+  experienceWorkspacePathsFromRoot,
+  readExperienceWorkspace,
+  writeExperienceWorkspaceSnapshot,
+} from "../experience-workspace"
 
 function nowISO() {
   return new Date().toISOString()
@@ -240,6 +245,54 @@ function normalizeStringArray(input: unknown) {
 
 function uniqueStrings(items: string[]) {
   return Array.from(new Set(items.filter((item) => item.trim().length > 0)))
+}
+
+function isExperienceWorkspaceRef(input: { role?: string; label?: string; path: string }) {
+  const descriptor = `${input.role ?? ""} ${input.label ?? ""} ${path.basename(input.path)}`.toLowerCase()
+  return descriptor.includes("experience-workspace") || descriptor.includes("expert-workspace")
+}
+
+async function buildCompletionValidationSpec(input: {
+  spec: LongTaskSpec
+  run: ReturnType<typeof longTaskRunPaths>
+}) {
+  const pendingPackageRoot = input.spec.campaignPendingPackageRoot
+  if (!pendingPackageRoot) return input.spec
+
+  const validationPackageRoot = path.join(input.run.root, "completion", "validation-expert-workspace")
+  const snapshot = await readExperienceWorkspace(experienceWorkspacePathsFromRoot(pendingPackageRoot, "manifest.md"))
+  await rm(validationPackageRoot, { recursive: true, force: true })
+  await writeExperienceWorkspaceSnapshot(validationPackageRoot, snapshot)
+
+  const previousTargets = input.spec.targetPaths ?? []
+  const targetPaths = previousTargets.length
+    ? previousTargets.map((item) =>
+        isExperienceWorkspaceRef(item)
+          ? {
+              ...item,
+              path: validationPackageRoot,
+              label: item.label ? `${item.label} validation mirror` : "validation expert workspace mirror",
+            }
+          : item,
+      )
+    : [
+        {
+          path: validationPackageRoot,
+          label: "validation expert workspace mirror",
+          role: "experience-workspace",
+        },
+      ]
+
+  return {
+    ...input.spec,
+    targetPaths,
+    formalPackageRoots: [validationPackageRoot],
+    initialExpertContextPaths: uniqueStrings([validationPackageRoot, ...(input.spec.initialExpertContextPaths ?? [])]),
+    preservePreseededEditablePaths: uniqueStrings([
+      validationPackageRoot,
+      ...(input.spec.preservePreseededEditablePaths ?? []),
+    ]),
+  }
 }
 
 function pad(value: number) {
@@ -1410,16 +1463,17 @@ async function runCompletionValidators(input: {
   onActivation?: OpencodeTaskInput["onSpawn"]
   onPulse?: OpencodeTaskInput["onPulse"]
 }) {
+  const completionSpec = await buildCompletionValidationSpec({ spec: input.spec, run: input.run })
   const completionValidatorIDs =
     input.graph.completionValidatorIDs.length > 0
       ? input.graph.completionValidatorIDs
-      : input.spec.disableCompletionValidators
+      : completionSpec.disableCompletionValidators
         ? []
-        : input.spec.validators.filter((item) => item.required !== false).map((item) => item.id)
-  const validatorContracts = input.spec.validators.filter((validator) => completionValidatorIDs.includes(validator.id))
+        : completionSpec.validators.filter((item) => item.required !== false).map((item) => item.id)
+  const validatorContracts = completionSpec.validators.filter((validator) => completionValidatorIDs.includes(validator.id))
   const progress = await readLongTaskProgressState(input.run)
   const syntheticUnit: LongTaskWorkUnit = {
-    ...syntheticCompletionUnit(input.spec),
+    ...syntheticCompletionUnit(completionSpec),
     validatorIDs: completionValidatorIDs,
   }
   const completionDir = path.join(input.run.root, "completion")
@@ -1452,19 +1506,19 @@ async function runCompletionValidators(input: {
     relevantLearningUnits: learningUnits.slice(-12),
     relevantShadowMemory: shadowMemory.filter((record) => record.runID !== progress.runID).slice(-6),
     runGlobalOperationalContext: operationalContext.slice(0, 12),
-    formalPackageRoots: resolveLongTaskFormalPackageRoots(input.spec),
+    formalPackageRoots: resolveLongTaskFormalPackageRoots(completionSpec),
   })
 
   const config = await loadConfig(input.configPathCwd)
   const results = []
   let updatedProgress = progress
-  const editablePaths = resolveLongTaskEditablePaths(input.spec)
+  const editablePaths = resolveLongTaskEditablePaths(completionSpec)
   for (const validator of validatorContracts) {
     const result = await runLongTaskValidator({
       cwd: input.cwd,
       config,
       contract: validator,
-      spec: input.spec,
+      spec: completionSpec,
       unit: syntheticUnit,
       runID: progress.runID,
       attempt: 1,
@@ -1477,11 +1531,11 @@ async function runCompletionValidators(input: {
         runID: progress.runID,
         unitID: syntheticUnit.id,
         attempt: 1,
-        goal: input.spec.goal,
+        goal: completionSpec.goal,
         claim: syntheticUnit.claim,
         checkPlan: syntheticUnit.checkPlan,
-        materials: input.spec.materials,
-        targetPaths: input.spec.targetPaths ?? [],
+        materials: completionSpec.materials,
+        targetPaths: completionSpec.targetPaths ?? [],
         expectedArtifacts: syntheticUnit.expectedArtifacts,
         editablePaths,
         bundlePath,
