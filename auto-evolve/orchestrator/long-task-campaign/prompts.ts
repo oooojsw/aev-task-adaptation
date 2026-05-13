@@ -14,6 +14,8 @@ function jsonFence(input: unknown) {
 
 function roleDescription(role: LongTaskCampaignWorkerRole) {
   switch (role) {
+    case "blank_acceptance_diagnostician":
+      return "Diagnose why the final blank-agent acceptance failed and convert that into highest-priority lead/planner repair guidance."
     case "success_synthesizer":
       return "Extract stable successful paths, validated methods, and reusable command/tool entrypoints from the run trace."
     case "failure_synthesizer":
@@ -35,6 +37,18 @@ function roleDescription(role: LongTaskCampaignWorkerRole) {
 
 function roleSpecificRules(role: LongTaskCampaignWorkerRole) {
   switch (role) {
+    case "blank_acceptance_diagnostician":
+      return [
+        "- This is the highest-priority worker role. Focus only on why blank-agent final acceptance did not pass.",
+        "- Treat blank-agent final acceptance as the campaign's primary objective. Other successes are secondary unless they help this gate pass.",
+        "- Use final_acceptance_result, dispatch_tickets, acceptance_experience, and blank-agent execution evidence before general run summaries.",
+        "- Identify the exact failure class: missing target files, placeholder residue, wrong/missing values, tool/runtime blocker, package guidance gap, or validator/config issue.",
+        "- Convert every diagnosis into concrete lead repairs: which expert-package guidance must be added, clarified, removed, or consolidated.",
+        "- Convert every diagnosis into concrete planner requirements: what the next graph must cover and what repeated regions should be avoided.",
+        "- Do not output generic statements such as 'validation failed' without naming the actionable repair surface.",
+        "- Do not copy protected validator-only answers or hidden reference truth into package_advice. Translate them into source-location, derivation, filling, and self-check guidance.",
+        "- The blank agent must never receive this diagnosis file directly. Keep internal evidence refs in refs, and put only safe executable guidance in package_advice.",
+      ]
     case "learning_promoter":
       return [
         "- Inspect the full run trace, including attempt-level learning units, retry lessons, and operational context across all units.",
@@ -73,6 +87,9 @@ export function buildCampaignWorkerPrompt(input: {
   workingMemoryPath: string
   routingControlPath: string
   dispatchTicketsPath: string
+  blankAgentAcceptanceDiagnosisPath?: string
+  acceptanceExperiencePath?: string
+  finalAcceptanceFeedbackPath?: string
   reviewerSuggestionPath?: string
 }) {
   return [
@@ -92,6 +109,13 @@ export function buildCampaignWorkerPrompt(input: {
       `working_memory_json: ${input.workingMemoryPath}`,
       `routing_control_json: ${input.routingControlPath}`,
       `dispatch_tickets_json: ${input.dispatchTicketsPath}`,
+      ...(input.blankAgentAcceptanceDiagnosisPath
+        ? [`latest_blank_agent_acceptance_diagnosis: ${input.blankAgentAcceptanceDiagnosisPath}`]
+        : []),
+      ...(input.acceptanceExperiencePath ? [`acceptance_experience: ${input.acceptanceExperiencePath}`] : []),
+      ...(input.finalAcceptanceFeedbackPath
+        ? [`latest_final_acceptance_result: ${input.finalAcceptanceFeedbackPath}`]
+        : []),
       ...(input.reviewerSuggestionPath ? [`latest_reviewer_suggestion: ${input.reviewerSuggestionPath}`] : []),
     ]),
     "",
@@ -105,6 +129,7 @@ export function buildCampaignWorkerPrompt(input: {
     "- Distinguish verified infrastructure blockers from agent-side inference. Do not treat 'stale heartbeat' wording alone as a confirmed blocker.",
     "- A missing execute/ directory for an in-flight attempt is not by itself proof of no-spawn; mark uncertain runtime diagnostics as tentative, not final.",
     "- Do not leak hidden validator answers or protected reference-only truth.",
+    "- If latest_blank_agent_acceptance_diagnosis exists, treat it as higher priority than ordinary worker history.",
     "- For non-drift_guard_synthesizer roles: if blank-agent execution hits system-level blockers (timeout/spawn/EPERM/path/encoding/runtime startup), propose BOTH package_advice and exploration_advice updates.",
     "- For non-drift_guard_synthesizer roles: for system blockers inside blank-agent execution, include bypass-oriented advice instead of diagnosis-only text.",
     ...roleSpecificRules(input.role),
@@ -135,6 +160,7 @@ export function buildCampaignLeadPrompt(input: {
   nextRoutingControlPath: string
   dispatchTicketsPath: string
   workerSuggestionPaths: string[]
+  blankAgentAcceptanceDiagnosisPath?: string
   reviewerSuggestionPath?: string
   acceptanceExperiencePath?: string
   finalAcceptanceFeedbackPath?: string
@@ -173,6 +199,9 @@ export function buildCampaignLeadPrompt(input: {
       `working_memory_json: ${input.workingMemoryPath}`,
       `previous_routing_control_json: ${input.previousRoutingControlPath}`,
       `dispatch_tickets_json: ${input.dispatchTicketsPath}`,
+      ...(input.blankAgentAcceptanceDiagnosisPath
+        ? [`blank_agent_acceptance_diagnosis: ${input.blankAgentAcceptanceDiagnosisPath}`]
+        : []),
       ...(input.reviewerSuggestionPath ? [`latest_reviewer_suggestion: ${input.reviewerSuggestionPath}`] : []),
       ...(input.acceptanceExperiencePath ? [`acceptance_experience: ${input.acceptanceExperiencePath}`] : []),
       ...(input.finalAcceptanceFeedbackPath
@@ -218,6 +247,9 @@ export function buildCampaignLeadPrompt(input: {
     "- Do not keep stale blockedBy items just because they appeared in an older summary. If a resolved issue still matters historically, record it in tree notes or package lessons, not as an active blocker.",
     "- If you remove a stale blockedBy item, mention the cleanup briefly in tree_highlights or package_highlights so the next round understands why it disappeared.",
     "- Treat open dispatch tickets as mandatory repairs that must be visibly encoded into package/tree/routing for the next round.",
+    "- If blank_agent_acceptance_diagnosis exists, process it before ordinary worker suggestions. Its conclusions are the top-priority repair input for the campaign's main goal.",
+    "- If blank_agent_acceptance_diagnosis identifies a package guidance gap, you must encode safe executable guidance into the pending expert package, not just tree or routing.",
+    "- Never copy blank_agent_acceptance_diagnosis verbatim into the expert package. Translate internal evidence into source-location, derivation, filling, and self-check guidance that a blank agent can use without hidden answers.",
     "- If latest_final_acceptance_result exists and failed, treat it as the highest-priority concrete repair input for this pass.",
     "- If this round exposed blank-agent execution system blockers, you must encode them into BOTH targets: pending expert package (failure lessons/checklist with concrete bypass guidance) and exploration tree (explicit region/node update).",
     "- Do not keep blank-agent system blockers only in tree notes or only in internal memory; the package must also carry executable bypass guidance.",
@@ -249,6 +281,7 @@ export function buildCampaignReviewerPrompt(input: {
   workingMemoryPath: string
   routingControlPath: string
   dispatchTicketsPath: string
+  blankAgentAcceptanceDiagnosisPath?: string
   acceptanceExperiencePath?: string
 }) {
   return [
@@ -265,6 +298,9 @@ export function buildCampaignReviewerPrompt(input: {
       `working_memory_json: ${input.workingMemoryPath}`,
       `routing_control_json: ${input.routingControlPath}`,
       `dispatch_tickets_json: ${input.dispatchTicketsPath}`,
+      ...(input.blankAgentAcceptanceDiagnosisPath
+        ? [`blank_agent_acceptance_diagnosis: ${input.blankAgentAcceptanceDiagnosisPath}`]
+        : []),
       ...(input.acceptanceExperiencePath ? [`acceptance_experience: ${input.acceptanceExperiencePath}`] : []),
     ]),
     "",
@@ -275,6 +311,7 @@ export function buildCampaignReviewerPrompt(input: {
     "- `acceptance_experience` is a concise history of past acceptance outcomes; use it to check whether repeated historical failures were actually addressed this round.",
     "- Do not copy old rejection text blindly from `acceptance_experience`; confirm with current package + run trace before keeping the same reason.",
     "- If dispatch tickets are still open and the package does not clearly repair them, mark not ready and name the missed ticket areas.",
+    "- If blank_agent_acceptance_diagnosis exists, verify that the lead actually addressed its package_advice and planner-facing repair requirements.",
     "- You only assess whether this package looks likely to pass the final blank-agent acceptance.",
     "- Mark not ready if the package hardcodes final task answers instead of teaching blank-agent how to derive them from the provided materials.",
     "- Mark not ready if the same operational rule is copied across many files without a clear canonical home.",

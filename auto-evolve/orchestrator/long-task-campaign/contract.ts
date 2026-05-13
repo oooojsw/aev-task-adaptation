@@ -103,6 +103,7 @@ export interface LongTaskCampaignRoutingControl {
 }
 
 export type LongTaskCampaignWorkerRole =
+  | "blank_acceptance_diagnostician"
   | "success_synthesizer"
   | "failure_synthesizer"
   | "tool_failure_synthesizer"

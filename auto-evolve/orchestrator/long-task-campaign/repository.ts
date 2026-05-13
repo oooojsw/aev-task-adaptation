@@ -20,6 +20,7 @@ export interface LongTaskCampaignPaths {
   historyPath: string
   acceptanceExperiencePath: string
   acceptanceExperienceJsonlPath: string
+  blankAgentAcceptanceDiagnosisPath: string
   dispatchTicketsPath: string
   aggregatedFailurePacketsPath: string
   aggregatedRetryLessonsPath: string
@@ -87,6 +88,7 @@ export function longTaskCampaignPaths(cwd: string, campaignID: string): LongTask
     campaignStatePath: path.join(root, "campaign.json"),
     historyPath: path.join(root, "history.jsonl"),
     acceptanceExperienceJsonlPath: path.join(root, "acceptance-experience.jsonl"),
+    blankAgentAcceptanceDiagnosisPath: path.join(root, "blank-agent-acceptance-diagnosis.json"),
     dispatchTicketsPath: path.join(root, "dispatch-tickets.json"),
     acceptanceExperiencePath: path.join(root, "acceptance-experience.md"),
     aggregatedFailurePacketsPath: path.join(root, "aggregated-failure-packets.jsonl"),
@@ -146,6 +148,18 @@ export async function initializeLongTaskCampaign(paths: LongTaskCampaignPaths, s
     "<!-- auto-evolve-role: acceptance_experience -->\n# Acceptance Experience\n\n- no acceptance records yet\n",
   )
   await writeTextFile(paths.acceptanceExperienceJsonlPath, "")
+  await writeJsonFile(paths.blankAgentAcceptanceDiagnosisPath, {
+    id: "blank-agent-acceptance-diagnosis-initial",
+    roundNumber: 0,
+    role: "blank_acceptance_diagnostician",
+    createdAt: state.createdAt,
+    summary: "No blank-agent final acceptance diagnosis has been produced yet.",
+    findings: [],
+    memoryAdvice: [],
+    packageAdvice: [],
+    explorationAdvice: [],
+    refs: [],
+  } satisfies LongTaskCampaignWorkerSuggestion)
   await writeJsonFile(paths.campaignOperationalMemoryPath, [])
   await writeJsonFile(paths.campaignWorkingMemoryPath, {
     updatedAt: state.createdAt,
