@@ -845,6 +845,13 @@ async function runOpencodeTaskOnce(
   const stderr = stderrData
 
   const events = parseEvents(stdout)
+  const eventErrors = events
+    .filter((event) => event.type === "error")
+    .map((event) => {
+      const message = event.error?.data?.message ?? event.error?.message ?? event.error?.name
+      return typeof message === "string" && message.trim() ? message.trim() : JSON.stringify(event.error ?? event)
+    })
+    .filter(Boolean)
   const timeoutNotes: string[] = []
   if (hardTimedOut) {
     timeoutNotes.push(
@@ -859,13 +866,20 @@ async function runOpencodeTaskOnce(
       `OpenCode task hit silent output timeout (${phaseText}) and the full process tree was terminated.`,
     )
   }
-  const normalizedStderr = timedOut ? [...timeoutNotes, stderr].filter(Boolean).join("\n\n") : stderr
+  const normalizedStderr = [
+    ...(timedOut ? timeoutNotes : []),
+    ...eventErrors.map((item) => `OpenCode emitted error event: ${item}`),
+    stderr,
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+  const normalizedExitCode = exitCode === 0 && eventErrors.length > 0 ? 1 : exitCode
   stderrData = normalizedStderr
-  await flush(exitCode)
+  await flush(normalizedExitCode)
 
   return {
     sessionID: events.find((event) => typeof event.sessionID === "string")?.sessionID,
-    exitCode,
+    exitCode: normalizedExitCode,
     finishReason: undefined,
     stdout,
     stderr: normalizedStderr,

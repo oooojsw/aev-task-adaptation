@@ -228,6 +228,9 @@ export async function loadLongTaskSpec(
     path: resolveMaybePath(baseDir, item.path),
   }))
   const editablePaths = normalizeStringArray(raw.editablePaths).map((item) => resolveMaybePath(baseDir, item))
+  const preservePreseededEditablePaths = normalizeStringArray(raw.preservePreseededEditablePaths).map((item) =>
+    resolveMaybePath(baseDir, item),
+  )
   const initialExpertContextPaths = normalizeStringArray(raw.initialExpertContextPaths).map((item) =>
     resolveMaybePath(baseDir, item),
   )
@@ -291,6 +294,7 @@ export async function loadLongTaskSpec(
     materials,
     targetPaths,
     editablePaths: editablePaths.length ? editablePaths : targetPaths.map((item) => item.path),
+    preservePreseededEditablePaths,
     initialExpertContextPaths,
     formalPackageRoots,
     campaignPendingPackageRoot: campaignPendingPackageRoot

@@ -13,6 +13,7 @@ import { longTaskPaths, longTaskRunPaths } from "./orchestrator/long-task/reposi
 import { validateLongTaskLayout, validateLongTaskRun } from "./orchestrator/long-task/validate"
 import { runLongTask, resumeLongTask } from "./orchestrator/long-task/runner"
 import { runLongTaskCampaign, resumeLongTaskCampaign } from "./orchestrator/long-task-campaign/runner"
+import { runSkillsBenchTask, type SkillsBenchMode } from "./orchestrator/skillsbench-adapter"
 import { resetExperienceWorkspace, restoreLatestArchivedExperienceWorkspace } from "./orchestrator/experience-archive"
 
 function printHelp() {
@@ -58,6 +59,10 @@ function printHelp() {
   run-baseline
     Produce a unified baseline scorecard for the current system, including train/test rounds and knowledge snapshots.
     Optional: --method <method-id> --train-limit <number> --test-limit <number> --skip-bootstrap --force-bootstrap
+
+  run-skillsbench --root <skillsbench-root> --task <task-id> --mode <short|long>
+    Run a real SkillsBench task through the auto-evolve adapter and official Docker verifier.
+    Optional: --attempts <number> --timeout-ms <number> --skip-docker-build
 
   run-propagation
     Run an initial third-layer propagation campaign on an experimental branch without touching the canonical experience workspace.
@@ -296,6 +301,55 @@ async function commandRunBaseline(args: string[]) {
   )
 }
 
+async function commandRunSkillsBench(args: string[]) {
+  await ensureLayout(process.cwd())
+  const root = getOption(args, "--root")
+  const taskID = getOption(args, "--task")
+  const mode = getOption(args, "--mode")
+  const attemptsValue = getOption(args, "--attempts")
+  const timeoutValue = getOption(args, "--timeout-ms")
+  const attempts = attemptsValue ? Number.parseInt(attemptsValue, 10) : undefined
+  const timeoutMs = timeoutValue ? Number.parseInt(timeoutValue, 10) : undefined
+
+  if (!root) {
+    console.error("Missing required option: --root <skillsbench-root>")
+    process.exit(1)
+  }
+  if (!taskID) {
+    console.error("Missing required option: --task <task-id>")
+    process.exit(1)
+  }
+  if (mode !== "short" && mode !== "long") {
+    console.error("Invalid --mode value. Use short or long.")
+    process.exit(1)
+  }
+  if (attemptsValue && (!Number.isFinite(attempts) || attempts <= 0)) {
+    console.error("Invalid --attempts value. Use a positive integer.")
+    process.exit(1)
+  }
+  if (timeoutValue && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+    console.error("Invalid --timeout-ms value. Use a positive integer.")
+    process.exit(1)
+  }
+
+  const result = await runSkillsBenchTask({
+    cwd: process.cwd(),
+    root,
+    taskID,
+    mode: mode as SkillsBenchMode,
+    attempts,
+    timeoutMs,
+    skipDockerBuild: getFlag(args, "--skip-docker-build"),
+  })
+  console.log(`SkillsBench task: ${result.taskID}`)
+  console.log(`Mode: ${result.mode}`)
+  console.log(`Passed: ${result.passed}`)
+  console.log(`Run root: ${result.runRoot}`)
+  console.log(`Workspace: ${result.workDir}`)
+  if ("runDir" in result) console.log(`Long-task run: ${result.runDir}`)
+  if ("summaryPath" in result) console.log(`Summary: ${result.summaryPath}`)
+}
+
 async function commandRunPropagation(args: string[]) {
   await ensureLayout(process.cwd())
   const config = await loadConfig(process.cwd())
@@ -491,6 +545,9 @@ async function main() {
       return
     case "run-baseline":
       await commandRunBaseline(args)
+      return
+    case "run-skillsbench":
+      await commandRunSkillsBench(args)
       return
     case "run-propagation":
       await commandRunPropagation(args)
