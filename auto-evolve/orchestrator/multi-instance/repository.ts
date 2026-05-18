@@ -12,6 +12,7 @@
 
 import path from "node:path"
 import { rename, writeFile, readFile } from "node:fs/promises"
+import { randomBytes } from "node:crypto"
 import { ensureDirectory, pathExists } from "../fs"
 import type { CoordinatorState } from "./contract"
 
@@ -31,11 +32,33 @@ export function validateDir(runRoot: string) {
   return path.join(runRoot, "phase3-validate")
 }
 
+// Per-runRoot save serialization. Multiple coordinator paths run in
+// parallel (Phase 1 fan-out, Phase 3 validate) and all call
+// saveCoordinatorState concurrently. Without serialization, two parallel
+// writes collide on the temp filename and rename(), producing ENOENT.
+const saveLocks = new Map<string, Promise<unknown>>()
+
 export async function saveCoordinatorState(state: CoordinatorState) {
+  const runRoot = state.runRoot
+  const previous = saveLocks.get(runRoot) ?? Promise.resolve()
+  const job = previous
+    .catch(() => undefined)
+    .then(() => writeStateOnce(state))
+  saveLocks.set(runRoot, job)
+  try {
+    await job
+  } finally {
+    if (saveLocks.get(runRoot) === job) {
+      saveLocks.delete(runRoot)
+    }
+  }
+}
+
+async function writeStateOnce(state: CoordinatorState) {
   state.updatedAt = new Date().toISOString()
   const target = coordinatorStatePath(state.runRoot)
   await ensureDirectory(state.runRoot)
-  const tmp = `${target}.tmp-${process.pid}`
+  const tmp = `${target}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`
   await writeFile(tmp, JSON.stringify(state, null, 2), "utf8")
   await rename(tmp, target)
 }

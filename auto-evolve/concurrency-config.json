@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "_doc": "Global limits for OpenCode child-process spawns. Applied via OpenCodeGate at every runOpencodeTask call. Tune maxConcurrent based on upstream API capacity. Default 3 is a conservative safety value tested for the minimax coding plan API.",
-  "maxConcurrent": 3,
+  "_doc": "Global limits for OpenCode child-process spawns. Applied via OpenCodeGate at every runOpencodeTask call. The minimax coding-plan API tolerates ~5 concurrent; we hold maxConcurrent=4 for a one-slot safety margin.",
+  "maxConcurrent": 4,
   "maxQueueDepth": 30,
   "acquireTimeoutMs": 3600000,
   "minSpawnIntervalMs": 0
