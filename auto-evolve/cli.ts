@@ -368,6 +368,7 @@ async function commandRunMultiInstance(args: string[]) {
   const labelOpt = getOption(args, "--label")
   const roundsValue = getOption(args, "--rounds")
   const fanoutLimitValue = getOption(args, "--fanout-limit")
+  const skipMerge = getFlag(args, "--skip-merge")
   const rounds = roundsValue ? Number.parseInt(roundsValue, 10) : 5
   const fanoutLimit = fanoutLimitValue ? Number.parseInt(fanoutLimitValue, 10) : undefined
 
@@ -430,6 +431,23 @@ async function commandRunMultiInstance(args: string[]) {
   console.log(`  failed   : ${summary.failed}`)
   console.log(`  skipped  : ${summary.skipped}`)
   console.log(`  duration : ${(summary.durationMs / 1000).toFixed(1)}s`)
+
+  if (skipMerge) {
+    console.log("--skip-merge set; stopping after Phase 1.")
+    return
+  }
+
+  if (summary.passed + summary.exhausted === 0) {
+    console.log("No usable instance skills (all failed/skipped); skipping merge.")
+    return
+  }
+
+  const { runCoordinatorPhase2Merge } = await import("./orchestrator/multi-instance/merger")
+  console.log("Phase 2 (merge) starting…")
+  const mergeOut = await runCoordinatorPhase2Merge({ cwd, state })
+  console.log("Phase 2 complete:")
+  console.log(`  merged skill: ${mergeOut.mergedSkillDir}`)
+  console.log(`  contributed : ${mergeOut.contributingInstances.join(", ") || "(none)"}`)
 }
 
 async function commandRunPropagation(args: string[]) {
