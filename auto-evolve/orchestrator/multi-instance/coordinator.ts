@@ -203,10 +203,12 @@ async function runSingleInstance(
       taskID: spec.taskID,
       mode: "campaign",
       rounds: instance.rounds,
-      // Use a per-instance campaign title so the live-campaign registry
-      // doesn't merge unrelated fan-out children when several instances
-      // share the same underlying SkillsBench taskID.
-      campaignTitle: `multi-instance-fanout-${state.id}-${instance.id}`,
+      // Title goes through createLongTaskCampaignID's slugify, which
+      // truncates to 48 chars. Put the unique instance id FIRST so it
+      // survives truncation; otherwise multiple parallel fan-out children
+      // would collide on the same campaign directory and clobber each
+      // other's pending-expert-package output.
+      campaignTitle: `mi-${instance.id}-fanout-${state.id}`,
     })
     if (result.mode !== "campaign") {
       throw new Error(`Unexpected non-campaign result for instance ${instance.id}`)

@@ -131,7 +131,10 @@ async function runOneValidation(
       mode: "campaign",
       rounds,
       seedExpertWorkspacePath: mergedSkillDir,
-      campaignTitle: `multi-instance-validate-${state.id}-${instance.id}`,
+      // Same rationale as fan-out: instance id goes first so the
+      // 48-char slug truncation in createLongTaskCampaignID can't
+      // collide multiple validations into one campaign directory.
+      campaignTitle: `mi-${instance.id}-validate-${state.id}`,
     })
     if (result.mode !== "campaign") {
       throw new Error(`Unexpected non-campaign result for instance ${instance.id}`)
