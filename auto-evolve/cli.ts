@@ -369,6 +369,11 @@ async function commandRunMultiInstance(args: string[]) {
   const roundsValue = getOption(args, "--rounds")
   const fanoutLimitValue = getOption(args, "--fanout-limit")
   const skipMerge = getFlag(args, "--skip-merge")
+  const skipValidate = getFlag(args, "--skip-validate")
+  const validateRoundsValue = getOption(args, "--validate-rounds")
+  const validateLimitValue = getOption(args, "--validate-limit")
+  const validateRounds = validateRoundsValue ? Number.parseInt(validateRoundsValue, 10) : 2
+  const validateLimit = validateLimitValue ? Number.parseInt(validateLimitValue, 10) : undefined
   const rounds = roundsValue ? Number.parseInt(roundsValue, 10) : 5
   const fanoutLimit = fanoutLimitValue ? Number.parseInt(fanoutLimitValue, 10) : undefined
 
@@ -448,6 +453,29 @@ async function commandRunMultiInstance(args: string[]) {
   console.log("Phase 2 complete:")
   console.log(`  merged skill: ${mergeOut.mergedSkillDir}`)
   console.log(`  contributed : ${mergeOut.contributingInstances.join(", ") || "(none)"}`)
+
+  if (skipValidate) {
+    console.log("--skip-validate set; stopping after Phase 2.")
+    return
+  }
+  if (mergeOut.contributingInstances.length === 0) {
+    console.log("No contributing instances; skipping Phase 3.")
+    return
+  }
+
+  const { runCoordinatorPhase3Validate } = await import("./orchestrator/multi-instance/validator")
+  console.log("Phase 3 (validate) starting…")
+  const validateOut = await runCoordinatorPhase3Validate({
+    cwd,
+    state,
+    rounds: validateRounds,
+    validateLimit,
+  })
+  console.log("Phase 3 complete:")
+  console.log(`  validated  : ${validateOut.passed}/${validateOut.total} passed`)
+  console.log(`  failures   : ${validateOut.failed}`)
+  console.log(`  regressions: ${validateOut.regressions.length} (${validateOut.regressions.join(", ") || "none"})`)
+  console.log(`  duration   : ${(validateOut.durationMs / 1000).toFixed(1)}s`)
 }
 
 async function commandRunPropagation(args: string[]) {

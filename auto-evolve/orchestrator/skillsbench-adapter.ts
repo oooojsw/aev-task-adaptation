@@ -1,13 +1,14 @@
 import path from "node:path"
-import { cp, readdir, rm, stat } from "node:fs/promises"
+import { cp, readdir, realpath, rm, stat } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { ensureDirectory, pathExists, readJsonFile, readTextFile, writeJsonFile, writeTextFile } from "./fs"
 import { loadConfig } from "./schema"
 import { runOpencodeTask, type OpencodeTaskRun } from "./opencode"
 import { runManagedProcess, type ManagedProcessResult } from "./managed-process"
 import { runLongTask } from "./long-task/runner"
+import { runLongTaskCampaign } from "./long-task-campaign/runner"
 
-export type SkillsBenchMode = "short" | "long"
+export type SkillsBenchMode = "short" | "long" | "campaign"
 
 export interface SkillsBenchRunOptions {
   cwd: string
@@ -17,6 +18,21 @@ export interface SkillsBenchRunOptions {
   attempts?: number
   timeoutMs?: number
   skipDockerBuild?: boolean
+  rounds?: number
+  /**
+   * Optional override for the campaign's seed expert workspace. When set,
+   * the SkillsBench adapter uses this directory instead of the built-in
+   * skillsbench-seed/seed-expert-workspace. Used by the multi-instance
+   * coordinator to plug a merged skill into Phase 3 validation runs.
+   */
+  seedExpertWorkspacePath?: string
+  /**
+   * Optional override for the campaign label. Defaults to "skillsbench
+   * campaign (anonymized)". Useful when the multi-instance coordinator
+   * launches several campaigns and wants to keep them apart in the live
+   * campaign registry.
+   */
+  campaignTitle?: string
 }
 
 export interface SkillsBenchVerifierResult {
@@ -34,6 +50,7 @@ interface PreparedSkillsBenchTask {
   taskID: string
   taskRoot: string
   instructionPath: string
+  instructionSafePath: string
   workDir: string
   logsDir: string
   specDir: string
@@ -114,11 +131,18 @@ async function prepareSkillsBenchTask(input: SkillsBenchRunOptions): Promise<Pre
   const logsDir = path.join(runRoot, "logs")
   const specDir = path.join(runRoot, "spec")
   await Promise.all([workDir, logsDir, specDir].map((dir) => ensureDirectory(dir)))
+  // Resolve symlinks (runtime-state -> E: drive) so permission patterns match
+  // what the Read tool sees after symlink resolution.
+  const realWorkDir = await realpath(workDir).catch(() => workDir)
   await copyEnvironmentWithoutLeaks(environmentRoot, workDir)
 
   const instruction = await readTextFile(instructionPath)
-  await writeTextFile(path.join(runRoot, "instruction.copy.md"), instruction)
-  await writeJsonFile(path.join(runRoot, "task-source.json"), {
+  // Write instruction.copy.md / task-source.json to a hidden artifacts directory
+  // outside the runRoot tree, so the agent can never navigate to them.
+  const artifactsDir = path.join(input.cwd, "auto-evolve", ".runtime", "skillsbench-artifacts", safeID(input.taskID) + "-" + input.mode)
+  await ensureDirectory(artifactsDir)
+  await writeTextFile(path.join(artifactsDir, "instruction.copy.md"), instruction)
+  await writeJsonFile(path.join(artifactsDir, "task-source.json"), {
     taskID: input.taskID,
     taskRoot,
     sourceRoot: root,
@@ -126,12 +150,18 @@ async function prepareSkillsBenchTask(input: SkillsBenchRunOptions): Promise<Pre
     createdAt: new Date().toISOString(),
     note: "The workspace is copied from SkillsBench environment/ only. solution/, tests/, and groundtruth-style files are intentionally not exposed to the agent.",
   })
+  // Write instruction.md at runRoot (not workspace) so it survives campaign seed
+  // cleanup (clearNonSeedEditablePaths clears editablePaths but not runRoot).
+  const realRunRoot = await realpath(runRoot).catch(() => runRoot)
+  const instructionSafePath = path.join(realRunRoot, "instruction.md")
+  await writeTextFile(instructionSafePath, instruction)
 
   return {
     taskID: input.taskID,
     taskRoot,
     instructionPath,
-    workDir,
+    instructionSafePath,
+    workDir: realWorkDir,
     logsDir,
     specDir,
     runRoot,
@@ -200,7 +230,8 @@ async function summarizeVerifierLogs(logsDir: string, run: ManagedProcessResult)
     run.stderr.trim() ? `stderr: ${run.stderr.trim().slice(0, 800)}` : "",
     run.stdout.trim() ? `stdout: ${run.stdout.trim().slice(0, 1200)}` : "",
   ].filter(Boolean)
-  const passed = reward === "1"
+  const rewardVal = reward !== undefined ? parseFloat(reward) : NaN
+  const passed = Number.isFinite(rewardVal) && rewardVal >= 1
   return {
     passed,
     failureKind: passed ? undefined : infrastructureFailure ? ("verifier_infrastructure" as const) : ("task_failure" as const),
@@ -272,7 +303,7 @@ export async function runSkillsBenchVerifier(input: {
     "run",
     "--rm",
     "-v",
-    `${workDir}:/root`,
+    `${workDir}/output:/output`,
     "-v",
     `${testsRoot}:/tests:ro`,
     "-v",
@@ -342,7 +373,8 @@ function buildSkillsBenchShortPrompt(input: {
     "- Create or update the requested output files directly inside that workspace.",
     "- You may read the task input files and reusable skills under the workspace.",
     "- The hidden solution and hidden verifier tests are not available to you; do not look for them.",
-    "- Do not modify the original SkillsBench dataset directory.",
+    "- The workspace you see is all there is — it contains only the environment files needed to solve the task.",
+    "- No solution, tests, expected outputs, or groundtruth files exist anywhere in or near this workspace.",
     "- Use headless file processing only.",
     "",
     "Task instruction:",
@@ -375,9 +407,9 @@ async function runShortSkillsBenchTask(input: SkillsBenchRunOptions, prepared: P
       config,
       title: `SkillsBench Short ${prepared.taskID} attempt-${String(attempt).padStart(2, "0")}`,
       prompt,
-      referencePaths: [prepared.instructionPath, prepared.workDir],
-      promptInlineFiles: [prepared.instructionPath],
-      permissionReadPaths: [prepared.instructionPath, prepared.workDir],
+      referencePaths: [prepared.workDir, prepared.instructionSafePath],
+      promptInlineFiles: [prepared.instructionSafePath],
+      permissionReadPaths: [prepared.workDir, prepared.instructionSafePath],
       permissionEditPaths: [prepared.workDir],
       runtimeScope: `skillsbench-short:${prepared.taskID}:${randomUUID().slice(0, 8)}`,
       isolateHostRuntime: false,
@@ -446,7 +478,7 @@ async function runShortSkillsBenchTask(input: SkillsBenchRunOptions, prepared: P
 async function runLongSkillsBenchTask(input: SkillsBenchRunOptions, prepared: PreparedSkillsBenchTask) {
   const taskToml = await readTextFile(path.join(prepared.taskRoot, "task.toml"))
   const verifierTimeoutMs = input.timeoutMs ?? parseTaskTimeoutMs(taskToml, "verifier", 60 * 60 * 1000)
-  const verifierScript = path.join(input.cwd, "auto-evolve", "scripts", "skillsbench-verify.ts")
+  const verifierScript = path.resolve(import.meta.dir, "..", "scripts", "skillsbench-verify.ts")
   const specPath = path.join(prepared.specDir, "long-task-spec.json")
   const promptGuidePath = path.join(prepared.specDir, "skillsbench-path-guide.md")
   await writeTextFile(
@@ -456,28 +488,35 @@ async function runLongSkillsBenchTask(input: SkillsBenchRunOptions, prepared: Pr
       "",
       `The task instruction may mention /root. In this host run, /root maps to: ${prepared.workDir}`,
       "Write all requested output files into that copied workspace.",
-      "Do not read or modify solution/ or tests/. They are hidden and not part of the editable workspace.",
       "The official SkillsBench verifier will run later in Docker against the copied workspace.",
+      "",
+      "## IMPORTANT: Your workspace is self-contained",
+      "",
+      "The workspace given to you is complete for solving this task.",
+      "It contains only the environment files you need — nothing more.",
+      "There are no solution files, test files, or expected outputs anywhere in or near this workspace.",
+      "Your job is to produce the output from scratch using your own ability.",
+      "The Docker verifier judges your work independently.",
     ].join("\n") + "\n",
   )
   await writeJsonFile(specPath, {
     id: `skillsbench-${safeID(prepared.taskID)}`,
-    title: `SkillsBench ${prepared.taskID}`,
+    title: "SkillsBench task (anonymized)",
     goal: [
-      `Solve the SkillsBench task ${prepared.taskID}.`,
+      "Solve the SkillsBench task.",
       `The instruction uses /root paths; for this host session /root maps to ${prepared.workDir}.`,
       "Create the requested output files in the copied workspace and make the official SkillsBench verifier pass.",
     ].join(" "),
     taskFamily: "skillsbench",
     domainTags: ["skillsbench", "external-verifier"],
     materials: [
-      { path: prepared.instructionPath, label: "SkillsBench instruction", role: "task-instruction" },
+      { path: prepared.instructionSafePath, label: "SkillsBench instruction", role: "task-instruction" },
       { path: prepared.workDir, label: "copied task workspace", role: "working-directory" },
     ],
     targetPaths: [{ path: prepared.workDir, label: "SkillsBench output workspace", role: "output-workspace" }],
     editablePaths: [prepared.workDir],
     preservePreseededEditablePaths: [prepared.workDir],
-    initialExpertContextPaths: [promptGuidePath, prepared.instructionPath],
+    initialExpertContextPaths: [promptGuidePath, prepared.instructionSafePath],
     validators: [
       {
         id: "skillsbench-official-verifier",
@@ -520,27 +559,27 @@ async function runLongSkillsBenchTask(input: SkillsBenchRunOptions, prepared: Pr
           id: "solve-skillsbench-task",
           title: "Solve SkillsBench Task",
           goal: [
-            `Read the SkillsBench instruction for ${prepared.taskID}.`,
+            "Read the SkillsBench instruction.",
             `Use ${prepared.workDir} as the mapped /root workspace.`,
             "Create the requested output files and prepare for official verifier acceptance.",
           ].join(" "),
-          inputs: [prepared.instructionPath, prepared.workDir, promptGuidePath],
+          inputs: [prepared.instructionSafePath, prepared.workDir, promptGuidePath],
           depends_on: [],
           expected_artifacts: [prepared.workDir],
           claim: "The SkillsBench task output files are produced in the copied workspace.",
           check_plan: "Self-check that requested files exist, then allow the official SkillsBench verifier to decide final pass/fail.",
           validator_ids: [],
-          retry_budget: Math.max(1, input.attempts ?? 2),
+          retry_budget: input.attempts ?? 3,
         },
       ],
     },
     budgets: {
-      maxAttemptsPerUnit: Math.max(1, input.attempts ?? 2),
-      maxTotalUnitAttempts: Math.max(2, input.attempts ?? 2),
-      maxGraphReplans: 1,
-      maxValidatorCalls: 4,
-      maxNoProgressCycles: 3,
-      maxUnitsPerGraph: 3,
+      maxAttemptsPerUnit: input.attempts ?? 3,
+      maxTotalUnitAttempts: input.attempts ? Math.max(3, input.attempts) : 18,
+      maxGraphReplans: 3,
+      maxValidatorCalls: 40,
+      maxNoProgressCycles: 5,
+      maxUnitsPerGraph: 12,
     },
     notes: "Generated by the auto-evolve SkillsBench adapter.",
   })
@@ -578,8 +617,194 @@ async function runLongSkillsBenchTask(input: SkillsBenchRunOptions, prepared: Pr
   }
 }
 
+async function runCampaignSkillsBenchTask(input: SkillsBenchRunOptions, prepared: PreparedSkillsBenchTask) {
+  // Generate the base long-task spec (same as long mode, minus the run)
+  // We let runLongSkillsBenchTask do its normal setup, then write a campaign spec
+  // that references the generated long-task spec.
+  const maxRounds = input.rounds ?? 10
+
+  // Generate the long-task spec for use as base spec
+  const taskToml = await readTextFile(path.join(prepared.taskRoot, "task.toml"))
+  const verifierTimeoutMs = input.timeoutMs ?? parseTaskTimeoutMs(taskToml, "verifier", 60 * 60 * 1000)
+  const verifierScript = path.resolve(import.meta.dir, "..", "scripts", "skillsbench-verify.ts")
+  const specPath = path.join(prepared.specDir, "long-task-spec.json")
+  const promptGuidePath = path.join(prepared.specDir, "skillsbench-path-guide.md")
+  await writeTextFile(
+    promptGuidePath,
+    [
+      "# SkillsBench path guide",
+      "",
+      `The task instruction may mention /root. In this host run, /root maps to: ${prepared.workDir}`,
+      "Write all requested output files into that copied workspace.",
+      "The official SkillsBench verifier will run later in Docker against the copied workspace.",
+      "This is a campaign run. Previous round failures, verifier feedback, and operational lessons will be available as context.",
+      "",
+      "## IMPORTANT: Your workspace is self-contained",
+      "",
+      "The workspace given to you is complete for solving this task.",
+      "It contains only the environment files you need — nothing more.",
+      "There are no solution files, test files, or expected outputs anywhere in or near this workspace.",
+      "Your job is to produce the output from scratch using your own ability.",
+      "The Docker verifier judges your work independently.",
+    ].join("\n") + "\n",
+  )
+  await writeJsonFile(specPath, {
+    id: `skillsbench-${safeID(prepared.taskID)}`,
+    title: "SkillsBench task (anonymized)",
+    goal: [
+      "Solve the SkillsBench task.",
+      `The instruction uses /root paths; for this host session /root maps to ${prepared.workDir}.`,
+      "Create the requested output files in the copied workspace and make the official SkillsBench verifier pass.",
+      "This is part of a multi-round campaign. Learn from previous round failures and verifier feedback.",
+    ].join(" "),
+    taskFamily: "skillsbench",
+    domainTags: ["skillsbench", "external-verifier"],
+    materials: [
+      { path: prepared.instructionSafePath, label: "SkillsBench instruction", role: "task-instruction" },
+      { path: prepared.workDir, label: "copied task workspace", role: "working-directory" },
+    ],
+    targetPaths: [{ path: prepared.workDir, label: "SkillsBench output workspace", role: "output-workspace" }],
+    editablePaths: [prepared.workDir],
+    preservePreseededEditablePaths: [prepared.workDir],
+    initialExpertContextPaths: [promptGuidePath, prepared.instructionSafePath],
+    validators: [
+      {
+        id: "skillsbench-official-verifier",
+        type: "script",
+        title: "SkillsBench official verifier",
+        path: verifierScript,
+        runner: "bun",
+        placement: "completion_only",
+        required: true,
+        blocking: true,
+        inputMode: "none",
+        timeoutMs: verifierTimeoutMs,
+        args: [
+          "--task-root",
+          prepared.taskRoot,
+          "--work-dir",
+          prepared.workDir,
+          "--logs-dir",
+          path.join(prepared.runRoot, "campaign-verifier"),
+          "--image-tag",
+          prepared.imageTag,
+          ...(input.skipDockerBuild === true ? ["--skip-docker-build"] : []),
+        ],
+      },
+    ],
+    execution: {
+      agent: "build",
+    },
+    planning: {
+      agent: "build",
+    },
+    validation: {
+      agent: "build",
+    },
+    initialGraph: {
+      planner_summary: "SkillsBench campaign: inspect the instruction and workspace, create outputs. The official verifier is the completion gate.",
+      completion_validator_ids: ["skillsbench-official-verifier"],
+      units: [
+        {
+          id: "solve-skillsbench-task",
+          title: "Solve SkillsBench Task",
+          goal: [
+            "Read the SkillsBench instruction.",
+            `Use ${prepared.workDir} as the mapped /root workspace.`,
+            "Create the requested output files and prepare for official verifier acceptance.",
+          ].join(" "),
+          inputs: [prepared.instructionSafePath, prepared.workDir, promptGuidePath],
+          depends_on: [],
+          expected_artifacts: [prepared.workDir],
+          claim: "The SkillsBench task output files are produced in the copied workspace.",
+          check_plan: "Self-check that requested files exist. The platform runs the official verifier as the final gate.",
+          validator_ids: [],
+          retry_budget: input.attempts ?? 3,
+        },
+      ],
+    },
+    budgets: {
+      maxAttemptsPerUnit: input.attempts ?? 3,
+      maxTotalUnitAttempts: input.attempts ? Math.max(3, input.attempts) : 15,
+      maxGraphReplans: 3,
+      maxValidatorCalls: 20,
+      maxNoProgressCycles: 5,
+      maxUnitsPerGraph: 8,
+    },
+    notes:
+      "Generated by the auto-evolve SkillsBench adapter for campaign mode. The official verifier is a platform completion gate.",
+  })
+
+  // Write campaign spec pointing to the long-task spec
+  // Use a minimal seed workspace so campaign can initialize its pending package
+  // Multi-instance Phase 3 may override the seed with a merged-skill directory.
+  const builtinSeed = path.resolve(import.meta.dir, "..", "task-packs", "real-long-tasks", "skillsbench-seed", "seed-expert-workspace")
+  const skillsbenchSeedPath = input.seedExpertWorkspacePath ?? builtinSeed
+  const campaignTitle = input.campaignTitle ?? "skillsbench campaign (anonymized)"
+  const campaignSpecPath = path.join(prepared.specDir, "campaign-spec.json")
+  await writeJsonFile(campaignSpecPath, {
+    title: campaignTitle,
+    taskFamily: "skillsbench",
+    mode: "graph_iterative",
+    baseSpecPath: specPath,
+    maxRounds,
+    seedTargets: [
+      {
+        targetPath: "./expert-workspace",
+        seedPath: skillsbenchSeedPath,
+        kind: "experience_workspace",
+        resetOnStart: true,
+      },
+    ],
+    carryover: {
+      includeFailurePackets: true,
+      includeRetryLessons: true,
+      includeLearningUnits: true,
+      includeRoundSummaries: true,
+      recentRoundSummaryCount: 5,
+    },
+    roundBudgetOverrides: {
+      maxAttemptsPerUnit: input.attempts ?? 3,
+      maxTotalUnitAttempts: input.attempts ? Math.max(3, input.attempts) : 15,
+      maxGraphReplans: 3,
+      maxValidatorCalls: 20,
+      maxNoProgressCycles: 5,
+    },
+    notes: "SkillsBench campaign. Auto-generated by the SkillsBench adapter.",
+  })
+
+  // Run the campaign
+  const result = await runLongTaskCampaign({ cwd: input.cwd, specPath: campaignSpecPath })
+  const finalPassed = result.status === "verified_success"
+
+  await writeJsonFile(path.join(prepared.runRoot, "campaign-result.json"), {
+    mode: "campaign",
+    taskID: prepared.taskID,
+    passed: finalPassed,
+    campaignID: result.campaignID,
+    campaignDir: result.campaignDir,
+    status: result.status,
+    roundsCompleted: result.roundsCompleted,
+    lastRunID: result.lastRunID,
+    lessonsPath: result.lessonsPath,
+    roundSummaryPath: result.roundSummaryPath,
+  })
+
+  return {
+    mode: "campaign" as const,
+    taskID: prepared.taskID,
+    passed: finalPassed,
+    status: result.status,
+    runRoot: prepared.runRoot,
+    workDir: prepared.workDir,
+    runDir: result.campaignDir,
+    summaryPath: result.roundSummaryPath ?? result.campaignDir,
+  }
+}
+
 export async function runSkillsBenchTask(input: SkillsBenchRunOptions) {
   const prepared = await prepareSkillsBenchTask(input)
   if (input.mode === "short") return runShortSkillsBenchTask(input, prepared)
+  if (input.mode === "campaign") return runCampaignSkillsBenchTask(input, prepared)
   return runLongSkillsBenchTask(input, prepared)
 }

@@ -53,6 +53,14 @@ export interface InstanceState {
   harvestedSkillPath?: string
   /** Last error if status is "failed". */
   errorMessage?: string
+  /** Phase 3 validation outcome (set after Phase 3 runs). */
+  validateStatus?: "running" | "passed" | "failed" | "skipped"
+  /** Path to the validation campaign directory, if any. */
+  validateCampaignDir?: string
+  /** SkillsBench run root for the validation pass. */
+  validateRunRoot?: string
+  /** Validation error message if validateStatus is "failed" due to a crash. */
+  validateErrorMessage?: string
 }
 
 export interface CoordinatorState {
