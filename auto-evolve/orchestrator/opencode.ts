@@ -9,6 +9,7 @@ import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
 import type { ToolFailure } from "./evaluator"
 import { autoEvolvePath, ensureDirectory, pathExists, writeJsonFile, writeTextFile } from "./fs"
 import { runManagedProcess } from "./managed-process"
+import { OpenCodeGate } from "./opencode-gate"
 import {
   resolveTaskArtifactKind,
   taskArtifactPaths,
@@ -915,40 +916,52 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
   let result: OpencodeRunResult | undefined
   const maxAttempts = 3
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    let current: OpencodeRunResult
-    try {
-      current = await runOpencodeTaskOnce(
-        effectiveInput,
-        selectedModel,
-        selectedAgent,
-        referencedPaths,
-        attachedFiles,
-        permissionReadPaths,
-        permissionEditPaths,
-        attempt,
-      )
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      current = {
-        exitCode: 1,
-        stdout: "",
-        stderr: `OpenCode infrastructure bootstrap failed on attempt ${attempt}: ${message}`,
-        events: [],
-        responseText: "",
-        toolFailures: [],
+  // Acquire a global gate permit before spawning OpenCode. This caps total
+  // concurrent OpenCode children across the whole process, regardless of
+  // which workflow (single campaign, multi-instance fan-out, batch maintainer)
+  // is calling. The permit is held across all retry attempts because retries
+  // are tightly coupled to a single logical task.
+  const gate = OpenCodeGate.instance()
+  const permit = await gate.acquire({ caller: input.title })
+
+  try {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let current: OpencodeRunResult
+      try {
+        current = await runOpencodeTaskOnce(
+          effectiveInput,
+          selectedModel,
+          selectedAgent,
+          referencedPaths,
+          attachedFiles,
+          permissionReadPaths,
+          permissionEditPaths,
+          attempt,
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        current = {
+          exitCode: 1,
+          stdout: "",
+          stderr: `OpenCode infrastructure bootstrap failed on attempt ${attempt}: ${message}`,
+          events: [],
+          responseText: "",
+          toolFailures: [],
+        }
       }
-    }
 
-    if (!isInfrastructureCrash(current) || attempt === maxAttempts) {
-      result = current
-      break
-    }
+      if (!isInfrastructureCrash(current) || attempt === maxAttempts) {
+        result = current
+        break
+      }
 
-    infrastructureNotes.push(
-      `Infrastructure crash detected on OpenCode launch attempt ${attempt}; retrying automatically.`,
-    )
-    await sleep(750 * attempt)
+      infrastructureNotes.push(
+        `Infrastructure crash detected on OpenCode launch attempt ${attempt}; retrying automatically.`,
+      )
+      await sleep(750 * attempt)
+    }
+  } finally {
+    permit.release()
   }
 
   if (!result) {

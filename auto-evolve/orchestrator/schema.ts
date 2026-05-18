@@ -2,6 +2,7 @@ import path from "node:path"
 import { autoEvolvePath, caseMetadataPath, listCaseDirectories, pathExists, readJsonFile, readTextFile } from "./fs"
 import { loadDatasetSplit } from "./dataset-split"
 import { experienceWorkspacePaths, resolveExperienceWorkspaceLayout, validateExperienceWorkspaceLayout } from "./experience-workspace"
+import { OpenCodeGate } from "./opencode-gate"
 
 export type CompareMode = "text_exact" | "text_contains" | "json_exact"
 export type ModelPhase = "bootstrap" | "solve" | "refine" | "verify" | "regression"
@@ -52,6 +53,17 @@ export interface LoadedMonitorConfig {
   openBrowserOnStart: boolean
 }
 
+export interface LoadedConcurrencyConfig {
+  /** Maximum number of OpenCode child processes that may run simultaneously. */
+  maxConcurrent: number
+  /** Maximum number of callers that may queue waiting for a permit. */
+  maxQueueDepth: number
+  /** Permit acquire timeout (milliseconds). */
+  acquireTimeoutMs: number
+  /** Optional minimum interval between consecutive spawn grants. */
+  minSpawnIntervalMs: number
+}
+
 export interface AutoEvolveConfig {
   version: number
   datasetDir: string
@@ -95,6 +107,9 @@ export interface AutoEvolveConfig {
   permissionConfig: LoadedPermissionConfig
   monitorConfigPath: string
   monitorConfig: LoadedMonitorConfig
+  concurrencyConfigFile: string
+  concurrencyConfigPath: string
+  concurrencyConfig: LoadedConcurrencyConfig
 }
 
 export interface CaseMaterial {
@@ -161,6 +176,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   judgeConfigFile: "judge-config.json",
   permissionConfigFile: "permission-config.json",
   monitorConfigFile: "monitor-config.json",
+  concurrencyConfigFile: "concurrency-config.json",
   defaultAgent: undefined,
   defaultModel: "minimax-cn-coding-plan/MiniMax-M2.7",
   defaultVariant: undefined,
@@ -208,6 +224,13 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
     intervalSeconds: 2,
     defaultLimit: 50,
     openBrowserOnStart: true,
+  },
+  concurrencyConfigPath: "",
+  concurrencyConfig: {
+    maxConcurrent: 3,
+    maxQueueDepth: 30,
+    acquireTimeoutMs: 60 * 60 * 1000,
+    minSpawnIntervalMs: 0,
   },
 }
 
@@ -376,10 +399,15 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
     typeof raw.monitorConfigFile === "string" && raw.monitorConfigFile.trim()
       ? raw.monitorConfigFile
       : DEFAULT_CONFIG.monitorConfigFile
+  const concurrencyConfigFile =
+    typeof raw.concurrencyConfigFile === "string" && raw.concurrencyConfigFile.trim()
+      ? raw.concurrencyConfigFile
+      : DEFAULT_CONFIG.concurrencyConfigFile
   const modelConfigPath = autoEvolvePath(cwd, modelConfigFile)
   const permissionConfigPath = autoEvolvePath(cwd, permissionConfigFile)
   const judgeConfigPath = autoEvolvePath(cwd, judgeConfigFile)
   const monitorConfigPath = autoEvolvePath(cwd, monitorConfigFile)
+  const concurrencyConfigPath = autoEvolvePath(cwd, concurrencyConfigFile)
   let modelConfig = buildDefaultModelConfig(legacyDefaults)
   if (await pathExists(modelConfigPath)) {
     const rawModelConfig = await readJsonFile<Record<string, unknown>>(modelConfigPath)
@@ -463,6 +491,38 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
           : monitorConfig.openBrowserOnStart,
     }
   }
+  let concurrencyConfig: LoadedConcurrencyConfig = { ...DEFAULT_CONFIG.concurrencyConfig }
+  if (await pathExists(concurrencyConfigPath)) {
+    const rawConcurrencyConfig = await readJsonFile<Record<string, unknown>>(concurrencyConfigPath)
+    concurrencyConfig = {
+      maxConcurrent:
+        typeof rawConcurrencyConfig.maxConcurrent === "number" && rawConcurrencyConfig.maxConcurrent > 0
+          ? Math.floor(rawConcurrencyConfig.maxConcurrent)
+          : concurrencyConfig.maxConcurrent,
+      maxQueueDepth:
+        typeof rawConcurrencyConfig.maxQueueDepth === "number" && rawConcurrencyConfig.maxQueueDepth > 0
+          ? Math.floor(rawConcurrencyConfig.maxQueueDepth)
+          : concurrencyConfig.maxQueueDepth,
+      acquireTimeoutMs:
+        typeof rawConcurrencyConfig.acquireTimeoutMs === "number" && rawConcurrencyConfig.acquireTimeoutMs > 0
+          ? Math.floor(rawConcurrencyConfig.acquireTimeoutMs)
+          : concurrencyConfig.acquireTimeoutMs,
+      minSpawnIntervalMs:
+        typeof rawConcurrencyConfig.minSpawnIntervalMs === "number" && rawConcurrencyConfig.minSpawnIntervalMs >= 0
+          ? Math.floor(rawConcurrencyConfig.minSpawnIntervalMs)
+          : concurrencyConfig.minSpawnIntervalMs,
+    }
+  }
+  // Apply the loaded concurrency limits to the global gate. This is the only
+  // place loadConfig has side-effects on a singleton — it's intentional so
+  // that any code path that calls loadConfig (CLI commands, smoke tests,
+  // adapters) automatically receives correct concurrency behavior.
+  OpenCodeGate.configure({
+    maxConcurrent: concurrencyConfig.maxConcurrent,
+    maxQueueDepth: concurrencyConfig.maxQueueDepth,
+    acquireTimeoutMs: concurrencyConfig.acquireTimeoutMs,
+    minSpawnIntervalMs: concurrencyConfig.minSpawnIntervalMs,
+  })
   const config: AutoEvolveConfig = {
     version: typeof raw.version === "number" ? raw.version : DEFAULT_CONFIG.version,
     datasetDir: typeof raw.datasetDir === "string" ? raw.datasetDir : DEFAULT_CONFIG.datasetDir,
@@ -554,6 +614,9 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
     permissionConfig,
     monitorConfigPath,
     monitorConfig,
+    concurrencyConfigFile,
+    concurrencyConfigPath,
+    concurrencyConfig,
   }
 
   return { ...config, configPath }
