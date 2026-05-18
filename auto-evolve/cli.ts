@@ -362,9 +362,12 @@ async function commandRunSkillsBench(args: string[]) {
 
 async function commandRunMultiInstance(args: string[]) {
   await ensureLayout(process.cwd())
+  const benchOpt = (getOption(args, "--bench") ?? "skillsbench").toLowerCase()
   const skillsbenchRoot = getOption(args, "--root")
   const taskID = getOption(args, "--task")
   const instanceList = getOption(args, "--instances")
+  const testInstanceList = getOption(args, "--test-instances")
+  const autoSplit = getOption(args, "--auto-split")
   const labelOpt = getOption(args, "--label")
   const roundsValue = getOption(args, "--rounds")
   const fanoutLimitValue = getOption(args, "--fanout-limit")
@@ -377,16 +380,16 @@ async function commandRunMultiInstance(args: string[]) {
   const rounds = roundsValue ? Number.parseInt(roundsValue, 10) : 5
   const fanoutLimit = fanoutLimitValue ? Number.parseInt(fanoutLimitValue, 10) : undefined
 
+  if (benchOpt !== "skillsbench" && benchOpt !== "skilllearnbench") {
+    console.error("Invalid --bench value. Use skillsbench or skilllearnbench.")
+    process.exit(1)
+  }
   if (!skillsbenchRoot) {
-    console.error("Missing required option: --root <skillsbench-root>")
+    console.error("Missing required option: --root <bench-root>")
     process.exit(1)
   }
   if (!taskID) {
-    console.error("Missing required option: --task <task-id> (the underlying SkillsBench task name)")
-    process.exit(1)
-  }
-  if (!instanceList) {
-    console.error("Missing required option: --instances <inst-1,inst-2,...> (comma-separated instance ids)")
+    console.error("Missing required option: --task <task-name>")
     process.exit(1)
   }
   if (!Number.isFinite(rounds) || rounds <= 0) {
@@ -395,26 +398,85 @@ async function commandRunMultiInstance(args: string[]) {
   }
 
   const cwd = path.basename(process.cwd()) === "auto-evolve" ? path.dirname(process.cwd()) : process.cwd()
-  const instances = instanceList.split(",").map((s) => s.trim()).filter(Boolean)
-  if (instances.length === 0) {
-    console.error("--instances list is empty after parsing")
+
+  // Discover the available instance task roots for this bench+task.
+  // Layout differences:
+  //   - skillsbench:      <root>/tasks/<task>/                (1 instance)
+  //   - skilllearnbench:  <root>/tasks/<task>/<task>-<N>/     (N instances)
+  const taskFamilyDir = path.join(skillsbenchRoot, "tasks", taskID)
+  const discovered = await discoverBenchInstances(taskFamilyDir, benchOpt as "skillsbench" | "skilllearnbench", taskID)
+  if (discovered.length === 0) {
+    console.error(`No instance directories found under ${taskFamilyDir}`)
     process.exit(1)
   }
-  const label = labelOpt ?? `${taskID}-multi`
 
+  // Resolve --instances and --test-instances. Both accept "all" to mean
+  // every discovered instance, or a comma-separated list of ids.
+  let trainIDs: string[] = []
+  let testIDs: string[] = []
+  if (autoSplit) {
+    const ratio = Number.parseFloat(autoSplit)
+    if (!Number.isFinite(ratio) || ratio <= 0 || ratio >= 1) {
+      console.error("Invalid --auto-split value. Use a fraction in (0, 1), e.g. 0.3 for 30% test.")
+      process.exit(1)
+    }
+    // Stable deterministic split: sort discovered ids, pick the last
+    // ceil(ratio * N) as test, the rest as train.
+    const sorted = [...discovered].sort((a, b) => a.id.localeCompare(b.id))
+    const testCount = Math.max(1, Math.ceil(sorted.length * ratio))
+    testIDs = sorted.slice(-testCount).map((d) => d.id)
+    trainIDs = sorted.slice(0, sorted.length - testCount).map((d) => d.id)
+    if (trainIDs.length === 0) {
+      console.error(
+        `--auto-split=${ratio} would leave no training instances (only ${sorted.length} discovered).`,
+      )
+      process.exit(1)
+    }
+  } else {
+    if (!instanceList) {
+      console.error("Missing required option: --instances <ids|all> (or use --auto-split <ratio>)")
+      process.exit(1)
+    }
+    trainIDs = resolveInstanceList(instanceList, discovered)
+    if (testInstanceList) {
+      testIDs = resolveInstanceList(testInstanceList, discovered)
+    }
+  }
+  if (trainIDs.length === 0) {
+    console.error("Train instance set is empty.")
+    process.exit(1)
+  }
+  // Sanity: no instance can be both train and test.
+  const overlap = trainIDs.filter((id) => testIDs.includes(id))
+  if (overlap.length > 0) {
+    console.error(`Instances cannot be both train and test: ${overlap.join(", ")}`)
+    process.exit(1)
+  }
+
+  const allIDs = [...trainIDs, ...testIDs]
+  const idToRoot = new Map(discovered.map((d) => [d.id, d.taskRoot]))
+  const instanceSpecs = allIDs.map((id) => {
+    const root = idToRoot.get(id)
+    if (!root) {
+      console.error(`Instance ${id} not found in ${taskFamilyDir}`)
+      process.exit(1)
+    }
+    return {
+      id,
+      sourceTaskRoot: root!,
+      engine: "skillsbench" as const,
+      skillsbenchRoot,
+      taskID: id,
+      role: testIDs.includes(id) ? ("test" as const) : ("train" as const),
+    }
+  })
+
+  const label = labelOpt ?? `${taskID}-multi`
   const { coordinatorRunID, createCoordinatorRun, runCoordinatorPhase1Fanout } = await import(
     "./orchestrator/multi-instance/coordinator"
   )
   const runID = coordinatorRunID(label)
   const runRoot = path.join(cwd, "auto-evolve", "runtime-state", "multi-instance-runs", runID)
-
-  const instanceSpecs = instances.map((id) => ({
-    id,
-    sourceTaskRoot: path.join(skillsbenchRoot, "tasks", id),
-    engine: "skillsbench" as const,
-    skillsbenchRoot,
-    taskID: id,
-  }))
 
   const state = await createCoordinatorRun({
     cwd,
@@ -426,7 +488,10 @@ async function commandRunMultiInstance(args: string[]) {
   })
   console.log(`MultiInstance run: ${state.id}`)
   console.log(`Run root: ${runRoot}`)
-  console.log(`Instances: ${instances.length} (rounds=${rounds}${fanoutLimit ? `, fanoutLimit=${fanoutLimit}` : ""})`)
+  console.log(`Bench: ${benchOpt} | task: ${taskID}`)
+  console.log(`Train (${trainIDs.length}): ${trainIDs.join(", ")}`)
+  console.log(`Test  (${testIDs.length}): ${testIDs.join(", ") || "(none)"}`)
+  console.log(`rounds=${rounds}${fanoutLimit ? `, fanoutLimit=${fanoutLimit}` : ""}`)
   console.log(`Phase 1 (fanout) starting…`)
 
   const summary = await runCoordinatorPhase1Fanout({ cwd, state })
@@ -476,6 +541,45 @@ async function commandRunMultiInstance(args: string[]) {
   console.log(`  failures   : ${validateOut.failed}`)
   console.log(`  regressions: ${validateOut.regressions.length} (${validateOut.regressions.join(", ") || "none"})`)
   console.log(`  duration   : ${(validateOut.durationMs / 1000).toFixed(1)}s`)
+}
+
+interface DiscoveredInstance {
+  id: string
+  taskRoot: string
+}
+
+async function discoverBenchInstances(
+  taskFamilyDir: string,
+  bench: "skillsbench" | "skilllearnbench",
+  taskID: string,
+): Promise<DiscoveredInstance[]> {
+  const fs = await import("node:fs/promises")
+  if (bench === "skillsbench") {
+    // The family dir IS the only instance.
+    return [{ id: taskID, taskRoot: taskFamilyDir }]
+  }
+  // SkillLearnBench: instances are subdirectories named "<task>-<n>".
+  const entries = await fs.readdir(taskFamilyDir, { withFileTypes: true }).catch(() => [])
+  const out: DiscoveredInstance[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    if (!entry.name.startsWith(`${taskID}-`)) continue
+    out.push({ id: entry.name, taskRoot: path.join(taskFamilyDir, entry.name) })
+  }
+  return out
+}
+
+function resolveInstanceList(raw: string, discovered: DiscoveredInstance[]): string[] {
+  const trimmed = raw.trim()
+  if (trimmed.toLowerCase() === "all") return discovered.map((d) => d.id)
+  const ids = trimmed.split(",").map((s) => s.trim()).filter(Boolean)
+  for (const id of ids) {
+    if (!discovered.some((d) => d.id === id)) {
+      console.error(`Instance not found in discovered list: ${id}`)
+      process.exit(1)
+    }
+  }
+  return ids
 }
 
 async function commandRunPropagation(args: string[]) {
