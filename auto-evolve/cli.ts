@@ -1,4 +1,5 @@
 import process from "node:process"
+import path from "node:path"
 import { readdir } from "node:fs/promises"
 import { ensureLayout } from "./orchestrator/fs"
 import { runBootstrap } from "./orchestrator/bootstrap"
@@ -60,9 +61,9 @@ function printHelp() {
     Produce a unified baseline scorecard for the current system, including train/test rounds and knowledge snapshots.
     Optional: --method <method-id> --train-limit <number> --test-limit <number> --skip-bootstrap --force-bootstrap
 
-  run-skillsbench --root <skillsbench-root> --task <task-id> --mode <short|long>
+  run-skillsbench --root <skillsbench-root> --task <task-id> --mode <short|long|campaign>
     Run a real SkillsBench task through the auto-evolve adapter and official Docker verifier.
-    Optional: --attempts <number> --timeout-ms <number> --skip-docker-build
+    Optional: --attempts <number> --timeout-ms <number> --rounds <number> --skip-docker-build
 
   run-propagation
     Run an initial third-layer propagation campaign on an experimental branch without touching the canonical experience workspace.
@@ -308,8 +309,10 @@ async function commandRunSkillsBench(args: string[]) {
   const mode = getOption(args, "--mode")
   const attemptsValue = getOption(args, "--attempts")
   const timeoutValue = getOption(args, "--timeout-ms")
+  const roundsValue = getOption(args, "--rounds")
   const attempts = attemptsValue ? Number.parseInt(attemptsValue, 10) : undefined
   const timeoutMs = timeoutValue ? Number.parseInt(timeoutValue, 10) : undefined
+  const rounds = roundsValue ? Number.parseInt(roundsValue, 10) : undefined
 
   if (!root) {
     console.error("Missing required option: --root <skillsbench-root>")
@@ -319,8 +322,8 @@ async function commandRunSkillsBench(args: string[]) {
     console.error("Missing required option: --task <task-id>")
     process.exit(1)
   }
-  if (mode !== "short" && mode !== "long") {
-    console.error("Invalid --mode value. Use short or long.")
+  if (mode !== "short" && mode !== "long" && mode !== "campaign") {
+    console.error("Invalid --mode value. Use short, long, or campaign.")
     process.exit(1)
   }
   if (attemptsValue && (!Number.isFinite(attempts) || attempts <= 0)) {
@@ -331,14 +334,21 @@ async function commandRunSkillsBench(args: string[]) {
     console.error("Invalid --timeout-ms value. Use a positive integer.")
     process.exit(1)
   }
+  if (roundsValue && (!Number.isFinite(rounds) || rounds <= 0)) {
+    console.error("Invalid --rounds value. Use a positive integer.")
+    process.exit(1)
+  }
 
+  // Ensure cwd is repo root (parent of auto-evolve/), not the auto-evolve/ subdirectory itself.
+  const cwd = path.basename(process.cwd()) === "auto-evolve" ? path.dirname(process.cwd()) : process.cwd()
   const result = await runSkillsBenchTask({
-    cwd: process.cwd(),
+    cwd,
     root,
     taskID,
     mode: mode as SkillsBenchMode,
     attempts,
     timeoutMs,
+    rounds,
     skipDockerBuild: getFlag(args, "--skip-docker-build"),
   })
   console.log(`SkillsBench task: ${result.taskID}`)
@@ -348,6 +358,78 @@ async function commandRunSkillsBench(args: string[]) {
   console.log(`Workspace: ${result.workDir}`)
   if ("runDir" in result) console.log(`Long-task run: ${result.runDir}`)
   if ("summaryPath" in result) console.log(`Summary: ${result.summaryPath}`)
+}
+
+async function commandRunMultiInstance(args: string[]) {
+  await ensureLayout(process.cwd())
+  const skillsbenchRoot = getOption(args, "--root")
+  const taskID = getOption(args, "--task")
+  const instanceList = getOption(args, "--instances")
+  const labelOpt = getOption(args, "--label")
+  const roundsValue = getOption(args, "--rounds")
+  const fanoutLimitValue = getOption(args, "--fanout-limit")
+  const rounds = roundsValue ? Number.parseInt(roundsValue, 10) : 5
+  const fanoutLimit = fanoutLimitValue ? Number.parseInt(fanoutLimitValue, 10) : undefined
+
+  if (!skillsbenchRoot) {
+    console.error("Missing required option: --root <skillsbench-root>")
+    process.exit(1)
+  }
+  if (!taskID) {
+    console.error("Missing required option: --task <task-id> (the underlying SkillsBench task name)")
+    process.exit(1)
+  }
+  if (!instanceList) {
+    console.error("Missing required option: --instances <inst-1,inst-2,...> (comma-separated instance ids)")
+    process.exit(1)
+  }
+  if (!Number.isFinite(rounds) || rounds <= 0) {
+    console.error("Invalid --rounds value. Use a positive integer.")
+    process.exit(1)
+  }
+
+  const cwd = path.basename(process.cwd()) === "auto-evolve" ? path.dirname(process.cwd()) : process.cwd()
+  const instances = instanceList.split(",").map((s) => s.trim()).filter(Boolean)
+  if (instances.length === 0) {
+    console.error("--instances list is empty after parsing")
+    process.exit(1)
+  }
+  const label = labelOpt ?? `${taskID}-multi`
+
+  const { coordinatorRunID, createCoordinatorRun, runCoordinatorPhase1Fanout } = await import(
+    "./orchestrator/multi-instance/coordinator"
+  )
+  const runID = coordinatorRunID(label)
+  const runRoot = path.join(cwd, "auto-evolve", "runtime-state", "multi-instance-runs", runID)
+
+  const instanceSpecs = instances.map((id) => ({
+    id,
+    sourceTaskRoot: path.join(skillsbenchRoot, "tasks", id),
+    engine: "skillsbench" as const,
+    skillsbenchRoot,
+    taskID: id,
+  }))
+
+  const state = await createCoordinatorRun({
+    cwd,
+    runRoot,
+    label,
+    rounds,
+    instances: instanceSpecs,
+    fanoutLimit,
+  })
+  console.log(`MultiInstance run: ${state.id}`)
+  console.log(`Run root: ${runRoot}`)
+  console.log(`Instances: ${instances.length} (rounds=${rounds}${fanoutLimit ? `, fanoutLimit=${fanoutLimit}` : ""})`)
+  console.log(`Phase 1 (fanout) starting…`)
+
+  const summary = await runCoordinatorPhase1Fanout({ cwd, state })
+  console.log(`Phase 1 complete:`)
+  console.log(`  passed   : ${summary.passed}`)
+  console.log(`  exhausted: ${summary.exhausted}`)
+  console.log(`  failed   : ${summary.failed}`)
+  console.log(`  skipped  : ${summary.skipped}`)
+  console.log(`  duration : ${(summary.durationMs / 1000).toFixed(1)}s`)
 }
 
 async function commandRunPropagation(args: string[]) {
@@ -548,6 +630,9 @@ async function main() {
       return
     case "run-skillsbench":
       await commandRunSkillsBench(args)
+      return
+    case "run-multi-instance":
+      await commandRunMultiInstance(args)
       return
     case "run-propagation":
       await commandRunPropagation(args)

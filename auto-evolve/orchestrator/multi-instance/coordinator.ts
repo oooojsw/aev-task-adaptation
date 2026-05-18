@@ -1,0 +1,247 @@
+/**
+ * MultiInstanceCoordinator — Phase 1 (fan-out) implementation.
+ *
+ * Launches N independent SkillsBench campaigns in parallel and harvests
+ * their pending-expert-package outputs into a single coordinator run-root.
+ *
+ * Real concurrency is capped two ways:
+ *   1. The global OpenCodeGate caps how many OpenCode children can run at
+ *      once, regardless of how many campaigns are active.
+ *   2. An optional fanoutLimit applies an additional coordinator-level
+ *      cap so we don't have hundreds of half-blocked campaigns sitting
+ *      in the queue. By default we launch all instances at once and
+ *      let the gate sort it out.
+ *
+ * Persistence: every state transition writes coordinator-state.json
+ * atomically, so a crash mid-fanout can be inspected and resumed.
+ *
+ * Phases 2/3 (merge, validate) live in their own modules — this file
+ * only handles phase 1 today, with hooks left for the next milestones.
+ */
+
+import path from "node:path"
+import { cp, readdir } from "node:fs/promises"
+import { ensureDirectory, pathExists, writeJsonFile } from "../fs"
+import { OpenCodeGate } from "../opencode-gate"
+import { runSkillsBenchTask } from "../skillsbench-adapter"
+import type { CoordinatorState, InstanceState, FanoutOutcome } from "./contract"
+import { appendCoordinatorLog, fanoutDir, saveCoordinatorState } from "./repository"
+
+export interface InstanceSpec {
+  /** Stable id, e.g. "court-form-filling-1". */
+  id: string
+  /** Path to the source task root accepted by skillsbench-adapter. */
+  sourceTaskRoot: string
+  /** Engine that knows how to run this instance. */
+  engine: "skillsbench"
+  /** SkillsBench root (parent directory containing tasks/). */
+  skillsbenchRoot: string
+  /** Underlying task id used by the SkillsBench adapter (e.g. "court-form-filling"). */
+  taskID: string
+}
+
+export interface CreateCoordinatorRunInput {
+  cwd: string
+  runRoot: string
+  label: string
+  rounds: number
+  instances: InstanceSpec[]
+  fanoutLimit?: number
+  minTerminalToStop?: number
+}
+
+export interface RunCoordinatorPhase1Input {
+  cwd: string
+  state: CoordinatorState
+  /** Optional callback for monitoring / structured logging. */
+  onInstanceUpdate?: (instance: InstanceState) => void
+}
+
+function coordinatorRunID(label: string, now = new Date()) {
+  const pad = (n: number, w = 2) => String(n).padStart(w, "0")
+  const stamp =
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+    `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}` +
+    pad(now.getMilliseconds(), 3)
+  const safeLabel = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60) || "multi-instance"
+  return `${stamp}-${safeLabel}`
+}
+
+export async function createCoordinatorRun(input: CreateCoordinatorRunInput): Promise<CoordinatorState> {
+  const now = new Date().toISOString()
+  const state: CoordinatorState = {
+    id: path.basename(input.runRoot),
+    label: input.label,
+    phase: "phase1_fanout",
+    createdAt: now,
+    updatedAt: now,
+    ownerPID: process.pid,
+    heartbeatAt: now,
+    runRoot: input.runRoot,
+    options: {
+      skillsbenchRoot: input.instances[0]?.skillsbenchRoot ?? "",
+      rounds: input.rounds,
+      fanoutLimit: input.fanoutLimit,
+      minTerminalToStop: input.minTerminalToStop,
+    },
+    instances: input.instances.map((spec) => ({
+      id: spec.id,
+      sourceTaskRoot: spec.sourceTaskRoot,
+      engine: spec.engine,
+      status: "queued",
+      rounds: input.rounds,
+    })),
+    log: [],
+  }
+  await ensureDirectory(input.runRoot)
+  await ensureDirectory(fanoutDir(input.runRoot))
+  await writeJsonFile(path.join(input.runRoot, "input-spec.json"), {
+    instances: input.instances,
+    rounds: input.rounds,
+    fanoutLimit: input.fanoutLimit,
+    minTerminalToStop: input.minTerminalToStop,
+  })
+  await saveCoordinatorState(state)
+  await appendCoordinatorLog(state, "info", `Coordinator run created with ${input.instances.length} instances`)
+  return state
+}
+
+/**
+ * Launch all queued instances in parallel, respecting fanoutLimit and the
+ * global OpenCodeGate. Returns a summary when all instances reach a
+ * terminal state (or minTerminalToStop is hit).
+ */
+export async function runCoordinatorPhase1Fanout(input: RunCoordinatorPhase1Input): Promise<FanoutOutcome> {
+  const state = input.state
+  const startedAt = Date.now()
+  const fanoutLimit = state.options.fanoutLimit ?? state.instances.length
+  const inFlight = new Set<Promise<unknown>>()
+
+  // Index by id for cheap lookups.
+  const byId = new Map(state.instances.map((i) => [i.id, i]))
+
+  // Spec lookup: rebuild from instance state.
+  const specs: InstanceSpec[] = state.instances.map((i) => ({
+    id: i.id,
+    sourceTaskRoot: i.sourceTaskRoot,
+    engine: "skillsbench",
+    skillsbenchRoot: state.options.skillsbenchRoot,
+    taskID: skillsbenchTaskIDFromInstance(i),
+  }))
+
+  for (const spec of specs) {
+    const instance = byId.get(spec.id)!
+    if (instance.status !== "queued") continue
+    while (inFlight.size >= fanoutLimit) {
+      await Promise.race(inFlight)
+    }
+    const job = runSingleInstance(input.cwd, state, spec, instance, input.onInstanceUpdate)
+      .finally(() => {
+        inFlight.delete(job)
+      })
+    inFlight.add(job)
+  }
+  await Promise.all(inFlight)
+
+  const summary: FanoutOutcome = {
+    totalInstances: state.instances.length,
+    passed: state.instances.filter((i) => i.status === "passed").length,
+    exhausted: state.instances.filter((i) => i.status === "exhausted").length,
+    failed: state.instances.filter((i) => i.status === "failed").length,
+    skipped: state.instances.filter((i) => i.status === "skipped").length,
+    durationMs: Date.now() - startedAt,
+  }
+  await appendCoordinatorLog(
+    state,
+    "info",
+    `Phase 1 fanout complete: ${summary.passed} passed, ${summary.exhausted} exhausted, ${summary.failed} failed, ${summary.skipped} skipped`,
+  )
+  return summary
+}
+
+async function runSingleInstance(
+  cwd: string,
+  state: CoordinatorState,
+  spec: InstanceSpec,
+  instance: InstanceState,
+  notify?: (instance: InstanceState) => void,
+) {
+  instance.status = "running"
+  await saveCoordinatorState(state)
+  notify?.(instance)
+  await appendCoordinatorLog(state, "info", `[${instance.id}] launching campaign`)
+
+  try {
+    const result = await runSkillsBenchTask({
+      cwd,
+      root: spec.skillsbenchRoot,
+      taskID: spec.taskID,
+      mode: "campaign",
+      rounds: instance.rounds,
+    })
+    if (result.mode !== "campaign") {
+      throw new Error(`Unexpected non-campaign result for instance ${instance.id}`)
+    }
+    instance.campaignDir = result.runDir
+    instance.campaignRunRoot = result.runRoot
+    instance.status = result.passed ? "passed" : "exhausted"
+    instance.finishedAt = new Date().toISOString()
+
+    // Snapshot the pending-expert-package into the coordinator run root.
+    if (result.runDir) {
+      const pendingDir = path.join(result.runDir, "pending-expert-package", "current")
+      if (await pathExists(pendingDir)) {
+        const harvestRoot = path.join(fanoutDir(state.runRoot), instance.id)
+        await ensureDirectory(harvestRoot)
+        // Copy the pending package — it's the canonical skill output for
+        // this instance and may be referenced by phases 2 and 3 even after
+        // the source campaign is cleaned up.
+        await copyTree(pendingDir, path.join(harvestRoot, "pending-expert-package"))
+        instance.harvestedSkillPath = path.join(harvestRoot, "pending-expert-package")
+      } else {
+        await appendCoordinatorLog(
+          state,
+          "warn",
+          `[${instance.id}] no pending-expert-package found at ${pendingDir}`,
+        )
+      }
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    instance.status = "failed"
+    instance.errorMessage = message
+    instance.finishedAt = new Date().toISOString()
+    await appendCoordinatorLog(state, "error", `[${instance.id}] failed: ${message}`)
+  }
+  await saveCoordinatorState(state)
+  notify?.(instance)
+}
+
+async function copyTree(source: string, target: string) {
+  await ensureDirectory(target)
+  const entries = await readdir(source, { withFileTypes: true })
+  for (const entry of entries) {
+    const s = path.join(source, entry.name)
+    const t = path.join(target, entry.name)
+    if (entry.isDirectory()) {
+      await copyTree(s, t)
+    } else {
+      await cp(s, t, { force: true })
+    }
+  }
+}
+
+/**
+ * Resolve the SkillsBench task id for an instance. For SkillsBench tasks
+ * (which are the only engine in M2), the source task root path is the task
+ * directory itself, so the task id is just its basename.
+ */
+function skillsbenchTaskIDFromInstance(instance: InstanceState): string {
+  return path.basename(instance.sourceTaskRoot)
+}
+
+export { coordinatorRunID }
