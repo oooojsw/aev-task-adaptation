@@ -12,8 +12,20 @@ export type SkillsBenchMode = "short" | "long" | "campaign"
 
 export interface SkillsBenchRunOptions {
   cwd: string
-  root: string
-  taskID: string
+  /**
+   * Path to the benchmark root (containing `tasks/<id>/`). Required unless
+   * `taskRoot` is given.
+   */
+  root?: string
+  /** Identifier of the task within the benchmark, joined as `<root>/tasks/<id>`. */
+  taskID?: string
+  /**
+   * Absolute path to the task directory (the one that contains task.toml,
+   * environment/, instruction.md, tests/). When set, this overrides
+   * root+taskID. Used by SkillLearnBench-style layouts where the task lives
+   * in `<root>/tasks/<family>/<instance>`.
+   */
+  taskRoot?: string
   mode: SkillsBenchMode
   attempts?: number
   timeoutMs?: number
@@ -115,8 +127,24 @@ async function copyEnvironmentWithoutLeaks(source: string, target: string) {
 }
 
 async function prepareSkillsBenchTask(input: SkillsBenchRunOptions): Promise<PreparedSkillsBenchTask> {
-  const root = path.resolve(input.root)
-  const taskRoot = path.join(root, "tasks", input.taskID)
+  // Two ways to point at a task:
+  //  - root + taskID  → the canonical SkillsBench layout (`<root>/tasks/<id>`)
+  //  - taskRoot       → an absolute path, used for SkillLearnBench-style
+  //                     nested layouts (`<root>/tasks/<family>/<instance>`)
+  // taskRoot wins when set; otherwise we fall back to root+taskID.
+  let taskRoot: string
+  let derivedTaskID: string
+  if (input.taskRoot) {
+    taskRoot = path.resolve(input.taskRoot)
+    derivedTaskID = input.taskID ?? path.basename(taskRoot)
+  } else {
+    if (!input.root || !input.taskID) {
+      throw new Error("prepareSkillsBenchTask requires either `taskRoot` or both `root` and `taskID`.")
+    }
+    const root = path.resolve(input.root)
+    taskRoot = path.join(root, "tasks", input.taskID)
+    derivedTaskID = input.taskID
+  }
   const instructionPath = path.join(taskRoot, "instruction.md")
   const environmentRoot = path.join(taskRoot, "environment")
   const taskTomlPath = path.join(taskRoot, "task.toml")
@@ -126,7 +154,7 @@ async function prepareSkillsBenchTask(input: SkillsBenchRunOptions): Promise<Pre
     }
   }
 
-  const runRoot = path.join(input.cwd, "auto-evolve", "runtime-state", "skillsbench-runs", `${nowStamp()}-${safeID(input.taskID)}-${input.mode}`)
+  const runRoot = path.join(input.cwd, "auto-evolve", "runtime-state", "skillsbench-runs", `${nowStamp()}-${safeID(derivedTaskID)}-${input.mode}`)
   const workDir = path.join(runRoot, "workspace")
   const logsDir = path.join(runRoot, "logs")
   const specDir = path.join(runRoot, "spec")
@@ -139,13 +167,13 @@ async function prepareSkillsBenchTask(input: SkillsBenchRunOptions): Promise<Pre
   const instruction = await readTextFile(instructionPath)
   // Write instruction.copy.md / task-source.json to a hidden artifacts directory
   // outside the runRoot tree, so the agent can never navigate to them.
-  const artifactsDir = path.join(input.cwd, "auto-evolve", ".runtime", "skillsbench-artifacts", safeID(input.taskID) + "-" + input.mode)
+  const artifactsDir = path.join(input.cwd, "auto-evolve", ".runtime", "skillsbench-artifacts", safeID(derivedTaskID) + "-" + input.mode)
   await ensureDirectory(artifactsDir)
   await writeTextFile(path.join(artifactsDir, "instruction.copy.md"), instruction)
   await writeJsonFile(path.join(artifactsDir, "task-source.json"), {
-    taskID: input.taskID,
+    taskID: derivedTaskID,
     taskRoot,
-    sourceRoot: root,
+    sourceRoot: input.root ?? path.dirname(path.dirname(taskRoot)),
     mode: input.mode,
     createdAt: new Date().toISOString(),
     note: "The workspace is copied from SkillsBench environment/ only. solution/, tests/, and groundtruth-style files are intentionally not exposed to the agent.",
@@ -157,7 +185,7 @@ async function prepareSkillsBenchTask(input: SkillsBenchRunOptions): Promise<Pre
   await writeTextFile(instructionSafePath, instruction)
 
   return {
-    taskID: input.taskID,
+    taskID: derivedTaskID,
     taskRoot,
     instructionPath,
     instructionSafePath,
@@ -165,7 +193,7 @@ async function prepareSkillsBenchTask(input: SkillsBenchRunOptions): Promise<Pre
     logsDir,
     specDir,
     runRoot,
-    imageTag: dockerImageTag(input.taskID),
+    imageTag: dockerImageTag(derivedTaskID),
     instruction,
   }
 }

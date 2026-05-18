@@ -55,7 +55,13 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
   await ensureDirectory(path.join(mergedSkillDir, "cases"))
 
   const contributingInstances = state.instances.filter(
-    (i) => (i.status === "passed" || i.status === "exhausted") && i.harvestedSkillPath,
+    (i) =>
+      // Only train instances feed the merger. Held-out test instances are
+      // intentionally never merged — that's how we know the merged skill
+      // generalizes when Phase 3 runs them.
+      i.role !== "test" &&
+      (i.status === "passed" || i.status === "exhausted") &&
+      i.harvestedSkillPath,
   )
 
   if (contributingInstances.length === 0) {

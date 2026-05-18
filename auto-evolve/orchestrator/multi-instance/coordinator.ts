@@ -30,14 +30,20 @@ import { appendCoordinatorLog, fanoutDir, saveCoordinatorState } from "./reposit
 export interface InstanceSpec {
   /** Stable id, e.g. "court-form-filling-1". */
   id: string
-  /** Path to the source task root accepted by skillsbench-adapter. */
+  /** Absolute path to the task root (skillsbench-adapter taskRoot). */
   sourceTaskRoot: string
   /** Engine that knows how to run this instance. */
   engine: "skillsbench"
-  /** SkillsBench root (parent directory containing tasks/). */
+  /** SkillsBench/SkillLearnBench top-level root, used for verifier paths. */
   skillsbenchRoot: string
-  /** Underlying task id used by the SkillsBench adapter (e.g. "court-form-filling"). */
+  /** Underlying SkillsBench task id (used by docker tag and run-root naming). */
   taskID: string
+  /**
+   * Role in the train/test split. "train" instances participate in Phase 1
+   * fan-out (their skill feeds the merger). "test" instances skip Phase 1
+   * entirely and are evaluated only in Phase 3 with the merged skill.
+   */
+  role?: "train" | "test"
 }
 
 export interface CreateCoordinatorRunInput {
@@ -92,6 +98,7 @@ export async function createCoordinatorRun(input: CreateCoordinatorRunInput): Pr
       id: spec.id,
       sourceTaskRoot: spec.sourceTaskRoot,
       engine: spec.engine,
+      role: spec.role ?? "train",
       status: "queued",
       rounds: input.rounds,
     })),
@@ -136,6 +143,17 @@ export async function runCoordinatorPhase1Fanout(input: RunCoordinatorPhase1Inpu
   for (const spec of specs) {
     const instance = byId.get(spec.id)!
     if (instance.status !== "queued") continue
+    // Held-out test instances skip Phase 1 entirely. They get marked
+    // "skipped" with a special note so Phase 3 still validates them.
+    if (instance.role === "test") {
+      instance.status = "skipped"
+      instance.errorMessage = "test-only instance — held out from fan-out"
+      instance.finishedAt = new Date().toISOString()
+      await saveCoordinatorState(state)
+      input.onInstanceUpdate?.(instance)
+      await appendCoordinatorLog(state, "info", `[${instance.id}] held out (role=test)`)
+      continue
+    }
     while (inFlight.size >= fanoutLimit) {
       await Promise.race(inFlight)
     }
@@ -178,7 +196,10 @@ async function runSingleInstance(
   try {
     const result = await runSkillsBenchTask({
       cwd,
-      root: spec.skillsbenchRoot,
+      // Use absolute taskRoot so SkillLearnBench-style nested layouts
+      // (`<root>/tasks/<family>/<instance>`) work alongside the canonical
+      // SkillsBench layout. taskID is still passed for docker-tag naming.
+      taskRoot: spec.sourceTaskRoot,
       taskID: spec.taskID,
       mode: "campaign",
       rounds: instance.rounds,

@@ -20,7 +20,7 @@ export type InstanceStatus =
   | "passed"      // Campaign verified_success — skill is "verified"
   | "exhausted"   // Hit round_limit_reached without success — skill is "unverified"
   | "failed"      // Crashed / aborted — skill not usable
-  | "skipped"     // User-requested skip
+  | "skipped"     // User-requested skip OR test-only instance not exercised in Phase 1
   | "removed"     // Removed via state edits
 
 export type CoordinatorPhase =
@@ -38,6 +38,13 @@ export interface InstanceState {
   sourceTaskRoot: string
   /** Family of the underlying engine (currently always "skillsbench"). */
   engine: "skillsbench"
+  /**
+   * Train instances participate in Phase 1 (their skill feeds the merger).
+   * Test instances skip Phase 1 entirely; they are only evaluated in Phase 3
+   * with the merged skill, giving us a held-out pass-rate signal that the
+   * merged skill actually generalizes.
+   */
+  role: "train" | "test"
   status: InstanceStatus
   /** Number of campaign rounds requested. */
   rounds: number

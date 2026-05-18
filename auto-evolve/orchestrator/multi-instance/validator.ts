@@ -126,7 +126,7 @@ async function runOneValidation(
   try {
     const result = await runSkillsBenchTask({
       cwd,
-      root: state.options.skillsbenchRoot,
+      taskRoot: instance.sourceTaskRoot,
       taskID: skillsbenchTaskIDFromInstance(instance),
       mode: "campaign",
       rounds,
@@ -149,8 +149,10 @@ async function runOneValidation(
 
     // A regression is when an instance that originally passed in Phase 1
     // now fails on the merged skill. That signals the merger dropped
-    // something the instance depended on.
-    if (instance.status === "passed" && !result.passed) {
+    // something the instance depended on. Held-out test instances cannot
+    // regress (they had no Phase 1 baseline to begin with) — failure on a
+    // test instance is just a generalization gap.
+    if (instance.role !== "test" && instance.status === "passed" && !result.passed) {
       regressions.push(instance.id)
       await appendCoordinatorLog(
         state,
@@ -173,11 +175,11 @@ async function runOneValidation(
 }
 
 function defaultFilter(instance: InstanceState): boolean {
-  // Validate everything that contributed to the merge — failed/skipped
-  // instances had no chance to shape the merged skill, so the validation
-  // signal is noisy. We still validate "exhausted" instances because their
-  // partial skills were merged and we want to know if the merged result
-  // helps them now.
+  // Validate everything that contributed to the merge plus all held-out test
+  // instances. Train instances with status passed/exhausted got their skills
+  // merged; test instances were never run in Phase 1 but are exactly the
+  // signal we want — does the merged skill solve unseen instances?
+  if (instance.role === "test") return true
   return instance.status === "passed" || instance.status === "exhausted"
 }
 
