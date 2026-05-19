@@ -75,6 +75,31 @@ sections, bullet lists, and short examples. No instance-specific
 filenames or placeholder values. Aim for clarity over completeness:
 better to keep CORE short and trustworthy than long and noisy.
 
+CORE.md must be executable, not just descriptive. If the contributing
+skills contain operational material that would help a fresh agent perform
+the task without rediscovering it, preserve the generalized version in
+CORE.md. In particular, look for and keep:
+- a step-by-step workflow, including setup, inspection, execution, and
+  final validation;
+- minimal code skeletons or command templates when the task depends on a
+  specific library, API, file format, or tool;
+- field maps, schema maps, selector maps, or naming patterns needed to
+  write the correct output;
+- data extraction patterns that explain where values come from in the
+  current input, without copying instance-specific answers;
+- stable failure lessons that prevent repeated mistakes;
+- a concrete validation checklist with commands or observable failure
+  signals;
+- references to reusable local templates or helper functions when those
+  are part of the successful method.
+
+When a useful detail appears in only one source instance, do not promote
+it as a universal rule unless the task semantics make it generally
+necessary. Instead, place it in the matching cases/case-<id>.md file and
+cross-reference it from CORE.md only as optional troubleshooting or an
+instance-derived pattern. Never include specific solved answers, private
+case values, or ground-truth content.
+
 ### cases/case-<instance-id>.md
 For each input instance, a brief notes file:
 - Header: "Instance: <id>" plus a one-line summary of what made it
