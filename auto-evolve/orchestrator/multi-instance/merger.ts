@@ -131,6 +131,7 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
     config,
     title: `multi-instance-merge-${state.id}`,
     prompt: fullPrompt,
+    concurrencyScope: `multi-instance-merge:${state.id}`,
     permissionReadPaths: readPaths,
     permissionEditPaths: editPaths,
   })

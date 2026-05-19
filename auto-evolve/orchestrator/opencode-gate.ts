@@ -1,43 +1,31 @@
 /**
- * OpenCodeGate — global concurrency controller for OpenCode child process spawns.
+ * OpenCodeGate - global concurrency controller for OpenCode child process spawns.
  *
- * Why this exists
- * ----------------
- * Every auto-evolve workflow eventually shells out to OpenCode through
- * `runOpencodeTask`. Without coordination, parallel campaigns (multi-instance
- * fan-out, batch maintainers, etc.) can fire dozens of OpenCode children
- * simultaneously. That blows past the upstream API's concurrency budget and
- * triggers 429s, retries, and ultimately wasted credits.
+ * The gate enforces two limits at the same time:
+ *   1. A global cap across every auto-evolve process on this machine.
+ *   2. A per-scope cap so one task family cannot monopolize the global pool.
  *
- * The gate enforces two independent limits on every `runOpencodeTask` call:
- *   1. A semaphore: only `maxConcurrent` children may be running at once.
- *   2. An optional spawn throttle: at least `minSpawnIntervalMs` between
- *      consecutive grants, so we don't burst-launch many children inside a
- *      single tick.
- *
- * Both must clear before `acquire()` resolves. Callers receive a `Permit` and
- * are responsible for calling `release()` when their OpenCode child has exited.
- *
- * The gate is a process-level singleton because all auto-evolve work shares
- * the same upstream API quota. Use `OpenCodeGate.configure()` once at startup
- * (see `loadConfig` integration in schema.ts) to apply user-configured limits.
+ * The cross-process coordination lives in a small JSON state file protected by
+ * a directory lock. That keeps the limits shared even when separate CLI
+ * processes are launched at the same time.
  */
 
+import path from "node:path"
+import { mkdir, readFile, rm, rename, writeFile } from "node:fs/promises"
 import { setTimeout as sleepMs } from "node:timers/promises"
 import { randomBytes } from "node:crypto"
+import { autoEvolvePath, ensureDirectory, pathExists } from "./fs"
 
 export interface OpenCodeGateConfig {
   /** Maximum number of OpenCode child processes that may run simultaneously. */
   maxConcurrent: number
+  /** Maximum number of OpenCode child processes allowed for one scope. */
+  perScopeMaxConcurrent: number
   /** Maximum number of callers that may be queued waiting for a permit. */
   maxQueueDepth: number
   /** How long an `acquire()` call will wait before giving up. */
   acquireTimeoutMs: number
-  /**
-   * Minimum delay between two successive permit grants. Helps avoid bursting
-   * many OpenCode child spawns in the same tick (e.g. when a fan-out kicks
-   * off N campaigns at once and they all race past the semaphore).
-   */
+  /** Optional minimum delay between consecutive grants. */
   minSpawnIntervalMs?: number
 }
 
@@ -48,8 +36,6 @@ export interface OpenCodeGateStatus {
   totalRejected: number
   totalTimedOut: number
   config: OpenCodeGateConfig
-  activeCallers: Array<{ caller: string; acquiredAt: string; elapsedMs: number }>
-  waitingCallers: Array<{ caller: string; enqueuedAt: string; elapsedMs: number }>
 }
 
 export class GateBusyError extends Error {
@@ -80,32 +66,46 @@ export interface Permit {
 }
 
 interface ActiveSlot {
-  caller: string
-  acquiredAt: Date
-}
-
-interface WaitingItem {
   id: string
   caller: string
-  enqueuedAt: Date
-  resolve(permit: Permit): void
-  reject(err: Error): void
-  timeoutHandle: ReturnType<typeof setTimeout>
+  scope: string
+  ownerPid: number
+  acquiredAt: string
+  acquiredAtMs: number
+}
+
+interface QueueSlot {
+  id: string
+  caller: string
+  scope: string
+  ownerPid: number
+  enqueuedAt: string
+  enqueuedAtMs: number
+}
+
+interface GateState {
+  version: number
+  updatedAt: string
+  active: ActiveSlot[]
+  queue: QueueSlot[]
 }
 
 const DEFAULT_CONFIG: OpenCodeGateConfig = {
-  maxConcurrent: 3,
-  maxQueueDepth: 30,
-  acquireTimeoutMs: 60 * 60 * 1000, // 1 hour
+  maxConcurrent: 15,
+  perScopeMaxConcurrent: 5,
+  maxQueueDepth: 60,
+  acquireTimeoutMs: 60 * 60 * 1000,
   minSpawnIntervalMs: 0,
 }
+
+const LOCK_STALE_MS = 30_000
+const LOCK_POLL_MS = 50
+const STATE_VERSION = 1
+const STATE_DIR = "opencode-gate"
 
 let _instance: OpenCodeGate | undefined
 
 export class OpenCodeGate {
-  private active = new Map<string, ActiveSlot>()
-  private waiting: WaitingItem[] = []
-  private lastSpawnAt = 0
   private metrics = { totalAcquired: 0, totalRejected: 0, totalTimedOut: 0 }
   private config: OpenCodeGateConfig
 
@@ -122,57 +122,102 @@ export class OpenCodeGate {
     const merged: OpenCodeGateConfig = { ...DEFAULT_CONFIG, ..._instance?.config, ...config }
     if (!_instance) {
       _instance = new OpenCodeGate(merged)
-    } else {
-      _instance.config = merged
-      // Wake the queue in case maxConcurrent grew.
-      _instance.processQueue()
+      return
     }
+    _instance.config = merged
   }
 
-  /** Reset the singleton — for tests only. */
+  /** Reset the singleton - for tests only. */
   static __resetForTest(): void {
     _instance = undefined
   }
 
-  async acquire(meta: { caller: string }): Promise<Permit> {
-    if (this.active.size < this.config.maxConcurrent) {
-      // Synchronously claim the slot before any await. If we awaited the
-      // spawn throttle here, multiple callers racing through `acquire()` in
-      // the same tick would all observe `active.size < max` and over-commit.
-      // By inserting into `active` first and only then awaiting the throttle
-      // delay, we keep the semaphore correct.
-      const slotId = this.reserveSlotSync(meta.caller)
-      await this.respectSpawnThrottle()
-      this.lastSpawnAt = Date.now()
-      return this.permitFor(slotId)
+  async acquire(meta: { caller: string; scope: string; root: string }): Promise<Permit> {
+    const start = Date.now()
+    const scope = normalizeScope(meta.scope)
+    const stateRoot = resolveStateRoot(meta.root)
+    const request: QueueSlot = {
+      id: randomID(),
+      caller: meta.caller,
+      scope,
+      ownerPid: process.pid,
+      enqueuedAt: new Date().toISOString(),
+      enqueuedAtMs: Date.now(),
     }
-    if (this.waiting.length >= this.config.maxQueueDepth) {
-      this.metrics.totalRejected += 1
-      throw new GateBusyError(this.waiting.length, this.config.maxQueueDepth)
-    }
-    const id = randomID()
-    return new Promise<Permit>((resolve, reject) => {
-      const item: WaitingItem = {
-        id,
-        caller: meta.caller,
-        enqueuedAt: new Date(),
-        resolve,
-        reject,
-        timeoutHandle: setTimeout(() => {
-          this.removeFromQueue(id)
-          this.metrics.totalTimedOut += 1
-          reject(new GateTimeoutError(this.config.acquireTimeoutMs))
-        }, this.config.acquireTimeoutMs),
+
+    while (true) {
+      const elapsed = Date.now() - start
+      if (elapsed >= this.config.acquireTimeoutMs) {
+        this.metrics.totalTimedOut += 1
+        throw new GateTimeoutError(this.config.acquireTimeoutMs)
       }
-      this.waiting.push(item)
-    })
+
+      const result = await withGateLock(stateRoot, async () => {
+        const state = await readState(stateRoot)
+        const cleaned = cleanupState(state, this.config.acquireTimeoutMs)
+        const alreadyQueued = cleaned.queue.some((item) => item.id === request.id)
+        if (!alreadyQueued && cleaned.queue.length >= this.config.maxQueueDepth) {
+          throw new GateBusyError(cleaned.queue.length, this.config.maxQueueDepth)
+        }
+        const queue = ensureQueued(cleaned.queue, request)
+        if (!alreadyQueued && queue.length > this.config.maxQueueDepth) {
+          await writeState(stateRoot, {
+            version: STATE_VERSION,
+            updatedAt: new Date().toISOString(),
+            active: cleaned.active,
+            queue: queue.filter((item) => item.id !== request.id),
+          })
+          throw new GateBusyError(queue.length - 1, this.config.maxQueueDepth)
+        }
+
+        const grant = selectGrant(queue, cleaned.active, this.config)
+        if (!grant || grant.id !== request.id) {
+          await writeState(stateRoot, {
+            version: STATE_VERSION,
+            updatedAt: new Date().toISOString(),
+            active: cleaned.active,
+            queue,
+          })
+          return { granted: false as const }
+        }
+
+        const next: GateState = {
+          version: STATE_VERSION,
+          updatedAt: new Date().toISOString(),
+          active: [
+            ...cleaned.active,
+            {
+              id: request.id,
+              caller: request.caller,
+              scope: request.scope,
+              ownerPid: request.ownerPid,
+              acquiredAt: new Date().toISOString(),
+              acquiredAtMs: Date.now(),
+            },
+          ],
+          queue: queue.filter((item) => item.id !== request.id),
+        }
+        await writeState(stateRoot, next)
+        return { granted: true as const, id: request.id, caller: request.caller, acquiredAt: new Date() }
+      })
+
+      if (result.granted) {
+        this.metrics.totalAcquired += 1
+        return {
+          id: result.id,
+          caller: result.caller,
+          acquiredAt: result.acquiredAt,
+          release: () => {
+            void this.release(stateRoot, result.id)
+          },
+        }
+      }
+
+      await sleepMs(waitDelay(this.config.minSpawnIntervalMs, elapsed))
+    }
   }
 
-  /**
-   * Convenience wrapper: acquire a permit, run `fn`, release on exit.
-   * Use this for nice scoped semantics.
-   */
-  async run<T>(meta: { caller: string }, fn: () => Promise<T>): Promise<T> {
+  async run<T>(meta: { caller: string; scope: string; root: string }, fn: () => Promise<T>): Promise<T> {
     const permit = await this.acquire(meta)
     try {
       return await fn()
@@ -182,86 +227,163 @@ export class OpenCodeGate {
   }
 
   getStatus(): OpenCodeGateStatus {
-    const now = Date.now()
     return {
-      active: this.active.size,
-      waiting: this.waiting.length,
+      active: 0,
+      waiting: 0,
       totalAcquired: this.metrics.totalAcquired,
       totalRejected: this.metrics.totalRejected,
       totalTimedOut: this.metrics.totalTimedOut,
       config: { ...this.config },
-      activeCallers: Array.from(this.active.entries()).map(([, slot]) => ({
-        caller: slot.caller,
-        acquiredAt: slot.acquiredAt.toISOString(),
-        elapsedMs: now - slot.acquiredAt.getTime(),
-      })),
-      waitingCallers: this.waiting.map((w) => ({
-        caller: w.caller,
-        enqueuedAt: w.enqueuedAt.toISOString(),
-        elapsedMs: now - w.enqueuedAt.getTime(),
-      })),
     }
   }
 
-  private async respectSpawnThrottle() {
-    if (!this.config.minSpawnIntervalMs) return
-    const elapsed = Date.now() - this.lastSpawnAt
-    if (elapsed < this.config.minSpawnIntervalMs) {
-      await sleepMs(this.config.minSpawnIntervalMs - elapsed)
-    }
+  private async release(stateRoot: string, id: string) {
+    await withGateLock(stateRoot, async () => {
+      const state = await readState(stateRoot)
+      const next: GateState = {
+        version: STATE_VERSION,
+        updatedAt: new Date().toISOString(),
+        active: state.active.filter((item) => item.id !== id),
+        queue: state.queue,
+      }
+      await writeState(stateRoot, next)
+    })
   }
+}
 
-  private reserveSlotSync(caller: string): string {
-    const id = randomID()
-    this.active.set(id, { caller, acquiredAt: new Date() })
-    this.metrics.totalAcquired += 1
-    return id
+function resolveStateRoot(root: string) {
+  return autoEvolvePath(path.resolve(root), ".runtime", STATE_DIR)
+}
+
+function normalizeScope(scope: string) {
+  return scope.trim().toLowerCase().replace(/[^a-z0-9._:-]+/g, "-").replace(/^-+|-+$/g, "") || "default"
+}
+
+function waitDelay(minSpawnIntervalMs: number | undefined, elapsed: number) {
+  if (!minSpawnIntervalMs) return LOCK_POLL_MS
+  if (elapsed < minSpawnIntervalMs) return Math.max(LOCK_POLL_MS, minSpawnIntervalMs - elapsed)
+  return LOCK_POLL_MS
+}
+
+function selectGrant(queue: QueueSlot[], active: ActiveSlot[], config: OpenCodeGateConfig) {
+  const activeByScope = countByScope(active)
+  const activeTotal = active.length
+  if (activeTotal >= config.maxConcurrent) return undefined
+  for (const item of queue) {
+    const scopeCount = activeByScope.get(item.scope) ?? 0
+    if (scopeCount >= config.perScopeMaxConcurrent) continue
+    return item
   }
+  return undefined
+}
 
-  private permitFor(slotId: string): Permit {
-    const slot = this.active.get(slotId)!
-    let released = false
+function countByScope(active: ActiveSlot[]) {
+  const map = new Map<string, number>()
+  for (const item of active) {
+    map.set(item.scope, (map.get(item.scope) ?? 0) + 1)
+  }
+  return map
+}
+
+function ensureQueued(queue: QueueSlot[], request: QueueSlot) {
+  if (queue.some((item) => item.id === request.id)) return queue
+  return [...queue, request]
+}
+
+function cleanupState(state: GateState, acquireTimeoutMs: number) {
+  const now = Date.now()
+  return {
+    active: state.active.filter((item) => isAlive(item.ownerPid) && now - item.acquiredAtMs < acquireTimeoutMs * 2),
+    queue: state.queue.filter((item) => isAlive(item.ownerPid) && now - item.enqueuedAtMs < acquireTimeoutMs),
+  }
+}
+
+function isAlive(pid: number) {
+  if (!Number.isFinite(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function readState(stateRoot: string): Promise<GateState> {
+  const target = path.join(stateRoot, "state.json")
+  if (!(await pathExists(target))) {
+    return { version: STATE_VERSION, updatedAt: new Date().toISOString(), active: [], queue: [] }
+  }
+  try {
+    const raw = JSON.parse(await readFile(target, "utf8")) as Partial<GateState>
     return {
-      id: slotId,
-      caller: slot.caller,
-      acquiredAt: slot.acquiredAt,
-      release: () => {
-        if (released) return
-        released = true
-        this.active.delete(slotId)
-        this.processQueue()
-      },
+      version: typeof raw.version === "number" ? raw.version : STATE_VERSION,
+      updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString(),
+      active: Array.isArray(raw.active) ? raw.active.filter(isActiveSlot) : [],
+      queue: Array.isArray(raw.queue) ? raw.queue.filter(isQueueSlot) : [],
+    }
+  } catch {
+    return { version: STATE_VERSION, updatedAt: new Date().toISOString(), active: [], queue: [] }
+  }
+}
+
+async function writeState(stateRoot: string, state: GateState) {
+  await ensureDirectory(stateRoot)
+  const target = path.join(stateRoot, "state.json")
+  const tmp = `${target}.tmp-${process.pid}-${randomID()}`
+  await writeFile(tmp, JSON.stringify(state, null, 2), "utf8")
+  await rm(target, { force: true }).catch(() => undefined)
+  await rename(tmp, target)
+}
+
+function isActiveSlot(input: unknown): input is ActiveSlot {
+  return !!input && typeof input === "object" && typeof (input as ActiveSlot).id === "string"
+}
+
+function isQueueSlot(input: unknown): input is QueueSlot {
+  return !!input && typeof input === "object" && typeof (input as QueueSlot).id === "string"
+}
+
+async function withGateLock<T>(stateRoot: string, fn: () => Promise<T>): Promise<T> {
+  const lockRoot = path.join(stateRoot, "lock")
+  const owner = path.join(lockRoot, "owner.json")
+  await ensureDirectory(path.dirname(lockRoot))
+  while (true) {
+    try {
+      await mkdir(lockRoot)
+      await writeFile(owner, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), "utf8")
+      break
+    } catch {
+      const exists = await pathExists(lockRoot)
+      if (!exists) continue
+      const stale = await isStaleLock(owner)
+      if (stale) {
+        await rm(lockRoot, { recursive: true, force: true }).catch(() => undefined)
+        continue
+      }
+      await sleepMs(LOCK_POLL_MS)
     }
   }
 
-  private grant(caller: string): Permit {
-    // Used by the queue-drain path where we already know throttle is fine
-    // (the inter-grant gap is naturally introduced by upstream callers
-    // releasing). Equivalent to reserveSlotSync + permitFor.
-    const id = this.reserveSlotSync(caller)
-    this.lastSpawnAt = Date.now()
-    return this.permitFor(id)
+  try {
+    return await fn()
+  } finally {
+    await rm(lockRoot, { recursive: true, force: true }).catch(() => undefined)
   }
+}
 
-  private processQueue() {
-    while (this.active.size < this.config.maxConcurrent && this.waiting.length > 0) {
-      const item = this.waiting.shift()!
-      clearTimeout(item.timeoutHandle)
-      // Spawn throttle is best-effort here — the queue drains quickly when a
-      // permit is released, and inserting a real sleep would block other
-      // releases. Callers can still see throttling on the next entry path.
-      const permit = this.grant(item.caller)
-      item.resolve(permit)
+async function isStaleLock(owner: string) {
+  if (!(await pathExists(owner))) return true
+  try {
+    const raw = JSON.parse(await readFile(owner, "utf8")) as { pid?: unknown; at?: unknown }
+    if (typeof raw.pid === "number" && !isAlive(raw.pid)) return true
+    if (typeof raw.at === "string") {
+      const time = Date.parse(raw.at)
+      if (Number.isFinite(time) && Date.now() - time > LOCK_STALE_MS) return true
     }
+  } catch {
+    return true
   }
-
-  private removeFromQueue(id: string) {
-    const idx = this.waiting.findIndex((w) => w.id === id)
-    if (idx >= 0) {
-      const [item] = this.waiting.splice(idx, 1)
-      clearTimeout(item.timeoutHandle)
-    }
-  }
+  return false
 }
 
 function randomID(): string {

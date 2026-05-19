@@ -226,6 +226,7 @@ async function runPromptValidator(input: {
     config: input.config,
     title: `Long Task Validator ${input.contract.id}`,
     prompt,
+    concurrencyScope: `long-task:${input.spec.id ?? input.spec.taskFamily ?? input.spec.title}`,
     referencePaths: [
       ...input.spec.materials.map((item) => item.path),
       ...(input.spec.targetPaths ?? []).map((item) => item.path),

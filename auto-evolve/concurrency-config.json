@@ -1,8 +1,9 @@
 {
   "version": 1,
-  "_doc": "Global limits for OpenCode child-process spawns. Applied via OpenCodeGate at every runOpencodeTask call. The minimax coding-plan API tolerates ~5 concurrent; we hold maxConcurrent=4 for a one-slot safety margin.",
-  "maxConcurrent": 4,
-  "maxQueueDepth": 30,
+  "_doc": "Cross-process limits for OpenCode child-process spawns. maxConcurrent is the machine-wide pool; perScopeMaxConcurrent caps one logical task family so it cannot monopolize the pool.",
+  "maxConcurrent": 15,
+  "perScopeMaxConcurrent": 5,
+  "maxQueueDepth": 60,
   "acquireTimeoutMs": 3600000,
   "minSpawnIntervalMs": 0
 }

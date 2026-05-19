@@ -82,6 +82,7 @@ export interface OpencodeTaskInput {
   agent?: string
   variant?: string
   runtimeScope?: string
+  concurrencyScope?: string
   injectPlatformSafetyRules?: boolean
   isolateHostRuntime?: boolean
   onSpawn?: () => Promise<void> | void
@@ -922,7 +923,11 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
   // is calling. The permit is held across all retry attempts because retries
   // are tightly coupled to a single logical task.
   const gate = OpenCodeGate.instance()
-  const permit = await gate.acquire({ caller: input.title })
+  const permit = await gate.acquire({
+    caller: input.title,
+    scope: input.concurrencyScope ?? input.runtimeScope ?? input.title,
+    root: input.cwd,
+  })
 
   try {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {

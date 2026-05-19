@@ -201,6 +201,7 @@ async function runSingleInstance(
       // SkillsBench layout. taskID is still passed for docker-tag naming.
       taskRoot: spec.sourceTaskRoot,
       taskID: spec.taskID,
+      concurrencyScope: `skillsbench:${path.basename(path.dirname(spec.sourceTaskRoot))}`,
       mode: "campaign",
       rounds: instance.rounds,
       // Title goes through createLongTaskCampaignID's slugify, which

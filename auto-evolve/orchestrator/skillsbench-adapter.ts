@@ -45,6 +45,8 @@ export interface SkillsBenchRunOptions {
    * campaign registry.
    */
   campaignTitle?: string
+  /** Optional concurrency scope shared by all OpenCode sessions for this task family. */
+  concurrencyScope?: string
 }
 
 export interface SkillsBenchVerifierResult {
@@ -455,6 +457,7 @@ async function runShortSkillsBenchTask(input: SkillsBenchRunOptions, prepared: P
       permissionReadPaths: [prepared.workDir, prepared.instructionSafePath],
       permissionEditPaths: [prepared.workDir],
       runtimeScope: `skillsbench-short:${prepared.taskID}:${randomUUID().slice(0, 8)}`,
+      concurrencyScope: input.concurrencyScope ?? `skillsbench:${prepared.taskID}`,
       isolateHostRuntime: false,
       injectPlatformSafetyRules: true,
       live: {

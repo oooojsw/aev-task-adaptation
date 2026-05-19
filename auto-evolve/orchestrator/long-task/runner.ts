@@ -1135,6 +1135,7 @@ async function runPlanningSession(input: {
     config,
     title: input.phase === "plan" ? "Long Task Graph Bootstrap" : "Long Task Graph Replan",
     prompt,
+    concurrencyScope: `long-task:${input.spec.id ?? input.spec.taskFamily ?? input.spec.title}`,
     referencePaths: [input.specPath, ...planningContextPaths, ...capabilityPaths],
     attachedFiles: capabilityFiles,
     permissionReadPaths: [input.specPath, ...planningContextPaths, ...capabilityPaths],
@@ -1259,6 +1260,7 @@ async function executeWorkUnit(input: {
     config,
     title: `Long Task Execute ${activeUnit.id}`,
     prompt,
+    concurrencyScope: `long-task:${input.spec.id ?? input.spec.taskFamily ?? input.spec.title}`,
     referencePaths: [
       ...input.spec.materials.map((item) => item.path),
       ...(input.spec.targetPaths ?? []).map((item) => item.path),

@@ -56,6 +56,8 @@ export interface LoadedMonitorConfig {
 export interface LoadedConcurrencyConfig {
   /** Maximum number of OpenCode child processes that may run simultaneously. */
   maxConcurrent: number
+  /** Maximum number of OpenCode child processes for one logical task scope. */
+  perScopeMaxConcurrent: number
   /** Maximum number of callers that may queue waiting for a permit. */
   maxQueueDepth: number
   /** Permit acquire timeout (milliseconds). */
@@ -227,8 +229,9 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   },
   concurrencyConfigPath: "",
   concurrencyConfig: {
-    maxConcurrent: 3,
-    maxQueueDepth: 30,
+    maxConcurrent: 15,
+    perScopeMaxConcurrent: 5,
+    maxQueueDepth: 60,
     acquireTimeoutMs: 60 * 60 * 1000,
     minSpawnIntervalMs: 0,
   },
@@ -499,6 +502,10 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
         typeof rawConcurrencyConfig.maxConcurrent === "number" && rawConcurrencyConfig.maxConcurrent > 0
           ? Math.floor(rawConcurrencyConfig.maxConcurrent)
           : concurrencyConfig.maxConcurrent,
+      perScopeMaxConcurrent:
+        typeof rawConcurrencyConfig.perScopeMaxConcurrent === "number" && rawConcurrencyConfig.perScopeMaxConcurrent > 0
+          ? Math.floor(rawConcurrencyConfig.perScopeMaxConcurrent)
+          : concurrencyConfig.perScopeMaxConcurrent,
       maxQueueDepth:
         typeof rawConcurrencyConfig.maxQueueDepth === "number" && rawConcurrencyConfig.maxQueueDepth > 0
           ? Math.floor(rawConcurrencyConfig.maxQueueDepth)
@@ -519,6 +526,7 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
   // adapters) automatically receives correct concurrency behavior.
   OpenCodeGate.configure({
     maxConcurrent: concurrencyConfig.maxConcurrent,
+    perScopeMaxConcurrent: concurrencyConfig.perScopeMaxConcurrent,
     maxQueueDepth: concurrencyConfig.maxQueueDepth,
     acquireTimeoutMs: concurrencyConfig.acquireTimeoutMs,
     minSpawnIntervalMs: concurrencyConfig.minSpawnIntervalMs,

@@ -2920,6 +2920,7 @@ async function runCampaignSuggestionTask(input: {
     config,
     title: input.title,
     prompt: input.prompt,
+    concurrencyScope: `long-task-campaign:${input.baseSpec.id ?? input.baseSpec.taskFamily ?? input.campaignSpec.title}`,
     referencePaths: uniqueStrings(input.referencePaths),
     attachedFiles: uniqueStrings(input.attachedFiles ?? []),
     permissionReadPaths: uniqueStrings(input.permissionReadPaths),

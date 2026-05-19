@@ -128,6 +128,7 @@ async function runOneValidation(
       cwd,
       taskRoot: instance.sourceTaskRoot,
       taskID: skillsbenchTaskIDFromInstance(instance),
+      concurrencyScope: `skillsbench:${path.basename(path.dirname(instance.sourceTaskRoot))}`,
       mode: "campaign",
       rounds,
       seedExpertWorkspacePath: mergedSkillDir,
