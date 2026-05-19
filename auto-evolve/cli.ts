@@ -507,8 +507,21 @@ async function commandRunMultiInstance(args: string[]) {
     return
   }
 
-  if (summary.passed + summary.exhausted === 0) {
-    console.log("No usable instance skills (all failed/skipped); skipping merge.")
+  if (summary.passed !== trainIDs.length) {
+    const missing = state.instances
+      .filter((i) => i.role !== "test" && i.status !== "passed")
+      .map((i) => `${i.id}:${i.status}`)
+    const { appendCoordinatorLog, saveCoordinatorState } = await import("./orchestrator/multi-instance/repository")
+    state.phase = "aborted"
+    await appendCoordinatorLog(
+      state,
+      "warn",
+      `Phase 1 gate blocked merge: ${summary.passed}/${trainIDs.length} train instances passed. Not passed: ${missing.join(", ")}`,
+    )
+    await saveCoordinatorState(state)
+    console.log("Phase 1 gate blocked merge: not all training instances passed.")
+    console.log(`  train passed: ${summary.passed}/${trainIDs.length}`)
+    console.log(`  not passed  : ${missing.join(", ") || "none"}`)
     return
   }
 
@@ -529,18 +542,50 @@ async function commandRunMultiInstance(args: string[]) {
   }
 
   const { runCoordinatorPhase3Validate } = await import("./orchestrator/multi-instance/validator")
-  console.log("Phase 3 (validate) starting…")
-  const validateOut = await runCoordinatorPhase3Validate({
+  console.log("Phase 3 train replay starting...")
+  const trainOut = await runCoordinatorPhase3Validate({
     cwd,
     state,
     rounds: validateRounds,
     validateLimit,
+    filter: (instance) => instance.role !== "test" && instance.status === "passed",
   })
-  console.log("Phase 3 complete:")
-  console.log(`  validated  : ${validateOut.passed}/${validateOut.total} passed`)
-  console.log(`  failures   : ${validateOut.failed}`)
-  console.log(`  regressions: ${validateOut.regressions.length} (${validateOut.regressions.join(", ") || "none"})`)
-  console.log(`  duration   : ${(validateOut.durationMs / 1000).toFixed(1)}s`)
+  console.log("Phase 3 train replay complete:")
+  console.log(`  train replay: ${trainOut.passed}/${trainOut.total} passed`)
+  console.log(`  failures    : ${trainOut.failed}`)
+  console.log(`  regressions : ${trainOut.regressions.length} (${trainOut.regressions.join(", ") || "none"})`)
+  console.log(`  duration    : ${(trainOut.durationMs / 1000).toFixed(1)}s`)
+
+  if (trainOut.passed !== trainOut.total) {
+    const { appendCoordinatorLog, saveCoordinatorState } = await import("./orchestrator/multi-instance/repository")
+    state.phase = "aborted"
+    await appendCoordinatorLog(
+      state,
+      "warn",
+      `Phase 3 gate blocked test validation: train replay passed ${trainOut.passed}/${trainOut.total}.`,
+    )
+    await saveCoordinatorState(state)
+    console.log("Phase 3 gate blocked test validation: train replay did not fully pass.")
+    return
+  }
+
+  if (testIDs.length === 0) {
+    console.log("No held-out test instances; stopping after train replay.")
+    return
+  }
+
+  console.log("Phase 3 held-out test starting...")
+  const testOut = await runCoordinatorPhase3Validate({
+    cwd,
+    state,
+    rounds: validateRounds,
+    validateLimit,
+    filter: (instance) => instance.role === "test",
+  })
+  console.log("Phase 3 held-out test complete:")
+  console.log(`  test passed: ${testOut.passed}/${testOut.total}`)
+  console.log(`  failures   : ${testOut.failed}`)
+  console.log(`  duration   : ${(testOut.durationMs / 1000).toFixed(1)}s`)
 }
 
 interface DiscoveredInstance {

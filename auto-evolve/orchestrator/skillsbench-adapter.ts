@@ -100,6 +100,15 @@ function dockerImageTag(taskID: string) {
   return `auto-evolve-skillsbench-${safeID(taskID)}:${nowStamp().toLowerCase()}`
 }
 
+function outputHint(taskID: string) {
+  if (!taskID.includes("court-form-filling")) return []
+  return [
+    "For court-form-filling tasks, the official verifier expects /root/sc100-filled.pdf to exist in the workspace root.",
+    "Use that exact filename for the final filled PDF.",
+    "The claim explanation should explicitly mention the phrase 'room rental agreement' because the verifier checks for that text.",
+  ]
+}
+
 function parseTaskTimeoutMs(taskToml: string, key: "agent" | "verifier", fallbackMs: number) {
   const sectionMatch = taskToml.match(new RegExp(`\\[${key}\\]([\\s\\S]*?)(?:\\n\\[|$)`, "m"))
   const section = sectionMatch?.[1] ?? ""
@@ -284,19 +293,22 @@ export async function runSkillsBenchVerifier(input: {
   const workDir = path.resolve(input.workDir)
   const logsDir = path.resolve(input.logsDir)
   const environmentRoot = path.join(taskRoot, "environment")
-  const dockerfilePath = path.join(environmentRoot, "Dockerfile")
   const testsRoot = path.join(taskRoot, "tests")
+  const buildRoot = path.join(logsDir, "verifier", "build-context")
   const imageTag = input.imageTag ?? dockerImageTag(path.basename(taskRoot))
   const timeoutMs = input.timeoutMs ?? 60 * 60 * 1000
   await ensureDirectory(logsDir)
   await ensureDirectory(path.join(logsDir, "verifier"))
+  await rm(buildRoot, { recursive: true, force: true })
+  await copyEnvironmentWithoutLeaks(environmentRoot, buildRoot)
+  await ensureDirectory(path.join(buildRoot, "skills"))
 
   let build: ManagedProcessResult | undefined
   if (!input.skipDockerBuild) {
     build = await runProcessLogged({
       title: `SkillsBench docker build ${path.basename(taskRoot)}`,
-      command: ["docker", "build", "-t", imageTag, "-f", dockerfilePath, environmentRoot],
-      cwd: taskRoot,
+      command: ["docker", "build", "-t", imageTag, "-f", "Dockerfile", "."],
+      cwd: buildRoot,
       timeoutMs,
       logsDir,
       prefix: "docker-build",
@@ -326,10 +338,13 @@ export async function runSkillsBenchVerifier(input: {
     }
   }
 
+  await ensureDirectory(path.join(workDir, "output"))
   const verifyCommand = [
     "docker",
     "run",
     "--rm",
+    "-v",
+    `${workDir}:/root`,
     "-v",
     `${workDir}/output:/output`,
     "-v",
@@ -516,6 +531,7 @@ async function runLongSkillsBenchTask(input: SkillsBenchRunOptions, prepared: Pr
       "",
       `The task instruction may mention /root. In this host run, /root maps to: ${prepared.workDir}`,
       "Write all requested output files into that copied workspace.",
+      ...outputHint(prepared.taskID),
       "The official SkillsBench verifier will run later in Docker against the copied workspace.",
       "",
       "## IMPORTANT: Your workspace is self-contained",
@@ -664,6 +680,7 @@ async function runCampaignSkillsBenchTask(input: SkillsBenchRunOptions, prepared
       "",
       `The task instruction may mention /root. In this host run, /root maps to: ${prepared.workDir}`,
       "Write all requested output files into that copied workspace.",
+      ...outputHint(prepared.taskID),
       "The official SkillsBench verifier will run later in Docker against the copied workspace.",
       "This is a campaign run. Previous round failures, verifier feedback, and operational lessons will be available as context.",
       "",

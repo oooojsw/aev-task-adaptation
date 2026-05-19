@@ -10,10 +10,10 @@
  *     cases/         # per-instance notes
  *     meta.json      # provenance & confidence
  *
- * The merger only consumes "verified" or "exhausted" instance skills. A
- * "failed" instance contributes nothing because its skill was never
- * exercised end-to-end. We do snapshot a manifest of which instance
- * inputs the merger saw, so the output is reproducible.
+ * The merger only consumes verified training instance skills. Exhausted
+ * skills are unverified drafts and must not shape the merged package.
+ * We snapshot a manifest of which instance inputs the merger saw, so the
+ * output is reproducible.
  */
 
 import path from "node:path"
@@ -60,7 +60,7 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
       // intentionally never merged — that's how we know the merged skill
       // generalizes when Phase 3 runs them.
       i.role !== "test" &&
-      (i.status === "passed" || i.status === "exhausted") &&
+      i.status === "passed" &&
       i.harvestedSkillPath,
   )
 

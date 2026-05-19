@@ -178,12 +178,11 @@ async function runOneValidation(
 }
 
 function defaultFilter(instance: InstanceState): boolean {
-  // Validate everything that contributed to the merge plus all held-out test
-  // instances. Train instances with status passed/exhausted got their skills
-  // merged; test instances were never run in Phase 1 but are exactly the
-  // signal we want — does the merged skill solve unseen instances?
+  // Validate verified train skills plus held-out test instances by default.
+  // Exhausted train instances never contributed to the merge, because they
+  // are unverified drafts rather than learned skills.
   if (instance.role === "test") return true
-  return instance.status === "passed" || instance.status === "exhausted"
+  return instance.status === "passed"
 }
 
 function skillsbenchTaskIDFromInstance(instance: InstanceState): string {
