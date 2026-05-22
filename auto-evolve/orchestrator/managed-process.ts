@@ -36,6 +36,43 @@ function resolveBackend(backend: ManagedProcessInput["backend"]) {
   return process.platform === "win32" ? "direct" : "direct"
 }
 
+// Normalize paths for libuv compatibility on Windows (MSYS2/Git Bash environment).
+// On Windows, forward slashes are more reliable than backslashes when passing
+// paths as command-line arguments through chain spawns (bun.exe → node → CreateProcessW).
+// Backslashes can be consumed as escape sequences or mangled by intermediate layers.
+function normalizePathForSpawn(p: string): string {
+  if (process.platform !== "win32") return p
+  // Convert MSYS2-style paths (/c/...) to Windows paths (C:/...)
+  let normalized = p.replace(/^\/([a-z])\//i, (match, drive) => `${drive.toUpperCase()}:/`)
+  // Normalize all separators to forward slashes
+  normalized = normalized.replace(/\\/g, "/")
+  // Collapse double slashes (but keep the leading C://)
+  normalized = normalized.replace(/([^:])\/+/g, "$1/")
+  return normalized
+}
+
+// Ensure the cwd directory exists before spawning.
+// On Windows, libuv's CreateProcessW fails with ENOENT if cwd doesn't exist,
+// even when the exe itself is valid. We fall back to a parent dir.
+function ensureValidCwd(p: string): string {
+  if (process.platform !== "win32") return p
+  const fs = require("node:fs")
+  let normalized = normalizePathForSpawn(p)
+  // Check each path component from deepest to shallowest
+  while (normalized.length >= 3) {
+    try {
+      const stat = fs.statSync(normalized)
+      if (stat.isDirectory()) return normalized
+    } catch {
+      // Try parent
+      const parent = normalized.replace(/\/[^/]+$/, "")
+      if (parent === normalized) break
+      normalized = parent
+    }
+  }
+  return "C:/"
+}
+
 function buildPythonWrapperCode() {
   return [
     "import json, os, subprocess, sys",
@@ -71,23 +108,28 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
   const backend = resolveBackend(input.backend)
   const child =
     backend === "python_subprocess"
-      ? nodeSpawn("python", ["-c", buildPythonWrapperCode()], {
+      ? nodeSpawn("cmd.exe", ["/c", "python"], {
           cwd: input.cwd,
           env: {
             ...process.env,
             ...input.env,
           },
           stdio: ["pipe", "pipe", "pipe"],
+          shell: true,
         })
-      : nodeSpawn(input.command[0] ?? "", input.command.slice(1), {
-          cwd: input.cwd,
-          env: {
-            ...process.env,
-            ...input.env,
-          },
+      : nodeSpawn(normalizePathForSpawn(input.command[0] ?? ""), input.command.slice(1), {
+          cwd: ensureValidCwd(input.cwd),
+          env: (() => {
+            const env: NodeJS.ProcessEnv = {
+              ...process.env,
+              ...input.env,
+            }
+            return env
+          })(),
           stdio: ["pipe", "pipe", "pipe"],
+          shell: false,
         })
-  registerRuntimeProcess(input.runtimeScope, child.pid, input.title)
+  await registerRuntimeProcess(input.runtimeScope, child.pid, input.title)
 
   const abortAfterSpawn = async (cause: unknown): Promise<never> => {
     const error = cause instanceof Error ? cause : new Error(String(cause))

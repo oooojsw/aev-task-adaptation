@@ -22,13 +22,12 @@ import { extractJsonObject } from "./json-extract"
 const GLOBAL_SCRIPT_VALIDATOR_TIMEOUT_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_SCRIPT_VALIDATOR_TIMEOUT_MS ?? "", 10)
   if (Number.isFinite(value) && value > 0) return value
-  return 60 * 60 * 1000
+  return 10 * 60 * 1000
 })()
 
 function resolveScriptValidatorTimeoutMs(timeoutMs: number | undefined) {
   if (typeof timeoutMs === "number" && timeoutMs > 0) {
-    // Enforce a global lower bound so per-task specs cannot shrink script validators below platform policy.
-    return Math.max(timeoutMs, GLOBAL_SCRIPT_VALIDATOR_TIMEOUT_MS)
+    return timeoutMs
   }
   return GLOBAL_SCRIPT_VALIDATOR_TIMEOUT_MS
 }

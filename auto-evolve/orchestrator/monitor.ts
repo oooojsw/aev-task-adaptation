@@ -29,7 +29,10 @@ function dashboardUrl(hostname: string, port: number) {
 
 async function isDashboardHealthy(url: string) {
   try {
-    const response = await fetch(`${url}/api/health`, { cache: "no-store" })
+    const response = await fetch(`${url}/api/health`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(2000),
+    })
     if (!response.ok) return false
     const data = (await response.json()) as { healthy?: boolean }
     return data.healthy === true

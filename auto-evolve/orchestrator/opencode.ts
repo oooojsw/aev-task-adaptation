@@ -18,12 +18,12 @@ import {
 } from "./task-artifacts"
 import { createTaskDescriptor } from "./task-model"
 
-const OPENCODE_TASK_TIMEOUT_MS = 180 * 60 * 1000
+const OPENCODE_TASK_TIMEOUT_MS = 60 * 60 * 1000
 const OPENCODE_PROMPT_SOFT_BUDGET_MS = 30 * 60 * 1000
 const OPENCODE_TASK_SILENT_TIMEOUT_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_MS ?? "", 10)
   if (Number.isFinite(value) && value > 0) return value
-  return 60 * 60 * 1000
+  return 15 * 60 * 1000
 })()
 const OPENCODE_TASK_SILENT_TIMEOUT_AFTER_ACTIVITY_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_AFTER_ACTIVITY_MS ?? "", 10)
@@ -402,6 +402,8 @@ async function ensureOverrideConfig(
         }
       : {}),
     // Keep runtime deterministic: always use built-in stable primary agent.
+    // Remove empty agents from system config so OpenCode loads its built-in agents.
+    agents: undefined,
     default_agent: "build",
     permission:
       permissionConfig.mode === "open" && !isolateHostRuntime && permissions.readPaths.length === 0
@@ -425,10 +427,34 @@ async function ensureRuntimeEnvironment(_cwd: string, _runLabel: string) {
     OPENCODE_DISABLE_PROJECT_CONFIG: "1",
   }
 
-  // Pass through proxy settings so OpenCode can reach external APIs when VPN is up.
-  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"]) {
-    const value = process.env[key]
-    if (value) env[key] = value
+  // Test if the VPN proxy (port 7890) is actually running.
+  // If it's down, we MUST clear proxy env vars — otherwise OpenCode
+  // tries to route through the dead proxy and can't reach ANY API,
+  // including domestic Chinese services like MiniMax.
+  const proxyReachable = await new Promise<boolean>((resolve) => {
+    const sock = (() => {
+      try { return require("node:net").createConnection({ host: "127.0.0.1", port: 7890 }) } catch { return null }
+    })()
+    if (!sock) { resolve(false); return }
+    const done = (v: boolean) => { try { sock.end() } catch {}; resolve(v) }
+    sock.on("connect", () => done(true))
+    sock.on("error", () => done(false))
+    setTimeout(() => done(false), 600)
+  })
+
+  const proxyKeys = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"]
+  if (proxyReachable) {
+    // Proxy is alive — pass through the existing settings.
+    for (const key of proxyKeys) {
+      const value = process.env[key]
+      if (value) env[key] = value
+    }
+  } else {
+    // Proxy is dead — explicitly clear so we don't inherit from process.env.
+    // MiniMax is a domestic Chinese API and must be reached directly.
+    for (const key of proxyKeys) {
+      env[key] = ""
+    }
   }
 
   // If a valid models.json cache exists, disable the fetch of models.dev/api.json.
@@ -704,19 +730,9 @@ async function runOpencodeTaskOnce(
     ...(input.isolateHostRuntime ? await prepareIsolatedHostRuntime(input.cwd, runLabel) : {}),
   }
 
-  const args = [
-    process.execPath,
-    "run",
-    "src/index.ts",
-    "run",
-    "--pure",
-    "--format",
-    "json",
-    "--dir",
-    input.cwd,
-    "--title",
-    input.title,
-  ]
+  const opencodeCmd = await resolveOpencodeCommand(input.cwd)
+  const dirArg = process.platform === "win32" ? input.cwd.replace(/\\/g, "/") : input.cwd
+  const args = [opencodeCmd, "run", "--pure", "--format", "json", "--dir", dirArg, "--title", input.title]
 
   const runtimeAgent = normalizeAgentForRuntime(selectedAgent)
 
@@ -737,6 +753,7 @@ async function runOpencodeTaskOnce(
   const runStart = new Date()
   const startedAt = runStart.toISOString()
   const runtimePrompt = withRuntimeBudgetPrompt({ prompt: input.prompt, runStart })
+  args.push(runtimePrompt)
   let started = false
   let lastOutputAt: string | undefined
   let stdoutData = ""
@@ -798,7 +815,7 @@ async function runOpencodeTaskOnce(
   started = true
   const managed = await runManagedProcess({
     title: input.title,
-    command: [process.execPath, ...args.slice(1)],
+    command: args,
     cwd: path.join(input.cwd, "packages", "opencode"),
     env: {
       ...runtimeEnv,
@@ -809,7 +826,7 @@ async function runOpencodeTaskOnce(
           }
         : {}),
     },
-    stdinText: runtimePrompt,
+    stdinText: undefined,
     runtimeScope: input.runtimeScope,
     timeoutMs: OPENCODE_TASK_TIMEOUT_MS,
     silentTimeoutMs: OPENCODE_TASK_SILENT_TIMEOUT_MS,
@@ -993,4 +1010,30 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
     permissionEditPaths,
     result,
   }
+}
+
+async function resolveOpencodeCommand(cwd: string) {
+  const envPath = process.env.OPENCODE_BIN_PATH?.trim()
+  if (envPath) return envPath
+  if (process.platform === "win32") {
+    const localExe = path.join(cwd, "packages", "opencode", "node_modules", "opencode-windows-x64", "bin", "opencode.exe")
+    if (await pathExists(localExe)) return localExe
+    const localBaselineExe = path.join(
+      cwd,
+      "packages",
+      "opencode",
+      "node_modules",
+      "opencode-windows-x64-baseline",
+      "bin",
+      "opencode.exe",
+    )
+    if (await pathExists(localBaselineExe)) return localBaselineExe
+  }
+  const localBin = path.join(cwd, "node_modules", ".bin", process.platform === "win32" ? "opencode.cmd" : "opencode")
+  if (await pathExists(localBin)) return localBin
+  if (process.platform === "win32") {
+    const roamingCmd = path.join(os.homedir(), "AppData", "Roaming", "npm", "opencode.cmd")
+    if (await pathExists(roamingCmd)) return roamingCmd
+  }
+  return "opencode"
 }

@@ -309,24 +309,40 @@ async function readExperienceSurfaceContract(root: string): Promise<{
     }
     raw = parsed as Record<string, unknown>
   } catch (parseError) {
-    const salvaged = extractJsonObject(rawText, {
-      preferredKeys: ["version", "entry", "changeLog", "documents", "assetRoots", "runtimeSidecarRoots"],
-    })
-    if (!salvaged) {
-      return {
-        path: EXPERIENCE_SURFACE_CONTRACT_FILE,
-        contract: null,
-        readMode: "invalid",
-        error:
-          parseError instanceof Error
-            ? parseError.message
-            : "surface_contract.json is not machine-readable JSON.",
-      }
+    // First fallback: LLMs sometimes write literal \n, \t instead of actual control chars
+    const deEscaped = rawText.replace(/^\uFEFF/, "").replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r")
+    let directParseWorked = false
+    if (deEscaped !== rawText.replace(/^\uFEFF/, "")) {
+      try {
+        const reparsed = JSON.parse(deEscaped) as unknown
+        if (reparsed && typeof reparsed === "object" && !Array.isArray(reparsed)) {
+          raw = reparsed as Record<string, unknown>
+          readMode = "salvaged_json"
+          error = "surface_contract.json contained escaped text (e.g. \\n). Automated repair applied."
+          directParseWorked = true
+        }
+      } catch { /* fall through to extractJsonObject */ }
     }
-    raw = salvaged
-    readMode = "salvaged_json"
-    error =
-      "surface_contract.json contained extra narrative or markup around the JSON contract. Keep this file as raw JSON only."
+    if (!directParseWorked) {
+      const salvaged = extractJsonObject(rawText, {
+        preferredKeys: ["version", "entry", "changeLog", "documents", "assetRoots", "runtimeSidecarRoots"],
+      })
+      if (!salvaged) {
+        return {
+          path: EXPERIENCE_SURFACE_CONTRACT_FILE,
+          contract: null,
+          readMode: "invalid",
+          error:
+            parseError instanceof Error
+              ? parseError.message
+              : "surface_contract.json is not machine-readable JSON.",
+        }
+      }
+      raw = salvaged
+      readMode = "salvaged_json"
+      error =
+        "surface_contract.json contained extra narrative or markup around the JSON contract. Keep this file as raw JSON only."
+    }
   }
 
   const documents = Array.isArray(raw.documents)

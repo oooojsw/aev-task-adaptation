@@ -1,0 +1,127 @@
+{
+  "dataset": "audit-point-learnbench",
+  "split": "train",
+  "count": 20,
+  "instances": [
+    {
+      "id": "audit-point-001",
+      "specPath": "tasks/audit-point-001/spec.json",
+      "campaignPath": "tasks/audit-point-001/campaign.json",
+      "answerPath": "tasks/audit-point-001/answer/answer.md"
+    },
+    {
+      "id": "audit-point-002",
+      "specPath": "tasks/audit-point-002/spec.json",
+      "campaignPath": "tasks/audit-point-002/campaign.json",
+      "answerPath": "tasks/audit-point-002/answer/answer.md"
+    },
+    {
+      "id": "audit-point-003",
+      "specPath": "tasks/audit-point-003/spec.json",
+      "campaignPath": "tasks/audit-point-003/campaign.json",
+      "answerPath": "tasks/audit-point-003/answer/answer.md"
+    },
+    {
+      "id": "audit-point-004",
+      "specPath": "tasks/audit-point-004/spec.json",
+      "campaignPath": "tasks/audit-point-004/campaign.json",
+      "answerPath": "tasks/audit-point-004/answer/answer.md"
+    },
+    {
+      "id": "audit-point-005",
+      "specPath": "tasks/audit-point-005/spec.json",
+      "campaignPath": "tasks/audit-point-005/campaign.json",
+      "answerPath": "tasks/audit-point-005/answer/answer.md"
+    },
+    {
+      "id": "audit-point-006",
+      "specPath": "tasks/audit-point-006/spec.json",
+      "campaignPath": "tasks/audit-point-006/campaign.json",
+      "answerPath": "tasks/audit-point-006/answer/answer.md"
+    },
+    {
+      "id": "audit-point-007",
+      "specPath": "tasks/audit-point-007/spec.json",
+      "campaignPath": "tasks/audit-point-007/campaign.json",
+      "answerPath": "tasks/audit-point-007/answer/answer.md"
+    },
+    {
+      "id": "audit-point-008",
+      "specPath": "tasks/audit-point-008/spec.json",
+      "campaignPath": "tasks/audit-point-008/campaign.json",
+      "answerPath": "tasks/audit-point-008/answer/answer.md"
+    },
+    {
+      "id": "audit-point-009",
+      "specPath": "tasks/audit-point-009/spec.json",
+      "campaignPath": "tasks/audit-point-009/campaign.json",
+      "answerPath": "tasks/audit-point-009/answer/answer.md"
+    },
+    {
+      "id": "audit-point-010",
+      "specPath": "tasks/audit-point-010/spec.json",
+      "campaignPath": "tasks/audit-point-010/campaign.json",
+      "answerPath": "tasks/audit-point-010/answer/answer.md"
+    },
+    {
+      "id": "audit-point-011",
+      "specPath": "tasks/audit-point-011/spec.json",
+      "campaignPath": "tasks/audit-point-011/campaign.json",
+      "answerPath": "tasks/audit-point-011/answer/answer.md"
+    },
+    {
+      "id": "audit-point-012",
+      "specPath": "tasks/audit-point-012/spec.json",
+      "campaignPath": "tasks/audit-point-012/campaign.json",
+      "answerPath": "tasks/audit-point-012/answer/answer.md"
+    },
+    {
+      "id": "audit-point-013",
+      "specPath": "tasks/audit-point-013/spec.json",
+      "campaignPath": "tasks/audit-point-013/campaign.json",
+      "answerPath": "tasks/audit-point-013/answer/answer.md"
+    },
+    {
+      "id": "audit-point-014",
+      "specPath": "tasks/audit-point-014/spec.json",
+      "campaignPath": "tasks/audit-point-014/campaign.json",
+      "answerPath": "tasks/audit-point-014/answer/answer.md"
+    },
+    {
+      "id": "audit-point-015",
+      "specPath": "tasks/audit-point-015/spec.json",
+      "campaignPath": "tasks/audit-point-015/campaign.json",
+      "answerPath": "tasks/audit-point-015/answer/answer.md"
+    },
+    {
+      "id": "audit-point-016",
+      "specPath": "tasks/audit-point-016/spec.json",
+      "campaignPath": "tasks/audit-point-016/campaign.json",
+      "answerPath": "tasks/audit-point-016/answer/answer.md"
+    },
+    {
+      "id": "audit-point-017",
+      "specPath": "tasks/audit-point-017/spec.json",
+      "campaignPath": "tasks/audit-point-017/campaign.json",
+      "answerPath": "tasks/audit-point-017/answer/answer.md"
+    },
+    {
+      "id": "audit-point-018",
+      "specPath": "tasks/audit-point-018/spec.json",
+      "campaignPath": "tasks/audit-point-018/campaign.json",
+      "answerPath": "tasks/audit-point-018/answer/answer.md"
+    },
+    {
+      "id": "audit-point-019",
+      "specPath": "tasks/audit-point-019/spec.json",
+      "campaignPath": "tasks/audit-point-019/campaign.json",
+      "answerPath": "tasks/audit-point-019/answer/answer.md"
+    },
+    {
+      "id": "audit-point-020",
+      "specPath": "tasks/audit-point-020/spec.json",
+      "campaignPath": "tasks/audit-point-020/campaign.json",
+      "answerPath": "tasks/audit-point-020/answer/answer.md"
+    }
+  ]
+}

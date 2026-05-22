@@ -177,12 +177,34 @@ async function cleanupRuntimeScopeWithRetry(scope: string | undefined) {
   await cleanupRuntimeProcessScope(scope)
 }
 
+async function retryWriteJson(file: string, value: unknown) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await writeJsonFile(file, value)
+      return true
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      const locked =
+        msg.includes("EBUSY") || msg.includes("EPERM") || msg.toLowerCase().includes("locked") || msg.includes("sharing violation")
+      if (!locked || attempt >= 3) return false
+      await sleep(150 * attempt)
+    }
+  }
+  return false
+}
+
 const STALE_BOOTSTRAP_GRACE_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_STALE_BOOTSTRAP_GRACE_MS ?? "", 10)
   if (Number.isFinite(value) && value > 0) return value
   // Bootstrapping on Windows can be slow under heavy IO/model load.
   // Default to 60 minutes to reduce false stale classification under long startup windows.
   return 60 * 60 * 1000
+})()
+
+const STALE_OWNER_TIMEOUT_MS = (() => {
+  const value = Number.parseInt(process.env.AUTO_EVOLVE_STALE_OWNER_TIMEOUT_MS ?? "", 10)
+  if (Number.isFinite(value) && value > 0) return value
+  return 2 * 60 * 60 * 1000
 })()
 
 async function isPidAlive(pid: number) {
@@ -242,6 +264,12 @@ function parseTimestampMs(value: unknown) {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
+function isOwnerHeartbeatStale(input: { heartbeatAt?: unknown; updatedAt?: unknown; nowMs: number }) {
+  const referenceMs = parseTimestampMs(input.heartbeatAt) ?? parseTimestampMs(input.updatedAt)
+  if (typeof referenceMs !== "number") return false
+  return input.nowMs - referenceMs > STALE_OWNER_TIMEOUT_MS
+}
+
 function isBootstrappingWithoutOwnerStale(input: {
   status: string
   ownerPID: unknown
@@ -276,6 +304,7 @@ async function healStaleRuntimeStates(cwd: string) {
         continue
       }
       if (!isLiveCampaignStatus(state.status)) continue
+      let kill = false
       if (typeof state.ownerPID !== "number") {
         if (
           !isBootstrappingWithoutOwnerStale({
@@ -291,11 +320,23 @@ async function healStaleRuntimeStates(cwd: string) {
         }
       } else {
         if (state.ownerPID === process.pid) continue
-        if (await isPidOwnedByHint(state.ownerPID, state.ownerCommandHint)) continue
+        const stale = isOwnerHeartbeatStale({
+          heartbeatAt: state.heartbeatAt,
+          updatedAt: state.updatedAt,
+          nowMs,
+        })
+        const owned = await isPidOwnedByHint(state.ownerPID, state.ownerCommandHint)
+        if (!stale && owned) continue
+        kill = owned
       }
-      if (typeof state.ownerPID === "number" && Number.isFinite(state.ownerPID) && state.ownerPID > 0) {
+      if (kill && typeof state.ownerPID === "number" && Number.isFinite(state.ownerPID) && state.ownerPID > 0) {
         await terminateProcessTree(state.ownerPID)
       }
+      const stale = isOwnerHeartbeatStale({
+        heartbeatAt: state.heartbeatAt,
+        updatedAt: state.updatedAt,
+        nowMs,
+      })
       const history = await readJsonLinesIfExists<LongTaskCampaignRoundRecord>(campaignPaths.historyPath)
       const recovery =
         (await determineCampaignRecoveryDecision({
@@ -308,13 +349,17 @@ async function healStaleRuntimeStates(cwd: string) {
           action: "restart_round",
           roundNumber: Math.max(1, state.currentRound || 1),
           reason:
-            typeof state.ownerPID === "number"
+            stale && kill && typeof state.ownerPID === "number"
+              ? `Campaign owner process ${state.ownerPID} stopped heartbeating past the hard stale timeout; killed its process tree and marked the campaign for recovery.`
+              : stale && typeof state.ownerPID === "number"
+              ? `Campaign owner process ${state.ownerPID} stopped heartbeating past the hard stale timeout; marked the campaign for recovery without killing because the PID no longer matched the recorded owner hint.`
+              : typeof state.ownerPID === "number"
               ? `Campaign owner process ${state.ownerPID} disappeared; restart the current round from its latest safe checkpoint.`
               : "Campaign stalled before a stable owner was recorded; restart the current round from its latest safe checkpoint.",
           detectedAt: now,
         } satisfies LongTaskCampaignRecoveryDecision)
 
-      await writeJsonFile(campaignStatePath, {
+      const wroteCampaign = await retryWriteJson(campaignStatePath, {
         ...state,
         status: "recovery_pending",
         ownerPID: process.pid,
@@ -323,6 +368,9 @@ async function healStaleRuntimeStates(cwd: string) {
         lastSummary: recovery.reason,
         recovery,
       } satisfies LongTaskCampaignState)
+      if (!wroteCampaign) {
+        continue
+      }
     }
   }
 
@@ -340,6 +388,7 @@ async function healStaleRuntimeStates(cwd: string) {
         continue
       }
       if (!isLiveRunStatus(progress.status)) continue
+      let kill = false
       if (typeof progress.ownerPID !== "number") {
         if (
           !isBootstrappingWithoutOwnerStale({
@@ -355,11 +404,23 @@ async function healStaleRuntimeStates(cwd: string) {
         }
       } else {
         if (progress.ownerPID === process.pid) continue
-        if (await isPidOwnedByHint(progress.ownerPID, progress.ownerCommandHint)) continue
+        const stale = isOwnerHeartbeatStale({
+          heartbeatAt: progress.heartbeatAt,
+          updatedAt: progress.updatedAt,
+          nowMs,
+        })
+        const owned = await isPidOwnedByHint(progress.ownerPID, progress.ownerCommandHint)
+        if (!stale && owned) continue
+        kill = owned
       }
-      if (typeof progress.ownerPID === "number" && Number.isFinite(progress.ownerPID) && progress.ownerPID > 0) {
+      if (kill && typeof progress.ownerPID === "number" && Number.isFinite(progress.ownerPID) && progress.ownerPID > 0) {
         await terminateProcessTree(progress.ownerPID)
       }
+      const stale = isOwnerHeartbeatStale({
+        heartbeatAt: progress.heartbeatAt,
+        updatedAt: progress.updatedAt,
+        nowMs,
+      })
       const hadMeaningfulProgress =
         Boolean(progress.activeUnitID) ||
         Boolean(progress.lastProgressAt) ||
@@ -367,7 +428,7 @@ async function healStaleRuntimeStates(cwd: string) {
         (progress.graphRevision ?? 0) > 0
       const recoveredStatus: LongTaskProgressState["status"] =
         progress.status === "planning" ? "planning" : hadMeaningfulProgress ? "waiting_for_retry" : "bootstrapping"
-      await writeJsonFile(progressPath, {
+      const wroteRun = await retryWriteJson(progressPath, {
         ...progress,
         status: recoveredStatus,
         ownerPID: process.pid,
@@ -375,10 +436,17 @@ async function healStaleRuntimeStates(cwd: string) {
         updatedAt: now,
         finalSummary:
           progress.finalSummary ??
-          (typeof progress.ownerPID === "number"
+          (stale && kill && typeof progress.ownerPID === "number"
+            ? `Run owner process ${progress.ownerPID} stopped heartbeating past the hard stale timeout; killed its process tree and changed stale run into ${recoveredStatus} so it can be resumed from the latest safe checkpoint.`
+            : stale && typeof progress.ownerPID === "number"
+            ? `Run owner process ${progress.ownerPID} stopped heartbeating past the hard stale timeout; changed stale run into ${recoveredStatus} without killing because the PID no longer matched the recorded owner hint.`
+            : typeof progress.ownerPID === "number"
             ? `Run owner process ${progress.ownerPID} disappeared; changed stale run into ${recoveredStatus} so it can be resumed from the latest safe checkpoint.`
             : `Run stalled before a stable owner was recorded; changed stale run into ${recoveredStatus} so it can be resumed from the latest safe checkpoint.`),
       } satisfies LongTaskProgressState)
+      if (!wroteRun) {
+        continue
+      }
     }
   }
 }
@@ -386,7 +454,6 @@ async function healStaleRuntimeStates(cwd: string) {
 async function findExistingLiveCampaign(input: { cwd: string; title: string; baseSpecPath: string }) {
   const campaignsRoot = autoEvolvePath(input.cwd, "runtime-state", "long-task-campaigns")
   if (!(await pathExists(campaignsRoot))) return undefined
-  const normalizedTitle = input.title.trim()
   const normalizedBaseSpecPath = path.resolve(input.baseSpecPath)
   const entries = await readdir(campaignsRoot, { withFileTypes: true })
   const candidates: Array<{
@@ -407,9 +474,8 @@ async function findExistingLiveCampaign(input: { cwd: string; title: string; bas
       continue
     }
     if (!isLiveCampaignStatus(state.status)) continue
-    const stateTitle = typeof state.title === "string" ? state.title.trim() : ""
     const stateBaseSpecPath = typeof state.baseSpecPath === "string" ? path.resolve(state.baseSpecPath) : ""
-    const sameTarget = stateTitle === normalizedTitle || stateBaseSpecPath === normalizedBaseSpecPath
+    const sameTarget = stateBaseSpecPath === normalizedBaseSpecPath
     if (!sameTarget) continue
     if (typeof state.ownerPID === "number" && Number.isFinite(state.ownerPID) && state.ownerPID > 0) {
       if (state.ownerPID === process.pid) continue
@@ -552,7 +618,6 @@ async function determineCampaignRecoveryDecision(input: {
 async function findRecoverableCampaignForTarget(input: { cwd: string; title: string; baseSpecPath: string }) {
   const campaignsRoot = autoEvolvePath(input.cwd, "runtime-state", "long-task-campaigns")
   if (!(await pathExists(campaignsRoot))) return undefined
-  const normalizedTitle = input.title.trim()
   const normalizedBaseSpecPath = path.resolve(input.baseSpecPath)
   const entries = await readdir(campaignsRoot, { withFileTypes: true })
   const candidates: Array<{
@@ -573,9 +638,8 @@ async function findRecoverableCampaignForTarget(input: { cwd: string; title: str
       continue
     }
     if (!isRecoverableCampaignStatus(state.status)) continue
-    const stateTitle = typeof state.title === "string" ? state.title.trim() : ""
     const stateBaseSpecPath = typeof state.baseSpecPath === "string" ? path.resolve(state.baseSpecPath) : ""
-    const sameTarget = stateTitle === normalizedTitle || stateBaseSpecPath === normalizedBaseSpecPath
+    const sameTarget = stateBaseSpecPath === normalizedBaseSpecPath
     if (!sameTarget) continue
     const freshnessMs =
       parseTimestampMs(state.heartbeatAt) ??
@@ -3788,7 +3852,7 @@ async function promoteRoundPendingAndTreeToCurrent(input: {
 }
 
 export async function runLongTaskCampaign(input: { cwd: string; specPath: string }): Promise<LongTaskCampaignRunResult> {
-  await healStaleRuntimeStates(input.cwd)
+  if (process.env.AUTO_EVOLVE_SKIP_STALE_HEAL !== "1") await healStaleRuntimeStates(input.cwd)
   const { spec: campaignSpec } = await loadLongTaskCampaignSpec(input.specPath)
   const { spec: baseSpec } = await loadLongTaskSpec(campaignSpec.baseSpecPath)
   const existingLiveCampaign = await findExistingLiveCampaign({
@@ -4547,7 +4611,7 @@ export async function resumeLongTaskCampaign(input: {
   campaignID: string
   specPath: string
 }): Promise<LongTaskCampaignRunResult> {
-  await healStaleRuntimeStates(input.cwd)
+  if (process.env.AUTO_EVOLVE_SKIP_STALE_HEAL !== "1") await healStaleRuntimeStates(input.cwd)
   const { spec: campaignSpec } = await loadLongTaskCampaignSpec(input.specPath)
   const { spec: baseSpec } = await loadLongTaskSpec(campaignSpec.baseSpecPath)
   const campaignPaths = longTaskCampaignPaths(input.cwd, input.campaignID)

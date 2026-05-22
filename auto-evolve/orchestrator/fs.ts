@@ -1,6 +1,7 @@
 import path from "node:path"
 import { existsSync, realpathSync } from "node:fs"
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import type { AutoEvolveConfig } from "./schema"
 
 export interface LayoutResult {
@@ -71,10 +72,8 @@ export async function readTextFile(target: string) {
 export async function readJsonFile<T = any>(target: string): Promise<T> {
   const raw = await readTextFile(target)
   const cleaned = raw.replace(/^\uFEFF/, "").trim()
-  // Empty or BOM-only file: return empty object instead of crashing
   if (!cleaned) {
-    console.warn(`[warn] ${target}: empty or BOM-only file, returning empty object`)
-    return {} as T
+    throw new Error(`Cannot read ${target}: empty or BOM-only JSON file`)
   }
   try {
     return JSON.parse(cleaned) as T
@@ -128,7 +127,27 @@ export async function writeTextFile(target: string, content: string) {
 }
 
 export async function writeJsonFile(target: string, value: unknown) {
-  await writeTextFile(target, JSON.stringify(value, null, 2) + "\n")
+  await ensureDirectory(path.dirname(target))
+  const body = JSON.stringify(value, null, 2) + "\n"
+  for (let i = 1; i <= 3; i += 1) {
+    const tmp = path.join(path.dirname(target), `.${path.basename(target)}.tmp-${process.pid}-${randomUUID()}`)
+    try {
+      await writeFile(tmp, body, "utf8")
+      await rename(tmp, target)
+      return
+    } catch (error) {
+      await rm(tmp, { force: true }).catch(() => undefined)
+      const msg = error instanceof Error ? error.message : String(error)
+      const locked =
+        msg.includes("EBUSY") ||
+        msg.includes("EPERM") ||
+        msg.includes("EACCES") ||
+        msg.toLowerCase().includes("locked") ||
+        msg.includes("sharing violation")
+      if (!locked || i >= 3) throw error
+      await new Promise((resolve) => setTimeout(resolve, 100 * i))
+    }
+  }
 }
 
 async function writeIfMissing(target: string, content: string, created: string[]) {

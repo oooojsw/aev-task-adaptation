@@ -2,6 +2,19 @@ function normalizeRawText(raw: string) {
   return raw.replace(/^\uFEFF/, "").trim()
 }
 
+// When LLMs write JSON files, they sometimes output literal escape sequences
+// like \n (two chars: backslash + n) instead of actual newlines.
+// This turns LLM-style double-escaped JSON into valid JSON.
+function normalizeLlmEscapedJson(text: string): string {
+  // After stripping BOM, replace common literal escape sequences
+  let fixed = text.replace(/^\uFEFF/, "")
+  // Replace literal \n, \t, \r with actual control characters
+  fixed = fixed.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r")
+  // Fix double-escaped quotes: \\"  →  \"
+  // But DON'T touch already-correct sequences
+  return fixed.trim()
+}
+
 function tryParseObject(candidate: string) {
   const trimmed = normalizeRawText(candidate)
   if (!trimmed) return undefined
@@ -11,7 +24,18 @@ function tryParseObject(candidate: string) {
       return parsed as Record<string, unknown>
     }
   } catch {
-    return undefined
+    // Try again after normalizing LLM-style escape sequences
+    try {
+      const fixed = normalizeLlmEscapedJson(trimmed)
+      if (fixed !== trimmed) {
+        const parsed = JSON.parse(fixed) as unknown
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>
+        }
+      }
+    } catch {
+      return undefined
+    }
   }
   return undefined
 }

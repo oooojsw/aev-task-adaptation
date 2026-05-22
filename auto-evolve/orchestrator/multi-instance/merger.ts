@@ -42,6 +42,7 @@ export interface MergerOutcome {
  * hardcode the absolute path so the same code works under different layouts.
  */
 const DEFAULT_PROMPT_REL = "methods/recipes/multi-instance/prompts/merge.md"
+const MERGE_TEXT_LIMIT = 64_000
 
 export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<MergerOutcome> {
   const state = input.state
@@ -94,7 +95,7 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
   // merger agent sees the actual text, not just paths it would have to read.
   const promptPath = input.promptPath ?? path.join(input.cwd, "auto-evolve", DEFAULT_PROMPT_REL)
   const promptBody = await readTextFile(promptPath)
-  const inlined = await inlineInstanceSkills(contributingInstances)
+  const inlined = await inlineInstanceSkills(state, contributingInstances)
   const fullPrompt = [
     promptBody.trim(),
     "",
@@ -173,7 +174,7 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
  * The merger sees a single prompt rather than a forest of files, which keeps
  * its working memory bounded.
  */
-async function inlineInstanceSkills(instances: InstanceState[]): Promise<string> {
+async function inlineInstanceSkills(state: CoordinatorState, instances: InstanceState[]): Promise<string> {
   const blocks: string[] = []
   for (const inst of instances) {
     const block: string[] = []
@@ -196,7 +197,14 @@ async function inlineInstanceSkills(instances: InstanceState[]): Promise<string>
       if (!item.isText) continue
       block.push(`### ${item.relPath}`)
       const content = await readTextFile(path.join(inst.harvestedSkillPath, item.relPath))
-      block.push(truncate(content, 8000))
+      if (content.length > MERGE_TEXT_LIMIT) {
+        await appendCoordinatorLog(
+          state,
+          "warn",
+          `Phase 2: merge input truncated for ${inst.id}/${item.relPath} from ${content.length} to ${MERGE_TEXT_LIMIT} chars.`,
+        )
+      }
+      block.push(truncate(content, MERGE_TEXT_LIMIT))
       block.push("")
     }
     blocks.push(block.join("\n"))

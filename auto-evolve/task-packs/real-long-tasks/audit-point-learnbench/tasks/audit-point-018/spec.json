@@ -1,0 +1,151 @@
+﻿{
+    "id":  "audit-point-018",
+    "title":  "audit-point-018",
+    "goal":  "Learn a reusable expert skill for finding and writing one professional internal audit opinion: 鍏朵粬搴旀敹娆剧エ鎹被鍨嬪奖鍝? The final blank agent should produce exactly one audit opinion item, not a full report.",
+    "taskFamily":  "audit-point-learnbench",
+    "domainTags":  [
+                       "audit-point-generation",
+                       "asset-valuation",
+                       "soft-validation"
+                   ],
+    "materials":  [
+                      {
+                          "path":  "../../../audit-report-pilot/materials/定稿",
+                          "label":  "shared finalized valuation deliverables",
+                          "role":  "source-artifact"
+                      },
+                      {
+                          "path":  "../../../audit-report-pilot/materials/电子底稿",
+                          "label":  "shared working papers",
+                          "role":  "source-artifact"
+                      },
+                      {
+                          "path":  "./human-guidance.md",
+                          "label":  "human long-task guidance",
+                          "role":  "instruction"
+                      }
+                  ],
+    "targetPaths":  [
+                        {
+                            "path":  "./expert-workspace",
+                            "label":  "learned audit-point skill",
+                            "role":  "experience-workspace"
+                        }
+                    ],
+    "editablePaths":  [
+                          "./expert-workspace",
+                          "./workspace"
+                      ],
+    "initialExpertContextPaths":  [
+                                      "../../seed-expert-workspace/manifest.md",
+                                      "../../seed-expert-workspace/change_log.md",
+                                      "./human-guidance.md"
+                                  ],
+    "formalPackageRoots":  [
+                               "./expert-workspace"
+                           ],
+    "validators":  [
+                       {
+                           "id":  "workspace-layout",
+                           "type":  "script",
+                           "title":  "Learned expert workspace layout is valid",
+                           "path":  "../../../../../scripts/validate-experience-workspace-layout.ts",
+                           "runner":  "bun",
+                           "placement":  "completion_only",
+                           "required":  true,
+                           "blocking":  true
+                       },
+                       {
+                           "id":  "single-point-soft-validate",
+                           "type":  "prompt_json",
+                           "title":  "Soft validation for one audit opinion point",
+                           "placement":  "completion_only",
+                           "required":  true,
+                           "blocking":  false,
+                           "attachedFiles":  [
+                                                 "./answer/answer.md",
+                                                 "./workspace/audit-point-output.md"
+                                             ],
+                           "prompt":  "You are validating whether the produced audit opinion item matches the hidden expert answer for one audit review point.\nRead answer/answer.md and workspace/audit-point-output.md carefully.\nReturn exactly one JSON object with no markdown code fence and no extra text.\nRequired keys: passed, score, same_issue, specific_evidence, actionable, gap, learning, blocking.\nDecision rule: passed=true only when same_issue=true AND specific_evidence=true AND actionable=true.\nIf any of those three is false, passed must be false.\n{\"passed\":true,\"score\":92,\"same_issue\":true,\"specific_evidence\":true,\"actionable\":true,\"gap\":\"minor wording difference\",\"learning\":\"Keep issue type and evidence location aligned.\",\"blocking\":false}\n{\"passed\":false,\"score\":58,\"same_issue\":false,\"specific_evidence\":true,\"actionable\":false,\"gap\":\"Issue type mismatched with expert answer.\",\"learning\":\"First align issue type, then propose actionable correction.\",\"blocking\":false}"
+                       }
+                   ],
+    "planning":  {
+                     "agent":  "top"
+                 },
+    "execution":  {
+                      "agent":  "top"
+                  },
+    "validation":  {
+                       "agent":  "top"
+                   },
+    "initialGraph":  {
+                         "planner_summary":  "Single-point audit learnbench: inspect all shared valuation materials, learn one reusable audit finding pattern, and write a one-point audit output for soft validation.",
+                         "completion_validator_ids":  [
+                                                          "workspace-layout",
+                                                          "single-point-soft-validate"
+                                                      ],
+                         "units":  [
+                                       {
+                                           "id":  "inspect-shared-materials",
+                                           "title":  "Inspect Shared Materials",
+                                           "goal":  "Inspect the shared valuation report and working papers for evidence related to this audit finding type: 妫€鏌ュ叾浠栧簲鏀舵涓紑鍏蜂笓绁ㄦ垨鏅エ瀵硅瘎浼板€兼槸鍚︽湁褰卞搷銆?Do not write a full audit report.",
+                                           "inputs":  [
+                                                          "../../../audit-report-pilot/materials/定稿",
+                                                          "../../../audit-report-pilot/materials/电子底稿",
+                                                          "./human-guidance.md"
+                                                      ],
+                                           "depends_on":  [
+
+                                                          ],
+                                           "expected_artifacts":  [
+                                                                      "./workspace/material-notes.md"
+                                                                  ],
+                                           "claim":  "Relevant evidence and checking targets for this one audit issue type have been identified.",
+                                           "check_plan":  "Write concise material notes with exact pages, sheets, rows, cells, or report sections where possible.",
+                                           "validator_ids":  [
+
+                                                             ],
+                                           "retry_budget":  2
+                                       },
+                                       {
+                                           "id":  "write-single-point-skill-and-output",
+                                           "title":  "Write Single Point Skill And Output",
+                                           "goal":  "Create a reusable skill package that teaches the finding pattern, and write workspace/audit-point-output.md containing exactly one professional audit opinion item.",
+                                           "inputs":  [
+                                                          "./workspace/material-notes.md",
+                                                          "../../seed-expert-workspace/manifest.md"
+                                                      ],
+                                           "depends_on":  [
+                                                              "inspect-shared-materials"
+                                                          ],
+                                           "expected_artifacts":  [
+                                                                      "./expert-workspace/manifest.md",
+                                                                      "./expert-workspace/change_log.md",
+                                                                      "./workspace/audit-point-output.md"
+                                                                  ],
+                                           "claim":  "The skill and one-point audit output are complete.",
+                                           "check_plan":  "The output must be one actionable audit opinion item with evidence, issue, and requested correction/check.",
+                                           "validator_ids":  [
+
+                                                             ],
+                                           "retry_budget":  2
+                                       }
+                                   ]
+                     },
+    "budgets":  {
+                    "maxAttemptsPerUnit":  3,
+                    "maxTotalUnitAttempts":  8,
+                    "maxGraphReplans":  2,
+                    "maxValidatorCalls":  10,
+                    "maxNoProgressCycles":  3,
+                    "maxUnitsPerGraph":  5
+                },
+    "shadowMemoryScope":  {
+                              "namespace":  "audit-point-learnbench",
+                              "tags":  [
+                                           "audit-point-generation"
+                                       ],
+                              "retrievalMode":  "manual"
+                          },
+    "notes":  "One instance learns exactly one audit finding pattern. Shared material directories are visible read-only inputs; do not copy or edit them. The answer file is used only by the soft validator."
+}

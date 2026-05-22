@@ -1,6 +1,6 @@
 import process from "node:process"
 import path from "node:path"
-import { readdir } from "node:fs/promises"
+import { readdir, stat } from "node:fs/promises"
 import { ensureLayout } from "./orchestrator/fs"
 import { runBootstrap } from "./orchestrator/bootstrap"
 import { runCase } from "./orchestrator/case-runner"
@@ -16,6 +16,60 @@ import { runLongTask, resumeLongTask } from "./orchestrator/long-task/runner"
 import { runLongTaskCampaign, resumeLongTaskCampaign } from "./orchestrator/long-task-campaign/runner"
 import { runSkillsBenchTask, type SkillsBenchMode } from "./orchestrator/skillsbench-adapter"
 import { resetExperienceWorkspace, restoreLatestArchivedExperienceWorkspace } from "./orchestrator/experience-archive"
+import { cleanupAllRuntimeProcesses } from "./orchestrator/runtime-process-registry"
+
+let shuttingDown = false
+
+function installShutdownCleanup() {
+  const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"]
+  for (const signal of signals) {
+    process.once(signal, () => {
+      if (shuttingDown) return
+      shuttingDown = true
+      const code = signal === "SIGINT" ? 130 : 143
+      const timer = setTimeout(() => {
+        console.error(`Forced exit after ${signal}; runtime child cleanup did not finish in time.`)
+        process.exit(code)
+      }, 10_000)
+      void cleanupAllRuntimeProcesses()
+        .then((result) => {
+          if (result.trackedCount > 0) {
+            console.error(
+              `Caught ${signal}; cleaned runtime children: tracked=${result.trackedCount}, killed=${result.killedCount}, remaining=${result.remainingCount}.`,
+            )
+          }
+        })
+        .catch((error) => {
+          console.error(`Caught ${signal}; runtime child cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+        })
+        .finally(() => {
+          clearTimeout(timer)
+          process.exit(code)
+        })
+    })
+  }
+}
+
+installShutdownCleanup()
+
+async function hasDir(dir: string) {
+  try {
+    return (await stat(dir)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+async function resolveWorkspaceCwd() {
+  const cwd = process.cwd()
+  if (path.basename(cwd).toLowerCase() === "auto-evolve" && (await hasDir(path.join(cwd, "orchestrator")))) {
+    return path.dirname(cwd)
+  }
+  if (await hasDir(path.join(cwd, "auto-evolve"))) return cwd
+  const parent = path.dirname(cwd)
+  if (await hasDir(path.join(parent, "auto-evolve"))) return parent
+  return cwd
+}
 
 function printHelp() {
   console.log(`auto-evolve commands:
@@ -341,8 +395,28 @@ async function commandRunSkillsBench(args: string[]) {
 
   // Ensure cwd is repo root (parent of auto-evolve/), not the auto-evolve/ subdirectory itself.
   const cwd = path.basename(process.cwd()) === "auto-evolve" ? path.dirname(process.cwd()) : process.cwd()
+
+  // Resolve task root: check for SkillLearnBench-style nested layout first.
+  // SkillLearnBench places instances under <root>/tasks/<family>/<instance>/
+  // while the plain skillsbench layout uses <root>/tasks/<task>/ directly.
+  let taskRoot: string | undefined
+  const directTaskRoot = path.resolve(root, "tasks", taskID)
+  if (await stat(path.join(directTaskRoot, "instruction.md")).then(() => true).catch(() => false)) {
+    taskRoot = directTaskRoot
+  } else {
+    // Try SkillLearnBench layout: look for <family>/<family>-1 subdirectory
+    const entries = await readdir(directTaskRoot, { withFileTypes: true }).catch(() => [])
+    const instances = entries
+      .filter((e) => e.isDirectory() && e.name.startsWith(`${taskID}-`))
+      .sort()
+    if (instances.length > 0) {
+      taskRoot = path.join(directTaskRoot, instances[0].name)
+    }
+  }
+
   const result = await runSkillsBenchTask({
     cwd,
+    taskRoot,
     root,
     taskID,
     mode: mode as SkillsBenchMode,
@@ -604,12 +678,22 @@ async function discoverBenchInstances(
     return [{ id: taskID, taskRoot: taskFamilyDir }]
   }
   // SkillLearnBench: instances are subdirectories named "<task>-<n>".
-  const entries = await fs.readdir(taskFamilyDir, { withFileTypes: true }).catch(() => [])
+  // Supports two layouts:
+  //   Nested: <root>/tasks/<task>/<task>-<n>/
+  //   Flat:   <root>/tasks/<task>-<n>/
+  let entries = await fs.readdir(taskFamilyDir, { withFileTypes: true }).catch(() => [])
+  let baseDir = taskFamilyDir
+  if (entries.length === 0) {
+    // Fallback: flat layout – look in parent tasks/ directory
+    const tasksDir = path.dirname(taskFamilyDir)
+    entries = await fs.readdir(tasksDir, { withFileTypes: true }).catch(() => [])
+    baseDir = tasksDir
+  }
   const out: DiscoveredInstance[] = []
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
     if (!entry.name.startsWith(`${taskID}-`)) continue
-    out.push({ id: entry.name, taskRoot: path.join(taskFamilyDir, entry.name) })
+    out.push({ id: entry.name, taskRoot: path.join(baseDir, entry.name) })
   }
   return out
 }
@@ -667,9 +751,10 @@ async function commandRunPropagation(args: string[]) {
 }
 
 async function commandRunLongTask(args: string[]) {
-  await ensureLayout(process.cwd())
-  const config = await loadConfig(process.cwd())
-  await ensureExperimentMonitor(process.cwd(), config).catch((error) => {
+  const cwd = await resolveWorkspaceCwd()
+  await ensureLayout(cwd)
+  const config = await loadConfig(cwd)
+  await ensureExperimentMonitor(cwd, config).catch((error) => {
     const message = error instanceof Error ? error.message : String(error)
     console.warn(`Monitor warning: ${message}`)
   })
@@ -681,7 +766,7 @@ async function commandRunLongTask(args: string[]) {
   }
 
   const result = await runLongTask({
-    cwd: process.cwd(),
+    cwd,
     specPath,
   })
   console.log(`Long-task run: ${result.runID}`)
@@ -691,9 +776,10 @@ async function commandRunLongTask(args: string[]) {
 }
 
 async function commandRunLongTaskCampaign(args: string[]) {
-  await ensureLayout(process.cwd())
-  const config = await loadConfig(process.cwd())
-  await ensureExperimentMonitor(process.cwd(), config).catch((error) => {
+  const cwd = await resolveWorkspaceCwd()
+  await ensureLayout(cwd)
+  const config = await loadConfig(cwd)
+  await ensureExperimentMonitor(cwd, config).catch((error) => {
     const message = error instanceof Error ? error.message : String(error)
     console.warn(`Monitor warning: ${message}`)
   })
@@ -705,7 +791,7 @@ async function commandRunLongTaskCampaign(args: string[]) {
   }
 
   const result = await runLongTaskCampaign({
-    cwd: process.cwd(),
+    cwd,
     specPath,
   })
   console.log(`Long-task campaign: ${result.campaignID}`)
@@ -722,9 +808,10 @@ async function commandRunLongTaskCampaign(args: string[]) {
 }
 
 async function commandResumeLongTask(args: string[]) {
-  await ensureLayout(process.cwd())
-  const config = await loadConfig(process.cwd())
-  await ensureExperimentMonitor(process.cwd(), config).catch((error) => {
+  const cwd = await resolveWorkspaceCwd()
+  await ensureLayout(cwd)
+  const config = await loadConfig(cwd)
+  await ensureExperimentMonitor(cwd, config).catch((error) => {
     const message = error instanceof Error ? error.message : String(error)
     console.warn(`Monitor warning: ${message}`)
   })
@@ -736,7 +823,7 @@ async function commandResumeLongTask(args: string[]) {
   }
 
   const result = await resumeLongTask({
-    cwd: process.cwd(),
+    cwd,
     runID,
   })
   console.log(`Long-task run: ${result.runID}`)
@@ -746,9 +833,10 @@ async function commandResumeLongTask(args: string[]) {
 }
 
 async function commandResumeLongTaskCampaign(args: string[]) {
-  await ensureLayout(process.cwd())
-  const config = await loadConfig(process.cwd())
-  await ensureExperimentMonitor(process.cwd(), config).catch((error) => {
+  const cwd = await resolveWorkspaceCwd()
+  await ensureLayout(cwd)
+  const config = await loadConfig(cwd)
+  await ensureExperimentMonitor(cwd, config).catch((error) => {
     const message = error instanceof Error ? error.message : String(error)
     console.warn(`Monitor warning: ${message}`)
   })
@@ -766,7 +854,7 @@ async function commandResumeLongTaskCampaign(args: string[]) {
   }
 
   const result = await resumeLongTaskCampaign({
-    cwd: process.cwd(),
+    cwd,
     campaignID,
     specPath,
   })

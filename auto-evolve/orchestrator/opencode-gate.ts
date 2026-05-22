@@ -11,7 +11,7 @@
  */
 
 import path from "node:path"
-import { mkdir, readFile, rm, rename, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rm, rename, stat, writeFile } from "node:fs/promises"
 import { setTimeout as sleepMs } from "node:timers/promises"
 import { randomBytes } from "node:crypto"
 import { autoEvolvePath, ensureDirectory, pathExists } from "./fs"
@@ -99,7 +99,9 @@ const DEFAULT_CONFIG: OpenCodeGateConfig = {
 }
 
 const LOCK_STALE_MS = 30_000
+const LOCK_INIT_GRACE_MS = 3_000
 const LOCK_POLL_MS = 50
+const LOCK_IO_RETRIES = 5
 const STATE_VERSION = 1
 const STATE_DIR = "opencode-gate"
 
@@ -346,18 +348,19 @@ function isQueueSlot(input: unknown): input is QueueSlot {
 async function withGateLock<T>(stateRoot: string, fn: () => Promise<T>): Promise<T> {
   const lockRoot = path.join(stateRoot, "lock")
   const owner = path.join(lockRoot, "owner.json")
+  const token = randomID()
   await ensureDirectory(path.dirname(lockRoot))
   while (true) {
     try {
       await mkdir(lockRoot)
-      await writeFile(owner, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), "utf8")
+      await writeOwner(owner, token)
       break
     } catch {
       const exists = await pathExists(lockRoot)
       if (!exists) continue
-      const stale = await isStaleLock(owner)
+      const stale = await isStaleLock(lockRoot, owner)
       if (stale) {
-        await rm(lockRoot, { recursive: true, force: true }).catch(() => undefined)
+        await quarantineLock(lockRoot)
         continue
       }
       await sleepMs(LOCK_POLL_MS)
@@ -367,25 +370,106 @@ async function withGateLock<T>(stateRoot: string, fn: () => Promise<T>): Promise
   try {
     return await fn()
   } finally {
-    await rm(lockRoot, { recursive: true, force: true }).catch(() => undefined)
+    if (await isOwnedBySelf(owner, token)) {
+      if (!(await quarantineLock(lockRoot))) {
+        await rm(lockRoot, { recursive: true, force: true }).catch(() => undefined)
+      }
+    }
   }
 }
 
-async function isStaleLock(owner: string) {
-  if (!(await pathExists(owner))) return true
+async function isStaleLock(lockRoot: string, owner: string) {
+  if (!(await pathExists(owner))) return await isExpiredWithoutOwner(lockRoot)
   try {
-    const raw = JSON.parse(await readFile(owner, "utf8")) as { pid?: unknown; at?: unknown }
+    const raw = await readOwnerWithRetry(owner)
+    if (!raw) return await isExpiredWithoutOwner(lockRoot)
     if (typeof raw.pid === "number" && !isAlive(raw.pid)) return true
     if (typeof raw.at === "string") {
       const time = Date.parse(raw.at)
       if (Number.isFinite(time) && Date.now() - time > LOCK_STALE_MS) return true
     }
   } catch {
-    return true
+    return await isExpiredWithoutOwner(lockRoot)
   }
   return false
 }
 
+async function isOwnedBySelf(owner: string, token: string) {
+  if (!(await pathExists(owner))) return false
+  try {
+    const raw = await readOwnerWithRetry(owner)
+    if (!raw) return false
+    return raw.pid === process.pid && raw.token === token
+  } catch {
+    return false
+  }
+}
+
+async function writeOwner(owner: string, token: string) {
+  const tmp = `${owner}.tmp-${process.pid}-${randomID()}`
+  const body = JSON.stringify({ pid: process.pid, token, at: new Date().toISOString() })
+  await writeFile(tmp, body, "utf8")
+  try {
+    await renameWithRetry(tmp, owner)
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
+async function isExpiredWithoutOwner(lockRoot: string) {
+  const info = await stat(lockRoot).catch(() => undefined)
+  if (!info) return true
+  const t = Math.max(info.ctimeMs, info.mtimeMs)
+  return Date.now() - t >= LOCK_INIT_GRACE_MS
+}
+
 function randomID(): string {
   return `gate-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`
+}
+
+async function readOwnerWithRetry(owner: string) {
+  for (let attempt = 1; attempt <= LOCK_IO_RETRIES; attempt += 1) {
+    try {
+      const raw = JSON.parse(await readFile(owner, "utf8")) as { pid?: unknown; token?: unknown; at?: unknown }
+      return raw
+    } catch (error) {
+      if (attempt >= LOCK_IO_RETRIES || !isLockIoError(error)) return undefined
+      await sleepMs(lockIoDelay(attempt))
+    }
+  }
+  return undefined
+}
+
+async function renameWithRetry(from: string, to: string) {
+  for (let attempt = 1; attempt <= LOCK_IO_RETRIES; attempt += 1) {
+    try {
+      await rename(from, to)
+      return
+    } catch (error) {
+      if (attempt >= LOCK_IO_RETRIES || !isLockIoError(error)) throw error
+      await sleepMs(lockIoDelay(attempt))
+    }
+  }
+}
+
+async function quarantineLock(lockRoot: string) {
+  const trash = `${lockRoot}.trash-${randomID()}`
+  try {
+    await renameWithRetry(lockRoot, trash)
+    await rm(trash, { recursive: true, force: true }).catch(() => undefined)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isLockIoError(error: unknown) {
+  if (!error || typeof error !== "object") return false
+  const code = typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : ""
+  return code === "EPERM" || code === "EACCES" || code === "EBUSY"
+}
+
+function lockIoDelay(attempt: number) {
+  return 10 * 2 ** (attempt - 1) + Math.floor(Math.random() * 15)
 }

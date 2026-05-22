@@ -193,6 +193,14 @@ async function runSingleInstance(
   notify?.(instance)
   await appendCoordinatorLog(state, "info", `[${instance.id}] launching campaign`)
 
+  // Heartbeat: keep coordinator-state.json fresh while the campaign runs,
+  // so external monitors don't see stale timestamps during long operations.
+  const heartbeatHandle = setInterval(() => {
+    state.heartbeatAt = new Date().toISOString()
+    state.updatedAt = state.heartbeatAt
+    void saveCoordinatorState(state).catch(() => undefined)
+  }, 60_000)
+
   try {
     const result = await runSkillsBenchTask({
       cwd,
@@ -244,6 +252,8 @@ async function runSingleInstance(
     instance.errorMessage = message
     instance.finishedAt = new Date().toISOString()
     await appendCoordinatorLog(state, "error", `[${instance.id}] failed: ${message}`)
+  } finally {
+    clearInterval(heartbeatHandle)
   }
   await saveCoordinatorState(state)
   notify?.(instance)
