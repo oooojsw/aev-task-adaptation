@@ -1,7 +1,7 @@
 import process from "node:process"
 import { setTimeout as sleep } from "node:timers/promises"
 import path from "node:path"
-import { ensureDirectory, pathExists } from "./fs"
+import { ensureDirectory, pathExists, runtimePath } from "./fs"
 import { readFile, rename, rm, writeFile } from "node:fs/promises"
 
 interface RegisteredRuntimeProcess {
@@ -23,7 +23,7 @@ let pendingSave: Promise<void> = Promise.resolve()
 let dirty = false
 
 function registryPath() {
-  return path.resolve(import.meta.dir, "..", ".runtime", "active-processes.json")
+  return runtimePath(process.cwd(), "active-processes.json")
 }
 
 function cloneRegistry() {

@@ -1,7 +1,7 @@
 import path from "node:path"
 import { cp, readdir, realpath, rm, stat } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import { ensureDirectory, pathExists, readJsonFile, readTextFile, writeJsonFile, writeTextFile } from "./fs"
+import { ensureDirectory, pathExists, readJsonFile, readTextFile, runtimePath, writeJsonFile, writeTextFile } from "./fs"
 import { loadConfig } from "./schema"
 import { runOpencodeTask, type OpencodeTaskRun } from "./opencode"
 import { runManagedProcess, type ManagedProcessResult } from "./managed-process"
@@ -178,7 +178,7 @@ async function prepareSkillsBenchTask(input: SkillsBenchRunOptions): Promise<Pre
   const instruction = await readTextFile(instructionPath)
   // Write instruction.copy.md / task-source.json to a hidden artifacts directory
   // outside the runRoot tree, so the agent can never navigate to them.
-  const artifactsDir = path.join(input.cwd, "auto-evolve", ".runtime", "skillsbench-artifacts", safeID(derivedTaskID) + "-" + input.mode)
+  const artifactsDir = runtimePath(input.cwd, "skillsbench-artifacts", safeID(derivedTaskID) + "-" + input.mode)
   await ensureDirectory(artifactsDir)
   await writeTextFile(path.join(artifactsDir, "instruction.copy.md"), instruction)
   await writeJsonFile(path.join(artifactsDir, "task-source.json"), {

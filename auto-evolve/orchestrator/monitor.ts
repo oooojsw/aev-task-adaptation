@@ -2,7 +2,7 @@ import path from "node:path"
 import process from "node:process"
 import { openSync } from "node:fs"
 import { spawn } from "node:child_process"
-import { autoEvolvePath, ensureDirectory, pathExists, readJsonFile, writeJsonFile } from "./fs"
+import { ensureDirectory, pathExists, readJsonFile, runtimePath, writeJsonFile } from "./fs"
 import type { AutoEvolveConfig } from "./schema"
 
 interface DashboardState {
@@ -104,7 +104,7 @@ export async function ensureExperimentMonitor(cwd: string, config: AutoEvolveCon
     }
   }
 
-  const runtimeDir = autoEvolvePath(cwd, ".runtime", "monitor")
+  const runtimeDir = runtimePath(cwd, "monitor")
   const statePath = path.join(runtimeDir, "session-dashboard.json")
   const logFile = path.join(runtimeDir, "session-dashboard.log")
   await ensureDirectory(runtimeDir)

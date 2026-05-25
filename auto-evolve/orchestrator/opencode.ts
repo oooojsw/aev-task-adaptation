@@ -7,7 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { buildActionTrace } from "./action-trace"
 import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
 import type { ToolFailure } from "./evaluator"
-import { autoEvolvePath, ensureDirectory, pathExists, writeJsonFile, writeTextFile } from "./fs"
+import { autoEvolvePath, ensureDirectory, pathExists, runtimePath, writeJsonFile, writeTextFile } from "./fs"
 import { runManagedProcess } from "./managed-process"
 import { OpenCodeGate } from "./opencode-gate"
 import {
@@ -268,7 +268,7 @@ function hostAuthCandidates() {
 }
 
 async function prepareIsolatedHostRuntime(cwd: string, runLabel: string) {
-  const root = autoEvolvePath(cwd, ".runtime", "opencode-isolated-env", runLabel)
+  const root = runtimePath(cwd, "opencode-isolated-env", runLabel)
   const home = path.join(root, "home")
   const xdgConfig = path.join(root, "config")
   const xdgData = path.join(root, "data")
@@ -324,7 +324,7 @@ async function ensureOverrideConfig(
   injectPlatformSafetyRules = true,
   isolateHostRuntime = false,
 ) {
-  const dir = autoEvolvePath(cwd, ".runtime", "opencode-config", runLabel)
+  const dir = runtimePath(cwd, "opencode-config", runLabel)
   const runtimeAgentsFallback = [
     "# AUTO-EVOLVE RUNTIME INSTRUCTIONS",
     "",

@@ -14,7 +14,7 @@ import path from "node:path"
 import { mkdir, readFile, rm, rename, stat, writeFile } from "node:fs/promises"
 import { setTimeout as sleepMs } from "node:timers/promises"
 import { randomBytes } from "node:crypto"
-import { autoEvolvePath, ensureDirectory, pathExists } from "./fs"
+import { ensureDirectory, pathExists, runtimePath } from "./fs"
 
 export interface OpenCodeGateConfig {
   /** Maximum number of OpenCode child processes that may run simultaneously. */
@@ -254,7 +254,7 @@ export class OpenCodeGate {
 }
 
 function resolveStateRoot(root: string) {
-  return autoEvolvePath(path.resolve(root), ".runtime", STATE_DIR)
+  return runtimePath(path.resolve(root), STATE_DIR)
 }
 
 function normalizeScope(scope: string) {
