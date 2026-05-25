@@ -185,22 +185,41 @@ async function buildReadListPermissionRules(paths: string[]) {
   return rules
 }
 
-function buildEditPermissionRules(cwd: string, paths: string[]) {
+async function buildEditPermissionRules(cwd: string, paths: string[]) {
   const rules: Record<string, "allow" | "deny"> = {
     "*": "deny",
   }
 
   // OpenCode resolves edit paths relative to the process cwd (packages/opencode).
-  // Normalize from project root but make relative to the OpenCode process cwd.
+  // Tool permission checks may use either process-cwd-relative paths or
+  // worktree-relative paths, so provide both alongside absolute paths.
   const opencodeCwd = path.join(cwd, "packages", "opencode")
   for (const item of paths) {
     const absolute = path.resolve(item)
     const relative = path.relative(opencodeCwd, absolute).replace(/\\/g, "/")
+    const worktreeRelative = path.relative(cwd, absolute).replace(/\\/g, "/")
     if (relative && !relative.startsWith("..")) {
       rules[relative] = "allow"
     }
+    if (worktreeRelative && !worktreeRelative.startsWith("..")) {
+      rules[worktreeRelative] = "allow"
+    }
     // Also allow absolute path as fallback
     rules[absolute.replace(/\\/g, "/")] = "allow"
+    try {
+      const info = await stat(absolute)
+      if (info.isDirectory()) {
+        if (relative && !relative.startsWith("..")) {
+          rules[`${relative}/*`] = "allow"
+        }
+        if (worktreeRelative && !worktreeRelative.startsWith("..")) {
+          rules[`${worktreeRelative}/*`] = "allow"
+        }
+        rules[`${absolute.replace(/\\/g, "/")}/*`] = "allow"
+      }
+    } catch {
+      continue
+    }
   }
 
   return rules
@@ -214,7 +233,7 @@ async function makeOverridePermissions(
     "*": "deny",
     read: await buildReadListPermissionRules(input.readPaths),
     list: await buildReadListPermissionRules(input.readPaths),
-    edit: buildEditPermissionRules(cwd, input.editPaths),
+    edit: await buildEditPermissionRules(cwd, input.editPaths),
     external_directory: {
       "*": "deny",
     },
