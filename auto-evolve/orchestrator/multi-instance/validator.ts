@@ -24,8 +24,9 @@
  */
 
 import path from "node:path"
-import { ensureDirectory, writeJsonFile } from "../fs"
+import { ensureDirectory, pathExists, readJsonFile, writeJsonFile } from "../fs"
 import { runSkillsBenchTask } from "../skillsbench-adapter"
+import { runLongTaskCampaign } from "../long-task-campaign/runner"
 import type { CoordinatorState, InstanceState } from "./contract"
 import { appendCoordinatorLog, saveCoordinatorState, validateDir } from "./repository"
 
@@ -124,39 +125,66 @@ async function runOneValidation(
   await ensureDirectory(slotDir)
 
   try {
-    const result = await runSkillsBenchTask({
-      cwd,
-      taskRoot: instance.sourceTaskRoot,
-      taskID: skillsbenchTaskIDFromInstance(instance),
-      concurrencyScope: `skillsbench:${path.basename(path.dirname(instance.sourceTaskRoot))}`,
-      mode: "campaign",
-      rounds,
-      seedExpertWorkspacePath: mergedSkillDir,
-      // Same rationale as fan-out: instance id goes first so the
-      // 48-char slug truncation in createLongTaskCampaignID can't
-      // collide multiple validations into one campaign directory.
-      campaignTitle: `mi-${instance.id}-validate-${state.id}`,
-    })
-    if (result.mode !== "campaign") {
-      throw new Error(`Unexpected non-campaign result for instance ${instance.id}`)
+    const hasTaskToml = await pathExists(path.join(instance.sourceTaskRoot, "task.toml"))
+    if (hasTaskToml) {
+      const result = await runSkillsBenchTask({
+        cwd,
+        taskRoot: instance.sourceTaskRoot,
+        taskID: skillsbenchTaskIDFromInstance(instance),
+        concurrencyScope: `skillsbench:${path.basename(path.dirname(instance.sourceTaskRoot))}`,
+        mode: "campaign",
+        rounds,
+        seedExpertWorkspacePath: mergedSkillDir,
+        campaignTitle: `mi-${instance.id}-validate-${state.id}`,
+      })
+      if (result.mode !== "campaign") {
+        throw new Error(`Unexpected non-campaign result for instance ${instance.id}`)
+      }
+      instance.validateStatus = result.passed ? "passed" : "failed"
+      instance.validateCampaignDir = result.runDir
+      instance.validateRunRoot = result.runRoot
+      await writeJsonFile(path.join(slotDir, "run.json"), {
+        instanceID: instance.id,
+        passed: result.passed,
+        campaignDir: result.runDir,
+        runRoot: result.runRoot,
+      })
+    } else {
+      const srcCampaign = path.join(instance.sourceTaskRoot, "campaign.json")
+      const src = await readJsonFile<Record<string, unknown>>(srcCampaign)
+      const seed = Array.isArray(src.seedTargets) ? src.seedTargets : []
+      const nextSeed = seed.map((item) => {
+        if (!item || typeof item !== "object") return item
+        const row = item as Record<string, unknown>
+        if (String(row.kind ?? "") !== "experience_workspace") return row
+        return { ...row, seedPath: mergedSkillDir, resetOnStart: true }
+      })
+      const spec = {
+        ...src,
+        baseSpecPath: path.join(instance.sourceTaskRoot, "spec.json"),
+        maxRounds: Math.max(1, rounds),
+        seedTargets: nextSeed,
+      }
+      const specPath = path.join(slotDir, "campaign.validate.json")
+      await writeJsonFile(specPath, spec)
+      const result = await runLongTaskCampaign({ cwd, specPath })
+      instance.validateStatus = result.finalStatus === "verified_success" ? "passed" : "failed"
+      instance.validateCampaignDir = result.campaignDir
+      instance.validateRunRoot = result.campaignDir
+      await writeJsonFile(path.join(slotDir, "run.json"), {
+        instanceID: instance.id,
+        passed: instance.validateStatus === "passed",
+        campaignDir: result.campaignDir,
+        status: result.finalStatus,
+      })
     }
-    instance.validateStatus = result.passed ? "passed" : "failed"
-    instance.validateCampaignDir = result.runDir
-    instance.validateRunRoot = result.runRoot
-
-    await writeJsonFile(path.join(slotDir, "run.json"), {
-      instanceID: instance.id,
-      passed: result.passed,
-      campaignDir: result.runDir,
-      runRoot: result.runRoot,
-    })
 
     // A regression is when an instance that originally passed in Phase 1
     // now fails on the merged skill. That signals the merger dropped
     // something the instance depended on. Held-out test instances cannot
     // regress (they had no Phase 1 baseline to begin with) — failure on a
     // test instance is just a generalization gap.
-    if (instance.role !== "test" && instance.status === "passed" && !result.passed) {
+    if (instance.role !== "test" && instance.status === "passed" && instance.validateStatus !== "passed") {
       regressions.push(instance.id)
       await appendCoordinatorLog(
         state,

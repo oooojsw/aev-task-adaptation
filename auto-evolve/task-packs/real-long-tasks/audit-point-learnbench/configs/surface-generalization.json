@@ -1,0 +1,34 @@
+{
+  "rootPaths": [
+    "./expert-workspace"
+  ],
+  "allowedExtensions": [
+    ".md",
+    ".txt",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml"
+  ],
+  "ignorePathSubstrings": [
+    "/tools/",
+    "/skills/",
+    "node_modules",
+    ".git",
+    "__pycache__"
+  ],
+  "warnOnIgnoredHits": false,
+  "maxHitsPerFile": 6,
+  "maxTotalHits": 30,
+  "forbiddenPatterns": [
+    {
+      "label": "task-id-hardcode",
+      "pattern": "audit-point-\\d+"
+    },
+    {
+      "label": "hidden-answer-section-copy",
+      "pattern": "##\\s*Hidden\\s*Expert\\s*Answer"
+    }
+  ],
+  "forbiddenLiterals": []
+}

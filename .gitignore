@@ -41,6 +41,24 @@ auto-evolve/runtime-logs/
 auto-evolve/runtime-export/
 runtime-logs/
 auto-evolve/task-packs/real-long-tasks/*/deployment/work/
+auto-evolve/.runtime/opencode-config/
+auto-evolve/.runtime/opencode-config/**
+auto-evolve/task-packs/real-long-tasks/*/workspace/
+auto-evolve/task-packs/real-long-tasks/*/workspace/**
+auto-evolve/task-packs/real-long-tasks/*/expert-workspace/workspace/
+auto-evolve/task-packs/real-long-tasks/*/expert-workspace/workspace/**
+auto-evolve/task-packs/real-long-tasks/*/validation-expert-workspace/
+auto-evolve/task-packs/real-long-tasks/*/validation-expert-workspace/**
+auto-evolve/task-packs/real-long-tasks/*/validate-run/
+auto-evolve/task-packs/real-long-tasks/*/validate-run/**
+auto-evolve/task-packs/real-long-tasks/*/outputs/
+auto-evolve/task-packs/real-long-tasks/*/outputs/**
+auto-evolve/task-packs/real-long-tasks/*/deployment/outputs/
+auto-evolve/task-packs/real-long-tasks/*/deployment/outputs/**
+auto-evolve/task-packs/real-long-tasks/*/materials/*_extracted/
+auto-evolve/task-packs/real-long-tasks/*/materials/*_extracted/**
+auto-evolve/task-packs/real-long-tasks/*/preview/
+auto-evolve/task-packs/real-long-tasks/*/preview/**
 
 # Local temp/debug artifacts (project root)
 tmp_check/
@@ -48,3 +66,7 @@ tmp/
 tmp_*.*
 debug_*.*
 check_*.*
+
+# AI Tool Folders (rule 8.1)
+**/.opencode/
+**/.roo/

@@ -753,7 +753,7 @@ async function runOpencodeTaskOnce(
   const runStart = new Date()
   const startedAt = runStart.toISOString()
   const runtimePrompt = withRuntimeBudgetPrompt({ prompt: input.prompt, runStart })
-  args.push(runtimePrompt)
+  args.push("--", runtimePrompt)
   let started = false
   let lastOutputAt: string | undefined
   let stdoutData = ""

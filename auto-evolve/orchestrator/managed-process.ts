@@ -51,6 +51,12 @@ function normalizePathForSpawn(p: string): string {
   return normalized
 }
 
+function normalizeArgForSpawn(arg: string): string {
+  if (process.platform !== "win32") return arg
+  if (!arg.includes("\\") && !/^\/[a-z]\//i.test(arg)) return arg
+  return normalizePathForSpawn(arg)
+}
+
 // Ensure the cwd directory exists before spawning.
 // On Windows, libuv's CreateProcessW fails with ENOENT if cwd doesn't exist,
 // even when the exe itself is valid. We fall back to a parent dir.
@@ -71,6 +77,26 @@ function ensureValidCwd(p: string): string {
     }
   }
   return "C:/"
+}
+
+function processRegistryTimeoutMs() {
+  const raw = Number(process.env.AUTO_EVOLVE_PROCESS_REGISTRY_TIMEOUT_MS)
+  if (Number.isFinite(raw) && raw > 0) return raw
+  return 5_000
+}
+
+async function waitRegistry(promise: Promise<void>, ms: number) {
+  let handle: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      promise,
+      new Promise<void>((resolve) => {
+        handle = setTimeout(resolve, ms)
+      }),
+    ])
+  } finally {
+    if (handle) clearTimeout(handle)
+  }
 }
 
 function buildPythonWrapperCode() {
@@ -105,6 +131,15 @@ function buildPythonWrapperCode() {
 }
 
 export async function runManagedProcess(input: ManagedProcessInput): Promise<ManagedProcessResult> {
+  if (!input.command[0]) {
+    throw new Error(`Managed process ${input.title} has no executable command.`)
+  }
+  for (const arg of input.command) {
+    if (typeof arg !== "string") {
+      throw new Error(`Managed process ${input.title} has a non-string command argument.`)
+    }
+  }
+
   const backend = resolveBackend(input.backend)
   const child =
     backend === "python_subprocess"
@@ -117,7 +152,7 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
           stdio: ["pipe", "pipe", "pipe"],
           shell: true,
         })
-      : nodeSpawn(normalizePathForSpawn(input.command[0] ?? ""), input.command.slice(1), {
+      : nodeSpawn(normalizePathForSpawn(input.command[0] ?? ""), input.command.slice(1).map(normalizeArgForSpawn), {
           cwd: ensureValidCwd(input.cwd),
           env: (() => {
             const env: NodeJS.ProcessEnv = {
@@ -129,7 +164,77 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
           stdio: ["pipe", "pipe", "pipe"],
           shell: false,
         })
-  await registerRuntimeProcess(input.runtimeScope, child.pid, input.title)
+  let stdoutData = ""
+  let stderrData = ""
+  let timedOut = false
+  let hardTimedOut = false
+  let silentTimedOut = false
+  let silentTimeoutAfterActivity = false
+  let observedRuntimeOutput = false
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  let silentTimeoutHandle: ReturnType<typeof setTimeout> | undefined
+  let refreshSilentTimeout: (() => void) | undefined
+  let startTimeouts: (() => void) | undefined
+
+  const exitPromise = new Promise<number>((resolve) => {
+    child.on("exit", (code) => resolve(code ?? 0))
+    child.on("error", () => resolve(1))
+  })
+  const timeoutPromise = new Promise<number>((resolve) => {
+    let settled = false
+    const killAndResolve = async (kind: "hard" | "silent") => {
+      if (settled) return
+      settled = true
+      timedOut = true
+      if (kind === "hard") hardTimedOut = true
+      if (kind === "silent") {
+        silentTimedOut = true
+        silentTimeoutAfterActivity = observedRuntimeOutput
+      }
+      try {
+        await terminateProcessTree(child.pid)
+      } catch {}
+      resolve(124)
+    }
+    const start = () => {
+      timeoutHandle = setTimeout(async () => {
+        await killAndResolve("hard")
+      }, input.timeoutMs)
+    }
+    const startSilent = () => {
+      if (typeof input.silentTimeoutMs !== "number" || input.silentTimeoutMs <= 0) return
+      refreshSilentTimeout = () => {
+        if (silentTimeoutHandle) clearTimeout(silentTimeoutHandle)
+        const nextSilentTimeoutMs =
+          observedRuntimeOutput &&
+          typeof input.silentTimeoutAfterActivityMs === "number" &&
+          input.silentTimeoutAfterActivityMs > 0
+          ? input.silentTimeoutAfterActivityMs
+          : input.silentTimeoutMs
+        silentTimeoutHandle = setTimeout(async () => {
+          await killAndResolve("silent")
+        }, nextSilentTimeoutMs)
+      }
+      refreshSilentTimeout()
+    }
+    startTimeouts = () => {
+      start()
+      startSilent()
+    }
+  })
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdoutData += chunk.toString("utf8")
+    observedRuntimeOutput = true
+    refreshSilentTimeout?.()
+    input.onStdoutChunk?.(chunk)
+  })
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderrData += chunk.toString("utf8")
+    observedRuntimeOutput = true
+    refreshSilentTimeout?.()
+    input.onStderrChunk?.(chunk)
+  })
 
   const abortAfterSpawn = async (cause: unknown): Promise<never> => {
     const error = cause instanceof Error ? cause : new Error(String(cause))
@@ -140,6 +245,20 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
   }
 
   try {
+    const ms = processRegistryTimeoutMs()
+    const started = Date.now()
+    let registryError: unknown
+    const registry = registerRuntimeProcess(input.runtimeScope, child.pid, input.title).catch((error) => {
+      registryError = error
+    })
+    await waitRegistry(registry, ms)
+    if (registryError) {
+      const message = registryError instanceof Error ? registryError.message : String(registryError)
+      stderrData += `[managed-process] process registry failed: ${message}\n`
+    } else if (Date.now() - started >= ms) {
+      stderrData += `[managed-process] process registry did not finish within ${ms}ms; continuing task execution.\n`
+    }
+
     if (backend === "python_subprocess") {
       const wrapperPayload = JSON.stringify({
         command: input.command,
@@ -164,75 +283,12 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
     return abortAfterSpawn(error)
   }
 
-  let stdoutData = ""
-  let stderrData = ""
-  let timedOut = false
-  let hardTimedOut = false
-  let silentTimedOut = false
-  let silentTimeoutAfterActivity = false
-  let observedRuntimeOutput = false
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-  let silentTimeoutHandle: ReturnType<typeof setTimeout> | undefined
-  let refreshSilentTimeout: (() => void) | undefined
   const pulseHandle = setInterval(() => {
     void Promise.resolve(input.onPulse?.()).catch(() => undefined)
     if (observedRuntimeOutput) refreshSilentTimeout?.()
   }, input.pulseIntervalMs ?? 60_000)
 
-  const exitPromise = new Promise<number>((resolve) => {
-    child.on("exit", (code) => resolve(code ?? 0))
-    child.on("error", () => resolve(1))
-  })
-  const timeoutPromise = new Promise<number>((resolve) => {
-    let settled = false
-    const killAndResolve = async (kind: "hard" | "silent") => {
-      if (settled) return
-      settled = true
-      timedOut = true
-      if (kind === "hard") hardTimedOut = true
-      if (kind === "silent") {
-        silentTimedOut = true
-        silentTimeoutAfterActivity = observedRuntimeOutput
-      }
-      try {
-        await terminateProcessTree(child.pid)
-      } catch {}
-      resolve(124)
-    }
-    timeoutHandle = setTimeout(async () => {
-      await killAndResolve("hard")
-    }, input.timeoutMs)
-
-    if (typeof input.silentTimeoutMs === "number" && input.silentTimeoutMs > 0) {
-      refreshSilentTimeout = () => {
-        if (silentTimeoutHandle) clearTimeout(silentTimeoutHandle)
-        const nextSilentTimeoutMs =
-          observedRuntimeOutput &&
-          typeof input.silentTimeoutAfterActivityMs === "number" &&
-          input.silentTimeoutAfterActivityMs > 0
-            ? input.silentTimeoutAfterActivityMs
-            : input.silentTimeoutMs
-        silentTimeoutHandle = setTimeout(async () => {
-          await killAndResolve("silent")
-        }, nextSilentTimeoutMs)
-      }
-      refreshSilentTimeout()
-    }
-  })
-
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdoutData += chunk.toString("utf8")
-    observedRuntimeOutput = true
-    refreshSilentTimeout?.()
-    input.onStdoutChunk?.(chunk)
-  })
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderrData += chunk.toString("utf8")
-    observedRuntimeOutput = true
-    refreshSilentTimeout?.()
-    input.onStderrChunk?.(chunk)
-  })
-
+  startTimeouts?.()
   const exitCode = await Promise.race([exitPromise, timeoutPromise])
   if (timeoutHandle) clearTimeout(timeoutHandle)
   if (silentTimeoutHandle) clearTimeout(silentTimeoutHandle)

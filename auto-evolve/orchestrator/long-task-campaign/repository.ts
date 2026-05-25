@@ -1,5 +1,6 @@
 import path from "node:path"
 import process from "node:process"
+import { randomBytes } from "node:crypto"
 import { appendFile, readFile } from "node:fs/promises"
 import { autoEvolvePath, ensureDirectory, readJsonFile, writeJsonFile, writeTextFile } from "../fs"
 import type {
@@ -78,7 +79,8 @@ function slugify(input: string) {
 export function createLongTaskCampaignID(title: string) {
   const now = new Date()
   const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}${String(now.getMilliseconds()).padStart(3, "0")}`
-  return `${stamp}-${slugify(title) || "long-task-campaign"}`
+  const salt = randomBytes(4).toString("hex")
+  return `${stamp}-${salt}-${slugify(title) || "long-task-campaign"}`
 }
 
 export function longTaskCampaignPaths(cwd: string, campaignID: string): LongTaskCampaignPaths {

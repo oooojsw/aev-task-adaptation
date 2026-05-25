@@ -42,8 +42,6 @@ export interface MergerOutcome {
  * hardcode the absolute path so the same code works under different layouts.
  */
 const DEFAULT_PROMPT_REL = "methods/recipes/multi-instance/prompts/merge.md"
-const MERGE_TEXT_LIMIT = 64_000
-
 export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<MergerOutcome> {
   const state = input.state
   state.phase = "phase2_merge"
@@ -91,11 +89,12 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
   }
   await writeJsonFile(path.join(mergerRoot, "input-manifest.json"), inputManifest)
 
-  // Build the prompt body. We inline the per-instance skill contents so the
-  // merger agent sees the actual text, not just paths it would have to read.
+  // Build the prompt body without inlining all skill text. Very large prompt
+  // arguments can exceed process spawn limits on Windows.
   const promptPath = input.promptPath ?? path.join(input.cwd, "auto-evolve", DEFAULT_PROMPT_REL)
   const promptBody = await readTextFile(promptPath)
-  const inlined = await inlineInstanceSkills(state, contributingInstances)
+  const lines = await buildInstanceIndex(contributingInstances)
+  const manifestPath = path.join(mergerRoot, "input-manifest.json")
   const fullPrompt = [
     promptBody.trim(),
     "",
@@ -105,9 +104,13 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
     "",
     `Output root for your writes: ${mergedSkillDir}`,
     "",
-    "Each instance is presented below with its id and skill content.",
+    `Manifest JSON path: ${manifestPath}`,
     "",
-    inlined,
+    "Read the manifest first, then read each harvested skill from disk via those paths.",
+    "Do not ask for more files; all inputs are already accessible.",
+    "",
+    "Contributing instances:",
+    ...lines,
     "",
     "# Working instructions",
     "",
@@ -122,7 +125,7 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
   // reaching into instance run-roots.
   const config = await loadConfig(input.cwd)
   const readPaths = [
-    path.join(mergerRoot, "input-manifest.json"),
+    manifestPath,
     ...contributingInstances.map((i) => i.harvestedSkillPath!).filter(Boolean),
   ]
   const editPaths = [mergedSkillDir]
@@ -174,42 +177,18 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
  * The merger sees a single prompt rather than a forest of files, which keeps
  * its working memory bounded.
  */
-async function inlineInstanceSkills(state: CoordinatorState, instances: InstanceState[]): Promise<string> {
-  const blocks: string[] = []
+async function buildInstanceIndex(instances: InstanceState[]): Promise<string[]> {
+  const lines: string[] = []
   for (const inst of instances) {
-    const block: string[] = []
-    block.push(`## Instance: ${inst.id}`)
-    block.push(`Status from fan-out: ${inst.status}`)
-    block.push(`Source root: ${inst.sourceTaskRoot}`)
-    block.push("")
     if (!inst.harvestedSkillPath) {
-      block.push("(no harvested skill on disk — instance contributes nothing)")
-      blocks.push(block.join("\n"))
+      lines.push(`- ${inst.id}: (missing harvestedSkillPath)`)
       continue
     }
     const tree = await listSkillTree(inst.harvestedSkillPath)
-    block.push("Skill files:")
-    for (const item of tree) {
-      block.push(`  - ${item.relPath} (${item.bytes} bytes)`)
-    }
-    block.push("")
-    for (const item of tree) {
-      if (!item.isText) continue
-      block.push(`### ${item.relPath}`)
-      const content = await readTextFile(path.join(inst.harvestedSkillPath, item.relPath))
-      if (content.length > MERGE_TEXT_LIMIT) {
-        await appendCoordinatorLog(
-          state,
-          "warn",
-          `Phase 2: merge input truncated for ${inst.id}/${item.relPath} from ${content.length} to ${MERGE_TEXT_LIMIT} chars.`,
-        )
-      }
-      block.push(truncate(content, MERGE_TEXT_LIMIT))
-      block.push("")
-    }
-    blocks.push(block.join("\n"))
+    const text = tree.filter((item) => item.isText).length
+    lines.push(`- ${inst.id}: ${inst.harvestedSkillPath} (files=${tree.length}, text=${text})`)
   }
-  return blocks.join("\n\n---\n\n")
+  return lines
 }
 
 interface SkillTreeItem {
@@ -253,9 +232,4 @@ function isProbablyText(name: string): boolean {
     lower.endsWith(".yml") ||
     lower.endsWith(".toml")
   )
-}
-
-function truncate(text: string, max: number): string {
-  if (text.length <= max) return text
-  return `${text.slice(0, max)}\n[...truncated ${text.length - max} chars...]`
 }

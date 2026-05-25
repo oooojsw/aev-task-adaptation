@@ -4,6 +4,7 @@ import type { LongTaskBudgets } from "../long-task/contract"
 import {
   DEFAULT_LONG_TASK_CAMPAIGN_CARRYOVER,
   type LongTaskCampaignCarryoverConfig,
+  type LongTaskCampaignSurfaceGeneralizationConfig,
   type LongTaskCampaignSpec,
 } from "./contract"
 
@@ -77,6 +78,32 @@ function normalizeBudgets(raw: unknown): Partial<LongTaskBudgets> | undefined {
   return Object.keys(next).length ? next : undefined
 }
 
+async function normalizeSurfaceGeneralization(baseDir: string, raw: unknown): Promise<LongTaskCampaignSurfaceGeneralizationConfig | undefined> {
+  if (!isObject(raw)) return undefined
+  const enabled = typeof raw.enabled === "boolean" ? raw.enabled : true
+  if (!enabled) return undefined
+  const validatorPathRaw = normalizeMaybeString(raw.validatorPath)
+  const configPathRaw = normalizeMaybeString(raw.configPath)
+  if (!validatorPathRaw || !configPathRaw) {
+    throw new Error("Long-task campaign surfaceGeneralization requires validatorPath and configPath when enabled.")
+  }
+  const validatorPath = resolveMaybePath(baseDir, validatorPathRaw)
+  const configPath = resolveMaybePath(baseDir, configPathRaw)
+  if (!(await pathExists(validatorPath))) {
+    throw new Error(`Long-task campaign surfaceGeneralization validatorPath does not exist: ${validatorPath}`)
+  }
+  if (!(await pathExists(configPath))) {
+    throw new Error(`Long-task campaign surfaceGeneralization configPath does not exist: ${configPath}`)
+  }
+  return {
+    enabled: true,
+    validatorPath,
+    configPath,
+    blocking: typeof raw.blocking === "boolean" ? raw.blocking : false,
+    timeoutMs: typeof raw.timeoutMs === "number" && raw.timeoutMs > 0 ? Math.floor(raw.timeoutMs) : 60000,
+  }
+}
+
 export async function loadLongTaskCampaignSpec(specPath: string): Promise<{ spec: LongTaskCampaignSpec; specPath: string }> {
   const resolvedSpecPath = path.resolve(specPath)
   const baseDir = path.dirname(resolvedSpecPath)
@@ -142,6 +169,7 @@ export async function loadLongTaskCampaignSpec(specPath: string): Promise<{ spec
     maxRounds,
     seedTargets,
     lessonsMirror,
+    surfaceGeneralization: await normalizeSurfaceGeneralization(baseDir, raw.surfaceGeneralization),
     carryover: normalizeCarryover(raw.carryover),
     roundBudgetOverrides: normalizeBudgets(raw.roundBudgetOverrides),
     notes: normalizeMaybeString(raw.notes),

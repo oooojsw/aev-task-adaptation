@@ -3609,6 +3609,108 @@ async function runCampaignReviewer(input: {
   return suggestion
 }
 
+async function runSurfaceGeneralizationPrecheck(input: {
+  cwd: string
+  campaignSpec: LongTaskCampaignSpec
+  baseSpec: LongTaskSpec
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+  roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
+  roundNumber: number
+  passID: string
+  runID?: string
+  runtimeScope: string
+}) {
+  const cfg = input.campaignSpec.surfaceGeneralization
+  if (!cfg?.enabled) return
+  const dir = path.join(input.roundPaths.root, "surface-precheck")
+  const id = `surface-precheck-${input.passID}`
+  const out = path.join(dir, "result.json")
+  await ensureDirectory(dir)
+  try {
+    const contract: LongTaskValidatorContract = {
+      id,
+      type: "script",
+      title: "Surface Generalization Pre-Check",
+      path: cfg.validatorPath,
+      runner: "python",
+      args: [cfg.configPath],
+      timeoutMs: cfg.timeoutMs,
+    }
+    const unit: LongTaskWorkUnit = {
+      id,
+      title: "Surface Generalization Pre-Check",
+      goal: "Verify pending package avoids hardcoded task-answer literals",
+      inputs: [],
+      dependsOn: [],
+      expectedArtifacts: [],
+      claim: "Surface generalization pre-check",
+      checkPlan: "Run surface generalization validator",
+      validatorIDs: [],
+      retryBudget: 0,
+      status: "active",
+      attemptCount: 1,
+    }
+    const result = await runLongTaskValidator({
+      cwd: input.cwd,
+      config: await loadConfig(input.cwd),
+      contract,
+      spec: input.baseSpec,
+      unit,
+      runID: input.runID ?? input.roundPaths.runTraceJsonPath,
+      attempt: 1,
+      validatorDir: dir,
+      bundlePath: out,
+      payload: {
+        targetPaths: [{ path: input.roundPaths.pendingPackageSnapshotRoot, role: "experience-workspace" }],
+      },
+      runtimeScope: input.runtimeScope,
+    })
+    if (result.passed) return
+    const items = await readLongTaskCampaignOperationalMemory(input.campaignPaths)
+    items.push({
+      id: `surface-fail-${input.roundNumber}-${input.passID}`,
+      runID: input.runID ?? "",
+      createdAt: nowISO(),
+      updatedAt: nowISO(),
+      kind: "blocking_issue",
+      status: "confirmed",
+      statement: `Lead pending package (${input.passID}) failed surface-generalization pre-check.`,
+      rationale: "Validator detected forbidden literals or non-generalized surface content.",
+      refs: [out],
+      tags: ["surface-generalization-fail"],
+      roundNumber: input.roundNumber,
+      lastRound: input.roundNumber,
+      occurrenceCount: 1,
+      sourceRunIDs: input.runID ? [input.runID] : [],
+    })
+    await writeLongTaskCampaignOperationalMemory(input.campaignPaths, items)
+    if (cfg.blocking) {
+      throw new Error(`Surface generalization pre-check failed (${input.passID}).`)
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const items = await readLongTaskCampaignOperationalMemory(input.campaignPaths)
+    items.push({
+      id: `surface-skip-${input.roundNumber}-${input.passID}`,
+      runID: input.runID ?? "",
+      createdAt: nowISO(),
+      updatedAt: nowISO(),
+      kind: "package_gap",
+      status: "candidate",
+      statement: `Surface generalization pre-check could not run: ${message}`,
+      rationale: "Pre-check script/config/runtime issue.",
+      refs: [],
+      tags: ["surface-precheck-error"],
+      roundNumber: input.roundNumber,
+      lastRound: input.roundNumber,
+      occurrenceCount: 1,
+      sourceRunIDs: input.runID ? [input.runID] : [],
+    })
+    await writeLongTaskCampaignOperationalMemory(input.campaignPaths, items)
+    if (cfg.blocking) throw error
+  }
+}
+
 async function runCampaignFinalAcceptance(input: {
   cwd: string
   campaignID: string
@@ -4275,99 +4377,17 @@ export async function runLongTaskCampaign(input: { cwd: string; specPath: string
             await writeLongTaskCampaignOperationalMemory(campaignPaths, existingOpMemory)
           }
 
-          // Pre-check: run surface-generalization validator on lead's pending package
-          // Non-blocking: failure is recorded to operational memory but does not stop the pass
-          const precheckValidatorDir = path.join(roundPaths.root, "surface-precheck")
-          const precheckValidatorId = `surface-precheck-${passID}`
-          const precheckResultPath = path.join(precheckValidatorDir, "result.json")
-          const precheckConfigPath = autoEvolvePath(
-            input.cwd,
-            "task-packs/real-long-tasks/try4-expert-bootstrap/configs/formal-surface-generalization.json",
-          )
-          await ensureDirectory(precheckValidatorDir)
-          try {
-            const precheckContract: LongTaskValidatorContract = {
-              id: precheckValidatorId,
-              type: "script",
-              title: "Surface Generalization Pre-Check",
-              path: autoEvolvePath(input.cwd, "scripts/validate-experience-surface-generalization.py"),
-              runner: "python",
-              args: [precheckConfigPath],
-              timeoutMs: 60000,
-            }
-            const precheckUnit: LongTaskWorkUnit = {
-              id: precheckValidatorId,
-              title: "Surface Generalization Pre-Check",
-              goal: "Verify lead's pending package has no hardcoded task-answer literals",
-              inputs: [],
-              dependsOn: [],
-              expectedArtifacts: [],
-              claim: "Surface generalization pre-check",
-              checkPlan: "Run surface generalization validator",
-              validatorIDs: [],
-              retryBudget: 0,
-              status: "active",
-              attemptCount: 1,
-            }
-            const precheckResult = await runLongTaskValidator({
-              cwd: input.cwd,
-              config: await loadConfig(input.cwd),
-              contract: precheckContract,
-              spec: baseSpec,
-              unit: precheckUnit,
-              runID: runResult.runID ?? roundPaths.runTraceJsonPath,
-              attempt: 1,
-              validatorDir: precheckValidatorDir,
-              bundlePath: precheckResultPath,
-              payload: {
-                targetPaths: [
-                  { path: roundPaths.pendingPackageSnapshotRoot, role: "experience-workspace" },
-                ],
-              },
-              runtimeScope: roundRuntimeScope,
-            })
-            if (!precheckResult.passed) {
-              const opMemory = await readLongTaskCampaignOperationalMemory(campaignPaths)
-              opMemory.push({
-                id: `surface-fail-${roundNumber}-${passID}`,
-                runID: runResult.runID ?? "",
-                createdAt: nowISO(),
-                updatedAt: nowISO(),
-                kind: "blocking_issue",
-                status: "confirmed",
-                statement: `Lead's pending package (${passID}) contains hardcoded task-answer literals.`,
-                rationale: "Surface generalization validator detected forbidden literals in lead output.",
-                refs: [precheckResultPath],
-                tags: ["surface-generalization-fail"],
-                roundNumber,
-                lastRound: roundNumber,
-                occurrenceCount: 1,
-                sourceRunIDs: [runResult.runID],
-              })
-              await writeLongTaskCampaignOperationalMemory(campaignPaths, opMemory)
-            }
-          } catch (precheckError) {
-            // If pre-check itself fails (e.g. missing script), log but don't crash
-            const precheckMessage = precheckError instanceof Error ? precheckError.message : String(precheckError)
-            const opMemory = await readLongTaskCampaignOperationalMemory(campaignPaths)
-            opMemory.push({
-              id: `surface-skip-${roundNumber}-${passID}`,
-              runID: runResult.runID ?? "",
-              createdAt: nowISO(),
-              updatedAt: nowISO(),
-              kind: "package_gap",
-              status: "candidate",
-              statement: `Surface generalization pre-check could not run: ${precheckMessage}`,
-              rationale: "Pre-check script or config may be missing.",
-              refs: [],
-              tags: ["surface-precheck-error"],
-              roundNumber,
-              lastRound: roundNumber,
-              occurrenceCount: 1,
-              sourceRunIDs: [runResult.runID],
-            })
-            await writeLongTaskCampaignOperationalMemory(campaignPaths, opMemory)
-          }
+          await runSurfaceGeneralizationPrecheck({
+            cwd: input.cwd,
+            campaignSpec,
+            baseSpec,
+            campaignPaths,
+            roundPaths,
+            roundNumber,
+            passID,
+            runID: runResult.runID,
+            runtimeScope: roundRuntimeScope,
+          })
 
           await promoteRoundPendingAndTreeToCurrent({
             campaignPaths,
@@ -5054,6 +5074,18 @@ export async function resumeLongTaskCampaign(input: {
             runtimeScope: roundRuntimeScope,
             onActivation: activateCampaignRound,
             onPulse: pulseCampaignRound,
+          })
+
+          await runSurfaceGeneralizationPrecheck({
+            cwd: input.cwd,
+            campaignSpec,
+            baseSpec,
+            campaignPaths,
+            roundPaths,
+            roundNumber,
+            passID,
+            runID: runResult.runID,
+            runtimeScope: roundRuntimeScope,
           })
 
           await promoteRoundPendingAndTreeToCurrent({

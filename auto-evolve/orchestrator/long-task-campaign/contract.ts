@@ -43,6 +43,14 @@ export interface LongTaskCampaignLessonsMirror {
   addManifestPointer?: boolean
 }
 
+export interface LongTaskCampaignSurfaceGeneralizationConfig {
+  enabled: boolean
+  validatorPath: string
+  configPath: string
+  blocking: boolean
+  timeoutMs: number
+}
+
 export interface LongTaskCampaignCarryoverConfig {
   includeCampaignOperationalMemory: boolean
   includeCampaignSeedContext: boolean
@@ -311,6 +319,7 @@ export interface LongTaskCampaignSpec {
   maxRounds: number
   seedTargets: LongTaskCampaignSeedTarget[]
   lessonsMirror?: LongTaskCampaignLessonsMirror
+  surfaceGeneralization?: LongTaskCampaignSurfaceGeneralizationConfig
   carryover?: Partial<LongTaskCampaignCarryoverConfig>
   roundBudgetOverrides?: Partial<LongTaskBudgets>
   notes?: string

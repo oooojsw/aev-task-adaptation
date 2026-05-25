@@ -313,43 +313,43 @@ export function buildLongTaskExecutionPrompt(input: {
 }
 
 export function buildLongTaskPromptValidatorPrompt(input: {
-  spec: LongTaskSpec
-  unit: LongTaskWorkUnit
   validator: Extract<LongTaskValidatorContract, { type: "prompt_json" }>
-  bundlePath: string
+  validatorInputPath: string
+  resultPath: string
 }) {
   return [
-    "You are a validator for a long-running task.",
+    "You are a validator agent. You are NOT a solver agent.",
     "",
-    "Global goal:",
-    input.spec.goal.trim(),
+    "Read validator_input.json first. It contains all task-specific paths and rubric details.",
+    `Validator input path: ${input.validatorInputPath}`,
+    `Required result file path: ${input.resultPath}`,
     "",
-    `Current work unit: ${input.unit.id}`,
-    `Unit goal: ${input.unit.goal}`,
-    `Unit claim: ${input.unit.claim}`,
+    "Primary mission:",
+    "- Validate candidate output against validator-only answer and rubric.",
+    "- Write exactly one JSON object to the required result file path.",
+    "- Return the same JSON object as final response.",
     "",
-    `Retry bundle path: ${input.bundlePath}`,
+    "Scope constraints:",
+    "- Human guidance is background context only, not your main task.",
+    "- Do not complete the task, do not rewrite outputs, do not create extra reports.",
+    "- If a required file is missing, fail safely in JSON with passed=false and clear reason.",
     "",
-    "Validator contract:",
+    "Validation contract details:",
     input.validator.prompt.trim(),
     "",
-    "Validator-only reference paths:",
-    input.validator.referencePaths?.length ? bullet(input.validator.referencePaths) : "- none",
-    "",
-    "Validator-only attached files:",
-    input.validator.attachedFiles?.length ? bullet(input.validator.attachedFiles) : "- none",
-    "",
-    "Task target paths:",
-    describePathRefs(input.spec.targetPaths ?? []),
-    "",
-    "STRICT OUTPUT FORMAT — read carefully:",
+    "STRICT OUTPUT FORMAT (read carefully):",
+    `Before final answer, write the same JSON object to ${input.resultPath}.`,
     "You must output ONLY a valid JSON object and nothing else. No explanation, no markdown, no text before or after.",
     "If you include any path values in JSON fields, use forward slashes '/' only. Do not use backslashes '\\\\'.",
-    "The JSON must contain exactly these fields:",
+    "The JSON must include at least these fields:",
     "  - passed: boolean (true if validation passed, false otherwise)",
+    "  - blocking: boolean (true = this failure blocks the run, false = soft failure only)",
+    "Strongly recommended fields:",
+    "  - failure_class: string enum",
+    "    allowed: missing_candidate | issue_mismatch | evidence_missing | not_actionable | infra_error | schema_invalid | candidate_missing | candidate_format_invalid | score_below_threshold",
     "  - summary: string (one short sentence summarizing the result)",
     "  - details: array of strings (each describing a specific check item)",
-    "  - blocking: boolean (true = this failure blocks the run, false = soft failure only)",
+    "You may include additional task-specific fields requested by the validator contract.",
     "If your output is not valid JSON starting with '{', it will be treated as FAILED.",
     "",
     "Example output (this is the ONLY format accepted):",
@@ -361,7 +361,6 @@ export function buildLongTaskPromptValidatorPrompt(input: {
     }),
   ].join("\n")
 }
-
 export function buildLongTaskReplanPrompt(input: {
   spec: LongTaskSpec
   graph: LongTaskWorkGraph
@@ -452,3 +451,4 @@ export function buildLongTaskReplanPrompt(input: {
     }),
   ].join("\n")
 }
+
