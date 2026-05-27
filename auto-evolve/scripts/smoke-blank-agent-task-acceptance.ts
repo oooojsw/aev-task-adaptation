@@ -6,11 +6,17 @@ import {
   experienceWorkspacePathsFromRoot,
   restoreExperienceWorkspace,
 } from "../orchestrator/experience-workspace"
-import { autoEvolvePath, ensureDirectory, writeJsonFile, writeTextFile } from "../orchestrator/fs"
+import { autoEvolvePath, ensureDirectory, readJsonFile, readTextFile, writeJsonFile, writeTextFile } from "../orchestrator/fs"
 
 function stamp() {
   const now = new Date()
   return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}${String(now.getMilliseconds()).padStart(3, "0")}`
+}
+
+function repoRoot(target: string) {
+  const root = path.resolve(target)
+  if (path.basename(root).toLowerCase() === "auto-evolve") return path.dirname(root)
+  return root
 }
 
 async function seedWorkspace(root: string, token: string) {
@@ -35,7 +41,7 @@ async function seedWorkspace(root: string, token: string) {
 }
 
 async function main() {
-  const cwd = process.argv[2] ? path.resolve(process.argv[2]) : process.cwd()
+  const cwd = repoRoot(process.argv[2] ? path.resolve(process.argv[2]) : process.cwd())
   const token = `TASK-ACCEPTANCE-SMOKE-${stamp()}`
   const root = path.join(autoEvolvePath(cwd), "runtime-state", "acceptance-framework", "smoke-task", stamp())
   const workspaceRoot = path.join(root, "formal-workspace")
@@ -98,6 +104,42 @@ async function main() {
       harnessRoot: path.join(root, "runs"),
       policyID: "blank-agent-single-session-task-gate",
     })
+    const run = await readJsonFile<{
+      promptInlineFiles?: string[]
+      permissionReadPaths?: string[]
+      referencedPaths?: string[]
+    }>(path.join(result.runDir, "session", "run.json"))
+    const prompt = await readTextFile(path.join(result.runDir, "session", "prompt.txt"))
+    const forbidden = [
+      "campaign-working-memory.json",
+      "routing-control.json",
+      "exploration-tree.json",
+      "dispatch-tickets.json",
+      "blank-agent-acceptance-diagnosis.json",
+      "retry_input_bundle.json",
+      "coordinator-state.json",
+      "validator_input.json",
+      "private-answers",
+      "hidden-answer",
+    ]
+    const exposed = [
+      ...((run.promptInlineFiles ?? []).map((item) => `promptInlineFiles:${item}`)),
+      ...((run.permissionReadPaths ?? []).map((item) => `permissionReadPaths:${item}`)),
+      ...((run.referencedPaths ?? []).map((item) => `referencedPaths:${item}`)),
+    ].filter((item) => forbidden.some((word) => item.toLowerCase().includes(word.toLowerCase())))
+    const inlineLeak = forbidden.filter((word) => {
+      if (word === "private-answers" || word === "hidden-answer") return prompt.toLowerCase().includes(word)
+      return prompt.includes(`/${word}`) || prompt.includes(`\\${word}`) || prompt.includes(` ${word}`)
+    })
+    if (exposed.length > 0 || inlineLeak.length > 0) {
+      throw new Error(
+        [
+          "Blank-agent task acceptance leaked forbidden runtime context.",
+          ...exposed,
+          ...inlineLeak.map((item) => `prompt:${item}`),
+        ].join("\n"),
+      )
+    }
 
     const summary = {
       passed: result.passed,
@@ -105,6 +147,7 @@ async function main() {
       runDir: result.runDir,
       acceptanceRecordPath: result.acceptanceRecordPath,
       sessionExecutionReportPath: result.sessionExecutionReportPath,
+      antiLeakPassed: true,
     }
     await writeJsonFile(path.join(root, "summary.json"), summary)
     console.log(JSON.stringify(summary, null, 2))

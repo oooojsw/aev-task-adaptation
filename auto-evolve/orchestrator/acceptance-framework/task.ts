@@ -1,78 +1,10 @@
 import path from "node:path"
-import { setTimeout as sleep } from "node:timers/promises"
-import { cp, lstat, rm, mkdir } from "node:fs/promises"
-import { resolveModelSelection } from "../model-selection"
-import { runOpencodeTask } from "../opencode"
 import { loadConfig } from "../schema"
-import { ensureDirectory, pathExists, readJsonFile, writeJsonFile, writeTextFile } from "../fs"
-import { writeTaskArtifacts } from "../task-artifacts"
+import { pathExists, readJsonFile, writeJsonFile } from "../fs"
 import { loadLongTaskSpec } from "../long-task/spec"
-import { resolveLongTaskEditablePaths } from "../long-task/repository"
-import { runLongTaskValidator } from "../long-task/validators"
-import type { LongTaskSpec, LongTaskWorkUnit, LongTaskValidatorResult } from "../long-task/contract"
 import { recordAcceptanceResult } from "./run"
 import { experienceWorkspacePathsFromRoot, resolveExperienceWorkspaceLayout } from "../experience-workspace"
-import { cleanupRuntimeProcessScope } from "../runtime-process-registry"
-
-function hasNonAsciiChars(str: string) {
-  return /[^\x00-\x7F]/.test(str)
-}
-
-async function writePartialArtifactSnapshot(runDir: string, spec: LongTaskSpec, timedOut: boolean) {
-  const snapshotRoot = path.join(runDir, "partial-artifacts")
-  await mkdir(snapshotRoot, { recursive: true })
-
-  const entries: { path: string; exists: boolean; sizeBytes?: number; error?: string }[] = []
-
-  for (const ref of spec.targetPaths ?? []) {
-    try {
-      const exists = await pathExists(ref.path)
-      if (exists) {
-        const stats = await lstat(ref.path)
-        entries.push({ path: ref.path, exists: true, sizeBytes: Number(stats.size) })
-      } else {
-        entries.push({ path: ref.path, exists: false })
-      }
-    } catch (err) {
-      entries.push({ path: ref.path, exists: false, error: String(err) })
-    }
-  }
-
-  await writeJsonFile(path.join(snapshotRoot, "stall-summary.json"), {
-    snapshotAt: nowISO(),
-    timedOut,
-    entries,
-  })
-
-  for (const ref of spec.targetPaths ?? []) {
-    if (!(await pathExists(ref.path))) continue
-    try {
-      const targetBase = path.join(snapshotRoot, path.basename(ref.path))
-      await cp(ref.path, targetBase, { force: true })
-    } catch {}
-  }
-}
-
-async function normalizePathForWindows(input: string): Promise<string> {
-  if (process.platform !== "win32") return input
-  if (!hasNonAsciiChars(input)) return input
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    `$p = '${input.replace(/'/g, "''")}'`,
-    "if (Test-Path -LiteralPath $p) {",
-    "(Get-Item -LiteralPath $p).FullName",
-    "} else {",
-    "$p",
-    "}",
-  ].join("; ")
-  const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
-  if (exitCode === 0) return stdout.trim()
-  return input
-}
+import { runBlankEval } from "../blank-eval/runner"
 
 function nowISO() {
   return new Date().toISOString()
@@ -84,60 +16,8 @@ function short(text: string, limit = 220) {
   return normalized.slice(0, limit - 3) + "..."
 }
 
-function bullet(items: string[]) {
-  return items.length ? items.map((item) => `- ${item}`).join("\n") : "- none"
-}
-
 function uniqueStrings(items: string[]) {
   return Array.from(new Set(items.filter((item) => item.trim().length > 0)))
-}
-
-function describePathRefs(refs: { path: string; label?: string; role?: string }[]) {
-  if (!refs.length) return "- none"
-  return refs
-    .map((item) => {
-      const labels = [item.label, item.role].filter(Boolean).join(", ")
-      return labels ? `- ${item.path} (${labels})` : `- ${item.path}`
-    })
-    .join("\n")
-}
-
-function describeCapabilities(spec: LongTaskSpec) {
-  if (!spec.capabilities?.length) return "- none"
-  return spec.capabilities
-    .map((capability) =>
-      [
-        `- id: ${capability.id}`,
-        `  title: ${capability.title}`,
-        `  kind: ${capability.kind}`,
-        `  description: ${capability.description.trim()}`,
-        capability.referencePaths?.length ? `  reference_paths: ${capability.referencePaths.join(", ")}` : "",
-        capability.attachedFiles?.length ? `  attached_files: ${capability.attachedFiles.join(", ")}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    )
-    .join("\n")
-}
-
-function describeEditablePaths(spec: LongTaskSpec) {
-  return bullet(resolveLongTaskEditablePaths(spec))
-}
-
-function capabilityReferencePaths(spec: LongTaskSpec) {
-  return uniqueStrings((spec.capabilities ?? []).flatMap((capability) => capability.referencePaths ?? []))
-}
-
-function capabilityAttachedFiles(spec: LongTaskSpec) {
-  return uniqueStrings((spec.capabilities ?? []).flatMap((capability) => capability.attachedFiles ?? []))
-}
-
-function deploymentGuidanceAttachedFiles(spec: LongTaskSpec) {
-  return uniqueStrings(
-    (spec.materials ?? [])
-      .map((item) => item.path)
-      .filter((item) => path.basename(item).toLowerCase() === "human-guidance.md"),
-  )
 }
 
 function deploymentRunID(title: string) {
@@ -152,45 +32,8 @@ function deploymentRunID(title: string) {
   return `${stamp}-${slug}`
 }
 
-async function resetEditablePaths(runDir: string, spec: LongTaskSpec, specDir: string) {
-  const rawPaths = [...(spec.editablePaths ?? []), ...(spec.targetPaths ?? []).map((item) => item.path)]
-  const resolved = rawPaths.map((p) => path.resolve(specDir, p))
-  const unique = Array.from(new Set(resolved)).sort((a, b) => a.length - b.length)
-
-  const editablePaths: string[] = []
-  for (const candidate of unique) {
-    const covered = editablePaths.some((existing) => candidate === existing || candidate.startsWith(existing + path.sep))
-    if (!covered) editablePaths.push(candidate)
-  }
-
-  const archiveRoot = path.join(runDir, "preexisting")
-  await ensureDirectory(archiveRoot)
-
-  for (const [index, editablePath] of editablePaths.entries()) {
-    if (!(await pathExists(editablePath))) {
-      const parent = path.dirname(editablePath)
-      if (parent && parent !== editablePath) await ensureDirectory(parent)
-      continue
-    }
-
-    const archivePath = path.join(
-      archiveRoot,
-      `${String(index + 1).padStart(2, "0")}-${path.basename(editablePath) || "editable"}`,
-    )
-    const stats = await lstat(editablePath)
-    await cp(editablePath, archivePath, { recursive: stats.isDirectory(), force: true })
-    if (stats.isDirectory()) {
-      await rm(editablePath, { recursive: true, force: true })
-      await ensureDirectory(editablePath)
-    } else {
-      await rm(editablePath, { force: true })
-    }
-  }
-}
-
 async function deriveFormalSurfaceEntryPoints(formalSurfaceRoots: string[]) {
   const entryPoints: string[] = []
-
   for (const root of uniqueStrings(formalSurfaceRoots)) {
     if (!(await pathExists(root))) continue
     try {
@@ -200,107 +43,7 @@ async function deriveFormalSurfaceEntryPoints(formalSurfaceRoots: string[]) {
       continue
     }
   }
-
   return uniqueStrings(entryPoints)
-}
-
-function buildBlankAgentTaskPrompt(input: {
-  spec: LongTaskSpec
-  formalSurfaceRoots: string[]
-  resolvedInitialExpertContextPaths: string[]
-  promptInlineFiles: string[]
-  bundlePath: string
-  hasNonAscii?: boolean
-}) {
-  const lines = [
-    "You are running a highest-level blank-agent deployment acceptance task.",
-    "",
-    "Global goal:",
-    input.spec.goal.trim(),
-    "",
-    "Formal expert surface roots:",
-    bullet(input.formalSurfaceRoots),
-    "",
-    "Resolved expert context entry points:",
-    bullet(input.resolvedInitialExpertContextPaths),
-    "",
-    "Task materials:",
-    describePathRefs(input.spec.materials),
-    "",
-    "Target output paths:",
-    describePathRefs(input.spec.targetPaths ?? []),
-    "",
-    "Editable paths:",
-    describeEditablePaths(input.spec),
-    "",
-    "Registered capabilities:",
-    describeCapabilities(input.spec),
-    "",
-    "Minimal deployment contract:",
-    "- Treat yourself as a blank agent. Use only the listed formal expert surface, declared materials, and registered capability assets.",
-    "- Required text files are embedded directly in this startup prompt. Use those inlined contents immediately; do not spend tool calls re-reading them before acting.",
-    "- The human guidance file is the human-readable task guidance and has hard-constraint priority for deployment execution.",
-    "- Write final outputs only to the declared target output paths, and edit only declared editable paths.",
-    "- External acceptance validators exist, but hidden criteria, reference data, and internal configurations are not available during deployment execution.",
-    "- Before returning, run local self-checks derived only from the allowed inputs. If blocked, report blockers instead of claiming success.",
-  ]
-
-  if (input.promptInlineFiles.length) {
-    lines.push(
-      "",
-      "Required files already inlined into this startup prompt:",
-      bullet(input.promptInlineFiles),
-    )
-  }
-
-  if (input.hasNonAscii) {
-    lines.push(
-      "",
-      "IMPORTANT — Non-ASCII path encoding:",
-      "- One or more file paths contain non-ASCII characters (Chinese, Unicode).",
-      "- When using ADM-ZIP (or any ZIP library) to read/write DOCX files on Windows, always use UTF-8 encoding explicitly.",
-      "- For Node.js fs operations, use Buffer.from(encodedPath, 'utf-8') or ensure the path is passed as a Buffer for non-ASCII segments.",
-      "- Do NOT rely on the platform default codepage (CP437/CP1252) for file paths with Chinese characters.",
-      "- If a path looks corrupted in logs, re-encode it as UTF-8 before passing to ZIP operations.",
-    )
-  }
-
-  lines.push(
-    "",
-    "Return JSON only, with this shape:",
-    "```json",
-    JSON.stringify(
-      {
-        claim_statement: "one short sentence describing the deployment result",
-        claimed_success: true,
-        blockers: ["optional blocker"],
-        self_checks_run: ["validator or local check you ran"],
-        updated_files: ["absolute/path/you/changed"],
-      },
-      null,
-      2,
-    ),
-    "```",
-  )
-
-  return lines.join("\n")
-}
-
-function syntheticDeploymentUnit(spec: LongTaskSpec): LongTaskWorkUnit {
-  return {
-    id: "deployment-run",
-    title: "Blank-Agent Deployment Run",
-    goal: spec.goal,
-    inputs: spec.materials.map((item) => item.path),
-    dependsOn: [],
-    expectedArtifacts: (spec.targetPaths ?? []).map((item) => item.path),
-    claim: "The blank-agent deployment run completed and left validator-ready outputs.",
-    checkPlan: "Run all required deployment validators against the current outputs.",
-    validatorIDs: spec.validators.filter((item) => item.required !== false).map((item) => item.id),
-    retryBudget: 1,
-    status: "active",
-    attemptCount: 1,
-  }
 }
 
 export async function runBlankAgentSingleSessionTaskAcceptance(input: {
@@ -317,265 +60,103 @@ export async function runBlankAgentSingleSessionTaskAcceptance(input: {
   const { spec, specPath, missingInitialExpertContextPaths } = await loadLongTaskSpec(input.deploymentSpecPath, {
     allowMissingInitialExpertContextPaths: true,
   })
-  const runID = `deployment-${deploymentRunID(spec.title)}`
-  const runtimeScope = `deployment:${runID}`
-  const runDir = path.join(input.harnessRoot, runID)
-  const bundlePath = path.join(runDir, "deployment_bundle.json")
-  const validatorBundleDir = path.join(runDir, "validators")
-  const executeDir = path.join(runDir, "session")
-  try {
-    const selection = resolveModelSelection(config, "solve", spec.execution)
-    const capabilityPaths = capabilityReferencePaths(spec)
-    const capabilityFiles = capabilityAttachedFiles(spec)
-    const guidanceFiles = deploymentGuidanceAttachedFiles(spec)
-
-    const derivedEntryPoints = await deriveFormalSurfaceEntryPoints(input.formalSurfaceRoots)
-    const resolvedInitialExpertContextPaths = uniqueStrings([
-      ...(spec.initialExpertContextPaths ?? []),
-      ...derivedEntryPoints,
-    ])
-
-    await ensureDirectory(runDir)
-    await ensureDirectory(validatorBundleDir)
-    await resetEditablePaths(runDir, spec, path.dirname(specPath))
-
-    await writeJsonFile(bundlePath, {
-      runID,
-      sourceRunID: input.sourceRunID,
+  const runSeed = deploymentRunID(spec.title)
+  const resolvedInitialExpertContextPaths = await deriveFormalSurfaceEntryPoints(input.formalSurfaceRoots)
+  const result = await runBlankEval({
+    cwd: input.cwd,
+    specPath,
+    skillRoots: input.formalSurfaceRoots,
+    runRoot: input.harnessRoot,
+    sourceID: input.targetID,
+    mode: "deployment",
+    runtimeScope: `deployment:${runSeed}`,
+    resetEditablePaths: true,
+  })
+  const failed = result.validatorResults.filter((item) => !item.passed)
+  const reason = result.passed
+    ? "All required deployment validators passed."
+    : (failed[0]?.summary ?? "Deployment validators failed.")
+  const reasons = result.passed
+    ? []
+    : uniqueStrings(
+        failed
+          .flatMap((item) => [item.summary, ...item.details])
+          .map((item) => short(item, 200)),
+      ).slice(0, 10)
+  const responsePath = path.join(result.runDir, "session", "response.txt")
+  const record = await recordAcceptanceResult({
+    cwd: input.cwd,
+    config,
+    sourceRunID: input.sourceRunID,
+    mode: "deployment",
+    policyID: input.policyID ?? "blank-agent-single-session-task-gate",
+    stageID: "deployment_guard",
+    targetKind: input.targetKind,
+    targetID: input.targetID,
+    passed: result.passed,
+    outcome: result.passed ? "promote" : "hold",
+    summary: result.summary,
+    reason,
+    reasons,
+    evidenceRefs: uniqueStrings([
+      result.sessionExecutionReportPath,
+      result.resultPath,
+      responsePath,
+      ...result.validatorResults.flatMap((item) => item.evidenceRefs),
+    ]),
+    details: {
       deploymentSpecPath: specPath,
-      formalSurfaceRoots: input.formalSurfaceRoots,
       resolvedInitialExpertContextPaths,
       missingInitialExpertContextPaths,
-      targetKind: input.targetKind,
-      targetID: input.targetID,
-      createdAt: nowISO(),
-    })
-
-    const specEditablePaths = resolveLongTaskEditablePaths(spec)
-    // Also add target output paths as editable so the blank agent can write to them.
-    const editablePaths = uniqueStrings([
-      ...specEditablePaths,
-      ...(spec.targetPaths ?? []).map((item) => item.path),
-    ])
-
-    const allPathsForNorm = uniqueStrings([
-      ...input.formalSurfaceRoots,
-      ...resolvedInitialExpertContextPaths,
-      ...spec.materials.map((item) => item.path),
-      ...(spec.targetPaths ?? []).map((item) => item.path),
-      ...capabilityPaths,
-      ...capabilityFiles,
-      ...guidanceFiles,
-    ])
-    const normalizedPathsMap: Map<string, string> = new Map()
-    for (const p of allPathsForNorm) {
-      const normalized = await normalizePathForWindows(p)
-      if (normalized !== p) normalizedPathsMap.set(p, normalized)
-    }
-    function normPath(p: string) {
-      return normalizedPathsMap.get(p) ?? p
-    }
-
-    const hasNonAscii = normalizedPathsMap.size > 0
-    const prompt = buildBlankAgentTaskPrompt({
-      spec,
-      formalSurfaceRoots: input.formalSurfaceRoots,
-      resolvedInitialExpertContextPaths,
-      promptInlineFiles: uniqueStrings([...guidanceFiles, ...resolvedInitialExpertContextPaths].map(normPath)),
-      bundlePath,
-      hasNonAscii,
-    })
-
-    const attachedFiles = uniqueStrings(capabilityFiles.map(normPath))
-    const promptInlineFiles = uniqueStrings([...guidanceFiles, ...resolvedInitialExpertContextPaths].map(normPath))
-
-    const abortController = new AbortController()
-    const pollIntervalMs = 10_000
-    const pollPromise = (async () => {
-      while (!abortController.signal.aborted) {
-        await sleep(pollIntervalMs)
-        if (abortController.signal.aborted) break
-        const cleanup = await cleanupRuntimeProcessScope(runtimeScope)
-        if (cleanup.killedCount > 0) {
-          abortController.abort()
-          break
-        }
-      }
-    })()
-
-    let task: Awaited<ReturnType<typeof runOpencodeTask>>
-    let taskTimedOut = false
-
-    try {
-      task = await runOpencodeTask({
-        cwd: input.cwd,
-        config,
-        title: `Blank Agent Deployment ${spec.title}`,
-        prompt,
-        referencePaths: uniqueStrings(allPathsForNorm.map(normPath)),
-        attachedFiles,
-        promptInlineFiles,
-        permissionReadPaths: uniqueStrings(allPathsForNorm.map(normPath)),
-        permissionEditPaths: editablePaths,
-        model: selection.model,
-        agent: selection.agent,
-        variant: selection.variant,
-        injectPlatformSafetyRules: false,
-        // Use non-isolated runtime so model resolution works (models.dev is not reachable).
-        // Permission sandboxing is handled by the override config's restricted read/edit rules.
-        isolateHostRuntime: false,
-        runtimeScope,
-        live: {
-          stageDir: executeDir,
-          phase: "deployment_acceptance",
-          taskKind: "deployment_acceptance",
-          methodID: spec.reversePropagation?.recipeID,
-        },
-        signal: abortController.signal,
-      })
-    } catch (err) {
-      abortController.abort()
-      await pollPromise.catch(() => {})
-      throw err
-    }
-    taskTimedOut = (task.result as { timedOut?: boolean }).timedOut ?? false
-    abortController.abort()
-    await pollPromise.catch(() => {})
-
-    const artifactPaths = await writeTaskArtifacts(executeDir, task, {
-      phase: "deployment_acceptance",
-      taskKind: "deployment_acceptance",
-      methodID: spec.reversePropagation?.recipeID,
-    })
-
-    if (taskTimedOut) {
-      await writePartialArtifactSnapshot(runDir, spec, taskTimedOut)
-    }
-
-    const unit = syntheticDeploymentUnit(spec)
-    const validatorPayload = {
-      runID,
-      unitID: unit.id,
-      attempt: 1,
-      goal: spec.goal,
-      claim: unit.claim,
-      checkPlan: unit.checkPlan,
-      materials: spec.materials,
-      targetPaths: spec.targetPaths ?? [],
-      expectedArtifacts: unit.expectedArtifacts,
-      editablePaths,
-      bundlePath,
-    }
-
-    const validatorResults: LongTaskValidatorResult[] = []
-    for (const validator of spec.validators) {
-      const result = await runLongTaskValidator({
-        cwd: input.cwd,
-        config,
-        contract: validator,
-        spec,
-        unit,
-        runID,
-        attempt: 1,
-        validatorDir: path.join(validatorBundleDir, validator.id),
-        bundlePath,
-        payload: validatorPayload,
-        runtimeScope,
-      })
-      validatorResults.push(result)
-    }
-
-    const passed = validatorResults.every((item) => item.passed)
-    const summary = passed
-      ? "Blank-agent task deployment acceptance passed."
-      : short(
-          validatorResults
-            .filter((item) => !item.passed)
-            .map((item) => item.summary)
-            .join(" | "),
-          260,
-        )
-    const reason = passed
-      ? "All required deployment validators passed."
-      : (validatorResults.find((item) => !item.passed)?.summary ?? "Deployment validators failed.")
-    const reasons = passed
-      ? []
-      : uniqueStrings(
-          validatorResults
-            .filter((item) => !item.passed)
-            .flatMap((item) => [item.summary, ...item.details])
-            .map((item) => short(item, 200)),
-        ).slice(0, 10)
-
-    const record = await recordAcceptanceResult({
-      cwd: input.cwd,
-      config,
-      sourceRunID: input.sourceRunID,
-      mode: "deployment",
-      policyID: input.policyID ?? "blank-agent-single-session-task-gate",
-      stageID: "deployment_guard",
-      targetKind: input.targetKind,
-      targetID: input.targetID,
-      passed,
-      outcome: passed ? "promote" : "hold",
-      summary,
-      reason,
-      reasons,
-      evidenceRefs: uniqueStrings([
-        artifactPaths.sessionExecutionReportPath,
-        artifactPaths.responsePath,
-        ...validatorResults.flatMap((item) => item.evidenceRefs),
-      ]),
-      details: {
-        deploymentSpecPath: specPath,
-        resolvedInitialExpertContextPaths,
-        missingInitialExpertContextPaths,
-        validatorCount: validatorResults.length,
-        toolFailureCount: task.result.toolFailures.length,
-        exitCode: task.result.exitCode,
-        validators: validatorResults.map((item) => ({
-          validatorID: item.validatorID,
-          passed: item.passed,
-          summary: item.summary,
-        })),
-      },
-      notes: [
-        "This deployment harness exposed only the formal expert surface, registered capability assets, and task materials.",
-        "It did not expose runtime-state, shadow memory, candidate packages, or maintenance-request traces.",
-      ],
-      mirrorPath: path.join(runDir, "deployment_acceptance.json"),
-    })
-
-    await writeJsonFile(path.join(runDir, "deployment_run.json"), {
-      runID,
-      sourceRunID: input.sourceRunID,
-      targetKind: input.targetKind,
-      targetID: input.targetID,
-      deploymentSpecPath: specPath,
-      formalSurfaceRoots: input.formalSurfaceRoots,
-      resolvedInitialExpertContextPaths,
-      missingInitialExpertContextPaths,
-      passed,
-      summary,
-      validatorResults,
-      acceptanceRecordPath: record.path,
-      createdAt: nowISO(),
-    })
-
-    return {
-      runID,
-      runDir,
-      passed,
-      summary,
-      validatorResults,
-      acceptanceRecordPath: record.path,
-      sessionExecutionReportPath: artifactPaths.sessionExecutionReportPath,
-    }
-  } finally {
-    const cleanup = await cleanupRuntimeProcessScope(runtimeScope)
-    if (cleanup.remainingCount > 0) {
-      await cleanupRuntimeProcessScope(runtimeScope)
-    }
+      validatorCount: result.validatorResults.length,
+      validators: result.validatorResults.map((item) => ({
+        validatorID: item.validatorID,
+        passed: item.passed,
+        summary: item.summary,
+      })),
+    },
+    notes: [
+      "This deployment harness exposed only the formal expert surface, registered capability assets, and task materials.",
+      "It did not expose runtime-state, shadow memory, candidate packages, or maintenance-request traces.",
+    ],
+    mirrorPath: path.join(result.runDir, "deployment_acceptance.json"),
+  })
+  await writeJsonFile(path.join(result.runDir, "deployment_bundle.json"), {
+    runID: result.runID,
+    sourceRunID: input.sourceRunID,
+    deploymentSpecPath: specPath,
+    formalSurfaceRoots: input.formalSurfaceRoots,
+    resolvedInitialExpertContextPaths,
+    missingInitialExpertContextPaths,
+    targetKind: input.targetKind,
+    targetID: input.targetID,
+    mode: "deployment",
+    createdAt: nowISO(),
+  })
+  await writeJsonFile(path.join(result.runDir, "deployment_run.json"), {
+    runID: result.runID,
+    sourceRunID: input.sourceRunID,
+    targetKind: input.targetKind,
+    targetID: input.targetID,
+    deploymentSpecPath: specPath,
+    formalSurfaceRoots: input.formalSurfaceRoots,
+    resolvedInitialExpertContextPaths,
+    missingInitialExpertContextPaths,
+    passed: result.passed,
+    summary: result.summary,
+    validatorResults: result.validatorResults,
+    acceptanceRecordPath: record.path,
+    sessionExecutionReportPath: result.sessionExecutionReportPath,
+    createdAt: nowISO(),
+  })
+  return {
+    runID: result.runID,
+    runDir: result.runDir,
+    passed: result.passed,
+    summary: result.summary,
+    validatorResults: result.validatorResults,
+    acceptanceRecordPath: record.path,
+    sessionExecutionReportPath: result.sessionExecutionReportPath,
   }
 }
 
