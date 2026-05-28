@@ -247,6 +247,42 @@ function uniqueStrings(items: string[]) {
   return Array.from(new Set(items.filter((item) => item.trim().length > 0)))
 }
 
+function includesAny(text: string, items: string[]) {
+  const normalized = text.toLowerCase()
+  return items.some((item) => normalized.includes(item))
+}
+
+function isPlatformValidationUnit(raw: Record<string, unknown>) {
+  const text = [
+    typeof raw.id === "string" ? raw.id : "",
+    typeof raw.title === "string" ? raw.title : "",
+    typeof raw.goal === "string" ? raw.goal : "",
+    typeof raw.claim === "string" ? raw.claim : "",
+    typeof raw.check_plan === "string" ? raw.check_plan : "",
+  ]
+    .join(" ")
+    .toLowerCase()
+  if (includesAny(text, ["validate-completion-gate", "run-final-acceptance", "confirm-validator"])) return true
+  if (!includesAny(text, ["completion validator", "completion validators", "single-point-soft-validate", "runpromptvalidator", "result.json"])) return false
+  return includesAny(text, ["run", "invoke", "confirm", "execute"])
+}
+
+function scrubCheckPlan(input: string | undefined) {
+  const text = input?.trim()
+  if (!text) return "Create the expected artifacts and leave concise local self-check evidence."
+  if (
+    includesAny(text, ["completion validator", "completion validators", "single-point-soft-validate", "runpromptvalidator"]) ||
+    includesAny(text, ["result.json"])
+  ) {
+    return [
+      "Do not run platform-owned completion validators from this worker.",
+      "Complete the expected artifacts and run only local self-checks that do not create validator result files.",
+      "The orchestrator will run completion validators after graph completion.",
+    ].join(" ")
+  }
+  return text
+}
+
 function isExperienceWorkspaceRef(input: { role?: string; label?: string; path: string }) {
   const descriptor = `${input.role ?? ""} ${input.label ?? ""} ${path.basename(input.path)}`.toLowerCase()
   return descriptor.includes("experience-workspace") || descriptor.includes("expert-workspace")
@@ -376,6 +412,7 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
       retryBudgetRaw,
       spec.budgets?.maxAttemptsPerUnit ?? DEFAULT_LONG_TASK_BUDGETS.maxAttemptsPerUnit,
     )
+    if (isPlatformValidationUnit(item as Record<string, unknown>)) continue
     const sanitizedInputs = sanitizeGraphPathRefs(normalizeStringArray(item.inputs), allowedRoots)
     const sanitizedExpectedArtifacts = sanitizeGraphPathRefs(
       normalizeStringArray(item.expected_artifacts),
@@ -395,10 +432,7 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
         expectedArtifacts:
           sanitizedExpectedArtifacts.length > 0 ? sanitizedExpectedArtifacts : fallbackExpectedArtifacts,
         claim: typeof item.claim === "string" && item.claim.trim() ? item.claim.trim() : `Unit ${id} is complete.`,
-        checkPlan:
-          typeof item.check_plan === "string" && item.check_plan.trim()
-            ? item.check_plan.trim()
-            : "Run the assigned validators for this unit.",
+        checkPlan: scrubCheckPlan(typeof item.check_plan === "string" ? item.check_plan : undefined),
         validatorIDs:
           proposedValidatorIDs.length > 0
             ? proposedValidatorIDs

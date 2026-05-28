@@ -422,3 +422,209 @@
   - acceptance framework
   - blank-agent deployment acceptance
 - 改 orchestrator 时，默认要把“状态机 + 进程生命周期 + validator 真实产物”当成第一验证面，而不是只看 TypeScript 能不能编译
+
+## 12. 新增并发回归脚本（2026-05-22）
+
+- 脚本路径：
+  - `C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\scripts\smoke-concurrency-regression.ts`
+- 作用：
+  - 小型并发回归检查，覆盖以下三个关键点：
+    - 进程注册表并发注册/清理是否正常，防止遗漏子进程记录
+    - `healStaleRuntimeStates` 的状态写入重试接线是否存在（`retryWriteJson`）
+    - multi-instance merger 的长文本截断阈值与截断警告是否存在
+- 运行命令（在 `auto-evolve` 目录）：
+  - `bun run scripts/smoke-concurrency-regression.ts`
+- 通过标志：
+  - 输出 `smoke-concurrency-regression: PASS`
+
+## 13. OpenCode 基础设施故障备忘（2026-05-22）
+
+- 现象：
+  - long-task/campaign 在 `inspect-shared-materials` 首单元卡住，`run.json` 停留 `status=running`，`updatedAt` 只更新 1 秒左右。
+  - `events.json` 为 `[]`，`response.txt` 为 1 字节或为空，几乎没有真实会话输出。
+- 核心根因（已验证）：
+  - 当前本地仓库 `packages/opencode` 在源码运行路径下无法稳定启动：
+    - `bun run src/index.ts ...` 报 `TypeError: The superclass is not a constructor`（minipass-pipeline 链路）。
+    - `bun packages/opencode/bin/opencode --version` 报缺少平台二进制包（`opencode-windows-x64`）。
+  - 即：不是 campaign 业务逻辑本身，而是 OpenCode 基础设施可执行链路已损坏。
+- 诊断结论：
+  - 本机存在“全局安装 opencode”和“本地仓库源码 opencode”两套链路，不能混用。
+  - 当前阶段必须先修复本地仓库这套 opencode 启动能力，再继续 long-task。
+
+## 14. audit-point-learnbench 长期项目记忆（2026-05-24）
+
+### 14.1 当前核心目标
+
+当前重点实验是 `audit-point-learnbench`。
+目标不是一次生成完整审计报告，而是把一份大型审计/评估材料拆成多条“单点人类审核意见”学习任务。
+每个训练实例只学习一条人类审核意见，产出：
+- 一个该审计点对应的局部 skill / expert-workspace
+- 一个 `workspace/audit-point-output.md`，内容必须是 exactly one audit opinion item
+
+最终目标是：
+1. 所有训练实例分别学到通过验收
+2. 合并所有成功实例的 skill
+3. 用合并 skill 回测训练集
+4. 训练集全过后再测测试集
+5. 测试集不过则回到合并经验修正，而不是直接结束
+
+### 14.2 泛化能力主要看合并后
+
+训练阶段主要是积累局部成功经验，不要把单点任务成功误报成系统已经泛化成功。
+系统泛化主要在合并之后验证：
+- 合并 skill 是否保留共性规则
+- 回测训练集是否全过
+- 测试集是否能过
+- 失败样本是否能被转化为“特殊案例规则”而不是硬背答案
+
+合并包应分两部分：
+- 通用规则：跨任务抽象出来的方法
+- 特殊案例规则：训练回测失败时保留的场景化细节、证据定位模式和易错点
+
+特殊案例规则不应写成“题号答案”，而应写成可迁移的场景规则。
+
+### 14.3 当前训练调度方式
+
+`audit-point-learnbench` 已从固定 `4x5` 分轮模式改为全局队列模式。
+脚本：
+- `C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\scripts\run-audit-point-batches.ts`
+
+当前行为：
+- 默认最多同时跑 5 个训练 campaign
+- 已经 `verified_success` 的任务不重跑
+- `running / bootstrapping / recovery_pending` 的任务走 `resume-long-task-campaign`
+- 队列有空位就补下一个未完成任务
+- 不再等待一整轮全部结束才开下一轮
+
+环境变量：
+- `AUDIT_POINT_QUEUE_CONCURRENCY=5` 可调整总并发
+- `AUDIT_POINT_QUEUE_DRY_RUN=1` 只生成计划，不启动训练
+
+### 14.4 合并门槛
+
+合并必须严格等待所有训练实例成功。
+当前训练集共 20 条：
+- `audit-point-001` 到 `audit-point-020`
+
+合并前必须满足：
+- 每个任务 ID 都有且只有一个被选中的成功 campaign
+- campaign 状态必须是 `verified_success`
+- 必须存在 `pending-expert-package/current`
+- 旧失败、旧中断、被重新拉起替代的 campaign 一律不能进入合并
+
+典型例子：
+- 旧失败 `audit-point-004` 因 `EPERM active-processes.json rename` 崩溃，不能进入合并
+- 新的 `audit-point-004` 续跑成功后，才可以作为 `004` 的唯一合并输入
+
+如果不是 `20/20` 成功，脚本应跳过合并并写 `merge-skipped.json`，不能用部分训练集强行合并。
+
+### 14.5 当前已知成功/未完成情况
+
+最近一次队列启动前，系统识别到：
+- 已成功：`001, 002, 003, 006, 007, 008`
+- 待继续：`004, 005, 009-020`
+
+这只是当时状态，后续要以 `runtime-state` 最新状态为准。
+
+### 14.6 软验证设计
+
+当前软验证是 `prompt_json`，但核心结果以文件为准。
+软验证读取：
+- `validator_input.json`
+
+软验证必须写：
+- `result.json`
+
+验证重点：
+- `same_issue`
+- `specific_evidence`
+- `actionable`
+
+判定规则：
+- 只有 `same_issue=true`
+- 且 `specific_evidence=true`
+- 且 `actionable=true`
+- 才允许 `passed=true`
+
+人类指导文件 `human-guidance.md` 是背景约束，不是验证器主要任务。验证器主要任务是判断候选审计意见是否匹配隐藏专家答案。
+失败分类建议使用：
+- `missing_candidate`
+- `issue_mismatch`
+- `evidence_missing`
+- `not_actionable`
+- `infra_error`
+- `schema_invalid`
+- `candidate_missing`
+- `candidate_format_invalid`
+- `score_below_threshold`
+
+### 14.7 训练失败常见类型
+
+当前常见失败不是系统全崩，而是最终验收不过。
+`004` 类问题：
+- 候选输出可能是模板占位内容
+- 或 `surface_contract.json` 引用了不存在的 `audit-point-output.md`
+- 重点查是否真的生成了 `workspace/audit-point-output.md`
+- 重点查它是否是有效的一条审计意见
+- 重点查 `surface_contract.json` 里的路径是否和真实文件一致
+
+`005` 类问题：
+- 主要是 `same_issue=false`
+- 曾经把专家答案要点“设备综合评价净残值/成新率 90 vs 93 差异”学偏成别的问题类型
+- 重点查 skill 的 PRIMARY finding type 是否和专家答案一致
+- 重点查重新部署 skill 后是否真的重新生成了 `audit-point-output.md`
+
+### 14.8 Windows 文件锁风险
+
+Windows 中 `.runtime/active-processes.json` 仍可能出现 `EPERM rename` 文件锁竞争。
+现象：
+- campaign 启动即失败
+- `lastSummary` 出现 `EPERM: operation not permitted, rename active-processes.json.tmp -> active-processes.json`
+- `.runtime` 下面残留 `active-processes.json.tmp-*`
+
+这类问题是基础设施文件锁竞争，不是任务内容失败。
+短期处理：
+- 失败 campaign 不进入合并
+- 重新拉起同一任务的新 campaign
+- 合并按任务 ID 只取成功版本
+
+长期建议：
+- 将进程注册表从单 JSON 覆写改为 append-only JSONL
+- 或将运行态迁移到 SQLite/WAL
+
+### 14.9 当前运行和排障路径
+
+常用位置：
+- 项目根：`C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve`
+- 训练任务包：`task-packs/real-long-tasks/audit-point-learnbench`
+- campaign 状态：`runtime-state/long-task-campaigns`
+- batch 状态：`runtime-state/audit-point-batches`
+- 日志：`C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\runtime-logs`
+
+判断真实状态时，不要只看前端或表格，要看：
+1. `campaign.json`
+2. `round-summary.md`
+3. final-acceptance 的 `result.json`
+4. 是否有真实 `bun run cli.ts run-long-task-campaign` 进程
+5. `pending-expert-package/current` 是否存在
+
+### 14.10 当前最近启动的队列
+
+最近一次启动：
+- 队列目录：`runtime-state/audit-point-batches/20260524-011119742`
+- 运行模式：全局队列，最大 5 个并发
+- 启动日志：
+  - `runtime-logs/audit-point-queue-20260524-011119.out.log`
+  - `runtime-logs/audit-point-queue-20260524-011119.err.log`
+
+该运行不要求持续监控，但后续检查时优先看这个队列目录。
+
+### 14.11 audit-point 当前流程纪律
+
+- 测试集当前只做 `targeted-blind`，暂缓 `open-discovery`。
+- `targeted-blind` 的含义是：给 merged skill、全量材料、一般审核方向/focus；不给 hidden answer、人类答案原句、Generalizable Rule 原句。
+- 测试集只验收空白 agent 是否能写出 `workspace/audit-point-output.md` 这一条审核意见。
+- 测试集不得要求产出 skill 包，不得要求 `manifest.md/change_log.md/surface_contract.json`，不得跑 `workspace-layout` 或 surface generalization。
+- 测试集失败只记录为泛化失败，不现场修 skill，不自动进入 append-only repair。
+- 合并后训练回测才允许开启 append-only repair gate；repair 只能单增 merged skill 内容，不能删除或重写旧内容。
+- 训练回测必须在全部训练 case 成功且完成 merge 后进行；训练回测不过，不进入测试集。

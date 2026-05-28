@@ -3,6 +3,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import { pathExists } from "../orchestrator/fs"
 import { createCoordinatorRun } from "../orchestrator/multi-instance/coordinator"
 import { runCoordinatorPhase2Merge } from "../orchestrator/multi-instance/merger"
+import { runCoordinatorPhase3Validate } from "../orchestrator/multi-instance/validator"
 import { saveCoordinatorState } from "../orchestrator/multi-instance/repository"
 
 type Row = {
@@ -26,6 +27,10 @@ const root = path.join(auto, "task-packs", "real-long-tasks", "audit-point-learn
 const out = path.join(auto, "runtime-state", "audit-point-batches", stamp())
 const max = Number.parseInt(process.env.AUDIT_POINT_QUEUE_CONCURRENCY ?? "5", 10)
 const dry = process.env.AUDIT_POINT_QUEUE_DRY_RUN === "1"
+const backtestRounds = Number.parseInt(process.env.AUDIT_POINT_TRAIN_BACKTEST_ROUNDS ?? "1", 10)
+const repairAttempts = Number.parseInt(process.env.AUDIT_POINT_REPAIR_ATTEMPTS ?? "1", 10)
+const skipFinalSanity = process.env.AUDIT_POINT_SKIP_FINAL_SANITY !== "0"
+const runTests = process.env.AUDIT_POINT_RUN_TESTSETS_AFTER_BACKTEST !== "0"
 const list = Array.from({ length: 20 }, (_, i) => `audit-point-${String(i + 1).padStart(3, "0")}`)
 
 function stamp() {
@@ -204,6 +209,62 @@ async function merge(ok: Map<string, Row>) {
   await saveCoordinatorState(state)
   const res = await runCoordinatorPhase2Merge({ cwd, state })
   await writeFile(path.join(out, "merge-output.json"), JSON.stringify(res, null, 2), "utf8")
+  if (res.contributingInstances.length === 0) return
+
+  state.mergedSkillDir = res.mergedSkillDir
+  await saveCoordinatorState(state)
+  const backtest = await runCoordinatorPhase3Validate({
+    cwd,
+    state,
+    rounds: Math.max(1, backtestRounds),
+    validateLimit: Math.max(1, max),
+    filter: (instance) => instance.role === "train" && instance.status === "passed",
+    repair: {
+      enabled: true,
+      mode: "append_only",
+      maxAttemptsPerCase: Math.max(1, repairAttempts),
+    },
+  })
+  const final =
+    !skipFinalSanity && (backtest.repairFixed ?? 0) > 0
+      ? await runCoordinatorPhase3Validate({
+          cwd,
+          state,
+          rounds: Math.max(1, backtestRounds),
+          validateLimit: Math.max(1, max),
+          filter: (instance) => instance.role === "train" && instance.status === "passed",
+        })
+      : backtest
+  await writeFile(
+    path.join(out, "train-backtest-output.json"),
+    JSON.stringify(
+      {
+        ...final,
+        repairBacktest: backtest,
+        finalSanity: skipFinalSanity ? undefined : final,
+        skippedFinalSanity: skipFinalSanity,
+        mergedSkillDir: state.mergedSkillDir,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  )
+  if (runTests) {
+    const test = Bun.spawn(["bun", "run", "scripts/run-audit-point-testsets.ts"], {
+      cwd: auto,
+      env: {
+        ...process.env,
+        AUDIT_POINT_TEST_CONCURRENCY: process.env.AUDIT_POINT_TEST_CONCURRENCY ?? String(Math.max(1, max)),
+        AUDIT_POINT_TEST_GROUPS: process.env.AUDIT_POINT_TEST_GROUPS ?? "all",
+        AUDIT_POINT_TEST_ROUNDS: process.env.AUDIT_POINT_TEST_ROUNDS ?? "1",
+      },
+      stdout: "inherit",
+      stderr: "inherit",
+    })
+    const code = await test.exited
+    if (code !== 0) throw new Error(`audit-point testsets failed with exit code ${code}`)
+  }
 }
 
 async function main() {

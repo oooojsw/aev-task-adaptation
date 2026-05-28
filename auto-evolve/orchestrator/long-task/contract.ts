@@ -123,6 +123,13 @@ export interface LongTaskPromptValidatorContract {
   placement?: "unit" | "completion_only"
   required?: boolean
   blocking?: boolean
+  inputFiles?: {
+    answerPath?: string
+    candidatePath?: string
+    humanGuidancePath?: string
+    contextPaths?: string[]
+  }
+  rubric?: Record<string, unknown>
   referencePaths?: string[]
   attachedFiles?: string[]
   execution?: ExecutionSpec

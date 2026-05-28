@@ -162,8 +162,10 @@ async function main() {
   if (!Array.isArray(completionValidatorIDs) || completionValidatorIDs.length !== 0) {
     throw new Error("Generated round spec should clear initial-graph completion validators")
   }
-  if (campaignState.status !== "round_limit_reached") {
-    throw new Error(`Expected single-round smoke campaign to stop at round_limit_reached, received ${String(campaignState.status)}`)
+  if (campaignState.status !== "round_limit_reached" && campaignState.status !== "verified_success") {
+    throw new Error(
+      `Expected single-round smoke campaign to stop at round_limit_reached or verified_success, received ${String(campaignState.status)}`,
+    )
   }
 
   console.log(

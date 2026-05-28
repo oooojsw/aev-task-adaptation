@@ -108,6 +108,14 @@ function normalizeValidator(raw: unknown): LongTaskValidatorContract | undefined
   }
   if (raw.type === "prompt_json") {
     if (typeof raw.prompt !== "string" || !raw.prompt.trim()) return undefined
+    const inputFiles = isObject(raw.inputFiles)
+      ? {
+          answerPath: normalizeMaybeString(raw.inputFiles.answerPath),
+          candidatePath: normalizeMaybeString(raw.inputFiles.candidatePath),
+          humanGuidancePath: normalizeMaybeString(raw.inputFiles.humanGuidancePath),
+          contextPaths: normalizeStringArray(raw.inputFiles.contextPaths),
+        }
+      : undefined
     const execution = isObject(raw.execution)
       ? {
           model: typeof raw.execution.model === "string" && raw.execution.model.trim() ? raw.execution.model : undefined,
@@ -126,6 +134,8 @@ function normalizeValidator(raw: unknown): LongTaskValidatorContract | undefined
       placement: raw.placement === "completion_only" ? "completion_only" : "unit",
       required: typeof raw.required === "boolean" ? raw.required : true,
       blocking: typeof raw.blocking === "boolean" ? raw.blocking : false,
+      inputFiles,
+      rubric: isObject(raw.rubric) ? raw.rubric : undefined,
       referencePaths: normalizeStringArray(raw.referencePaths),
       attachedFiles: normalizeStringArray(raw.attachedFiles),
       execution,
@@ -248,6 +258,20 @@ export async function loadLongTaskSpec(
         }
       : {
           ...validator,
+          inputFiles: validator.inputFiles
+            ? {
+                answerPath: validator.inputFiles.answerPath
+                  ? resolveMaybePath(baseDir, validator.inputFiles.answerPath)
+                  : undefined,
+                candidatePath: validator.inputFiles.candidatePath
+                  ? resolveMaybePath(baseDir, validator.inputFiles.candidatePath)
+                  : undefined,
+                humanGuidancePath: validator.inputFiles.humanGuidancePath
+                  ? resolveMaybePath(baseDir, validator.inputFiles.humanGuidancePath)
+                  : undefined,
+                contextPaths: (validator.inputFiles.contextPaths ?? []).map((item) => resolveMaybePath(baseDir, item)),
+              }
+            : undefined,
           referencePaths: (validator.referencePaths ?? []).map((item) => resolveMaybePath(baseDir, item)),
           attachedFiles: (validator.attachedFiles ?? []).map((item) => resolveMaybePath(baseDir, item)),
         },

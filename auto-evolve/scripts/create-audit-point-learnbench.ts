@@ -153,6 +153,63 @@ const points: Point[] = [
     answer: "鉴于目前银行贷款市场现状，计算资金成本时上浮 100 个基点是否合适需要核实；答复称实际按评估基准日 LPR 确定贷款利率并删除上浮 100 个基点描述。",
     rule: "资金成本测算要核对 LPR、上浮基点和报告描述是否一致；如果没有依据，不应保留机械上浮 100 个基点的表述。",
   },
+  {
+    id: "audit-point-021",
+    title: "P16 法国 PPI 与重置全价公式核实",
+    focus: "检查法国电气、电子及数据处理设备 PPI 基准日、购买日数据和重置全价计算公式是否正确。",
+    answer:
+      "P16 经查询法国电气、电子及数据处理设备 PPI 在评估基准日 2023 年 9 月为 114.10，在购买日 2024 年 4 月为 113.90，则重置全价=1,591.63/100×773.22×114.10/113.90=12,300.00 元（取整）。上述基准日及 PPI 数据需核实。",
+    rule: "境外设备重置全价使用 PPI 调整时，要核对基准日指数、购买日指数、原币金额、汇率或换算因子和取整结果，公式链条任一处无来源都应提出核实。",
+  },
+  {
+    id: "audit-point-022",
+    title: "购买 1 个月设备是否调整重置全价",
+    focus: "检查购买时间距离评估基准日很近的设备，是否仍需要进行 PPI 或重置全价调整。",
+    answer: "购买 1 个月的设备是否需要调整重置全价需要核实。",
+    rule: "设备购买日距离评估基准日很近时，要判断价格变动调整是否有必要，避免机械套用 PPI 造成不合理重置全价。",
+  },
+  {
+    id: "audit-point-023",
+    title: "三年以上电脑重置价高于购买价",
+    focus: "检查使用年限较长的电脑等电子设备，重置价是否异常高于购买价。",
+    answer: "部分 3 年以上电脑重置价高于购买价是否正确需要核实。",
+    rule: "电子设备尤其是电脑类资产通常更新迭代快、价格下降明显，若旧设备重置价高于购买价，应检查型号、购置价、重置价来源和调整公式是否合理。",
+  },
+  {
+    id: "audit-point-024",
+    title: "合同负债表页脚评估人员完善",
+    focus: "检查合同负债表等明细表页脚、评估人员、复核人员等签署或填列信息是否完整。",
+    answer: "合同负债表页脚评估人员需完善。",
+    rule: "审核明细表时除了金额，还要检查页脚、编制人、评估人员、复核人等必要信息是否完整，缺失时应作为格式完整性审核意见提出。",
+  },
+  {
+    id: "audit-point-025",
+    title: "流动负债汇总表页脚完善",
+    focus: "检查浙江海可姆相关流动负债汇总表页脚、评估人员等基础信息是否完整。",
+    answer: "浙江海可姆流动负债汇总表页脚需完善。",
+    rule: "子公司或分部明细表的页脚签署信息需要逐表检查，不能只检查母公司或主表；页脚缺失应指出具体公司和表名。",
+  },
+  {
+    id: "audit-point-026",
+    title: "P12 分布于于公司各部门文字错误",
+    focus: "检查上海公司报告正文中是否存在明显重复用字、错别字或表述不通顺。",
+    answer: "上海公司 P12 “分布于于公司各部门”文字表述需要修正。",
+    rule: "报告正文审核要检查明显错别字、重复字和病句；发现具体错误时应引用页码和原句，提出明确文字修正。",
+  },
+  {
+    id: "audit-point-027",
+    title: "P14 案例 1 笔记本电脑第 25 项核实",
+    focus: "检查上海公司 P14 案例 1 中笔记本电脑项目与电子设备评估明细表第 25 项是否一致、是否需核实。",
+    answer: "上海公司 P14 案例 1：笔记本电脑（电子设备评估明细表第 25 项）需核实。",
+    rule: "案例说明引用具体设备时，要回到电子设备评估明细表核对序号、名称、型号和价值，发现案例与明细不清或不一致时应要求核实。",
+  },
+  {
+    id: "audit-point-028",
+    title: "五年以上电脑二手价建议",
+    focus: "检查使用 5 年以上电脑类电子设备是否仍按重置成本法机械评估，是否应考虑二手价。",
+    answer: "5 年以上的电脑建议直接用二手价。",
+    rule: "对使用年限较长、技术淘汰快的电脑类电子设备，要评估重置成本法是否适用；超过 5 年的电脑可优先考虑二手市场价格或可变现价值。",
+  },
 ]
 
 function spec(point: Point) {
@@ -281,7 +338,7 @@ function campaign(point: Point) {
     surfaceGeneralization: {
       enabled: true,
       validatorPath: "../../../../../scripts/validate-experience-surface-generalization.py",
-      configPath: "../../configs/surface-generalization.json",
+      configPath: "../../configs/single-surface-generalization.json",
       blocking: false,
       timeoutMs: 60000,
     },
@@ -311,7 +368,8 @@ async function main() {
       "Each instance has a different hidden answer under answer/answer.md and a soft validator for exactly one audit point.",
       "",
       "- train instances: audit-point-001 to audit-point-020",
-      "- intended fanout: 4 concurrent campaigns",
+      "- test instances: audit-point-021 to audit-point-028",
+      "- intended fanout: 5 concurrent campaigns",
       "- intended output per instance: one reusable skill plus workspace/audit-point-output.md",
       "- writable paths per instance: only its own workspace/ and expert-workspace/",
     ].join("\n"),
@@ -333,25 +391,71 @@ async function main() {
     "utf8",
   )
   await writeFile(path.join(root, "seed-expert-workspace", "change_log.md"), "# Change Log\n\nSeed workspace.\n", "utf8")
+  const surfaceBase = {
+    rootPaths: ["./expert-workspace"],
+    allowedExtensions: [".md", ".txt", ".json", ".jsonl", ".yaml", ".yml"],
+    ignorePathSubstrings: ["/tools/", "/skills/", "node_modules", ".git", "__pycache__"],
+    warnOnIgnoredHits: false,
+    maxHitsPerFile: 6,
+    maxTotalHits: 30,
+    forbiddenPatterns: [
+      { label: "task-id-hardcode", pattern: "audit-point-\\d+" },
+      { label: "hidden-answer-section-copy", pattern: "##\\s*Hidden\\s*Expert\\s*Answer" },
+      { label: "answer-literal-leak", pattern: "(?i)hidden\\s*answer|ground\\s*truth|official\\s*answer" },
+    ],
+    forbiddenLiterals: [],
+    requiredSections: [
+      {
+        file: "CORE.md",
+        sections: [
+          "## Material Navigation Rules",
+          "## High-Value Anomaly Patterns",
+          "## Evidence Localization Workflow",
+          "## Audit Opinion Writing Template",
+          "## Failure Lessons And Anti-Patterns",
+          "## Optional Observations",
+        ],
+      },
+    ],
+  }
+  const singleSurface = {
+    ...surfaceBase,
+    requiredFiles: [
+      "INDEX.md",
+      "CORE.md",
+      "meta.json",
+      "surface_contract.json",
+      "open_observations.md",
+      "case.md",
+      "lessons/failure_lessons.md",
+    ],
+  }
+  const mergedSurface = {
+    ...surfaceBase,
+    requiredFiles: [
+      "INDEX.md",
+      "CORE.md",
+      "meta.json",
+      "surface_contract.json",
+      "open_observations.md",
+      "patches/training-backtest-patches.md",
+      "patches/patch-log.jsonl",
+    ],
+    requiredDirs: ["casebook"],
+  }
+  await writeFile(
+    path.join(root, "configs", "single-surface-generalization.json"),
+    JSON.stringify(singleSurface, null, 2) + "\n",
+    "utf8",
+  )
+  await writeFile(
+    path.join(root, "configs", "merged-surface-generalization.json"),
+    JSON.stringify(mergedSurface, null, 2) + "\n",
+    "utf8",
+  )
   await writeFile(
     path.join(root, "configs", "surface-generalization.json"),
-    JSON.stringify(
-      {
-        rootPaths: ["./expert-workspace"],
-        allowedExtensions: [".md", ".txt", ".json", ".jsonl", ".yaml", ".yml"],
-        ignorePathSubstrings: ["/tools/", "/skills/", "node_modules", ".git", "__pycache__"],
-        warnOnIgnoredHits: false,
-        maxHitsPerFile: 6,
-        maxTotalHits: 30,
-        forbiddenPatterns: [
-          { label: "task-id-hardcode", pattern: "audit-point-\\d+" },
-          { label: "hidden-answer-section-copy", pattern: "##\\s*Hidden\\s*Expert\\s*Answer" },
-        ],
-        forbiddenLiterals: [],
-      },
-      null,
-      2,
-    ) + "\n",
+    JSON.stringify(mergedSurface, null, 2) + "\n",
     "utf8",
   )
 
@@ -401,13 +505,47 @@ async function main() {
       {
         dataset: "audit-point-learnbench",
         split: "train",
-        count: points.length,
-        instances: points.map((point) => ({
+        count: points.slice(0, 20).length,
+        instances: points.slice(0, 20).map((point) => ({
           id: point.id,
           specPath: `tasks/${point.id}/spec.json`,
           campaignPath: `tasks/${point.id}/campaign.json`,
           answerPath: `tasks/${point.id}/answer/answer.md`,
         })),
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  )
+  await writeFile(
+    path.join(root, "test-instances.json"),
+    JSON.stringify(
+      {
+        dataset: "audit-point-learnbench",
+        source: "audit-report-pilot-human-review-28",
+        split: "test",
+        count: points.slice(20).length,
+        instances: points.slice(20).map((point, index) => ({
+          id: point.id,
+          originAuditPointIndex: index + 21,
+          mode: "reproduce",
+          specPath: `tasks/${point.id}/spec.json`,
+          campaignPath: `tasks/${point.id}/campaign.json`,
+          answerPath: `tasks/${point.id}/answer/answer.md`,
+        })),
+        groups: [
+          {
+            name: "reproduce",
+            description: "targeted-blind holdout: hidden answers are not available to the solving agent",
+            instanceIDs: points.slice(20).map((point) => point.id),
+          },
+          {
+            name: "discovery",
+            description: "deferred; current materials do not support open-discovery evaluation",
+            instanceIDs: [],
+          },
+        ],
       },
       null,
       2,

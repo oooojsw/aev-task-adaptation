@@ -1,5 +1,5 @@
 import path from "node:path"
-import { cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises"
+import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { createCoordinatorRun } from "../orchestrator/multi-instance/coordinator"
 import { runCoordinatorPhase3Validate } from "../orchestrator/multi-instance/validator"
 import { pathExists } from "../orchestrator/fs"
@@ -22,38 +22,34 @@ type Spec = {
   groups: Group[]
 }
 
-const materialFixes = new Map<string, string>([
-  ["../../../audit-report-pilot/materials/瀹氱", "../../../audit-report-pilot/materials/定稿"],
-  ["../../../audit-report-pilot/materials/鐢靛瓙搴曠", "../../../audit-report-pilot/materials/电子底稿"],
-])
-
 const cwd = path.resolve(import.meta.dir, "..", "..")
 const auto = path.join(cwd, "auto-evolve")
 const mats = path.join(auto, "task-packs", "real-long-tasks", "audit-report-pilot", "materials")
-const final = path.join(mats, "\u5b9a\u7a3f")
-const papers = path.join(mats, "\u7535\u5b50\u5e95\u7a3f")
+const final = path.join(mats, "定稿")
+const papers = path.join(mats, "电子底稿")
 const rawFixes = new Map<string, string>([
-  ["../../../audit-report-pilot/materials/瀹氱", "../../../audit-report-pilot/materials/定稿"],
-  ["../../../audit-report-pilot/materials/鐢靛瓙搴曠", "../../../audit-report-pilot/materials/电子底稿"],
+  ["../../../audit-report-pilot/materials/鐎规氨顭?", "../../../audit-report-pilot/materials/瀹氱"],
+  ["../../../audit-report-pilot/materials/閻㈤潧鐡欐惔鏇狀焾", "../../../audit-report-pilot/materials/鐢靛瓙搴曠"],
 ])
 const pathFixes = new Map<string, string>([
-  ["../../../audit-report-pilot/materials/定稿", final],
-  ["../../../audit-report-pilot/materials/电子底稿", papers],
   ["../../../audit-report-pilot/materials/瀹氱", final],
   ["../../../audit-report-pilot/materials/鐢靛瓙搴曠", papers],
+  ["../../../audit-report-pilot/materials/鐎规氨顭?", final],
+  ["../../../audit-report-pilot/materials/閻㈤潧鐡欐惔鏇狀焾", papers],
 ])
 const root = path.join(auto, "task-packs", "real-long-tasks", "audit-point-learnbench")
 const testSpec = path.join(root, "test-instances.json")
 const out = path.join(auto, "runtime-state", "audit-point-testsets", stamp())
 const runRoot = path.join(auto, "runtime-state", "multi-instance-runs")
 const limit = Number.parseInt(process.env.AUDIT_POINT_TEST_CONCURRENCY ?? "5", 10)
-const rounds = Number.parseInt(process.env.AUDIT_POINT_TEST_ROUNDS ?? "2", 10)
+const rounds = Number.parseInt(process.env.AUDIT_POINT_TEST_ROUNDS ?? "1", 10)
 const groups = new Set(
-  (process.env.AUDIT_POINT_TEST_GROUPS ?? "reproduce,discovery")
+  (process.env.AUDIT_POINT_TEST_GROUPS ?? "all")
     .split(",")
     .map((it) => it.trim())
     .filter(Boolean),
 )
+const prepOnly = process.env.AUDIT_POINT_TEST_PREP_ONLY === "1"
 
 function stamp() {
   const d = new Date()
@@ -62,6 +58,9 @@ function stamp() {
 }
 
 async function merged() {
+  const env = process.env.AUDIT_POINT_MERGED_SKILL_DIR
+  if (env && (await pathExists(env))) return env
+
   const dir = path.join(auto, "runtime-state", "audit-point-batches")
   const rows = await readdir(dir, { withFileTypes: true }).catch(() => [])
   const got = rows.filter((it) => it.isDirectory()).map((it) => path.join(dir, it.name)).sort().reverse()
@@ -76,18 +75,12 @@ async function merged() {
 
 function fixSpec(value: unknown): unknown {
   if (typeof value === "string") {
-    let out = value
-    for (const [bad, good] of pathFixes) {
-      out = out.replaceAll(bad, good)
-    }
-    return out
+    let next = value
+    for (const [bad, good] of pathFixes) next = next.replaceAll(bad, good)
+    return next
   }
-  if (Array.isArray(value)) {
-    return value.map((item) => fixSpec(item))
-  }
-  if (!value || typeof value !== "object") {
-    return value
-  }
+  if (Array.isArray(value)) return value.map((item) => fixSpec(item))
+  if (!value || typeof value !== "object") return value
   return Object.fromEntries(Object.entries(value).map(([key, val]) => [key, fixSpec(val)]))
 }
 
@@ -111,57 +104,162 @@ function forceSharedPaths(spec: Record<string, unknown>) {
   return spec
 }
 
-async function prep(item: Item) {
-  if (item.mode !== "discovery") return path.join(root, "tasks", item.id)
-  const src = path.join(root, "tasks", item.id)
-  const dst = path.join(out, "discovery-shadow", item.id)
-  await cp(src, dst, { recursive: true, force: true })
-  const instruction = path.join(dst, "instruction.md")
-  const guidance = path.join(dst, "human-guidance.md")
-  const a = [
-    `# Human Guidance - ${item.id}`,
+function focusFromAnswer(raw: string) {
+  const match = raw.match(/## Focus\s+([\s\S]*?)(?:\n## |\s*$)/)
+  const focus = match?.[1]?.trim()
+  return focus && !/Hidden Expert Answer/i.test(focus) ? focus : "Follow the task focus in the merged skill and shared materials."
+}
+
+function fixGuidance(id: string, focus: string) {
+  return [
+    `# Human Guidance - ${id}`,
     "",
-    "这是发现型测试：不要复述答案句，不要先验匹配。",
-    "你必须从共享材料中独立定位证据，产出一条可执行审核意见。",
-    "重点：同类问题识别、证据定位、可执行纠正建议。",
-    "约束：只输出一条审核意见到 workspace/audit-point-output.md。",
+    "This is a targeted-blind evaluation run.",
+    "",
+    "Audit focus:",
+    focus,
+    "",
+    "You may use all shared materials and the merged skill in expert-workspace, but you must not assume hidden answers.",
+    "Produce exactly one audit opinion item in workspace/audit-point-output.md.",
+    "Do not create, repair, or evaluate a skill package in this test run.",
+    "The opinion must include the audit issue, cause/context, concrete evidence, and an actionable recommendation.",
     "",
   ].join("\n")
-  await writeFile(instruction, a, "utf8")
-  await writeFile(guidance, a, "utf8")
+}
+
+function outputOnlySpec(spec: Record<string, unknown>, focus: string) {
+  spec.goal = `Targeted-blind evaluation: use the merged skill and shared materials to produce exactly one audit opinion item for this audit focus: ${focus}`
+  spec.targetPaths = [
+    {
+      path: "./workspace/audit-point-output.md",
+      label: "candidate audit opinion",
+      role: "output",
+    },
+  ]
+  spec.editablePaths = ["./workspace"]
+  spec.initialExpertContextPaths = []
+  spec.formalPackageRoots = []
+  const graph = spec.initialGraph
+  if (graph && typeof graph === "object") {
+    const obj = graph as Record<string, unknown>
+    obj.completion_validator_ids = ["single-point-soft-validate"]
+    obj.planner_summary =
+      "Targeted-blind test: use the merged skill and shared materials to write exactly one audit opinion item, then validate only that opinion."
+    const units = Array.isArray(obj.units) ? obj.units : []
+    for (const row of units) {
+      if (!row || typeof row !== "object") continue
+      const unit = row as Record<string, unknown>
+      if (String(unit.id ?? "") !== "write-single-point-skill-and-output") continue
+      unit.title = "Write Single Point Audit Opinion"
+      unit.goal =
+        "Using the provided merged skill and shared materials, write exactly one professional audit opinion item to workspace/audit-point-output.md. Do not create or repair a skill package."
+      unit.inputs = ["./workspace/material-notes.md", "./expert-workspace/INDEX.md", "./expert-workspace/CORE.md"]
+      unit.expected_artifacts = ["./workspace/audit-point-output.md"]
+      unit.claim = "The one-point audit opinion output is complete."
+      unit.check_plan =
+        "The output must contain one actionable audit opinion item with issue, cause/context, concrete evidence, and requested correction/check."
+      unit.validator_ids = []
+    }
+  }
+  return spec
+}
+
+async function prep(item: Item) {
+  const src = path.join(root, "tasks", item.id)
+  const dst = path.join(out, "test-shadow", item.id)
+  await cp(src, dst, { recursive: true, force: true })
+
+  const srcAnswer = path.join(dst, "answer", "answer.md")
+  const answerRaw = (await pathExists(srcAnswer)) ? await readFile(srcAnswer, "utf8") : ""
+  const answerDir = path.join(out, "private-answers", item.id)
+  const answerPath = path.join(answerDir, "answer.md")
+  await mkdir(answerDir, { recursive: true })
+  if (answerRaw) await writeFile(answerPath, answerRaw, "utf8")
+  await rm(path.join(dst, "answer"), { recursive: true, force: true }).catch(() => undefined)
+  await rm(path.join(dst, "workspace"), { recursive: true, force: true }).catch(() => undefined)
+  await rm(path.join(dst, "expert-workspace"), { recursive: true, force: true }).catch(() => undefined)
+  await rm(path.join(dst, "validation-expert-workspace"), { recursive: true, force: true }).catch(() => undefined)
+  await rm(path.join(dst, "validate-run"), { recursive: true, force: true }).catch(() => undefined)
+
+  const instruction = path.join(dst, "instruction.md")
+  const guidance = path.join(dst, "human-guidance.md")
+  const focus = focusFromAnswer(answerRaw)
+  const text = fixGuidance(item.id, focus)
+  await writeFile(instruction, text, "utf8")
+  await writeFile(guidance, text, "utf8")
+
   const specPath = path.join(dst, "spec.json")
   if (await pathExists(specPath)) {
     const raw = await readFile(specPath, "utf8")
-    let text = raw.replace(/^\uFEFF/, "")
-    for (const [bad, good] of rawFixes) {
-      text = text.replaceAll(bad, good)
-    }
-    if (text !== raw) {
-      await writeFile(specPath, text, "utf8")
-    }
-    const spec = JSON.parse(text) as Record<string, unknown>
-    const fixed = forceSharedPaths(fixSpec(spec) as Record<string, unknown>)
+    let data = raw.replace(/^\uFEFF/, "")
+    for (const [bad, good] of rawFixes) data = data.replaceAll(bad, good)
+    const spec = JSON.parse(data) as Record<string, unknown>
+    const fixed = outputOnlySpec(forceSharedPaths(fixSpec(spec) as Record<string, unknown>), focus)
+
     const validators = Array.isArray(fixed.validators) ? fixed.validators : []
-    const next = validators.map((row) => {
-      if (!row || typeof row !== "object") return row
-      const val = row as Record<string, unknown>
-      if (String(val.id ?? "") !== "single-point-soft-validate") return val
-      const extra = [
-        "Discovery-mode acceptance is enabled for this test instance.",
-        "If candidate does not match hidden answer issue but presents a valid high-severity audit issue from shared materials, set valid_new_issue=true.",
-        "For discovery mode, pass=true when: (same_issue=true AND specific_evidence=true AND actionable=true) OR (valid_new_issue=true AND specific_evidence=true AND actionable=true).",
-        "Include field valid_new_issue (boolean) in result.",
-      ].join("\n")
-      const prompt = `${String(val.prompt ?? "").trim()}\n${extra}`
-      return { ...val, prompt }
-    })
+    const next = validators
+      .filter((row) => !!row && typeof row === "object" && String((row as Record<string, unknown>).id ?? "") === "single-point-soft-validate")
+      .map((row) => {
+        if (!row || typeof row !== "object") return row
+        const val = row as Record<string, unknown>
+        const prompt = String(val.prompt ?? "")
+        const patched = [
+          prompt.trim(),
+          "",
+          "STRICT RULES:",
+          "- This is an evaluation run, not a training run.",
+          "- The candidate artifact is only workspace/audit-point-output.md.",
+          "- Do not require manifest.md, change_log.md, surface_contract.json, or any skill-package layout file.",
+          "- Judge whether the candidate audit opinion identifies the hidden expert issue and explains cause/context/evidence/actionability.",
+          "- valid_new_issue must always be false in this dataset.",
+          "- pass can be true only when same_issue=true, specific_evidence=true, actionable=true.",
+          "- If issue does not match hidden answer, set pass=false.",
+        ].join("\n")
+        return {
+          ...val,
+          inputFiles: {
+            candidatePath: "./workspace/audit-point-output.md",
+            humanGuidancePath: "./human-guidance.md",
+          },
+          privateAnswerManifest: {
+            mode: "test-shadow-sibling",
+            id: item.id,
+            note: "The hidden answer is intentionally not exposed in this spec. The validator resolves it from the private testset area.",
+          },
+          attachedFiles: [],
+          rubric: {
+            mode: "targeted-blind",
+            passRule: "passed = same_issue && specific_evidence && actionable",
+            requiredCandidate: "one audit opinion item with issue, cause/context, concrete evidence, and actionability",
+          },
+          prompt: patched,
+        }
+      })
+      .filter(Boolean)
+
     await writeFile(specPath, JSON.stringify({ ...fixed, validators: next }, null, 2), "utf8")
   }
+
+  const campaignPath = path.join(dst, "campaign.json")
+  if (await pathExists(campaignPath)) {
+    const raw = await readFile(campaignPath, "utf8")
+    const data = JSON.parse(raw.replace(/^\uFEFF/, "")) as Record<string, unknown>
+    const sg = data.surfaceGeneralization
+    if (sg && typeof sg === "object" && !Array.isArray(sg)) {
+      const row = sg as Record<string, unknown>
+      data.surfaceGeneralization = {
+        ...row,
+        enabled: false,
+      }
+      await writeFile(campaignPath, JSON.stringify(data, null, 2), "utf8")
+    }
+  }
+
   return dst
 }
 
 async function runOne(input: {
-  kind: Group["name"]
+  kind: string
   rows: Item[]
   mergedSkillDir: string
 }) {
@@ -205,15 +303,26 @@ async function main() {
     force: true,
   })
   const spec = JSON.parse(await readFile(testSpec, "utf8")) as Spec
+  const rows = groups.has("none")
+    ? []
+    : groups.has("all")
+      ? spec.instances
+      : spec.instances.filter((item) => groups.has(item.mode) || groups.has(item.id))
+  if (prepOnly) {
+    const prepared = await Promise.all(rows.map((row) => prep(row)))
+    await writeFile(
+      path.join(out, "test-results.json"),
+      JSON.stringify({ mode: "targeted-blind", prepOnly: true, prepared }, null, 2),
+      "utf8",
+    )
+    console.log(`TESTSET_RUN_ROOT=${out}`)
+    console.log(JSON.stringify({ mode: "targeted-blind", prepOnly: true, prepared }, null, 2))
+    return
+  }
   const mergedSkillDir = await merged()
-  const map = new Map(spec.instances.map((it) => [it.id, it]))
-  const plan = spec.groups.filter((group) => groups.has(group.name)).map((group) => ({
-    group,
-    rows: group.instanceIDs.map((id) => map.get(id)).filter((v): v is Item => !!v),
-  }))
   const results = []
-  for (const item of plan) {
-    const row = await runOne({ kind: item.group.name, rows: item.rows, mergedSkillDir })
+  if (rows.length > 0) {
+    const row = await runOne({ kind: "targeted-blind", rows, mergedSkillDir })
     results.push(row)
   }
   await writeFile(path.join(out, "test-results.json"), JSON.stringify(results, null, 2), "utf8")

@@ -70,3 +70,78 @@ check_*.*
 # AI Tool Folders (rule 8.1)
 **/.opencode/
 **/.roo/
+
+# Python cache (AGENTS rule 8.3)
+**/__pycache__/
+*.pyc
+*.pyo
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Virtual environments (AGENTS rule 8.4)
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+*.venv/
+
+# System cache (AGENTS rule 8.9)
+.cache/
+.pip_cache/
+pip_cache/
+.tox/
+
+# Build artifacts (AGENTS rule 8.10)
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Coverage reports (AGENTS rule 8.12)
+.coverage
+htmlcov/
+
+# AI model files (AGENTS rule 8.13)
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# Docker files (AGENTS rule 8.15)
+docker-compose.yml
+Dockerfile
+docker/
+
+# OpenCode temp files (AGENTS rule 8.16)
+tmpopencode*
+*-cwd
+
+# Test scripts (AGENTS rule 8.17)
+test__.py
+*_test.py
+*_fix.py
+test_batch.csv
+test_batch.xlsx
+
+# Local dev files (additional)
+*.log
+*.tmp
+*.temp
+*.bak
+*.md.bak
+*.sublime-project
+*.sublime-workspace

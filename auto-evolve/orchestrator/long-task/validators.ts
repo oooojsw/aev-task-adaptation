@@ -87,6 +87,17 @@ async function resolveAttachedPath(input: { expected: string; bundle: unknown })
   return undefined
 }
 
+async function inferPrivateAnswer(input: { spec: LongTaskSpec; contract: LongTaskPromptValidatorContract }) {
+  const human = input.contract.inputFiles?.humanGuidancePath
+  if (!human) return undefined
+  const id = input.spec.id ?? input.spec.title
+  const dir = path.dirname(human)
+  const parent = path.dirname(dir)
+  if (path.basename(parent) !== "test-shadow") return undefined
+  const answer = path.join(path.dirname(parent), "private-answers", id, "answer.md")
+  return (await pathExists(answer)) ? answer : undefined
+}
+
 async function buildPromptValidatorInput(input: {
   spec: LongTaskSpec
   unit: LongTaskWorkUnit
@@ -103,13 +114,35 @@ async function buildPromptValidatorInput(input: {
       return { expected: item, resolved }
     }),
   )
-  const answer = attached.find((item) => path.basename(item.expected).toLowerCase() === "answer.md")?.resolved
-  const candidate = attached.find((item) => path.basename(item.expected).toLowerCase() !== "answer.md")?.resolved
+  const explicit = input.contract.inputFiles
+  const answer =
+    explicit?.answerPath && (await pathExists(explicit.answerPath))
+      ? explicit.answerPath
+      : attached.find((item) => path.basename(item.expected).toLowerCase() === "answer.md")?.resolved ??
+        (await inferPrivateAnswer({ spec: input.spec, contract: input.contract }))
+  const candidate =
+    explicit?.candidatePath && (await pathExists(explicit.candidatePath))
+      ? explicit.candidatePath
+      : attached.find((item) => path.basename(item.expected).toLowerCase() !== "answer.md")?.resolved
   const human =
-    answer && (await pathExists(path.join(path.dirname(path.dirname(answer)), "human-guidance.md")))
-      ? path.join(path.dirname(path.dirname(answer)), "human-guidance.md")
-      : undefined
+    explicit?.humanGuidancePath && (await pathExists(explicit.humanGuidancePath))
+      ? explicit.humanGuidancePath
+      : answer && (await pathExists(path.join(path.dirname(path.dirname(answer)), "human-guidance.md")))
+        ? path.join(path.dirname(path.dirname(answer)), "human-guidance.md")
+        : undefined
+  const context = await Promise.all(
+    (explicit?.contextPaths ?? []).map(async (item) => ({
+      expected: item,
+      resolved: (await pathExists(item)) ? item : undefined,
+    })),
+  )
   const missing = attached.filter((item) => !item.resolved).map((item) => item.expected)
+  if (explicit?.answerPath && !answer) missing.push(explicit.answerPath)
+  if (explicit?.candidatePath && !candidate) missing.push(explicit.candidatePath)
+  if (explicit?.humanGuidancePath && !human) missing.push(explicit.humanGuidancePath)
+  for (const item of context) {
+    if (!item.resolved) missing.push(item.expected)
+  }
   const payload = {
     schema: "soft-validator/v2",
     validator_id: input.contract.id,
@@ -124,6 +157,7 @@ async function buildPromptValidatorInput(input: {
       answer_path: answer,
       candidate_path: candidate,
       human_guidance_path: human,
+      context_paths: context.map((item) => item.resolved).filter((item): item is string => typeof item === "string"),
     },
     constraints: {
       human_guidance_role: "background_constraints_not_primary_task",
@@ -131,6 +165,7 @@ async function buildPromptValidatorInput(input: {
     },
     rubric: {
       contract_prompt: input.contract.prompt,
+      criteria: input.contract.rubric ?? {},
       required_keys: ["passed", "blocking"],
       recommended_keys: ["failure_class", "summary", "details"],
     },
@@ -378,6 +413,7 @@ async function runPromptValidator(input: {
       answerPath,
       candidatePath,
       humanPath,
+      ...(Array.isArray(built.payload.files.context_paths) ? built.payload.files.context_paths : []),
       ...(input.contract.referencePaths ?? []),
     ].filter((item): item is string => typeof item === "string" && item.length > 0),
   )

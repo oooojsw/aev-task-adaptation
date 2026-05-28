@@ -9,7 +9,7 @@ DEFAULT_ROOT_ROLES = ["experience-workspace"]
 
 
 def load_json(path_value: str):
-    with open(path_value, "r", encoding="utf-8") as fh:
+    with open(path_value, "r", encoding="utf-8-sig") as fh:
         return json.load(fh)
 
 
@@ -104,6 +104,70 @@ def compile_patterns(config: dict):
         compiled.append((label, re.compile(pattern, flags)))
     return compiled
 
+def check_required_files(roots: list[Path], config: dict):
+    required = [str(item).strip() for item in config.get("requiredFiles", []) if str(item).strip()]
+    if not required:
+        return []
+    misses = []
+    # Root-level relative checks: any root can satisfy each required file.
+    for rel in required:
+        found = False
+        for root in roots:
+            target = (root / rel).resolve()
+            if target.exists() and target.is_file():
+                found = True
+                break
+        if not found:
+            misses.append(f"missing required file: {rel}")
+    return misses
+
+def check_required_dirs(roots: list[Path], config: dict):
+    required = [str(item).strip() for item in config.get("requiredDirs", []) if str(item).strip()]
+    if not required:
+        return []
+    misses = []
+    for rel in required:
+        found = False
+        for root in roots:
+            target = (root / rel).resolve()
+            if target.exists() and target.is_dir():
+                found = True
+                break
+        if not found:
+            misses.append(f"missing required directory: {rel}")
+    return misses
+
+def check_required_sections(roots: list[Path], config: dict):
+    required = config.get("requiredSections", [])
+    if not isinstance(required, list) or not required:
+        return []
+    misses = []
+    for item in required:
+        if not isinstance(item, dict):
+            continue
+        rel = item.get("file")
+        sec = item.get("sections", [])
+        if not isinstance(rel, str) or not rel.strip():
+            continue
+        if not isinstance(sec, list):
+            continue
+        values = [str(v).strip() for v in sec if str(v).strip()]
+        if not values:
+            continue
+        text = None
+        for root in roots:
+            target = (root / rel).resolve()
+            if target.exists() and target.is_file():
+                text = target.read_text(encoding="utf-8", errors="ignore")
+                break
+        if text is None:
+            misses.append(f"required section file not found: {rel}")
+            continue
+        for row in values:
+            if row not in text:
+                misses.append(f"missing required section: {rel} -> {row}")
+    return misses
+
 
 def trim_line(text: str, limit: int = 180):
     normalized = " ".join(text.strip().split())
@@ -181,6 +245,10 @@ def main():
     files, ignored = iter_candidate_files(roots, config)
     compiled_patterns = compile_patterns(config)
     details = [f"scanned_roots: {len(roots)}", f"scanned_files: {len(files)}"]
+    required_misses = []
+    required_misses.extend(check_required_files(roots, config))
+    required_misses.extend(check_required_dirs(roots, config))
+    required_misses.extend(check_required_sections(roots, config))
     if ignored:
         details.append(f"skipped_files: {len(ignored)}")
         if config.get("warnOnIgnoredHits", False):
@@ -203,7 +271,8 @@ def main():
         if len(all_hits) >= max_total_hits:
             break
 
-    passed = len(all_hits) == 0
+    passed = len(all_hits) == 0 and len(required_misses) == 0
+    details.extend(required_misses)
     details.extend(all_hits if all_hits else ["no task-answer literals detected in the formal experience surface"])
     print(
         json.dumps(

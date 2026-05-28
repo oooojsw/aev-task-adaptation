@@ -14,6 +14,8 @@ import { longTaskPaths, longTaskRunPaths } from "./orchestrator/long-task/reposi
 import { validateLongTaskLayout, validateLongTaskRun } from "./orchestrator/long-task/validate"
 import { runLongTask, resumeLongTask } from "./orchestrator/long-task/runner"
 import { runLongTaskCampaign, resumeLongTaskCampaign } from "./orchestrator/long-task-campaign/runner"
+import { runBlankEval } from "./orchestrator/blank-eval/runner"
+import type { BlankEvalMode } from "./orchestrator/blank-eval/contract"
 import { runSkillsBenchTask, type SkillsBenchMode } from "./orchestrator/skillsbench-adapter"
 import { resetExperienceWorkspace, restoreLatestArchivedExperienceWorkspace } from "./orchestrator/experience-archive"
 import { cleanupAllRuntimeProcesses } from "./orchestrator/runtime-process-registry"
@@ -94,6 +96,10 @@ function printHelp() {
   run-long-task --spec <path>
     Run a validator-driven long-running task. The system bootstraps its own work graph from the task spec and validators.
 
+  run-blank-eval --spec <path> --skill-root <path[,path]>
+    Run one hermetic blank-agent evaluation: material + guidance + formal skill in, task output + validators out.
+    Optional: --run-root <path> --mode <train-backtest|test|deployment|smoke> --source-id <id> --no-reset
+
   run-long-task-campaign --spec <path>
     Run a multi-round long-task campaign. Each round harvests failure evidence and learning into carryover context for the next round.
 
@@ -133,6 +139,15 @@ function getOption(args: string[], name: string) {
   const index = args.indexOf(name)
   if (index === -1) return undefined
   return args[index + 1]
+}
+
+function getListOption(args: string[], name: string) {
+  const value = getOption(args, name)
+  if (!value) return []
+  return value
+    .split(/[;,]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
 }
 
 async function commandInit() {
@@ -449,8 +464,10 @@ async function commandRunMultiInstance(args: string[]) {
   const skipValidate = getFlag(args, "--skip-validate")
   const validateRoundsValue = getOption(args, "--validate-rounds")
   const validateLimitValue = getOption(args, "--validate-limit")
+  const repairAttemptsValue = getOption(args, "--repair-attempts")
   const validateRounds = validateRoundsValue ? Number.parseInt(validateRoundsValue, 10) : 2
   const validateLimit = validateLimitValue ? Number.parseInt(validateLimitValue, 10) : undefined
+  const repairAttempts = repairAttemptsValue ? Number.parseInt(repairAttemptsValue, 10) : 3
   const rounds = roundsValue ? Number.parseInt(roundsValue, 10) : 5
   const fanoutLimit = fanoutLimitValue ? Number.parseInt(fanoutLimitValue, 10) : undefined
 
@@ -623,11 +640,20 @@ async function commandRunMultiInstance(args: string[]) {
     rounds: validateRounds,
     validateLimit,
     filter: (instance) => instance.role !== "test" && instance.status === "passed",
+    repair:
+      repairAttempts > 0
+        ? {
+            enabled: true,
+            mode: "append_only",
+            maxAttemptsPerCase: repairAttempts,
+          }
+        : undefined,
   })
   console.log("Phase 3 train replay complete:")
   console.log(`  train replay: ${trainOut.passed}/${trainOut.total} passed`)
   console.log(`  failures    : ${trainOut.failed}`)
   console.log(`  regressions : ${trainOut.regressions.length} (${trainOut.regressions.join(", ") || "none"})`)
+  console.log(`  repair      : attempts=${trainOut.repairAttempts ?? 0}, fixed=${trainOut.repairFixed ?? 0}`)
   console.log(`  duration    : ${(trainOut.durationMs / 1000).toFixed(1)}s`)
 
   if (trainOut.passed !== trainOut.total) {
@@ -775,6 +801,48 @@ async function commandRunLongTask(args: string[]) {
   console.log(`Summary: ${result.summaryPath}`)
 }
 
+async function commandRunBlankEval(args: string[]) {
+  const cwd = await resolveWorkspaceCwd()
+  await ensureLayout(cwd)
+  const config = await loadConfig(cwd)
+  await ensureExperimentMonitor(cwd, config).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(`Monitor warning: ${message}`)
+  })
+
+  const specPath = getOption(args, "--spec")
+  if (!specPath) {
+    console.error("Missing required option: --spec <path-to-long-task-spec>")
+    process.exit(1)
+  }
+  const roots = getListOption(args, "--skill-root").map((item) => path.resolve(item))
+  if (roots.length === 0) {
+    console.error("Missing required option: --skill-root <path[,path]>")
+    process.exit(1)
+  }
+  const mode = getOption(args, "--mode") ?? "deployment"
+  if (mode !== "train-backtest" && mode !== "test" && mode !== "deployment" && mode !== "smoke") {
+    console.error("Invalid --mode. Use train-backtest, test, deployment, or smoke.")
+    process.exit(1)
+  }
+
+  const result = await runBlankEval({
+    cwd,
+    specPath,
+    skillRoots: roots,
+    runRoot: getOption(args, "--run-root"),
+    sourceID: getOption(args, "--source-id"),
+    mode: mode as BlankEvalMode,
+    resetEditablePaths: !getFlag(args, "--no-reset"),
+    promptInlinePaths: getListOption(args, "--prompt-inline").map((item) => path.resolve(item)),
+  })
+  console.log(`Blank eval: ${result.runID}`)
+  console.log(`Run dir: ${result.runDir}`)
+  console.log(`Passed: ${result.passed}`)
+  console.log(`Summary: ${result.summary}`)
+  console.log(`Result: ${result.resultPath}`)
+}
+
 async function commandRunLongTaskCampaign(args: string[]) {
   const cwd = await resolveWorkspaceCwd()
   await ensureLayout(cwd)
@@ -892,6 +960,9 @@ async function main() {
       return
     case "run-long-task":
       await commandRunLongTask(args)
+      return
+    case "run-blank-eval":
+      await commandRunBlankEval(args)
       return
     case "run-long-task-campaign":
       await commandRunLongTaskCampaign(args)
