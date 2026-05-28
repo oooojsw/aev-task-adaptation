@@ -1002,7 +1002,12 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
       await sleep(750 * attempt)
     }
   } finally {
-    permit.release()
+    try {
+      await permit.release()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`OpenCodeGate release failed: ${message}`)
+    }
   }
 
   if (!result) {

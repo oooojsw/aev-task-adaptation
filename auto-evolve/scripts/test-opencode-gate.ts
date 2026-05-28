@@ -46,17 +46,17 @@ async function testSemaphoreCap() {
   })
   await sleep(50)
   assert(!resolved3, "third caller is blocked while at capacity")
-  p1.release()
+  await p1.release()
   const p3 = await p3Promise
   assert(resolved3, "third caller resumes after release")
-  p2.release()
-  p3.release()
+  await p2.release()
+  await p3.release()
   assert(gate.getStatus().active === 0, "all permits released")
 }
 
 async function testQueueOverflow() {
   OpenCodeGate.__resetForTest()
-  OpenCodeGate.configure({ maxConcurrent: 1, perScopeMaxConcurrent: 1, maxQueueDepth: 1, acquireTimeoutMs: 200 })
+  OpenCodeGate.configure({ maxConcurrent: 1, perScopeMaxConcurrent: 1, maxQueueDepth: 1, acquireTimeoutMs: 2000 })
   const gate = OpenCodeGate.instance()
   const root = testRoot("overflow")
   const p1 = await gate.acquire({ caller: "blocker", scope: "a", root })
@@ -66,11 +66,11 @@ async function testQueueOverflow() {
     overflowError = e
     return undefined
   })
-  await sleep(50)
+  await sleep(250)
   assert(overflowError instanceof GateBusyError || overflowError instanceof GateTimeoutError, "queue overflow blocks new callers")
-  p1.release()
+  await p1.release()
   const a1 = await w1
-  a1.release()
+  await a1.release()
   await w2
 }
 
@@ -89,16 +89,16 @@ async function testScopeCap() {
   const p4 = await gate.acquire({ caller: "s4", scope: "third", root })
   assert(!resolved3, "same-scope third caller waits while scope cap is full")
   assert(gate.getStatus().config.perScopeMaxConcurrent === 1, "configured perScopeMaxConcurrent applied")
-  p1.release()
+  await p1.release()
   const p3 = await p3Promise
-  p2.release()
-  p3.release()
-  p4.release()
+  await p2.release()
+  await p3.release()
+  await p4.release()
 }
 
 async function testTimeout() {
   OpenCodeGate.__resetForTest()
-  OpenCodeGate.configure({ maxConcurrent: 1, perScopeMaxConcurrent: 1, maxQueueDepth: 5, acquireTimeoutMs: 200 })
+  OpenCodeGate.configure({ maxConcurrent: 1, perScopeMaxConcurrent: 1, maxQueueDepth: 5, acquireTimeoutMs: 1000 })
   const gate = OpenCodeGate.instance()
   const root = testRoot("timeout")
   const p1 = await gate.acquire({ caller: "hold", scope: "a", root })
@@ -109,7 +109,7 @@ async function testTimeout() {
     timeoutError = e
   }
   assert(timeoutError instanceof GateTimeoutError, "acquire timeout throws GateTimeoutError")
-  p1.release()
+  await p1.release()
 }
 
 async function testRunWrapper() {

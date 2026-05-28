@@ -62,7 +62,7 @@ export interface Permit {
   id: string
   caller: string
   acquiredAt: Date
-  release(): void
+  release(): Promise<void>
 }
 
 interface ActiveSlot {
@@ -224,7 +224,7 @@ export class OpenCodeGate {
     try {
       return await fn()
     } finally {
-      permit.release()
+      await permit.release()
     }
   }
 
@@ -254,7 +254,14 @@ export class OpenCodeGate {
 }
 
 function resolveStateRoot(root: string) {
-  return runtimePath(path.resolve(root), STATE_DIR)
+  const cwd = path.resolve(root)
+  const stateRoot = runtimePath(cwd, STATE_DIR)
+  const base = path.parse(stateRoot).root
+  const normalized = path.normalize(stateRoot)
+  if (!normalized || normalized === "." || normalized === path.sep || normalized === base) {
+    throw new Error(`OpenCodeGate resolved invalid state root: ${stateRoot}`)
+  }
+  return stateRoot
 }
 
 function normalizeScope(scope: string) {
@@ -346,10 +353,20 @@ function isQueueSlot(input: unknown): input is QueueSlot {
 }
 
 async function withGateLock<T>(stateRoot: string, fn: () => Promise<T>): Promise<T> {
+  const normalized = path.normalize(stateRoot)
+  const base = path.parse(normalized).root
+  if (!normalized || normalized === "." || normalized === path.sep || normalized === base) {
+    throw new Error(`OpenCodeGate lock root rejected: ${stateRoot}`)
+  }
   const lockRoot = path.join(stateRoot, "lock")
   const owner = path.join(lockRoot, "owner.json")
   const token = randomID()
-  await ensureDirectory(path.dirname(lockRoot))
+  const parent = path.dirname(lockRoot)
+  const root = path.parse(parent).root
+  if (!parent || parent === "." || parent === path.sep || parent === root) {
+    throw new Error(`OpenCodeGate lock parent rejected: ${parent}`)
+  }
+  await ensureDirectory(parent)
   while (true) {
     try {
       await mkdir(lockRoot)
