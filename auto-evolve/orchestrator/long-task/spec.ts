@@ -1,4 +1,5 @@
 import path from "node:path"
+import { readFile } from "node:fs/promises"
 import type {
   LongTaskCapabilityContract,
   LongTaskBudgets,
@@ -13,6 +14,8 @@ import { pathExists, readJsonFile } from "../fs"
 export interface LoadLongTaskSpecOptions {
   allowMissingInitialExpertContextPaths?: boolean
 }
+
+const VALIDATOR_PROFILES_ROOT = path.resolve(import.meta.dir, "..", "..", "task-packs", "validator-profiles")
 
 function isObject(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input)
@@ -149,6 +152,12 @@ function normalizeValidators(raw: unknown) {
   return raw.map(normalizeValidator).filter((item): item is LongTaskValidatorContract => Boolean(item))
 }
 
+function mergeValidatorsKeepLast(validators: LongTaskValidatorContract[]) {
+  const index = new Map<string, number>()
+  validators.forEach((item, i) => index.set(item.id, i))
+  return validators.filter((item, i) => index.get(item.id) === i)
+}
+
 function normalizeCapability(raw: unknown): LongTaskCapabilityContract | undefined {
   if (!isObject(raw)) return undefined
   if (typeof raw.id !== "string" || !raw.id.trim()) return undefined
@@ -221,6 +230,116 @@ function resolveMaybePath(baseDir: string, input: string) {
   return path.isAbsolute(input) ? input : path.resolve(baseDir, input)
 }
 
+function isUseRef(raw: unknown): raw is { use: string } {
+  if (!isObject(raw)) return false
+  return typeof raw.use === "string" && raw.use.trim().length > 0
+}
+
+async function resolveValidatorProfilePath(baseDir: string, profileRef: string) {
+  if (!profileRef.trim()) return undefined
+  if (path.isAbsolute(profileRef)) {
+    return profileRef.endsWith(".json") ? profileRef : `${profileRef}.json`
+  }
+  if (profileRef.endsWith(".json") || profileRef.includes(path.sep) || profileRef.includes("/")) {
+    const maybeLocal = resolveMaybePath(baseDir, profileRef)
+    if (await pathExists(maybeLocal)) return maybeLocal
+    const normalizedRef = profileRef.replace(/\\/g, "/").replace(/^\/+/, "")
+    return path.resolve(VALIDATOR_PROFILES_ROOT, normalizedRef.endsWith(".json") ? normalizedRef : `${normalizedRef}.json`)
+  }
+  return path.resolve(VALIDATOR_PROFILES_ROOT, `${profileRef}.json`)
+}
+
+async function materializePromptPath(baseDir: string, raw: Record<string, unknown>) {
+  if (raw.type !== "prompt_json") return raw
+  const hasPrompt = typeof raw.prompt === "string" && raw.prompt.trim().length > 0
+  if (hasPrompt) return raw
+  const promptPath = typeof raw.promptPath === "string" && raw.promptPath.trim().length > 0 ? raw.promptPath : undefined
+  if (!promptPath) return raw
+  const resolved = resolveMaybePath(baseDir, promptPath)
+  const promptRaw = await readFile(resolved, "utf8").catch(() => undefined)
+  if (typeof promptRaw !== "string" || !promptRaw.trim().length) return raw
+  return {
+    ...raw,
+    prompt: promptRaw.trim(),
+  }
+}
+
+function materializeValidatorEntryPaths(baseDir: string, raw: Record<string, unknown>) {
+  const out: Record<string, unknown> = { ...raw }
+  if (out.type === "script") {
+    if (typeof out.path === "string" && out.path.trim().length > 0) {
+      out.path = resolveMaybePath(baseDir, out.path)
+    }
+    if (typeof out.cwd === "string" && out.cwd.trim().length > 0) {
+      out.cwd = resolveMaybePath(baseDir, out.cwd)
+    }
+  }
+  if (out.type === "prompt_json") {
+    if (Array.isArray(out.referencePaths)) {
+      out.referencePaths = out.referencePaths
+        .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        .map((item) => resolveMaybePath(baseDir, item))
+    }
+    if (Array.isArray(out.attachedFiles)) {
+      out.attachedFiles = out.attachedFiles
+        .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        .map((item) => resolveMaybePath(baseDir, item))
+    }
+    if (isObject(out.inputFiles)) {
+      const nextInputFiles: Record<string, unknown> = { ...out.inputFiles }
+      if (typeof nextInputFiles.answerPath === "string" && nextInputFiles.answerPath.trim().length > 0) {
+        nextInputFiles.answerPath = resolveMaybePath(baseDir, nextInputFiles.answerPath)
+      }
+      if (typeof nextInputFiles.candidatePath === "string" && nextInputFiles.candidatePath.trim().length > 0) {
+        nextInputFiles.candidatePath = resolveMaybePath(baseDir, nextInputFiles.candidatePath)
+      }
+      if (
+        typeof nextInputFiles.humanGuidancePath === "string" &&
+        nextInputFiles.humanGuidancePath.trim().length > 0
+      ) {
+        nextInputFiles.humanGuidancePath = resolveMaybePath(baseDir, nextInputFiles.humanGuidancePath)
+      }
+      if (Array.isArray(nextInputFiles.contextPaths)) {
+        nextInputFiles.contextPaths = nextInputFiles.contextPaths
+          .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          .map((item) => resolveMaybePath(baseDir, item))
+      }
+      out.inputFiles = nextInputFiles
+    }
+  }
+  return out
+}
+
+async function resolveValidatorProfileEntries(baseDir: string, refs: string[], chain: string[] = []): Promise<unknown[]> {
+  const out: unknown[] = []
+  for (const ref of refs) {
+    const resolvedPath = await resolveValidatorProfilePath(baseDir, ref)
+    if (!resolvedPath) continue
+    if (!(await pathExists(resolvedPath))) {
+      throw new Error(`Validator profile does not exist: ${resolvedPath}`)
+    }
+    const key = resolvedPath.toLowerCase()
+    if (chain.includes(key)) {
+      throw new Error(`Validator profile cycle detected: ${[...chain, key].join(" -> ")}`)
+    }
+    const rawDoc = await readJsonFile<Record<string, unknown>>(resolvedPath)
+    const rawValidators = Array.isArray(rawDoc.validators) ? rawDoc.validators : []
+    const profileDir = path.dirname(resolvedPath)
+    for (const rawItem of rawValidators) {
+      if (isUseRef(rawItem)) {
+        const nested = await resolveValidatorProfileEntries(profileDir, [rawItem.use], [...chain, key])
+        out.push(...nested)
+        continue
+      }
+      if (isObject(rawItem)) {
+        const withPrompt = await materializePromptPath(profileDir, rawItem)
+        out.push(materializeValidatorEntryPaths(profileDir, withPrompt))
+      }
+    }
+  }
+  return out
+}
+
 export async function loadLongTaskSpec(
   specPath: string,
   options?: LoadLongTaskSpecOptions,
@@ -249,7 +368,16 @@ export async function loadLongTaskSpec(
   const campaignExplorationTreePath = normalizeMaybeString(raw.campaignExplorationTreePath)
   const campaignWorkingMemoryPath = normalizeMaybeString(raw.campaignWorkingMemoryPath)
   const campaignRoutingControlPath = normalizeMaybeString(raw.campaignRoutingControlPath)
-  const validators = normalizeValidators(raw.validators).map((validator) =>
+  const validatorProfiles = normalizeStringArray(raw.validatorProfiles)
+  const blankEvalValidatorProfiles = normalizeStringArray(raw.blankEvalValidatorProfiles)
+  const profileValidatorEntries = await resolveValidatorProfileEntries(baseDir, validatorProfiles)
+  const inlineValidatorEntries = Array.isArray(raw.validators)
+    ? await Promise.all(
+        raw.validators.map(async (item) => (isObject(item) ? materializePromptPath(baseDir, item) : item)),
+      )
+    : []
+  const mergedValidatorEntries = [...profileValidatorEntries, ...inlineValidatorEntries]
+  const validators = mergeValidatorsKeepLast(normalizeValidators(mergedValidatorEntries)).map((validator) =>
     validator.type === "script"
       ? {
           ...validator,
@@ -332,6 +460,8 @@ export async function loadLongTaskSpec(
       ? resolveMaybePath(baseDir, campaignRoutingControlPath)
       : undefined,
     capabilities,
+    validatorProfiles,
+    blankEvalValidatorProfiles,
     validators,
     planning,
     execution,

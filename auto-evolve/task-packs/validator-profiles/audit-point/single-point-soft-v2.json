@@ -1,0 +1,18 @@
+{
+  "id": "audit-point.single-point-soft-v2",
+  "validators": [
+    {
+      "id": "single-point-soft-validate",
+      "type": "prompt_json",
+      "title": "Soft validation for one audit opinion point",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": false,
+      "attachedFiles": [
+        "./answer/answer.md",
+        "./workspace/audit-point-output.md"
+      ],
+      "promptPath": "./prompts/single-point-soft-v2.md"
+    }
+  ]
+}

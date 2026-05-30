@@ -1,0 +1,8 @@
+{
+  "id": "audit-point.blank-eval-targeted-v2",
+  "validators": [
+    {
+      "use": "audit-point/single-point-soft-v2"
+    }
+  ]
+}

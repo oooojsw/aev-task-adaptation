@@ -1,0 +1,15 @@
+{
+  "id": "generic.workspace-layout-v1",
+  "validators": [
+    {
+      "id": "workspace-layout",
+      "type": "script",
+      "title": "Learned expert workspace layout is valid",
+      "path": "../../../scripts/validate-experience-workspace-layout.ts",
+      "runner": "bun",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true
+    }
+  ]
+}

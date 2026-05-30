@@ -1,0 +1,11 @@
+{
+  "id": "audit-point.single-train-v2",
+  "validators": [
+    {
+      "use": "generic/workspace-layout-v1"
+    },
+    {
+      "use": "audit-point/single-point-soft-v2"
+    }
+  ]
+}

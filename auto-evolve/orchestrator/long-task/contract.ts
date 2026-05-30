@@ -156,6 +156,11 @@ export interface LongTaskSpec {
   campaignWorkingMemoryPath?: string
   campaignRoutingControlPath?: string
   capabilities?: LongTaskCapabilityContract[]
+  // Optional validator profile references. Profiles are resolved at load time
+  // and merged before inline validators.
+  validatorProfiles?: string[]
+  // Optional dedicated validator profiles for blank-eval/deployment style runs.
+  blankEvalValidatorProfiles?: string[]
   validators: LongTaskValidatorContract[]
   planning?: ExecutionSpec
   execution?: ExecutionSpec

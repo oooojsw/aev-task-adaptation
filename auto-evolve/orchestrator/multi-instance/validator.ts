@@ -187,6 +187,7 @@ async function runOneValidation(
       })
     } else {
       const specPath = await writeBlankEvalSpec({
+        cwd,
         instance,
         slotDir,
       })
@@ -357,6 +358,7 @@ async function rerunValidationWithMerged(input: {
   }
 
   const specPath = await writeBlankEvalSpec({
+    cwd: input.cwd,
     instance: input.instance,
     slotDir,
   })
@@ -393,6 +395,15 @@ function within(root: string, target: string) {
 
 function uniqueStrings(items: string[]) {
   return Array.from(new Set(items.filter((item) => item.trim().length > 0)))
+}
+
+function resolveProfileRefForGeneratedSpec(cwd: string, ref: string) {
+  const trimmed = ref.trim()
+  if (!trimmed) return trimmed
+  if (path.isAbsolute(trimmed)) return trimmed
+  const normalized = trimmed.replace(/\\/g, "/").replace(/^\/+/, "")
+  const withExt = normalized.endsWith(".json") ? normalized : `${normalized}.json`
+  return path.resolve(cwd, "task-packs", "validator-profiles", withExt)
 }
 
 function uniqueRefs(items: LongTaskPathRef[]) {
@@ -481,6 +492,7 @@ async function patchValidator(input: {
 }
 
 async function writeBlankEvalSpec(input: {
+  cwd: string
   instance: InstanceState
   slotDir: string
 }) {
@@ -507,7 +519,13 @@ async function writeBlankEvalSpec(input: {
         }),
       ),
   )
-  if (validators.length === 0) {
+  const blankEvalValidatorProfiles = uniqueStrings(
+    (loaded.spec.blankEvalValidatorProfiles ?? []).map((item) =>
+      resolveProfileRefForGeneratedSpec(input.cwd, item),
+    ),
+  )
+  const useProfileValidators = blankEvalValidatorProfiles.length > 0
+  if (!useProfileValidators && validators.length === 0) {
     throw new Error(`Blank eval spec for ${input.instance.id} has no task-output validators after filtering skill validators.`)
   }
   const spec = {
@@ -526,7 +544,8 @@ async function writeBlankEvalSpec(input: {
     initialExpertContextPaths: [],
     formalPackageRoots: [],
     capabilities: loaded.spec.capabilities,
-    validators,
+    validatorProfiles: useProfileValidators ? blankEvalValidatorProfiles : undefined,
+    validators: useProfileValidators ? [] : validators,
     execution: loaded.spec.execution,
     validation: loaded.spec.validation,
     disableCompletionValidators: false,
