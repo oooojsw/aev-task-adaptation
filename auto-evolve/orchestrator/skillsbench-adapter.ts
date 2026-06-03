@@ -458,7 +458,6 @@ async function runShortSkillsBenchTask(input: SkillsBenchRunOptions, prepared: P
       permissionEditPaths: [prepared.workDir],
       runtimeScope: `skillsbench-short:${prepared.taskID}:${randomUUID().slice(0, 8)}`,
       concurrencyScope: input.concurrencyScope ?? `skillsbench:${prepared.taskID}`,
-      isolateHostRuntime: false,
       injectPlatformSafetyRules: true,
       live: {
         stageDir,

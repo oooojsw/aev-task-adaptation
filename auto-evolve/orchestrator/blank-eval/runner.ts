@@ -379,7 +379,6 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
           agent: selection.agent,
           variant: selection.variant,
           injectPlatformSafetyRules: false,
-          isolateHostRuntime: false,
           runtimeScope: scope,
           concurrencyScope: input.concurrencyScope,
           live: {

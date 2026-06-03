@@ -2,12 +2,20 @@ import path from "node:path"
 import process from "node:process"
 import os from "node:os"
 import { randomUUID } from "node:crypto"
-import { copyFile, readFile, stat } from "node:fs/promises"
+import { copyFile, readFile, readdir, rm, stat } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
 import { buildActionTrace } from "./action-trace"
 import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
 import type { ToolFailure } from "./evaluator"
-import { autoEvolvePath, ensureDirectory, pathExists, runtimePath, writeJsonFile, writeTextFile } from "./fs"
+import {
+  ensureDirectory,
+  isPathWithinTruthRoot,
+  pathExists,
+  runtimePath,
+  runtimeRoot,
+  writeJsonFile,
+  writeTextFile,
+} from "./fs"
 import { runManagedProcess } from "./managed-process"
 import { OpenCodeGate } from "./opencode-gate"
 import {
@@ -90,6 +98,41 @@ export interface OpencodeTaskInput {
   live?: TaskArtifactInput & {
     stageDir: string
   }
+}
+
+interface IsolatedHostRuntime {
+  root: string
+  env: NodeJS.ProcessEnv
+}
+
+let staleRuntimeCleanupStarted = false
+
+function envFlag(name: string, defaultValue: boolean) {
+  const raw = process.env[name]
+  if (typeof raw !== "string") return defaultValue
+  const normalized = raw.trim().toLowerCase()
+  if (!normalized) return defaultValue
+  if (["1", "true", "yes", "on"].includes(normalized)) return true
+  if (["0", "false", "no", "off"].includes(normalized)) return false
+  return defaultValue
+}
+
+function envNumber(name: string, defaultValue: number) {
+  const raw = Number.parseInt(process.env[name] ?? "", 10)
+  return Number.isFinite(raw) && raw > 0 ? raw : defaultValue
+}
+
+function shouldIsolateHostRuntime(input: OpencodeTaskInput) {
+  if (typeof input.isolateHostRuntime === "boolean") return input.isolateHostRuntime
+  return envFlag("AUTO_EVOLVE_OPENCODE_ISOLATE_RUNTIME", true)
+}
+
+function shouldCleanupOpencodeRuntime() {
+  return envFlag("AUTO_EVOLVE_OPENCODE_CLEAN_RUNTIME", true)
+}
+
+function staleRuntimeTtlMs() {
+  return envNumber("AUTO_EVOLVE_OPENCODE_STALE_RUNTIME_TTL_MS", 6 * 60 * 60 * 1000)
 }
 
 function normalizeAgentForRuntime(agent: string | undefined) {
@@ -286,7 +329,7 @@ function hostAuthCandidates() {
   ].filter(Boolean))
 }
 
-async function prepareIsolatedHostRuntime(cwd: string, runLabel: string) {
+async function prepareIsolatedHostRuntime(cwd: string, runLabel: string): Promise<IsolatedHostRuntime> {
   const root = runtimePath(cwd, "opencode-isolated-env", runLabel)
   const home = path.join(root, "home")
   const xdgConfig = path.join(root, "config")
@@ -311,27 +354,80 @@ async function prepareIsolatedHostRuntime(cwd: string, runLabel: string) {
   }
 
   return {
-    OPENCODE_TEST_HOME: home,
-    XDG_CONFIG_HOME: xdgConfig,
-    XDG_DATA_HOME: xdgData,
-    XDG_CACHE_HOME: xdgCache,
-    XDG_STATE_HOME: xdgState,
-    HOME: home,
-    USERPROFILE: home,
-    OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-    OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: "1",
-    OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1",
-    OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
-    // Keep default plugins enabled (model resolution needs them).
-    // Disabling them forces OpenCode to fetch models.dev/api.json which may ECONNRESET.
-    // OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
-    OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
-    OPENCODE_CONFIG: undefined,
-    OPENCODE_CONFIG_CONTENT: undefined,
-    OPENCODE_PERMISSION: undefined,
-    OPENCODE_TUI_CONFIG: undefined,
-    OPENCODE_PLUGIN_META_FILE: path.join(xdgState, "opencode", "plugin-meta.json"),
-  } satisfies NodeJS.ProcessEnv
+    root,
+    env: {
+      OPENCODE_TEST_HOME: home,
+      XDG_CONFIG_HOME: xdgConfig,
+      XDG_DATA_HOME: xdgData,
+      XDG_CACHE_HOME: xdgCache,
+      XDG_STATE_HOME: xdgState,
+      HOME: home,
+      USERPROFILE: home,
+      OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+      OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: "1",
+      OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1",
+      OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
+      // Keep default plugins enabled (model resolution needs them).
+      // Disabling them forces OpenCode to fetch models.dev/api.json which may ECONNRESET.
+      // OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
+      OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
+      OPENCODE_CONFIG: undefined,
+      OPENCODE_CONFIG_CONTENT: undefined,
+      OPENCODE_PERMISSION: undefined,
+      OPENCODE_TUI_CONFIG: undefined,
+      OPENCODE_PLUGIN_META_FILE: path.join(xdgState, "opencode", "plugin-meta.json"),
+    } satisfies NodeJS.ProcessEnv,
+  }
+}
+
+async function cleanupEphemeralRuntimeDir(cwd: string, target: string | undefined) {
+  if (!target || !shouldCleanupOpencodeRuntime()) return
+  const root = runtimeRoot(cwd)
+  const normalizedRoot = path.resolve(root)
+  const normalizedTarget = path.resolve(target)
+  if (normalizedTarget === normalizedRoot || !isPathWithinTruthRoot(root, target)) {
+    throw new Error(`Refusing to clean runtime path outside runtime root: ${target}`)
+  }
+  await rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 150 }).catch(() => undefined)
+}
+
+async function cleanupEphemeralOpencodeRuntime(input: { cwd: string; overrideConfigDir: string; isolatedRoot?: string }) {
+  await Promise.all([
+    cleanupEphemeralRuntimeDir(input.cwd, input.overrideConfigDir),
+    cleanupEphemeralRuntimeDir(input.cwd, input.isolatedRoot),
+  ])
+}
+
+async function cleanupStaleRuntimeFamily(cwd: string, family: string, olderThanMs: number) {
+  if (!shouldCleanupOpencodeRuntime()) return
+  const root = runtimePath(cwd, family)
+  if (!(await pathExists(root))) return
+  const now = Date.now()
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .map(async (entry) => {
+        const target = path.join(root, entry.name)
+        const info = await stat(target).catch(() => undefined)
+        if (!info) return
+        if (now - info.mtimeMs < olderThanMs) return
+        await cleanupEphemeralRuntimeDir(cwd, target)
+      }),
+  )
+}
+
+function startStaleOpencodeRuntimeCleanup(cwd: string) {
+  if (staleRuntimeCleanupStarted) return
+  staleRuntimeCleanupStarted = true
+  const ttl = staleRuntimeTtlMs()
+  void Promise.all([
+    cleanupStaleRuntimeFamily(cwd, "opencode-config", ttl),
+    cleanupStaleRuntimeFamily(cwd, "opencode-isolated-env", ttl),
+  ]).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(`Stale OpenCode runtime cleanup failed: ${message}`)
+  })
 }
 
 async function ensureOverrideConfig(
@@ -425,7 +521,7 @@ async function ensureOverrideConfig(
     agents: undefined,
     default_agent: "build",
     permission:
-      permissionConfig.mode === "open" && !isolateHostRuntime && permissions.readPaths.length === 0
+      permissionConfig.mode === "open" && permissions.readPaths.length === 0
         ? makeOpenPermissions()
         : await makeOverridePermissions(cwd, {
             readPaths: permissions.readPaths,
@@ -732,6 +828,7 @@ async function runOpencodeTaskOnce(
   attempt: number,
 ) {
   const runLabel = buildRunLabel(input.title, attempt)
+  const isolateHostRuntime = shouldIsolateHostRuntime(input)
   const overrideConfigDir = await ensureOverrideConfig(
     input.cwd,
     selectedModel,
@@ -742,11 +839,12 @@ async function runOpencodeTaskOnce(
     },
     runLabel,
     input.injectPlatformSafetyRules !== false,
-    input.isolateHostRuntime === true,
+    isolateHostRuntime,
   )
+  const isolatedRuntime = isolateHostRuntime ? await prepareIsolatedHostRuntime(input.cwd, runLabel) : undefined
   const runtimeEnv = {
     ...(await ensureRuntimeEnvironment(input.cwd, runLabel)),
-    ...(input.isolateHostRuntime ? await prepareIsolatedHostRuntime(input.cwd, runLabel) : {}),
+    ...(isolatedRuntime?.env ?? {}),
   }
 
   const opencodeCmd = await resolveOpencodeCommand(input.cwd)
@@ -831,46 +929,66 @@ async function runOpencodeTaskOnce(
 
   await flush()
 
-  started = true
-  const managed = await runManagedProcess({
-    title: input.title,
-    command: args,
-    cwd: path.join(input.cwd, "packages", "opencode"),
-    env: {
-      ...runtimeEnv,
-      OPENCODE_CONFIG_DIR: overrideConfigDir,
-      ...(typeof input.config.modelConfig.limits.requestsPerMinute === "number"
-        ? {
-            OPENCODE_REQUESTS_PER_MINUTE: String(input.config.modelConfig.limits.requestsPerMinute),
-          }
-        : {}),
-    },
-    stdinText: undefined,
-    runtimeScope: input.runtimeScope,
-    timeoutMs: OPENCODE_TASK_TIMEOUT_MS,
-    silentTimeoutMs: OPENCODE_TASK_SILENT_TIMEOUT_MS,
-    silentTimeoutAfterActivityMs: OPENCODE_TASK_SILENT_TIMEOUT_AFTER_ACTIVITY_MS,
-    onSpawn: async () => {
-      await input.onSpawn?.()
-      await input.onPulse?.()
-      await flush()
-    },
-    onPulse: input.onPulse,
-    onStdoutChunk: (chunk) => {
-      stdoutData += chunk.toString()
-      lastOutputAt = new Date().toISOString()
-      scheduleFlush()
-    },
-    onStderrChunk: (chunk) => {
-      stderrData += chunk.toString()
-      lastOutputAt = new Date().toISOString()
-      scheduleFlush()
-    },
-  })
+  let cleanupDone = false
+  const cleanupRuntime = async () => {
+    if (cleanupDone) return
+    cleanupDone = true
+    await cleanupEphemeralOpencodeRuntime({
+      cwd: input.cwd,
+      overrideConfigDir,
+      isolatedRoot: isolatedRuntime?.root,
+    })
+  }
 
-  if (flushHandle) {
-    clearTimeout(flushHandle)
-    flushHandle = undefined
+  let managed: Awaited<ReturnType<typeof runManagedProcess>> | undefined
+  try {
+    started = true
+    managed = await runManagedProcess({
+      title: input.title,
+      command: args,
+      cwd: path.join(input.cwd, "packages", "opencode"),
+      env: {
+        ...runtimeEnv,
+        OPENCODE_CONFIG_DIR: overrideConfigDir,
+        ...(typeof input.config.modelConfig.limits.requestsPerMinute === "number"
+          ? {
+              OPENCODE_REQUESTS_PER_MINUTE: String(input.config.modelConfig.limits.requestsPerMinute),
+            }
+          : {}),
+      },
+      stdinText: undefined,
+      runtimeScope: input.runtimeScope,
+      timeoutMs: OPENCODE_TASK_TIMEOUT_MS,
+      silentTimeoutMs: OPENCODE_TASK_SILENT_TIMEOUT_MS,
+      silentTimeoutAfterActivityMs: OPENCODE_TASK_SILENT_TIMEOUT_AFTER_ACTIVITY_MS,
+      onSpawn: async () => {
+        await input.onSpawn?.()
+        await input.onPulse?.()
+        await flush()
+      },
+      onPulse: input.onPulse,
+      onStdoutChunk: (chunk) => {
+        stdoutData += chunk.toString()
+        lastOutputAt = new Date().toISOString()
+        scheduleFlush()
+      },
+      onStderrChunk: (chunk) => {
+        stderrData += chunk.toString()
+        lastOutputAt = new Date().toISOString()
+        scheduleFlush()
+      },
+    })
+  } finally {
+    if (flushHandle) {
+      clearTimeout(flushHandle)
+      flushHandle = undefined
+    }
+    await flushTail.catch(() => undefined)
+    await cleanupRuntime()
+  }
+
+  if (!managed) {
+    throw new Error("OpenCode process exited without a managed process result.")
   }
 
   const timedOut = managed.timedOut
@@ -928,6 +1046,8 @@ async function runOpencodeTaskOnce(
 }
 
 export async function runOpencodeTask(input: OpencodeTaskInput): Promise<OpencodeTaskRun> {
+  startStaleOpencodeRuntimeCleanup(input.cwd)
+
   const dependenciesInstalled = await pathExists(path.join(input.cwd, "node_modules"))
   if (!dependenciesInstalled) {
     throw new Error(
