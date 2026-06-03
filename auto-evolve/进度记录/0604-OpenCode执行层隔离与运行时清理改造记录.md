@@ -154,6 +154,34 @@
 
 另外我也跑过一次整体验证命令，但它失败的原因主要是仓库里已有的历史 runtime / 旧任务数据不完整，不是这次执行层改动本身引入的新错误。
 
+## 0604 十 session 空间烟测
+
+为了确认这次改动不是“理论上会清理”，而是真的不会重新制造过去那种每个 session 一份 `node_modules` 的暴涨问题，新增并执行了专门烟测脚本：
+
+- `auto-evolve/scripts/smoke-opencode-runtime-cleanup.ts`
+
+这次烟测做了这些事：
+
+1. 创建一个干净的临时 runtime root。
+2. 并发启动 10 个真实 `runOpencodeTask(...)` / `opencode run` session。
+3. 记录运行前后的目录体积、文件数、目录数、`node_modules` 数量。
+4. 检查 `opencode-config` 和 `opencode-isolated-env` 在 session 结束后是否被清空。
+
+第二轮有效结果：
+
+- 10 个 session 全部 `exitCode=0`
+- 10 个 session 工具失败数为 0
+- `opencode-config` 结束后：0 bytes / 0 files / 0 directories
+- `opencode-isolated-env` 结束后：0 bytes / 0 files / 0 directories
+- `node_modules` 残留数量：0
+- 整个临时 runtime root 最终增量：2471 bytes
+- 剩余内容主要是 `opencode-gate` 的 2 个很小状态文件
+- 运行结束后未发现残留 `opencode.exe` 进程
+
+这说明本次改造对最关键的历史问题是有效的：不会再因为 10 个 session 留下 10 份 `node_modules`，也没有把每次 OpenCode 内部 sqlite/session/cache 长期留在本次 runtime 里。
+
+注意：本机当前没有挂载 `D:`，所以默认 runtime 策略会回退到项目所在盘。烟测使用的是干净临时 runtime root，目的是把历史目录噪声排除掉，验证执行层本身的清理行为。
+
 ## 对后续的影响
 
 这次改完以后，后续如果继续往“更轻量的执行层”走，方向会更清楚：
