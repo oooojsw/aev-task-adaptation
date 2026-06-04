@@ -78,6 +78,7 @@ import { runLongTaskValidator } from "./validators"
 import { loadConfig } from "../schema"
 import { runOpencodeTask, type OpencodeTaskInput } from "../opencode"
 import type { OpencodeRunResult } from "../opencode"
+import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
 import { extractJsonObject } from "./json-extract"
@@ -865,19 +866,23 @@ function promoteOperationalContextFromVerifiedUnit(input: {
   validatorResults: LongTaskValidatorResult[]
   selfChecksRun: string[]
 }): LongTaskOperationalContextItem[] {
-  const items: LongTaskOperationalContextItem[] = [
-    makeOperationalContextItem({
-      runID: input.runID,
-      unit: input.unit,
-      attempt: input.attempt,
-      kind: "confirmed_fact",
-      status: "confirmed",
-      statement: input.claim.statement,
-      rationale: "Validated at the work-unit boundary before promotion into run-global context.",
-      refs: input.claim.evidenceRefs,
-      tags: operationalContextTags({ spec: input.spec, unit: input.unit, extra: ["verified-claim"] }),
-    }),
-  ]
+  const items: LongTaskOperationalContextItem[] = []
+
+  if (!hasConcreteAnswerLeakageSurface(input.claim.statement)) {
+    items.push(
+      makeOperationalContextItem({
+        runID: input.runID,
+        unit: input.unit,
+        attempt: input.attempt,
+        kind: "confirmed_fact",
+        status: "confirmed",
+        statement: input.claim.statement,
+        rationale: "Validated at the work-unit boundary before promotion into run-global context.",
+        refs: input.claim.evidenceRefs,
+        tags: operationalContextTags({ spec: input.spec, unit: input.unit, extra: ["verified-claim"] }),
+      }),
+    )
+  }
 
   for (const unit of input.learningUnits) {
     const shouldPromote =
@@ -888,6 +893,7 @@ function promoteOperationalContextFromVerifiedUnit(input: {
       unit.kind === "tooling_hint" ||
       unit.kind === "validator_hint"
     if (!shouldPromote) continue
+    if (hasConcreteAnswerLeakageSurface(unit.statement)) continue
     items.push(
       makeOperationalContextItem({
         runID: input.runID,
@@ -907,6 +913,7 @@ function promoteOperationalContextFromVerifiedUnit(input: {
   }
 
   for (const selfCheck of input.selfChecksRun) {
+    if (hasConcreteAnswerLeakageSurface(selfCheck)) continue
     items.push(
       makeOperationalContextItem({
         runID: input.runID,

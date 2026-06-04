@@ -23,6 +23,7 @@ import { resumeLongTask, runLongTask } from "../long-task/runner"
 import { runLongTaskValidator } from "../long-task/validators"
 import { readOperationalContext, resolveExistingLongTaskRun } from "../long-task/repository"
 import { loadLongTaskSpec } from "../long-task/spec"
+import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import type {
   LongTaskBudgets,
   LongTaskOperationalContextItem,
@@ -811,6 +812,7 @@ function promoteCampaignOperationalMemory(input: {
   const merged = new Map<string, LongTaskCampaignOperationalMemoryRecord>()
   for (const item of input.existing) merged.set(campaignOperationalSignature(item), item)
   for (const item of input.incoming) {
+    if (hasConcreteAnswerLeakageSurface(item.statement)) continue
     const signature = campaignOperationalSignature(item)
     const current = merged.get(signature)
     if (current) {
