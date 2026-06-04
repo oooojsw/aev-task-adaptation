@@ -105,3 +105,22 @@
     *   *Tracked Experience Plane*: 经验平面（Markdown、JSON），最终要提交和复用的纯净知识。
     *   *Runtime Sidecar Plane*: 运行平面（如 `.opencode` 下的缓存、临时执行文件），这部分物理隔离，绝对不允许被吸纳进经验平面污染知识库。
 *   **Monitor Dashboard**: 提供 Web 仪表盘，实时观测各 Session 的状态、工具调用流和思考日志。
+## 2026-06-04 Implementation Note: per-round blank-agent acceptance is now infrastructure
+
+本次代码层变更把 long-task campaign 的每一轮最终验收改回真实闭环：
+
+- Lead/Reviewer 写完本轮 pending expert package 后，系统先跑 surface validators，只检查经验包表面是否泄漏答案、结构是否合格。
+- surface 通过后，系统必须启动 clean blank agent，让它只拿当前经验包、原始材料、允许的输出路径去完成任务。
+- blank agent 产物再交给 product validators。只有这个链路通过，本轮 final acceptance 才能 passed。
+- 如果任务没有 product validator，也没有旧的 blank-agent deployment wrapper，本轮会失败并提示缺少产物验收，不能再靠静态检查冒充成功。
+- blank agent prompt 已降噪成普通任务提示，不再告诉它自己处在实验、战役或验收体系里。
+
+对应核心代码：
+
+- `auto-evolve/orchestrator/long-task-campaign/runner.ts`
+- `auto-evolve/orchestrator/blank-eval/runner.ts`
+
+维护要求：
+
+- 后续改 campaign / validator / blank-eval 时，必须同步维护本 README。
+- 不允许再把 surface validator、product validator、blank agent acceptance 混成同一个概念。

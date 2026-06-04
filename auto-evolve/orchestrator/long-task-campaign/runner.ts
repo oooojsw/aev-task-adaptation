@@ -24,6 +24,7 @@ import { runLongTaskValidator } from "../long-task/validators"
 import { readOperationalContext, resolveExistingLongTaskRun } from "../long-task/repository"
 import { loadLongTaskSpec } from "../long-task/spec"
 import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
+import { runBlankEval } from "../blank-eval/runner"
 import type {
   LongTaskBudgets,
   LongTaskOperationalContextItem,
@@ -2281,6 +2282,42 @@ function completionOnlyValidatorContracts(spec: LongTaskSpec) {
   )
 }
 
+function isSurfaceValidatorContract(validator: LongTaskValidatorContract) {
+  const descriptor = [
+    validator.id,
+    validator.title,
+    validator.type === "script" ? validator.path : validator.prompt,
+  ]
+    .join(" ")
+    .toLowerCase()
+  return (
+    descriptor.includes("surface") ||
+    descriptor.includes("generalization") ||
+    descriptor.includes("workspace-layout") ||
+    descriptor.includes("workspace layout") ||
+    descriptor.includes("experience-layout") ||
+    descriptor.includes("experience layout")
+  )
+}
+
+function isLegacyBlankAgentValidatorContract(validator: LongTaskValidatorContract) {
+  if (validator.id === "blank-agent-deployment") return true
+  if (validator.type !== "script") return false
+  return validator.path.toLowerCase().includes("run-blank-agent-task-deployment-acceptance")
+}
+
+function partitionCampaignFinalAcceptanceValidators(spec: LongTaskSpec) {
+  const contracts = completionOnlyValidatorContracts(spec)
+  const surfaceValidators = contracts.filter(isSurfaceValidatorContract)
+  const legacyBlankAgentValidators = contracts.filter(
+    (validator) => !isSurfaceValidatorContract(validator) && isLegacyBlankAgentValidatorContract(validator),
+  )
+  const productValidators = contracts.filter(
+    (validator) => !isSurfaceValidatorContract(validator) && !isLegacyBlankAgentValidatorContract(validator),
+  )
+  return { contracts, surfaceValidators, legacyBlankAgentValidators, productValidators }
+}
+
 function shouldRunCampaignWorkers(roundNumber: number) {
   return roundNumber > 1
 }
@@ -2363,6 +2400,51 @@ function buildCampaignFinalAcceptanceSpec(baseSpec: LongTaskSpec, pendingPackage
     ],
     editablePaths: [],
     initialGraph: undefined,
+  }
+}
+
+function buildCampaignBlankEvalSpec(input: {
+  baseSpec: LongTaskSpec
+  pendingPackageRoot: string
+  productValidators: LongTaskValidatorContract[]
+}): LongTaskSpec {
+  return {
+    ...input.baseSpec,
+    disableCompletionValidators: false,
+    initialExpertContextPaths: [input.pendingPackageRoot],
+    formalPackageRoots: [input.pendingPackageRoot],
+    campaignPendingPackageRoot: undefined,
+    campaignExplorationTreePath: undefined,
+    campaignWorkingMemoryPath: undefined,
+    campaignRoutingControlPath: undefined,
+    validators: input.productValidators.map((validator) => ({ ...validator, placement: "unit" })),
+    initialGraph: undefined,
+  }
+}
+
+function blankEvalValidatorResult(input: {
+  runID?: string
+  unitID?: string
+  passed: boolean
+  summary: string
+  details: string[]
+  evidenceRefs: string[]
+  rawOutputPath?: string
+}): LongTaskValidatorResult {
+  return {
+    id: `validator-${randomUUID().slice(0, 8)}`,
+    runID: input.runID ?? "campaign-final-acceptance",
+    unitID: input.unitID ?? "campaign-final-acceptance",
+    attempt: 1,
+    validatorID: "global-blank-agent-acceptance",
+    validatorType: "script",
+    createdAt: nowISO(),
+    passed: input.passed,
+    blocking: true,
+    summary: input.summary,
+    details: input.details,
+    evidenceRefs: input.evidenceRefs,
+    rawOutputPath: input.rawOutputPath,
   }
 }
 
@@ -3732,8 +3814,8 @@ async function runCampaignFinalAcceptance(input: {
 }) {
   const acceptanceRoot = input.finalAcceptanceRoot ?? input.roundPaths.finalAcceptanceRoot
   const acceptanceResultPath = input.finalAcceptanceResultPath ?? input.roundPaths.finalAcceptanceResultPath
-  const validatorContracts = completionOnlyValidatorContracts(input.baseSpec)
-  if (!validatorContracts.length) {
+  const validatorPartitions = partitionCampaignFinalAcceptanceValidators(input.baseSpec)
+  if (!validatorPartitions.contracts.length) {
     const emptyResult = {
       campaignID: input.campaignID,
       roundNumber: input.roundNumber,
@@ -3763,12 +3845,17 @@ async function runCampaignFinalAcceptance(input: {
     validationPackageRoot,
     runTracePath: input.runTracePath,
     reviewerSuggestionPath: input.reviewerSuggestionPath,
+    validatorPartitions: {
+      surfaceValidatorIDs: validatorPartitions.surfaceValidators.map((item) => item.id),
+      legacyBlankAgentValidatorIDs: validatorPartitions.legacyBlankAgentValidators.map((item) => item.id),
+      productValidatorIDs: validatorPartitions.productValidators.map((item) => item.id),
+    },
     createdAt: nowISO(),
   })
 
   const config = await loadConfig(input.cwd)
   const validatorResults: LongTaskValidatorResult[] = []
-  for (const validator of validatorContracts) {
+  for (const validator of validatorPartitions.surfaceValidators) {
     const result = await runLongTaskValidator({
       cwd: input.cwd,
       config,
@@ -3799,9 +3886,120 @@ async function runCampaignFinalAcceptance(input: {
     validatorResults.push(result)
   }
 
+  const surfacePassed = validatorResults.every((result) => result.passed)
+  let blankEvalResultPath: string | undefined
+  let blankEvalRunDir: string | undefined
+  if (surfacePassed) {
+    if (validatorPartitions.legacyBlankAgentValidators.length) {
+      for (const validator of validatorPartitions.legacyBlankAgentValidators) {
+        const result = await runLongTaskValidator({
+          cwd: input.cwd,
+          config,
+          contract: validator,
+          spec: acceptanceSpec,
+          unit: syntheticUnit,
+          runID: input.sourceRunID,
+          attempt: 1,
+          validatorDir: path.join(acceptanceRoot, validator.id),
+          bundlePath,
+          runtimeScope: input.runtimeScope,
+          onActivation: input.onActivation,
+          onPulse: input.onPulse,
+          payload: {
+            runID: input.sourceRunID,
+            unitID: syntheticUnit.id,
+            attempt: 1,
+            goal: acceptanceSpec.goal,
+            claim: syntheticUnit.claim,
+            checkPlan: syntheticUnit.checkPlan,
+            materials: acceptanceSpec.materials,
+            targetPaths: acceptanceSpec.targetPaths ?? [],
+            expectedArtifacts: syntheticUnit.expectedArtifacts,
+            editablePaths: acceptanceSpec.editablePaths ?? [],
+            bundlePath,
+          },
+        })
+        validatorResults.push(result)
+      }
+    } else if (!validatorPartitions.productValidators.length) {
+      validatorResults.push(
+        blankEvalValidatorResult({
+          passed: false,
+          summary:
+            "Blank-agent acceptance is not configured: no product validators were found for the blank agent output.",
+          details: [
+            "Each campaign round must validate the skill by running a clean blank agent and checking its product.",
+            "Add at least one completion/product validator, or provide an existing blank-agent deployment validator wrapper.",
+          ],
+          evidenceRefs: [bundlePath, validationPackageRoot],
+        }),
+      )
+    } else {
+      try {
+        const blankEvalSpec = buildCampaignBlankEvalSpec({
+          baseSpec: input.baseSpec,
+          pendingPackageRoot: validationPackageRoot,
+          productValidators: validatorPartitions.productValidators,
+        })
+        const blankEvalSpecPath = path.join(acceptanceRoot, "blank-eval-spec.json")
+        await writeJsonFile(blankEvalSpecPath, blankEvalSpec)
+        const blankEval = await runBlankEval({
+          cwd: input.cwd,
+          specPath: blankEvalSpecPath,
+          skillRoots: [validationPackageRoot],
+          runRoot: path.join(acceptanceRoot, "blank-eval-runs"),
+          sourceID: `${input.campaignID}:${roundID(input.roundNumber)}`,
+          mode: "deployment",
+          runtimeScope: input.runtimeScope ? `${input.runtimeScope}:blank-eval` : undefined,
+          concurrencyScope: `campaign-final-acceptance:${input.campaignID}`,
+        })
+        blankEvalResultPath = blankEval.resultPath
+        blankEvalRunDir = blankEval.runDir
+        validatorResults.push(
+          blankEvalValidatorResult({
+            passed: blankEval.passed,
+            summary: blankEval.passed
+              ? "Blank-agent acceptance passed: the current skill taught a clean agent to produce a valid product."
+              : `Blank-agent acceptance failed: ${blankEval.summary}`,
+            details: blankEval.validatorResults
+              .filter((result) => !result.passed)
+              .map((result) => `${result.validatorID}: ${result.summary}`),
+            evidenceRefs: [
+              blankEval.runDir,
+              blankEval.resultPath,
+              blankEval.sessionExecutionReportPath,
+              ...blankEval.validatorResults.flatMap((result) => result.evidenceRefs ?? []),
+            ],
+            rawOutputPath: blankEval.resultPath,
+          }),
+        )
+        validatorResults.push(...blankEval.validatorResults)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        validatorResults.push(
+          blankEvalValidatorResult({
+            passed: false,
+            summary: `Blank-agent acceptance crashed before completion: ${message}`,
+            details: [message],
+            evidenceRefs: [bundlePath, validationPackageRoot],
+          }),
+        )
+      }
+    }
+  } else {
+    validatorResults.push(
+      blankEvalValidatorResult({
+        passed: false,
+        summary: "Blank-agent acceptance was skipped because the pending skill failed surface validation.",
+        details: validatorResults.filter((result) => !result.passed).map((result) => result.summary),
+        evidenceRefs: [bundlePath, validationPackageRoot],
+      }),
+    )
+  }
+
   const passed = validatorResults.every((result) => result.passed)
   const summary = passed
-    ? "Campaign final acceptance passed."
+    ? "Campaign final acceptance passed: surface checks and blank-agent product validation both passed."
     : validatorResults
         .filter((result) => !result.passed)
         .map((result) => result.summary)
@@ -3816,6 +4014,13 @@ async function runCampaignFinalAcceptance(input: {
     validatorResults,
     bundlePath,
     validationPackageRoot,
+    blankEvalResultPath,
+    blankEvalRunDir,
+    validatorPartitions: {
+      surfaceValidatorIDs: validatorPartitions.surfaceValidators.map((item) => item.id),
+      legacyBlankAgentValidatorIDs: validatorPartitions.legacyBlankAgentValidators.map((item) => item.id),
+      productValidatorIDs: validatorPartitions.productValidators.map((item) => item.id),
+    },
     createdAt: nowISO(),
   }
   await writeJsonFile(acceptanceResultPath, finalAcceptance)
