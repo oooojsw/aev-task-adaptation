@@ -6,6 +6,7 @@ The shared material directories are read-only inputs. Do not copy them and do no
 Each instance has a different hidden answer under answer/answer.md and a soft validator for exactly one audit point.
 
 - train instances: audit-point-001 to audit-point-020
-- intended fanout: 4 concurrent campaigns
+- test instances: audit-point-021 to audit-point-028
+- intended fanout: 5 concurrent campaigns
 - intended output per instance: one reusable skill plus workspace/audit-point-output.md
 - writable paths per instance: only its own workspace/ and expert-workspace/

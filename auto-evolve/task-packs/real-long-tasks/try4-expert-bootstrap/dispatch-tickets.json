@@ -1,0 +1,64 @@
+{
+  "updatedAt": "2026-05-10T10:11:04.380Z",
+  "updatedThroughRound": 8,
+  "tickets": [
+    {
+      "id": "dispatch-f4a36bcb",
+      "key": "validator:blank-agent-deployment",
+      "status": "open",
+      "createdAt": "2026-05-09T17:17:10.288Z",
+      "updatedAt": "2026-05-10T10:11:04.380Z",
+      "firstSeenRound": 1,
+      "lastSeenRound": 8,
+      "occurrenceCount": 17,
+      "validatorID": "blank-agent-deployment",
+      "title": "Repair validator blank-agent-deployment",
+      "issue": "Generated Word targets are missing required task values or numeric consistency checks.",
+      "actionableFix": "targets-exist: All target files exist.",
+      "evidenceRefs": [
+        "E:\\opencode-auto-evolve-history\\runtime-state\\long-task-campaigns\\20260510-003632946-try4-expert-bootstrap-campaign\\rounds\\round-001\\final-acceptance\\pass-01\\blank-agent-deployment\\validator_input.json",
+        "E:\\opencode-auto-evolve-history\\runtime-state\\long-task-campaigns\\20260510-003632946-try4-expert-bootstrap-campaign\\rounds\\round-008\\final-acceptance\\pass-02\\result.json"
+      ]
+    },
+    {
+      "id": "dispatch-0df72a28",
+      "key": "validator:expert-surface-generalization",
+      "status": "closed",
+      "createdAt": "2026-05-09T21:52:49.030Z",
+      "updatedAt": "2026-05-10T09:17:02.792Z",
+      "firstSeenRound": 3,
+      "lastSeenRound": 8,
+      "occurrenceCount": 5,
+      "validatorID": "expert-surface-generalization",
+      "title": "Repair validator expert-surface-generalization",
+      "issue": "Formal experience surface still contains hardcoded task-answer content.",
+      "actionableFix": "scanned_roots: 2",
+      "evidenceRefs": [
+        "E:\\opencode-auto-evolve-history\\runtime-state\\long-task-campaigns\\20260510-003632946-try4-expert-bootstrap-campaign\\rounds\\round-003\\final-acceptance\\pass-01\\expert-surface-generalization\\validator_input.json",
+        "E:\\opencode-auto-evolve-history\\runtime-state\\long-task-campaigns\\20260510-003632946-try4-expert-bootstrap-campaign\\rounds\\round-008\\final-acceptance\\pass-01\\expert-surface-generalization\\stderr.log"
+      ],
+      "closedAt": "2026-05-10T10:49:00.000Z",
+      "closedBy": "repair-dispatch-expert-surface-generalization:attempt-01"
+    },
+    {
+      "id": "dispatch-0836badb",
+      "key": "validator:workspace-layout",
+      "status": "closed",
+      "createdAt": "2026-05-10T08:24:16.792Z",
+      "updatedAt": "2026-05-10T08:24:16.792Z",
+      "firstSeenRound": 8,
+      "lastSeenRound": 8,
+      "occurrenceCount": 1,
+      "validatorID": "workspace-layout",
+      "title": "Repair validator workspace-layout",
+      "issue": "Learned expert workspace layout is valid failed with exit code 66.",
+      "actionableFix": "workspace-layout validator passes (exit 0, passed=true) - round-8 exit 66 was a misfire. Confirmed by running validator directly on expert-workspace/.",
+      "evidenceRefs": [
+        "E:\\opencode-auto-evolve-history\\runtime-state\\long-task-campaigns\\20260510-003632946-try4-expert-bootstrap-campaign\\rounds\\round-008\\final-acceptance\\pass-01\\workspace-layout\\validator_input.json",
+        "E:\\opencode-auto-evolve-history\\runtime-state\\long-task-campaigns\\20260510-003632946-try4-expert-bootstrap-campaign\\rounds\\round-008\\final-acceptance\\pass-01\\result.json"
+      ],
+      "closedAt": "2026-05-10T10:41:00.000Z",
+      "closedBy": "repair-dispatch-workspace-layout:attempt-03"
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "id": "audit-report-pilot-deployment",
+  "title": "audit report pilot deployment acceptance",
+  "goal": "Use only the formal expert workspace and the source materials to produce a qualified internal audit opinion document (内部审核意见) in one uninterrupted session.",
+  "materials": [
+    {
+      "path": "../materials/定稿",
+      "label": "finalized asset valuation deliverables",
+      "role": "source-artifact"
+    },
+    {
+      "path": "../materials/电子底稿",
+      "label": "working papers (底稿)",
+      "role": "source-artifact"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "./outputs/浙江哈工机器人有限公司股权价值内部审核意见-草稿.docx",
+      "label": "generated audit opinion output",
+      "role": "target-artifact"
+    }
+  ],
+  "editablePaths": [
+    "./outputs"
+  ],
+  "initialExpertContextPaths": [
+    "../expert-workspace"
+  ],
+  "validators": [
+    {
+      "id": "output-exists",
+      "type": "script",
+      "title": "Generated audit opinion file exists and is not empty",
+      "path": "../scripts/check-output-exists.py",
+      "runner": "python",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true
+    },
+    {
+      "id": "audit-opinion-soft-validate",
+      "type": "prompt_json",
+      "title": "Granular point-by-point soft validation against human expert reference",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": false,
+      "attachedFiles": [
+        "../materials/定稿/A01资产评估说明-瑞弗机电-定稿.doc",
+        "../materials/定稿/A01资产评估说明-瑞弗机电.pdf",
+        "../materials/定稿/B01资产评估说明-瑞弗航空.doc",
+        "../materials/定稿/B01资产评估说明-瑞弗航空.pdf",
+        "../materials/定稿/华辰评报字2024第0007号哈工智能拟转让浙江瑞弗机电有限公司股权项目.pdf",
+        "../materials/定稿/评估计算表-收益法-瑞弗合并口径 - 定稿.xlsm",
+        "./outputs/浙江哈工机器人有限公司股权价值内部审核意见-草稿.docx",
+        "../浙江哈工机器人有限公司股权价值内部审核意见.doc"
+      ],
+      "prompt": "你是一个专业的资产评估审核专家。你的任务是逐条对比AI生成的内部审核意见与人类专家写的审核意见，找出AI版本遗漏或做得不够好的每一个具体审核要点。每一个遗漏的要点都是宝贵的学习经验，需要详细记录下来用于改进专家知识库。\n\n【第一步：读取并完整提取人类参考的审核要点】\n先仔细阅读 ../浙江哈工机器人有限公司股权价值内部审核意见.doc（人类专家写的标准答案）。\n逐条提取其中的每一个具体审核要点，必须包括：\n- 引用的具体单元格或页面位置（如 P11、P12、P16、P26、P41、P44、P65、H10、H83、AG9 等）\n- 提到的具体数值、公式、计算过程\n- 每一个待核实的事项\n- 每一个\"答复\"栏对应的原始问题\n- 人类参考大约有28条左右的审核要点，你必须全部提取出来，按原文顺序编号\n\n【第二步：读取AI草稿】\n阅读 ./outputs/浙江哈工机器人有限公司股权价值内部审核意见-草稿.docx\n\n【第三步：逐条精确对比】\n对第一步提取的每一个审核要点，逐一检查AI草稿中是否：\n- 明确提到了同一个具体问题（不只是泛泛地说\"xx方面需关注\"）\n- 引用了同一个数据位置或单元格\n- 给出了同等粒度的审核意见\n- 包含了同等级别的可执行性（能否直接指导项目人员修改底稿）\n注意：AI草稿的作者看不到人类参考，所以它不可能知道具体的单元格编号。你要判断的是：AI是否独立发现了相同类型的问题，且粒度相当。如果AI只说了\"需核实折现率计算过程\"但人类精确指出了\"P16 PPI 114.10→113.90 公式需核实\"，则判定为粒度不足。\n\n【第四步：评分与输出】\n- 每一个被AI遗漏或粒度不够的要点都要在 details 中详细记录\n- coverage_score = AI覆盖到的要点数 / 人类总要点数 × 100\n- passed = coverage_score >= 70\n- 即使 passed=true，也要如实记录所有 gap\n- 每条 gap 的 learning 字段要写清楚：这条差距对 expert-workspace/manifest.md 应该补充什么内容\n\n【输出格式】直接输出JSON，不要任何其他文字：\n{\"passed\":true或false,\"summary\":\"AI覆盖了 X/N 个人类审核要点（覆盖率 Y%）。主要遗漏领域：[简述]\",\"details\":[{\"point_id\":1,\"human_point\":\"人类参考原文摘要\",\"ai_covered\":true或false,\"ai_status\":\"已覆盖/未覆盖/粒度不足\",\"gap\":\"具体差距描述\",\"learning\":\"应补充到专家知识库的具体内容\"},...],\"total_human_points\":0,\"covered_points\":0,\"coverage_score\":0,\"blocking\":false}\n\n【重要规则】\n- 使用 /minimax-docx read 读取 .docx/.doc 文件\n- 使用 /minimax-xlsx read 读取 .xlsm/.xlsx 文件\n- PDF 用 Read 工具\n- blocking 必须为 false\n- 必须逐条列出所有人类审核要点，不能偷懒只列几条\n- learning 字段必须具体可执行，能直接写入 manifest.md"
+    }
+  ],
+  "notes": "Blank-agent deployment acceptance with redesigned granular soft validation. The validator extracts every single review point from the human reference and checks the AI output point-by-point. Every gap is recorded as a learning opportunity for the expert workspace."
+}

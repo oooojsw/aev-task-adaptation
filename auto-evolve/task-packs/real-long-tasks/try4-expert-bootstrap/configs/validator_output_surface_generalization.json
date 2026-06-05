@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "summary": "Formal experience surface stays answer-agnostic.",
+  "details": [
+    "scanned_roots: 1",
+    "scanned_files: 0",
+    "skipped_files: 1",
+    "  skip: C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\task-packs\\real-long-tasks\\try4-expert-bootstrap\\expert-workspace\\change_log.md (matched ignorePathSubstring: change_log)",
+    "no task-answer literals detected in the formal experience surface"
+  ],
+  "blocking": false,
+  "exit_code": 0
+}

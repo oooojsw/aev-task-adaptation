@@ -1,0 +1,51 @@
+{
+  "rootRoles": [
+    "experience-workspace"
+  ],
+  "rootPaths": [
+    "E:/opencode-auto-evolve-history/runtime-state/long-task-campaigns/20260510-003632946-try4-expert-bootstrap-campaign/pending-expert-package/current"
+  ],
+  "allowedExtensions": [".md", ".txt", ".json", ".jsonl", ".yaml", ".yml", ".py", ".ps1", ".sh", ".js", ".mjs", ".cjs", ".ts"],
+  "ignorePathSubstrings": [
+    "evidence"
+  ],
+  "warnOnIgnoredHits": true,
+  "maxHitsPerFile": 4,
+  "maxTotalHits": 12,
+  "forbiddenLiterals": [
+    {
+      "value": "20260",
+      "label": "task-specific result amount"
+    },
+    {
+      "value": "40925.2",
+      "label": "task-specific taxed amount"
+    },
+    {
+      "value": "20665.2",
+      "label": "task-specific taxed amount"
+    },
+    {
+      "value": "22893",
+      "label": "task-specific result amount"
+    }
+  ],
+  "forbiddenPatterns": [
+    {
+      "label": "task-specific bare result",
+      "pattern": "(?<!\\d)20260(?:\\.0+)?(?!\\d)"
+    },
+    {
+      "label": "task-specific bare taxed",
+      "pattern": "(?<!\\d)40925\\.2(?:\b)?(?!\\d)"
+    },
+    {
+      "label": "task-specific bare taxed2",
+      "pattern": "(?<!\\d)20665(?:\\.20?)?(?!\\d)"
+    },
+    {
+      "label": "task-specific bare result2",
+      "pattern": "(?<!\\d)22893(?:\b)?(?!\\d)"
+    }
+  ]
+}

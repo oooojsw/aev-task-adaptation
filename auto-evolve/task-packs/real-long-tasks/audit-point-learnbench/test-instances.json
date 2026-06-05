@@ -1,0 +1,93 @@
+{
+  "dataset": "audit-point-learnbench",
+  "source": "audit-report-pilot-human-review-28",
+  "split": "test",
+  "count": 8,
+  "instances": [
+    {
+      "id": "audit-point-021",
+      "originAuditPointIndex": 21,
+      "mode": "reproduce",
+      "specPath": "tasks/audit-point-021/spec.json",
+      "campaignPath": "tasks/audit-point-021/campaign.json",
+      "answerPath": "tasks/audit-point-021/answer/answer.md"
+    },
+    {
+      "id": "audit-point-022",
+      "originAuditPointIndex": 22,
+      "mode": "reproduce",
+      "specPath": "tasks/audit-point-022/spec.json",
+      "campaignPath": "tasks/audit-point-022/campaign.json",
+      "answerPath": "tasks/audit-point-022/answer/answer.md"
+    },
+    {
+      "id": "audit-point-023",
+      "originAuditPointIndex": 23,
+      "mode": "reproduce",
+      "specPath": "tasks/audit-point-023/spec.json",
+      "campaignPath": "tasks/audit-point-023/campaign.json",
+      "answerPath": "tasks/audit-point-023/answer/answer.md"
+    },
+    {
+      "id": "audit-point-024",
+      "originAuditPointIndex": 24,
+      "mode": "reproduce",
+      "specPath": "tasks/audit-point-024/spec.json",
+      "campaignPath": "tasks/audit-point-024/campaign.json",
+      "answerPath": "tasks/audit-point-024/answer/answer.md"
+    },
+    {
+      "id": "audit-point-025",
+      "originAuditPointIndex": 25,
+      "mode": "reproduce",
+      "specPath": "tasks/audit-point-025/spec.json",
+      "campaignPath": "tasks/audit-point-025/campaign.json",
+      "answerPath": "tasks/audit-point-025/answer/answer.md"
+    },
+    {
+      "id": "audit-point-026",
+      "originAuditPointIndex": 26,
+      "mode": "reproduce",
+      "specPath": "tasks/audit-point-026/spec.json",
+      "campaignPath": "tasks/audit-point-026/campaign.json",
+      "answerPath": "tasks/audit-point-026/answer/answer.md"
+    },
+    {
+      "id": "audit-point-027",
+      "originAuditPointIndex": 27,
+      "mode": "reproduce",
+      "specPath": "tasks/audit-point-027/spec.json",
+      "campaignPath": "tasks/audit-point-027/campaign.json",
+      "answerPath": "tasks/audit-point-027/answer/answer.md"
+    },
+    {
+      "id": "audit-point-028",
+      "originAuditPointIndex": 28,
+      "mode": "reproduce",
+      "specPath": "tasks/audit-point-028/spec.json",
+      "campaignPath": "tasks/audit-point-028/campaign.json",
+      "answerPath": "tasks/audit-point-028/answer/answer.md"
+    }
+  ],
+  "groups": [
+    {
+      "name": "reproduce",
+      "description": "targeted-blind holdout: hidden answers are not available to the solving agent",
+      "instanceIDs": [
+        "audit-point-021",
+        "audit-point-022",
+        "audit-point-023",
+        "audit-point-024",
+        "audit-point-025",
+        "audit-point-026",
+        "audit-point-027",
+        "audit-point-028"
+      ]
+    },
+    {
+      "name": "discovery",
+      "description": "deferred; current materials do not support open-discovery evaluation",
+      "instanceIDs": []
+    }
+  ]
+}

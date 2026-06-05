@@ -1,0 +1,1 @@
+How can I amend my VBA macro to delete rows in Column L of a sheet named 'PL Recon Items', where there are numeric values greater than +0.05 or less than -0.05, while excluding the deletion of rows with values between +0.01 and +0.05 or between -0.01 and -0.05?

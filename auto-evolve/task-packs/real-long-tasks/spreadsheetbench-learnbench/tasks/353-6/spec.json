@@ -1,0 +1,127 @@
+{
+  "id": "spreadsheetbench-353-6",
+  "title": "spreadsheetbench-353-6",
+  "goal": "Solve one spreadsheet task from SpreadsheetBench.\nRead the input workbook and produce exactly one JSON file at workspace/answer.json.\nThe JSON schema must be:\n{\"answer_sheet\":\"<sheet>\",\"answer_position\":\"<range>\",\"values\":[[\"...\"]]}\nThe values matrix must match the expected answer cells exactly.",
+  "taskFamily": "spreadsheetbench-learnbench",
+  "domainTags": [
+    "spreadsheet",
+    "hard-validation",
+    "answer-range"
+  ],
+  "materials": [
+    {
+      "path": "./instruction.md",
+      "label": "task instruction",
+      "role": "human-guidance"
+    },
+    {
+      "path": "./input.xlsx",
+      "label": "input workbook",
+      "role": "source-artifact"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "./workspace/answer.json",
+      "label": "answer matrix",
+      "role": "output"
+    },
+    {
+      "path": "./expert-workspace",
+      "label": "expert workspace",
+      "role": "experience-workspace"
+    }
+  ],
+  "editablePaths": [
+    "./workspace",
+    "./expert-workspace"
+  ],
+  "formalPackageRoots": [
+    "./expert-workspace"
+  ],
+  "validators": [
+    {
+      "id": "spreadsheet-hard-validate",
+      "type": "script",
+      "title": "Spreadsheet answer matrix validation",
+      "path": "../../../../../scripts/validate-spreadsheetbench-answer.py",
+      "runner": "python",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "args": [
+        "--answer",
+        "../../private-answers/353-6/answer.xlsx",
+        "--candidate",
+        "./workspace/answer.json",
+        "--sheet",
+        "Data",
+        "--range",
+        "'Data'!A1:AH20"
+      ],
+      "timeoutMs": 120000
+    }
+  ],
+  "planning": {
+    "agent": "top"
+  },
+  "execution": {
+    "agent": "top"
+  },
+  "validation": {
+    "agent": "top"
+  },
+  "initialGraph": {
+    "planner_summary": "Read workbook, infer required result cells, and output exact matrix JSON.",
+    "completion_validator_ids": [
+      "spreadsheet-hard-validate"
+    ],
+    "units": [
+      {
+        "id": "inspect-input",
+        "title": "Inspect Input Workbook",
+        "goal": "Inspect input.xlsx and identify how to compute the target answer range from instruction.",
+        "inputs": [
+          "./instruction.md",
+          "./input.xlsx"
+        ],
+        "depends_on": [],
+        "expected_artifacts": [
+          "./workspace/notes.md"
+        ],
+        "claim": "Computation logic and target range interpretation are clear.",
+        "check_plan": "Notes include target sheet, range dimensions, and computation method.",
+        "validator_ids": [],
+        "retry_budget": 2
+      },
+      {
+        "id": "write-answer-json",
+        "title": "Write Answer JSON",
+        "goal": "Write workspace/answer.json with answer_sheet, answer_position, and values matrix.",
+        "inputs": [
+          "./workspace/notes.md",
+          "./instruction.md",
+          "./input.xlsx"
+        ],
+        "depends_on": [
+          "inspect-input"
+        ],
+        "expected_artifacts": [
+          "./workspace/answer.json"
+        ],
+        "claim": "Answer JSON exists and matrix dimensions match the target range.",
+        "check_plan": "Run a quick self-check on matrix rows/cols before finalizing.",
+        "validator_ids": [],
+        "retry_budget": 2
+      }
+    ]
+  },
+  "budgets": {
+    "maxAttemptsPerUnit": 3,
+    "maxTotalUnitAttempts": 6,
+    "maxGraphReplans": 1,
+    "maxValidatorCalls": 8,
+    "maxNoProgressCycles": 2,
+    "maxUnitsPerGraph": 4
+  }
+}

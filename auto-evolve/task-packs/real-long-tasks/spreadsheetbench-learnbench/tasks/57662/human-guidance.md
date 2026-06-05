@@ -1,0 +1,1 @@
+How can I automatically fill in rows highlighted in orange with the corresponding names from my dataset when the rows have the same email addresses, similar to how the SUMIFS formula works for numerical values, considering the data is already filtered by email for marketing purposes?

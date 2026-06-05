@@ -1,35 +1,42 @@
-﻿{
-    "title":  "audit-point-learnbench-campaign",
-    "taskFamily":  "audit-point-learnbench",
-    "mode":  "graph_iterative",
-    "baseSpecPath":  "./spec.json",
-    "maxRounds":  5,
-    "seedTargets":  [
-                        {
-                            "targetPath":  "./expert-workspace",
-                            "seedPath":  "../../seed-expert-workspace",
-                            "kind":  "experience_workspace",
-                            "resetOnStart":  true
-                        }
-                    ],
-    "lessonsMirror":  {
-                          "workspaceTargetPath":  "./expert-workspace",
-                          "relativePath":  "lessons/failure_lessons.md",
-                          "addManifestPointer":  true
-                      },
-    "carryover":  {
-                      "includeFailurePackets":  true,
-                      "includeRetryLessons":  true,
-                      "includeLearningUnits":  true,
-                      "includeRoundSummaries":  true,
-                      "recentRoundSummaryCount":  5
-                  },
-    "roundBudgetOverrides":  {
-                                 "maxAttemptsPerUnit":  3,
-                                 "maxTotalUnitAttempts":  8,
-                                 "maxGraphReplans":  2,
-                                 "maxValidatorCalls":  10,
-                                 "maxNoProgressCycles":  3,
-                                 "maxUnitsPerGraph":  5
-                             }
+{
+  "title": "audit-point-learnbench-campaign-audit-point-007",
+  "taskFamily": "audit-point-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 20,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ],
+  "lessonsMirror": {
+    "workspaceTargetPath": "./expert-workspace",
+    "relativePath": "lessons/failure_lessons.md",
+    "addManifestPointer": true
+  },
+  "carryover": {
+    "includeFailurePackets": true,
+    "includeRetryLessons": true,
+    "includeLearningUnits": true,
+    "includeRoundSummaries": true,
+    "recentRoundSummaryCount": 5
+  },
+  "surfaceGeneralization": {
+    "enabled": true,
+    "validatorPath": "../../../../../scripts/validate-experience-surface-generalization.py",
+    "configPath": "../../configs/single-surface-generalization.json",
+    "blocking": false,
+    "timeoutMs": 60000
+  },
+  "roundBudgetOverrides": {
+    "maxAttemptsPerUnit": 3,
+    "maxTotalUnitAttempts": 8,
+    "maxGraphReplans": 2,
+    "maxValidatorCalls": 10,
+    "maxNoProgressCycles": 3,
+    "maxUnitsPerGraph": 5
+  }
 }

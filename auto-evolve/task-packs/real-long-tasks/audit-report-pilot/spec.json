@@ -1,0 +1,146 @@
+{
+  "title": "audit-report-pilot",
+  "goal": "Learn a formal expert workspace from asset valuation working papers and reference audit opinions, so that a blank agent can later generate a qualified internal audit opinion document (内部审核意见) that matches professional human reviewer standards.",
+  "taskFamily": "audit-report-pilot",
+  "domainTags": [
+    "audit-report-generation",
+    "asset-valuation",
+    "soft-validation",
+    "prompt-json-validator"
+  ],
+  "materials": [
+    {
+      "path": "./materials/定稿",
+      "label": "finalized asset valuation deliverables",
+      "role": "source-artifact"
+    },
+    {
+      "path": "./materials/电子底稿",
+      "label": "working papers (底稿)",
+      "role": "source-artifact"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "./expert-workspace",
+      "label": "learned expert workspace for audit opinion generation",
+      "role": "experience-workspace"
+    }
+  ],
+  "editablePaths": [
+    "./expert-workspace",
+    "./workspace"
+  ],
+  "initialExpertContextPaths": [
+    "./seed-expert-workspace/manifest.md",
+    "./seed-expert-workspace/change_log.md"
+  ],
+  "formalPackageRoots": [
+    "./expert-workspace"
+  ],
+  "validators": [
+    {
+      "id": "workspace-layout",
+      "type": "script",
+      "title": "Learned expert workspace layout is valid",
+      "path": "../../../scripts/validate-experience-workspace-layout.ts",
+      "runner": "bun",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true
+    },
+    {
+      "id": "blank-agent-deployment",
+      "type": "script",
+      "title": "Blank-agent deployment: generate audit opinion using only the expert workspace",
+      "path": "../../../scripts/run-blank-agent-task-deployment-acceptance.ts",
+      "runner": "bun",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "args": [
+        "./auto-evolve/task-packs/real-long-tasks/audit-report-pilot/deployment/deployment-spec.json"
+      ]
+    }
+  ],
+  "planning": {
+    "agent": "top"
+  },
+  "execution": {
+    "agent": "top"
+  },
+  "validation": {
+    "agent": "top"
+  },
+  "deploymentAcceptance": {
+    "agent": "blank"
+  },
+  "initialGraph": {
+    "planner_summary": "Read the source valuation materials (定稿 + 电子底稿) to understand the project scope, then synthesize a formal expert workspace that teaches a blank agent how to generate a professional internal audit opinion document covering all 6 review dimensions.",
+    "completion_validator_ids": [
+      "workspace-layout",
+      "blank-agent-deployment"
+    ],
+    "units": [
+      {
+        "id": "inspect-source-materials",
+        "title": "Inspect Source Materials",
+        "goal": "Thoroughly read the valuation deliverables (定稿) and working papers (电子底稿). Extract the valuation scope, methodology, key assumptions, critical data, risk areas, and conclusion structure. Understand what a professional audit opinion must cover.",
+        "inputs": [
+          "./materials/定稿",
+          "./materials/电子底稿"
+        ],
+        "depends_on": [],
+        "expected_artifacts": [
+          "./workspace"
+        ],
+        "claim": "Source materials have been thoroughly analyzed and key audit opinion requirements have been extracted.",
+        "check_plan": "Leave structured analysis notes in workspace that the synthesis unit can use.",
+        "validator_ids": [],
+        "retry_budget": 2
+      },
+      {
+        "id": "synthesize-expert-workspace",
+        "title": "Synthesize Expert Workspace",
+        "goal": "Write a formal expert workspace that teaches a blank agent how to produce a qualified internal audit opinion. The workspace must include: (1) manifest.md with expert rules covering all 6 review dimensions, (2) change_log.md tracking iterations, (3) output_contract.md defining the expected output format and quality standards. The workspace should teach HOW to derive findings from materials — never bake in final answers.",
+        "inputs": [
+          "./workspace",
+          "./seed-expert-workspace/manifest.md",
+          "./seed-expert-workspace/change_log.md"
+        ],
+        "depends_on": [
+          "inspect-source-materials"
+        ],
+        "expected_artifacts": [
+          "./expert-workspace/manifest.md",
+          "./expert-workspace/change_log.md"
+        ],
+        "claim": "The expert workspace is complete enough to guide a blank agent through producing a professional audit opinion.",
+        "check_plan": "Update the tracked expert workspace with stable rules, output contract, and execution guidance. The blank agent must be able to follow it without seeing the original materials.",
+        "validator_ids": [],
+        "retry_budget": 2
+      }
+    ]
+  },
+  "budgets": {
+    "maxAttemptsPerUnit": 2,
+    "maxTotalUnitAttempts": 6,
+    "maxGraphReplans": 1,
+    "maxValidatorCalls": 12,
+    "maxNoProgressCycles": 3,
+    "maxUnitsPerGraph": 5
+  },
+  "shadowMemoryScope": {
+    "namespace": "audit-report-pilot",
+    "tags": [
+      "audit-report-generation",
+      "asset-valuation",
+      "soft-validation"
+    ],
+    "retrievalMode": "manual"
+  },
+  "reversePropagation": {
+    "acceptancePolicyID": "long-task-candidate-guard"
+  },
+  "notes": "Campaign mode following the campaign-smoke pattern. Worker agents learn an expert workspace from source materials. Campaign harvest/lead/reviewer roles accumulate knowledge across rounds. A blank-agent deployment acceptance test validates that the expert workspace actually teaches a blank agent to produce a qualified audit opinion. Soft validation compares the blank agent's output against the human reference audit opinion."
+}

@@ -1,0 +1,120 @@
+{
+  "id": "audit-point-024",
+  "title": "audit-point-024",
+  "goal": "Learn a reusable expert skill for finding and writing one professional internal audit opinion: 合同负债表页脚评估人员完善. The final blank agent should produce exactly one audit opinion item, not a full report.",
+  "taskFamily": "audit-point-learnbench",
+  "domainTags": [
+    "audit-point-generation",
+    "asset-valuation",
+    "soft-validation"
+  ],
+  "materials": [
+    {
+      "path": "../../../audit-report-pilot/materials/定稿",
+      "label": "shared finalized valuation deliverables",
+      "role": "source-artifact"
+    },
+    {
+      "path": "../../../audit-report-pilot/materials/电子底稿",
+      "label": "shared working papers",
+      "role": "source-artifact"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "./expert-workspace",
+      "label": "learned audit-point skill",
+      "role": "experience-workspace"
+    }
+  ],
+  "editablePaths": [
+    "./expert-workspace",
+    "./workspace"
+  ],
+  "initialExpertContextPaths": [
+    "../../seed-expert-workspace/manifest.md",
+    "../../seed-expert-workspace/change_log.md"
+  ],
+  "formalPackageRoots": [
+    "./expert-workspace"
+  ],
+  "validatorProfiles": [
+    "audit-point/single-train-v2"
+  ],
+  "blankEvalValidatorProfiles": [
+    "audit-point/blank-eval-targeted-v2"
+  ],
+  "validators": [],
+  "planning": {
+    "agent": "top"
+  },
+  "execution": {
+    "agent": "top"
+  },
+  "validation": {
+    "agent": "top"
+  },
+  "initialGraph": {
+    "planner_summary": "Single-point audit learnbench: inspect all shared valuation materials, learn one reusable audit finding pattern, and write a one-point audit output for soft validation.",
+    "completion_validator_ids": [
+      "workspace-layout",
+      "single-point-soft-validate"
+    ],
+    "units": [
+      {
+        "id": "inspect-shared-materials",
+        "title": "Inspect Shared Materials",
+        "goal": "Inspect the shared valuation report and working papers for evidence related to this audit finding type: 检查合同负债表等明细表页脚、评估人员、复核人员等签署或填列信息是否完整。 Do not write a full audit report.",
+        "inputs": [
+          "../../../audit-report-pilot/materials/定稿",
+          "../../../audit-report-pilot/materials/电子底稿"
+        ],
+        "depends_on": [],
+        "expected_artifacts": [
+          "./workspace/material-notes.md"
+        ],
+        "claim": "Relevant evidence and checking targets for this one audit issue type have been identified.",
+        "check_plan": "Write concise material notes with exact pages, sheets, rows, cells, or report sections where possible.",
+        "validator_ids": [],
+        "retry_budget": 2
+      },
+      {
+        "id": "write-single-point-skill-and-output",
+        "title": "Write Single Point Skill And Output",
+        "goal": "Create a reusable skill package that teaches the finding pattern, and write workspace/audit-point-output.md containing exactly one professional audit opinion item.",
+        "inputs": [
+          "./workspace/material-notes.md",
+          "../../seed-expert-workspace/manifest.md"
+        ],
+        "depends_on": [
+          "inspect-shared-materials"
+        ],
+        "expected_artifacts": [
+          "./expert-workspace/manifest.md",
+          "./expert-workspace/change_log.md",
+          "./workspace/audit-point-output.md"
+        ],
+        "claim": "The skill and one-point audit output are complete.",
+        "check_plan": "The output must be one actionable audit opinion item with evidence, issue, and requested correction/check.",
+        "validator_ids": [],
+        "retry_budget": 2
+      }
+    ]
+  },
+  "budgets": {
+    "maxAttemptsPerUnit": 3,
+    "maxTotalUnitAttempts": 8,
+    "maxGraphReplans": 2,
+    "maxValidatorCalls": 10,
+    "maxNoProgressCycles": 3,
+    "maxUnitsPerGraph": 5
+  },
+  "shadowMemoryScope": {
+    "namespace": "audit-point-learnbench",
+    "tags": [
+      "audit-point-generation"
+    ],
+    "retrievalMode": "manual"
+  },
+  "notes": "One instance learns exactly one audit finding pattern. Shared material directories are visible read-only inputs; do not copy or edit them. The answer file is used only by the soft validator."
+}

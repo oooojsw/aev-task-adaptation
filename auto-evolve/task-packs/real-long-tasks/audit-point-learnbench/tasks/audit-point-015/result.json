@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "score": 85,
+  "same_issue": true,
+  "specific_evidence": true,
+  "actionable": true,
+  "gap": "minor wording difference",
+  "learning": "Keep issue type and evidence location aligned.",
+  "blocking": false,
+  "summary": "Issue type, evidence, and actionability align with expert answer.",
+  "details": [
+    "same_issue=true",
+    "specific_evidence=true",
+    "actionable=true"
+  ]
+}

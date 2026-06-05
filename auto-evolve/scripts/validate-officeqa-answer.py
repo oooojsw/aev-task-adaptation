@@ -58,10 +58,22 @@ def resolve_candidate_path(candidate: str, payload: dict) -> Path:
     return raw
 
 
+def resolve_answer_path(answer_path: str, payload: dict) -> Path:
+    raw = Path(answer_path)
+    if raw.is_absolute():
+        return raw
+    task_dir = infer_task_dir(payload)
+    if task_dir is not None:
+        task_relative = (task_dir / answer_path).resolve()
+        if task_relative.exists():
+            return task_relative
+    return raw.resolve()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("payload_json", nargs="?")
-    parser.add_argument("--ground-truth", required=True)
+    parser.add_argument("--answer-path", required=True)
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--reward", required=True)
     parser.add_argument("--tolerance", type=float, default=0.01)
@@ -72,13 +84,18 @@ def main() -> None:
     if not candidate_path.exists():
         raise SystemExit(f"Missing candidate answer file: {candidate_path}")
 
+    answer_file = resolve_answer_path(args.answer_path, payload)
+    if not answer_file.exists():
+        raise SystemExit(f"Missing private answer file: {answer_file}")
+
+    ground_truth_text = answer_file.read_text(encoding="utf-8-sig", errors="ignore").strip()
     predicted = candidate_path.read_text(encoding="utf-8-sig", errors="ignore").strip()
     reward = load_reward_module(Path(args.reward))
-    score = reward.score_answer(args.ground_truth, predicted, args.tolerance)
+    score = reward.score_answer(ground_truth_text, predicted, args.tolerance)
     if score < 1.0:
         raise SystemExit(
             "OfficeQA answer validation failed.\n"
-            f"Expected: {args.ground_truth}\n"
+            f"Expected: {ground_truth_text}\n"
             f"Predicted: {predicted}\n"
             f"Tolerance: {args.tolerance}\n"
             f"Score: {score}"

@@ -1,0 +1,53 @@
+{
+  "rootPaths": [
+    "./expert-workspace"
+  ],
+  "allowedExtensions": [".md", ".txt", ".json", ".jsonl", ".yaml", ".yml", ".py", ".ps1", ".sh", ".js", ".mjs", ".cjs", ".ts"],
+  "ignorePathSubstrings": [
+    "/tools/",
+    "/skills/",
+    "node_modules",
+    ".git",
+    "__pycache__"
+  ],
+  "warnOnIgnoredHits": false,
+  "maxHitsPerFile": 6,
+  "maxTotalHits": 30,
+  "forbiddenPatterns": [
+    {
+      "label": "task-id-hardcode",
+      "pattern": "audit-point-\\d+"
+    },
+    {
+      "label": "hidden-answer-section-copy",
+      "pattern": "##\\s*Hidden\\s*Expert\\s*Answer"
+    },
+    {
+      "label": "answer-literal-leak",
+      "pattern": "(?i)hidden\\s*answer|ground\\s*truth|official\\s*answer"
+    }
+  ],
+  "forbiddenLiterals": [],
+  "requiredSections": [
+    {
+      "file": "CORE.md",
+      "sections": [
+        "## Material Navigation Rules",
+        "## High-Value Anomaly Patterns",
+        "## Evidence Localization Workflow",
+        "## Audit Opinion Writing Template",
+        "## Failure Lessons And Anti-Patterns",
+        "## Optional Observations"
+      ]
+    }
+  ],
+  "requiredFiles": [
+    "INDEX.md",
+    "CORE.md",
+    "meta.json",
+    "surface_contract.json",
+    "open_observations.md",
+    "case.md",
+    "lessons/failure_lessons.md"
+  ]
+}

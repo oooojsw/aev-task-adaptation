@@ -1,0 +1,21 @@
+{
+  "validated_at": "2026-05-13T00:14:47+08:00",
+  "validator": "validate-experience-surface-generalization.py",
+  "passed": true,
+  "summary": "Formal experience surface stays answer-agnostic.",
+  "details": [
+    "scanned_roots: 1",
+    "scanned_files: 6",
+    "skipped_files: 5",
+    "no task-answer literals detected in the formal experience surface"
+  ],
+  "exit_code": 0,
+  "check_plan": {
+    "required": "no forbiddenPattern matches; scanned_files >= 6; surface contains no hardcoded literal values",
+    "actual": {
+      "forbiddenPattern_matches": 0,
+      "scanned_files": 6,
+      "hardcoded_literals": 0
+    }
+  }
+}

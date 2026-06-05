@@ -5,14 +5,7 @@
   "rootPaths": [
     "C:\\\\Users\\\\ZhuanZ\\\\Desktop\\\\opencode re\\\\opencode latest\\\\auto-evolve\\\\task-packs\\\\real-long-tasks\\\\try4-expert-bootstrap\\\\expert-workspace"
   ],
-  "allowedExtensions": [
-    ".md",
-    ".txt",
-    ".json",
-    ".jsonl",
-    ".yaml",
-    ".yml"
-  ],
+  "allowedExtensions": [".md", ".txt", ".json", ".jsonl", ".yaml", ".yml", ".py", ".ps1", ".sh", ".js", ".mjs", ".cjs", ".ts"],
   "ignorePathSubstrings": [
     "/evidence/",
     "lessons",

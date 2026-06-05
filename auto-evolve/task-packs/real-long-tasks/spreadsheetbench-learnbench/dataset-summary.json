@@ -1,0 +1,9 @@
+{
+  "sourceRoot": "C:\\Users\\ZhuanZ\\Desktop\\experiment\\SpreadsheetBench\\all_data_912_v0.1",
+  "datasetSize": 912,
+  "splitRatio": 0.8,
+  "trainAll": 729,
+  "testAll": 183,
+  "trainSelected": 40,
+  "testSelected": 10
+}

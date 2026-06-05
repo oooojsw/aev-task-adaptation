@@ -1,0 +1,1 @@
+How can I color a cell red to a specific deliverable's deadline? The deadline week is in Column D and the week numbers are displayed in row 6. I want to automate this process using a formula or conditional formatting.

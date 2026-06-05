@@ -1,0 +1,141 @@
+{
+  "rootRoles": [
+    "experience-workspace"
+  ],
+  "rootPaths": [],
+  "allowedExtensions": [
+    ".md",
+    ".txt",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml",
+    ".py",
+    ".ps1",
+    ".sh",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts"
+  ],
+  "ignorePathSubstrings": [
+    "node_modules",
+    ".git",
+    "__pycache__",
+    "/workspace/",
+    "\\workspace\\"
+  ],
+  "requiredFiles": [
+    "README.md"
+  ],
+  "forbiddenPatterns": [
+    {
+      "label": "explicit-ground-truth-container",
+      "pattern": "\\b(ground[-_ ]?truth|official answer|hidden answer|gold answer|gold label)\\b",
+      "flags": [
+        "IGNORECASE"
+      ]
+    },
+    {
+      "label": "private-answer-path",
+      "pattern": "\\bprivate-answers\\b|--answer-path",
+      "flags": [
+        "IGNORECASE"
+      ]
+    },
+    {
+      "label": "camelcase-answer-container",
+      "pattern": "\\b(expectedAnswer|groundTruth|officialAnswer|hiddenAnswer|goldAnswer)\\b",
+      "flags": [
+        "IGNORECASE"
+      ]
+    },
+    {
+      "label": "locked-answer-container",
+      "pattern": "\\b(validated answer|locked answer value)\\b",
+      "flags": [
+        "IGNORECASE"
+      ]
+    },
+    {
+      "label": "no-rederive-answer",
+      "pattern": "\\b(do not re-derive|do not rederive|do not recompute|use the answer|copy the answer)\\b",
+      "flags": [
+        "IGNORECASE"
+      ]
+    },
+    {
+      "label": "answer-file-contains-literal",
+      "pattern": "answer\\.txt\\s+(?:contains|must contain|is)\\s+[`\\\"']?[-+]?\\d[\\d,]*(?:\\.\\d+)?%?[`\\\"']?",
+      "flags": [
+        "IGNORECASE"
+      ]
+    },
+    {
+      "label": "final-answer-literal",
+      "pattern": "\\b(?:final|correct|validated|locked|expected)\\s+answer\\s*(?:is|=|:)\\s*[`\\\"']?[-+]?\\d[\\d,]*(?:\\.\\d+)?%?[`\\\"']?",
+      "flags": [
+        "IGNORECASE"
+      ]
+    }
+  ],
+  "structuredDangerKeys": [
+    "expectedAnswer",
+    "groundTruth",
+    "ground_truth",
+    "officialAnswer",
+    "official_answer",
+    "hiddenAnswer",
+    "hidden_answer",
+    "gold",
+    "goldAnswer",
+    "gold_answer",
+    "solution"
+  ],
+  "structuredConditionalKeys": [
+    "answer",
+    "finalAnswer",
+    "final_answer",
+    "target",
+    "label"
+  ],
+  "answerContextTerms": [
+    "answer",
+    "expected",
+    "validated",
+    "locked",
+    "correct",
+    "official",
+    "ground truth",
+    "ground-truth",
+    "gold",
+    "solution",
+    "final",
+    "do not re-derive",
+    "do not rederive",
+    "copy"
+  ],
+  "benignNumericContextTerms": [
+    "page",
+    "table",
+    "row",
+    "column",
+    "year",
+    "month",
+    "months",
+    "round",
+    "decimal",
+    "tolerance",
+    "pdf",
+    "ocr",
+    "sheet",
+    "section",
+    "chapter",
+    "line",
+    "format",
+    "example"
+  ],
+  "numericContextWindow": 100,
+  "maxHitsPerFile": 6,
+  "maxTotalHits": 30
+}

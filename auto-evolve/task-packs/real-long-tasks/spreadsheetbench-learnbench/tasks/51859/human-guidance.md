@@ -1,0 +1,1 @@
+How can I calculate the total hours each employee has spent on each category by summing the values from column H when column L matches the corresponding employee's name in column A and the category matches with row 4?

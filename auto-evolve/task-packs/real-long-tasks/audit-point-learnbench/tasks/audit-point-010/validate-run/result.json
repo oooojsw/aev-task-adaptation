@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "score": 85,
+  "same_issue": true,
+  "specific_evidence": true,
+  "actionable": true,
+  "gap": "minor",
+  "learning": "Keep aligned.",
+  "blocking": false,
+  "summary": "All met.",
+  "details": [
+    "si=true",
+    "se=true",
+    "ar=true",
+    "score=85"
+  ]
+}

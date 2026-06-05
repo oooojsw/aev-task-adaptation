@@ -1,0 +1,15 @@
+{
+  "title": "spreadsheetbench-campaign-57662",
+  "taskFamily": "spreadsheetbench-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

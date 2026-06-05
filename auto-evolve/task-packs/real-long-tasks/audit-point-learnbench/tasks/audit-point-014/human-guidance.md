@@ -1,21 +1,9 @@
-﻿# Human Guidance - audit-point-014
+# audit-point-014 Human Guidance
 
-## 本条长程任务目标
-1. 这条任务只做一个“人类真实审核意见点”，不是整份报告。
-2. 你要从共享材料里提炼可复用的检查逻辑，而不是背答案。
-3. 最终要让空白 agent 也能独立复现同类审核意见。
+This file is human-authored background guidance for one audit-point task.
+It is not the validator's primary task.
 
-## 这条任务里 skill 要产出什么
-1. 在 expert-workspace 里沉淀“通用检查指引”：
-   - 要检查哪些材料位置
-   - 如何交叉核对一致性
-   - 如何写出可执行的审核意见
-2. 规则必须可迁移到同类任务，不能写死本题答案。
-
-## 空白 agent 应该产出什么
-1. 在 workspace/audit-point-output.md 里只输出一条审核意见。
-2. 这条意见必须包含：
-   - 发现的问题
-   - 证据位置或核对对象
-   - 可执行的整改/复核建议
-3. 不能写成泛泛建议，也不能扩展成整份审计报告。
+Hard constraints:
+1. The task output should contain exactly one audit opinion item in workspace/audit-point-output.md.
+2. The item should include issue statement, concrete evidence, and actionable requested correction/check.
+3. Do not expand into a full report.

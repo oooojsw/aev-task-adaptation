@@ -1,0 +1,1 @@
+How can I adjust my VBA code to highlight unique values in a column of text strings within Excel, instead of highlighting duplicates? Precisely, I'd like unique values highlighted in green. I'm using a code that currently identifies unique values, but the highlighting function needs to be inverted to highlight non-duplicates as unique.

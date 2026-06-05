@@ -1,0 +1,1 @@
+How can I calculate the median market capitalization for a set of companies that fall within a specific percentile range, using a formula in Excel that allows me to dynamically change the percentile range?

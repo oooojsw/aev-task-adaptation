@@ -361,7 +361,7 @@ async function main() {
   await writeFile(path.join(root, "seed-expert-workspace", "change_log.md"), "# Change Log\n\nSeed workspace.\n", "utf8")
   const surfaceBase = {
     rootPaths: ["./expert-workspace"],
-    allowedExtensions: [".md", ".txt", ".json", ".jsonl", ".yaml", ".yml"],
+    allowedExtensions: [".md", ".txt", ".json", ".jsonl", ".yaml", ".yml", ".py", ".ps1", ".sh", ".js", ".mjs", ".cjs", ".ts"],
     ignorePathSubstrings: ["/tools/", "/skills/", "node_modules", ".git", "__pycache__"],
     warnOnIgnoredHits: false,
     maxHitsPerFile: 6,

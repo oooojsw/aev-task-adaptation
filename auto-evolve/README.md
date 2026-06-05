@@ -135,3 +135,96 @@ $$\text{SOP 质量} \propto \frac{1}{\text{作弊空间 (Surface Gate)}} \times 
 
 ---
 **铭记：系统的生命力在于对 LLM 投机取巧本能的绝对物理镇压。不要相信模型的承诺，只相信验证器的冷酷判决。**
+
+---
+
+## 第六部分：通用任务包批跑脚本
+
+现在新增了一个通用任务包级批跑脚本：
+
+- `auto-evolve/scripts/run-benchmark-orchestrator.ts`
+
+它的定位不是替代 long-task/campaign/blank-agent 主链路，而是做 **外层编排**：
+
+- 读取 `task-packs/real-long-tasks/<pack>/tasks/<id>/campaign.json`
+- 并发启动或续跑多个 training campaign
+- 只把 `verified_success` 且存在 `pending-expert-package/current` 的任务当作可合并输入
+- 在需要时进入 merge
+- 在需要时进入训练回测（Phase 3 train replay，可带 append-only repair）
+- 在需要时进入 held-out test
+- 在需要时再跑 blank/no-skill baseline
+
+这个脚本 **不会绕开** 现有每轮验收链路。每个 campaign 内部仍然是：
+
+- lead 写 pending package
+- surface validator 先查经验包表面
+- blank agent 闭卷跑真实任务
+- product validator 验空白 agent 产物
+- 失败结果再回流给下一轮
+
+### 6.1 为什么要加这层脚本
+
+以前：
+
+- OfficeQA、SpreadsheetBench 各自有一份单独批跑脚本
+- 能跑，但控制粒度不一致
+- 想停在“训练结束 / 合并结束 / 回测结束 / 测试结束”这种中间点时不统一
+
+现在：
+
+- 通用 orchestrator 把这些外层控制统一起来
+- 但不碰底层 campaign、blank eval、validator、merge-repair 的核心机制
+
+### 6.2 这个脚本支持停在任意阶段
+
+核心控制项：
+
+- `--mode campaign-only`
+  - 只跑 training campaign，不进入 merge
+- `--stop-after training`
+  - 跑完训练就停
+- `--stop-after merge`
+  - 合并完成就停
+- `--stop-after train-replay`
+  - 训练回测完成就停
+- `--stop-after test`
+  - 测试集完成就停，不跑 baseline
+- `--stop-after baseline`
+  - 全部跑完再停
+
+另外也支持单独关步骤：
+
+- `--skip-merge`
+- `--skip-train-replay`
+- `--skip-test`
+- `--skip-baseline`
+
+### 6.3 典型用法
+
+OfficeQA 训练后直接停：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --task-pack-root auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench `
+  --train-split auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench/splits/train-20.json `
+  --test-split auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench/splits/test-10.json `
+  --concurrency 5 `
+  --stop-after training
+```
+
+SpreadsheetBench 跑到训练回测结束：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --task-pack-root auto-evolve/task-packs/real-long-tasks/spreadsheetbench-learnbench `
+  --train-split auto-evolve/task-packs/real-long-tasks/spreadsheetbench-learnbench/splits/train-selected.json `
+  --test-split auto-evolve/task-packs/real-long-tasks/spreadsheetbench-learnbench/splits/test-selected.json `
+  --concurrency 5 `
+  --stop-after train-replay
+```
+
+### 6.4 与旧脚本的关系
+
+旧入口 `auto-evolve/scripts/run-officeqa-pro-benchmark.ts` 现在只是这个通用脚本的薄包装，保留旧入口是为了兼容你之前已经在用的命令和环境变量。
+
+如果以后新接一个同结构的数据集，优先直接接这个通用 orchestrator，而不是再复制一份 OfficeQA/SpreadsheetBench 风格的专用批跑脚本。

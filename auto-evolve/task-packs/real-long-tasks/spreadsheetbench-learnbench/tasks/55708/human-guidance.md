@@ -1,0 +1,1 @@
+How can I use the AVERAGEIFS function in Excel to calculate the average turnaround time for a given department when the status is either "In Progress" or "In Review" and only for turnaround times equal to or greater than 6?

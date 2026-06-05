@@ -5,14 +5,7 @@
   "rootPaths": [
     "E:/opencode-auto-evolve-history/runtime-state/long-task-campaigns/20260510-003632946-try4-expert-bootstrap-campaign/pending-expert-package/current"
   ],
-  "allowedExtensions": [
-    ".md",
-    ".txt",
-    ".json",
-    ".jsonl",
-    ".yaml",
-    ".yml"
-  ],
+  "allowedExtensions": [".md", ".txt", ".json", ".jsonl", ".yaml", ".yml", ".py", ".ps1", ".sh", ".js", ".mjs", ".cjs", ".ts"],
   "ignorePathSubstrings": [
     "\\evidence\\\\",
     "/evidence/",

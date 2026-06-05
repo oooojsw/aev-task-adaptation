@@ -628,3 +628,41 @@ Windows 中 `.runtime/active-processes.json` 仍可能出现 `EPERM rename` 文�
 - 测试集失败只记录为泛化失败，不现场修 skill，不自动进入 append-only repair。
 - 合并后训练回测才允许开启 append-only repair gate；repair 只能单增 merged skill 内容，不能删除或重写旧内容。
 - 训练回测必须在全部训练 case 成功且完成 merge 后进行；训练回测不过，不进入测试集。
+
+### 14.12 通用任务包批跑脚本
+
+现在新增了一个通用外层编排脚本：
+
+- `auto-evolve/scripts/run-benchmark-orchestrator.ts`
+
+它是“任务包级 orchestrator”，不是新的 campaign 内核。它只负责：
+
+- 读取某个 `task-packs/real-long-tasks/<pack>` 下的 `splits`
+- 并发启动或续跑多个 `tasks/<id>/campaign.json`
+- 统计哪些 training case 已经 `verified_success`
+- 达标后进入 merge
+- 再按需要进入训练回测、测试集、baseline
+
+必须记住：
+
+- 它不能替代每轮 round 内部的 blank agent 验收
+- 它不能自己发明新的成功判据
+- 它只能信现有 campaign 产出的 `campaign.json`、`pending-expert-package/current`、final acceptance 结果
+
+这个脚本现在支持停在任意阶段：
+
+- `--mode campaign-only`
+- `--stop-after training`
+- `--stop-after merge`
+- `--stop-after train-replay`
+- `--stop-after test`
+- `--stop-after baseline`
+
+也支持单独关步骤：
+
+- `--skip-merge`
+- `--skip-train-replay`
+- `--skip-test`
+- `--skip-baseline`
+
+旧脚本 `auto-evolve/scripts/run-officeqa-pro-benchmark.ts` 现在只是这个通用脚本的兼容包装。以后如果是同结构任务包，优先接这个通用 orchestrator，不要再复制一份新的专用批跑脚本。

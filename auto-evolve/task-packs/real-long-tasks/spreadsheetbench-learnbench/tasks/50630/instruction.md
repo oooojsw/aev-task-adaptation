@@ -1,0 +1,1 @@
+How can I split a sentence into three parts using 'ADDED' and 'DUE' as common words that indicate where to divide the sentence? I have provided an Excel sheet for better understanding. NOTE: name is always before added. DATE WILL BE ALWAYS BE 2021.

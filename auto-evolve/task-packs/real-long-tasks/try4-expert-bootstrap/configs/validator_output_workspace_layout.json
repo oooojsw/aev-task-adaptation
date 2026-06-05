@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "summary": "Expert surface is valid under the governed profile.",
+  "details": [
+    "entry: manifest.md",
+    "documents: 5",
+    "assets: 0,
+    "control_files: 1,
+    "runtime_sidecars: 0,
+    "contract_present: true"
+  ],
+  "warnings": [],
+  "blocking": false,
+  "workspacePath": "C:\\Users\\ZhuanZ\\Desktop\\opencode re\\opencode latest\\auto-evolve\\task-packs\\real-long-tasks\\try4-expert-bootstrap\\expert-workspace",
+  "profile": "governed"
+}

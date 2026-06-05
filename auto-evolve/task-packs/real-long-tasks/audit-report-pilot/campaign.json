@@ -1,0 +1,36 @@
+{
+  "title": "audit-report-pilot-campaign",
+  "taskFamily": "audit-report-pilot",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 100,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "./seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ],
+  "lessonsMirror": {
+    "workspaceTargetPath": "./expert-workspace",
+    "relativePath": "lessons/failure_lessons.md",
+    "addManifestPointer": true
+  },
+  "carryover": {
+    "includeFailurePackets": true,
+    "includeRetryLessons": true,
+    "includeLearningUnits": true,
+    "includeRoundSummaries": true,
+    "recentRoundSummaryCount": 5
+  },
+  "roundBudgetOverrides": {
+    "maxAttemptsPerUnit": 3,
+    "maxTotalUnitAttempts": 10,
+    "maxGraphReplans": 2,
+    "maxValidatorCalls": 20,
+    "maxNoProgressCycles": 4,
+    "maxUnitsPerGraph": 6
+  },
+  "notes": "Campaign mode for audit-report-pilot. Each round generates an audit opinion draft validated against human expert reference. Expert workspace accumulates knowledge across rounds, learning from validation feedback to improve report quality."
+}

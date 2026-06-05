@@ -1,0 +1,21 @@
+﻿{
+  "entry": "manifest.md",
+  "changeLog": "change_log.md",
+  "documents": [
+    {
+      "name": "manifest.md",
+      "role": "expert-rules-primary",
+      "description": "Six-dimension audit review derivation rules; teaches HOW to locate, derive, verify, and fill values"
+    },
+    {
+      "name": "change_log.md",
+      "role": "iteration-tracking",
+      "description": "Round-by-round iteration history and lessons"
+    },
+    {
+      "name": "output_contract.md",
+      "role": "output-format-and-quality-standards",
+      "description": "Output format standards, audit opinion template, and quality checklist for expert package deliverables"
+    }
+  ]
+}

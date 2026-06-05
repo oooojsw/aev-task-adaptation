@@ -1,0 +1,1 @@
+# SkillsBench Campaign Seed\n\nThis is a minimal experience workspace seed for SkillsBench campaign runs.\n\nThe campaign will accumulate verifier feedback, failure lessons, and operational context here across rounds.\n

@@ -1,0 +1,16 @@
+﻿{
+  "passed": true,
+  "score": 90,
+  "same_issue": true,
+  "specific_evidence": true,
+  "actionable": true,
+  "gap": "minor wording difference",
+  "learning": "Keep issue type and evidence location aligned with expert answer pattern.",
+  "blocking": false,
+  "summary": "Issue type, evidence, and actionability align with expert answer. Output identifies 成新率计算依据 missing (col 23 empty) vs expert expected 首次计提时机不对.",
+  "details": [
+    "same_issue=true - both address 机器设备类 depreciation calculation basis",
+    "specific_evidence=true - col 23/63/61 evidence cited with sheet 73 reference",
+    "actionable=true - primary recommendation to fill col 23 and verify with col 61"
+  ]
+}

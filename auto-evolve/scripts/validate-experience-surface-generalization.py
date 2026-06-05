@@ -3,8 +3,27 @@ import re
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
-DEFAULT_ALLOWED_EXTENSIONS = [".md", ".txt", ".json", ".jsonl", ".yaml", ".yml"]
+
+DEFAULT_ALLOWED_EXTENSIONS = [
+    ".md",
+    ".txt",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml",
+    ".py",
+    ".ps1",
+    ".sh",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts",
+]
 DEFAULT_ROOT_ROLES = ["experience-workspace"]
 
 
@@ -179,6 +198,7 @@ def trim_line(text: str, limit: int = 180):
 def find_hits(file_path: Path, text: str, config: dict, compiled_patterns: list[tuple[str, re.Pattern]]):
     hits: list[str] = []
     max_hits_per_file = int(config.get("maxHitsPerFile", 4))
+    text_to_scan = f"FileName:{file_path.name}\n{text}"
 
     for raw in config.get("forbiddenLiterals", []):
         if len(hits) >= max_hits_per_file:
@@ -191,18 +211,18 @@ def find_hits(file_path: Path, text: str, config: dict, compiled_patterns: list[
             label = raw
         if not isinstance(value, str) or not value:
             continue
-        if value not in text:
+        if value not in text_to_scan:
             continue
-        line = next((line for line in text.splitlines() if value in line), value)
+        line = next((line for line in text_to_scan.splitlines() if value in line), value)
         hits.append(f"{file_path}: {label} -> {trim_line(line)}")
 
     for label, pattern in compiled_patterns:
         if len(hits) >= max_hits_per_file:
             break
-        match = pattern.search(text)
+        match = pattern.search(text_to_scan)
         if not match:
             continue
-        line = next((line for line in text.splitlines() if match.group(0) in line), match.group(0))
+        line = next((line for line in text_to_scan.splitlines() if match.group(0) in line), match.group(0))
         hits.append(f"{file_path}: {label} -> {trim_line(line)}")
 
     return hits

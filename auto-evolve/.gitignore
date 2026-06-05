@@ -1,0 +1,151 @@
+# AI tool folders
+**/.claude/
+**/.roo/
+**/.codex/
+
+# Node.js / Bun cache
+node_modules/
+.npm/
+.bun-install-cache/
+**/*npm-cache/
+**/.bun/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+*.ipynb
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+*.venv/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Vector / DB cache
+config/faiss_index_local/
+*.index
+*.faiss
+*.pkl
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal
+customs_audit.db
+
+# Logs and temp files
+*.log
+logs/
+*.tmp
+*.temp
+.tmp/
+temp/
+*.bak
+*.md.bak
+
+# Project-specific
+nul
+
+# System cache
+.cache/
+.pip_cache/
+pip_cache/
+.tox/
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Test scripts and data
+test_*.py
+*_test.py
+*_fix.py
+test_batch.csv
+test_batch.xlsx
+
+# Build artifacts
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Coverage
+.coverage
+htmlcov/
+
+# AI model files
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# Env files
+.env
+.env.local
+.env.*.local
+
+# Docker (optional)
+.dockerignore
+docker-compose.yml
+Dockerfile
+docker/
+
+# Claude Code temp files
+tmpclaude*
+*-cwd
+
+# Runtime state symlink target (history is external)
+/runtime-state
+runtime-state/
+
+# Local untracked reference materials (PDFs, images, txt extracts)
+# Note: legitimate task materials under task-packs/ are tracked explicitly
+# This rule is a safety net for stray reference materials at project root
+
+# Local untracked script artifacts at project root
+.tmp-opencode-gate-tests/
+.tmp-runtime-root-smoke.mjs
+.runtime/
+auto-evolve/.runtime/
+validator_input.json
+validate_input.json
+temp_validator_input.json
+tmp_val/
+
+# runtime-state is a reparse point to external storage
+# (parent .gitignore already ignores it, but local rules help)
+/runtime-state
+/runtime-state/
