@@ -4160,33 +4160,39 @@ async function promoteRoundPendingAndTreeToCurrent(input: {
   await writeLongTaskCampaignRoutingControl(input.campaignPaths, routingControl)
 }
 
-export async function runLongTaskCampaign(input: { cwd: string; specPath: string }): Promise<LongTaskCampaignRunResult> {
+export async function runLongTaskCampaign(input: {
+  cwd: string
+  specPath: string
+  forceNew?: boolean
+}): Promise<LongTaskCampaignRunResult> {
   if (process.env.AUTO_EVOLVE_SKIP_STALE_HEAL !== "1") await healStaleRuntimeStates(input.cwd)
   const { spec: campaignSpec } = await loadLongTaskCampaignSpec(input.specPath)
   const { spec: baseSpec } = await loadLongTaskSpec(campaignSpec.baseSpecPath)
-  const existingLiveCampaign = await findExistingLiveCampaign({
-    cwd: input.cwd,
-    title: campaignSpec.title,
-    baseSpecPath: campaignSpec.baseSpecPath,
-  })
-  if (existingLiveCampaign) {
-    return toCampaignRunResult({
-      campaignID: existingLiveCampaign.campaignID,
-      campaignPaths: existingLiveCampaign.campaignPaths,
-      state: existingLiveCampaign.state,
-    })
-  }
-  const recoverableCampaign = await findRecoverableCampaignForTarget({
-    cwd: input.cwd,
-    title: campaignSpec.title,
-    baseSpecPath: campaignSpec.baseSpecPath,
-  })
-  if (recoverableCampaign) {
-    return resumeLongTaskCampaign({
+  if (!input.forceNew) {
+    const existingLiveCampaign = await findExistingLiveCampaign({
       cwd: input.cwd,
-      campaignID: recoverableCampaign.campaignID,
-      specPath: input.specPath,
+      title: campaignSpec.title,
+      baseSpecPath: campaignSpec.baseSpecPath,
     })
+    if (existingLiveCampaign) {
+      return toCampaignRunResult({
+        campaignID: existingLiveCampaign.campaignID,
+        campaignPaths: existingLiveCampaign.campaignPaths,
+        state: existingLiveCampaign.state,
+      })
+    }
+    const recoverableCampaign = await findRecoverableCampaignForTarget({
+      cwd: input.cwd,
+      title: campaignSpec.title,
+      baseSpecPath: campaignSpec.baseSpecPath,
+    })
+    if (recoverableCampaign) {
+      return resumeLongTaskCampaign({
+        cwd: input.cwd,
+        campaignID: recoverableCampaign.campaignID,
+        specPath: input.specPath,
+      })
+    }
   }
   const campaignID = createLongTaskCampaignID(campaignSpec.title)
   const campaignPaths = longTaskCampaignPaths(input.cwd, campaignID)

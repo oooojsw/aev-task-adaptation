@@ -102,6 +102,7 @@ function printHelp() {
 
   run-long-task-campaign --spec <path>
     Run a multi-round long-task campaign. Each round harvests failure evidence and learning into carryover context for the next round.
+    Optional: --force-new skips matching live/recoverable campaign auto-resume and starts a fresh campaign.
 
   resume-long-task-campaign --campaign <campaign-id> --spec <path>
     Resume an existing long-task campaign from the same campaign ID and continue at the correct round boundary.
@@ -857,10 +858,12 @@ async function commandRunLongTaskCampaign(args: string[]) {
     console.error("Missing required option: --spec <path-to-long-task-campaign-spec>")
     process.exit(1)
   }
+  const forceNew = args.includes("--force-new")
 
   const result = await runLongTaskCampaign({
     cwd,
     specPath,
+    forceNew,
   })
   console.log(`Long-task campaign: ${result.campaignID}`)
   console.log(`Campaign dir: ${result.campaignDir}`)

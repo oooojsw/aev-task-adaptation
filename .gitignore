@@ -145,3 +145,59 @@ test_batch.xlsx
 *.md.bak
 *.sublime-project
 *.sublime-workspace
+
+# npm/Node.js cache (AGENTS rule 8.2)
+**/npm-cache/
+**/node_modules/
+
+# IDE/Editor configs (AGENTS rule 8.5)
+.settings/
+.project
+.pydevproject
+*.swp
+*.swo
+*~
+
+# DB/SQLite files (AGENTS rule 8.6)
+*.pkl
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal
+config/faiss*index_local/
+*.index
+.fais
+
+# Logs and temp files (AGENTS rule 8.7)
+logs/
+.temp/
+.temp/
+
+# Project-specific (AGENTS rule 8.8)
+nul
+
+# System files (AGENTS rule 8.11)
+.DS_Store
+.DS_Store?
+.*_
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Jupyter notebooks (AGENTS rule 8.3)
+*.ipynb
+
+# Environment files (AGENTS rule 8.14)
+.env.local
+.env.*.local

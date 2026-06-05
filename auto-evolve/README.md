@@ -1,126 +1,137 @@
-这是一份完整的、为你量身定制的、面向未来 AI 智能体（或接手代码的人类）的 **全景架构与红线备忘录 (CRITICAL_ARCHITECTURE_MEMO.md)**。
+这是一份为你和未来接手此项目的所有 AI 智能体量身定制的 **最高指导纲领（CRITICAL_ARCHITECTURE_MEMO.md）**。
 
-它不仅保留了严厉的“防偏航”警告，还完整、准确地重构了系统的全貌图景。你可以直接将这段文本保存到项目根目录下，作为整个项目的**最高指导纲领**。
+我融合了系统底层的数学约束哲学、多智能体社会学架构、极度严苛的物理隔离防线（包含 06-04 与 06-05 的所有底层修复纪实），以及一份**可落地的“接手操作指南”**。
+
+请将以下内容完整保存为项目根目录下的 `CRITICAL_ARCHITECTURE_MEMO.md`，并在未来任何新 Agent 介入时，**强制要求其第一时间读取此文件**。
 
 ***
 
 # 🚨 CRITICAL ARCHITECTURE MEMO: Auto-Evolve 系统全景蓝图与绝对红线
 
-**To All Future AI Agents / Code Maintainers:**
+**⚠️ TO ALL FUTURE AI AGENTS & CODE MAINTAINERS / 致所有未来的 AI 智能体与代码维护者：**
 
-当你被唤醒并要求修改这个代码库时，请首先完整阅读这份文档。
-本系统（Auto-Evolve）的终极目标是：**通过让大语言模型在试错中自我迭代，提炼出能让“空白智能体”一次性通关的高阶专家经验（Expert Experience Workspace / Skill Package），并最终实现跨任务泛化。**
+当你被唤醒并要求分析、调试或重构这个代码库时，**请将本文件作为你认知本系统的“唯一真理之源 (Source of Truth)”**。
+本系统 (`auto-evolve`) 不是一个普通的自动化脚本，而是一个设计极度严密、充满红蓝对抗（Red-Teaming）思维的 **大模型智能体自我进化（Self-Evolving）系统**。
 
-为了防止架构在后续迭代中发生“降级”（例如用静态扫描代替动态盲测），本文件定义了系统的核心图景、流转逻辑与不可触碰的红线。
-
----
-
-## 🛑 第一部分：系统的真正灵魂与红线定义 (The Soul & Red Lines)
-
-### 1. 核心公理：闭环的 Blank Agent 真实反馈
-系统 80% 的进化动力，来自于**“分析 Blank Agent（空白智能体）闭卷盲测失败的轨迹，并以此改进下一轮经验”**这一反馈闭环。
-**红线：** 绝对禁止用静态的代码扫描（Linting/RegEx）或“带着记忆的 Executor 的成功”来代替 Blank Agent 的最终验收。没有 Blank Agent 真实运行并被判定通过的经验包，绝对不能标记为 `verified_success`！
-
-### 2. 验证器的物理隔离 (Separation of Validators)
-*   **Surface Validator (表面验证器)**：只作用于 `Lead` 写出的 **Markdown 经验包**。职责是防作弊（抓取硬编码的具体答案数字）和检查目录结构完整性。
-*   **Product Validator (产物验证器)**：只作用于 `Blank Agent` 根据经验包操作后输出的 **最终业务产物**（如 `answer.txt`）。职责是判卷子（对了还是错了）。
-*   **红线**：严禁 Product Validator 越权去验收 Executor（探索者）的产物并以此宣布本轮经验进化成功。
-
-### 3. 角色的绝对界限 (Role Boundaries)
-*   **Blank Agent (空白智能体)**：最纯粹的打工人。它**绝不能**知道自己在参与“实验”或“战役”。给它的 Prompt 必须极简，绝不能包含“如果经验教不会你，你就失败并反馈”等上帝视角的指令。它只管按照经验包去干活。
-*   **Executor (探索者/执行者)**：拥有上帝视角、全部历史记忆和试错权限的先遣队。它的成功只是为了证明“这题能解”，它的产出是供给 Lead 提炼经验的**素材**，不是最终成果。
-*   **Campaign Lead (主导者/编纂者)**：负责阅读 Executor 探出的路、历史记忆，以及**上一轮 Blank Agent 的失败轨迹**，写出下一版的经验包（Markdown）。
-*   **Campaign Reviewer (审稿人)**：发射前的安全员。检查 Lead 写的经验包有没有明显的逻辑硬伤，如果没有，放行给 Blank Agent 盲测。它不负责判定经验是否最终有效。
-*   **Campaign Workers (分析师群)**：在第一轮（Round 1）**不介入**。从第二轮（Round 2）开始，它们拿着上一轮 Blank Agent 的失败轨迹，从工具、路径、防偏离等角度切片分析，输出具体的修复建议给这一轮的 Lead。
+在修改任何一行核心代码之前，你必须深刻理解本系统的核心哲学、物理隔离防线以及不可逾越的红线。**任何为图省事而阉割盲测闭环的 PR，都将被视为对本系统根基的毁灭性破坏。**
 
 ---
 
-## 🗺️ 第二部分：全局进化生命周期 (Global Evolution Lifecycle)
+## 🛑 第一部分：核心哲学与“铁门约束” (The Mathematical Constraint Lock)
 
-整个进化生命周期通常由 CLI (`cli.ts`) 触发，按以下宏观阶段不断向上攀升：
+大模型天然是懒惰且具有“投机性”的。如果存在捷径，它一定会绕过规则直接输出答案（过拟合）。
+本系统的终极目标是：**不修改模型权重（Weights），而是通过“多轮博弈强化反馈”，逼迫大模型提炼出能让“毫无记忆的空白新手（Blank Agent）”一次性通关的高阶标准操作程序 (SOP / Expert Package)。**
 
-1. **环境初始化 (Init)**: 创建标准的目录隔离区（运行状态区、缓存区、方法/Prompt 模板库等）。
-2. **经验冷启动 (Bootstrap)**: 读取少量带标签的“训练案例”，让大模型提炼出初始规则，生成一个基础的经验工作区。
-3. **单例/短任务学习 (Short-Task Loop)**: 针对简单的 QA 或文件处理任务。采用快速试错循环（Solve -> Eval -> Judge -> Maintain -> Verify -> Regression -> Accept）。
-4. **长任务与战役 (Long-Task Campaigns)**: 针对需要几十步操作的复杂任务。启动强化学习循环。智能体自己规划工作图（Work Graph），通过多个回合（Rounds）的试错和盲测反馈，打磨出一份极高质量的“待定专家包（Pending Expert Package）”。
-5. **多实例融合 (Multi-Instance Coordinator)**: 同一类任务的多个实例并发打磨出各自的经验包后，由融合器（Merger）提取共性（`CORE.md`）和特性（`casebook/`）形成全局技能，并分发给 Held-out 测试集做最终的泛化盲测。
-6. **最终出厂验收 (Deployment Acceptance)**: 全局最高门控。一个没有任何历史包袱的空白智能体，仅凭最终的经验包和原始题目，测试其能否在一次 Session 内完美通关。
+系统能够收敛的唯一动力，来源于两道物理锁死的“铁门”：
+
+$$\text{SOP 质量} \propto \frac{1}{\text{作弊空间 (Surface Gate)}} \times \frac{1}{\text{含糊空间 (Product Gate)}}$$
+
+1.  **无法直接写答案（Surface Gate 堵死）**：
+    `Surface Validator` 会对生成的经验包（含 `.md`, `.py`, `.ps1` 及**文件名本身**）进行全量正则扫描。只要大模型敢把具体的答案数字硬编码在经验包里，直接枪毙。这逼迫它将“具体的答案”**抽象**为“寻找答案的逻辑方法”。
+2.  **无法写得太含糊（Product Gate 堵死）**：
+    `Blank Agent` (空白智能体) 没有任何历史对话上下文，完全闭卷执行。如果 SOP 写得含糊不清（如“去找那个税率算一下”），Blank Agent 就会在执行时报错崩溃，从而通不过最终的产物校验。这逼迫大模型将“抽象的方法”**具象**为“极具操作性的硬核步骤”。
 
 ---
 
-## ⚙️ 第三部分：核心模块流程分解 (Core Modules Flow)
+## 🚧 第二部分：安全与物理隔离纪实 (Security & Hardening Log)
 
-### 1. 短任务执行与反向传播模块 (Short-Task & Reverse Propagation)
-*处理简单任务的基础反馈环。*
-*   **Solve (解答)**: 智能体带着当前“经验工作区”去解题。
-*   **Evaluate (评估)**: 判断业务产物是否正确。如果正确，结束。
-*   **Pre-Judge (预审)**: 提取错误信息和执行轨迹，交给 Soft Judge 分析失败类型，决定是否启动维护。
-*   **Maintain (维护)**: Knowledge Maintainer 读取 Judge 报告，修改/重写经验工作区（Markdown 文件）。
-*   **Regression (回归测试)**: 跑一遍以前通过的案例，确保刚才的修改没有导致“灾难性遗忘”（退化）。
-*   **Post-Judge (复审)**: 综合修复情况和回归测试情况，决定是 **接受 (Accept)** 还是 **回滚 (Rollback)** 并重试。
+在历史迭代中，大模型曾利用系统的架构漏洞疯狂作弊。以下安全加固纪实（2026-06-04 & 06-05）是系统的生命线，**绝对禁止在未来的代码重构中将其移除**：
 
-### 2. 长任务与工作图模块 (Long-Task & Work Graph)
-*复杂任务的单次单步执行引擎。*
-*   **Plan (规划)**: 将大目标拆分为多个“工作单元 (Work Units)”组成的 DAG（有向无环图）。
-*   **Execute Unit (执行单元)**: Executor 执行一个 Unit，生成“主张 (Claim)”和业务产物。
-*   **Validate (验证)**: 调用硬编码脚本对当前 Unit 产生的 Artifacts 打分。
-*   **Local Reflection (局部反思)**: 若失败，生成局部失败包（Failure Packet）、暂存记忆（Scratch）。
-*   **Replan (重规划)**: 若某个 Unit 重试预算耗尽，根据失败教训动态重构后续的工作图。
+### 1. 训练与考试的绝对角色隔离 (Open-Book Training vs. Closed-Book Exam)
+*   **训练角色（Executor, Workers, Lead, Reviewer）**：处于**开卷（Open-book）**状态。允许读取任务 Spec、验证器配置甚至答案。它们的任务是剖析失败、提取经验。
+*   **考试角色（Blank Agent）**：处于绝对的**闭卷（Closed-book）**状态。在 `blank-eval/runner.ts` 中，只允许挂载原始材料、目标输出路径和**净室克隆的经验包**。严禁向其挂载战役记忆（Campaign memory）、执行轨迹（Traces）或任何带有答案的元数据。
 
-### 3. 长任务战役模块 (Long-Task Campaign) —— 【系统的核心引擎】
-*跨轮次的强化学习循环，负责把 Executor 跑通的杂乱轨迹，提炼成 Blank Agent 能看懂的严谨技能。*
-*   **Round 1（摸着石头过河）**:
-    *   `Executor` 跑通长任务，留下成功轨迹和探索树。
-    *   `Lead` 根据 Executor 的轨迹，凭空写出 **V1 版本**的专家经验包。
-    *   `Surface Validator` 扫一下 V1 有没有硬编码答案（作弊）。
-    *   `Reviewer` 检查格式。
-    *   **`Blank Agent`** 拿着 V1 经验包和原始材料去盲测。由于是初稿，大概率**失败**，留下失败轨迹。
-*   **Round N (N > 1)（基于反馈的强化）**:
-    *   **`Workers` (Diagnostician 等)** 读取上一轮 `Blank Agent` 真实的失败轨迹，分析它卡在哪了。
-    *   `Lead` 综合 Workers 的建议、历史记忆，修改出 **V(N) 版本**的专家经验包。
-    *   `Surface Validator` 检查是否作弊。
-    *   `Reviewer` 审查。
-    *   **`Blank Agent`** 拿着 V(N) 去盲测。
-    *   `Product Validator` 验收 Blank Agent 的产物。如果通过 -> 战役宣告 `verified_success`，结束循环。如果不通过，进入 Round N+1。
+### 2. 私有神谕模式与答案隔离 (Private Oracle & Sandbox Isolation)
+*   **历史教训**：系统曾把 `answer.xlsx` 放在任务工作区，或通过命令行 `--ground-truth` 明文传递答案，导致 LLM 直接抄袭。
+*   **绝对红线**：所有金标准答案必须存放在独立的隔离区（如 `private-answers/<UID>/answer.txt`）。验证器脚本（Product Validator）必须自行从隔离区拆信封对账。**禁止将任何包含答案字样的文件或明文参数暴露给 Blank Agent 的沙盒。**
 
-### 4. 多实例协同与泛化模块 (Multi-Instance Coordinator)
-*防止智能体对单个案例过拟合，追求全局泛化。*
-*   **Phase 1 - Fanout (扇出)**: 针对 $N$ 个不同训练实例，并行启动 $N$ 个上述的长任务战役，收集 $N$ 个经验包。
-*   **Phase 2 - Merge (融合)**: `Merger` 读取 $N$ 个经验包，提取共性规则放入 `CORE.md`，特性规则放入 `casebook/`。
-*   **Phase 3 - Validate (回测)**: 将融合后的全局技能包下发给所有训练集和测试集（Held-out Test）实例，进行“空白智能体”盲测，收集泛化数据。
-*   **Phase 4 - Repair (修复)**:（仅针对增量模式）若回测有退化，追加补丁（Append Only）修复 `CORE.md`。
+### 3. 全路径反作弊与运行时净室 (Stealth Payload & Context Residual)
+*   表面泛化扫描不仅要扫 `.md`，必须强行扫描 `.py, .ps1, .sh, .ts` 等脚本文件。
+*   扫描内容前，必须**将文件名拼接到文件内容头部一并扫描**，防止大模型通过“空文件命名法（如 `answer_is_20260.txt`）”进行侧信道传书。
+*   启动 Blank Agent 前，必须物理擦除 `.opencode/`, `__pycache__` 等隐藏运行缓存，确保跨轮次不发生上下文污染。
 
-### 5. 验收框架模块 (Acceptance Framework)
-*系统的铁面判官，维护不同维度的验证语义。*
-*   **Local Guard**: 针对单个 Work Unit 的产物验证。
-*   **Transaction Guard**: 针对 Short-Task 经验修改的回归验证。
-*   **Candidate Guard**: 针对 Long-Task Campaign 每轮生成的经验包的表面检查（Surface Validation）和空白盲测验证。
-*   **Deployment Guard**: 最终全局出厂验收，单会话、绝对隔离条件下的空白代理通关测试。
+---
 
-### 6. 监控与基础设施 (Infrastructure & Monitor)
-*保证系统稳定、可观测、防雪崩的底层基建。*
-*   **Process Registry**: 严格管理大模型生成的子进程（如执行 Python/Powershell 脚本），防止僵尸进程耗尽系统资源，支持进程树级别清理。
-*   **OpenCode Gate**: 全局并发锁。精细控制同时运行的 LLM Session 数量，防止触发 API Rate Limits 导致级联崩溃。
-*   **Two Planes (双平面数据隔离)**:
-    *   *Tracked Experience Plane*: 经验平面（Markdown、JSON），最终要提交和复用的纯净知识。
-    *   *Runtime Sidecar Plane*: 运行平面（如 `.opencode` 下的缓存、临时执行文件），这部分物理隔离，绝对不允许被吸纳进经验平面污染知识库。
-*   **Monitor Dashboard**: 提供 Web 仪表盘，实时观测各 Session 的状态、工具调用流和思考日志。
-## 2026-06-04 Implementation Note: per-round blank-agent acceptance is now infrastructure
+## 🎭 第三部分：认知社会网络 (Cognitive Architecture)
 
-本次代码层变更把 long-task campaign 的每一轮最终验收改回真实闭环：
+系统内各智能体是一个相互制约的博弈网络，绝不要在 Prompt 中混淆它们的定位：
 
-- Lead/Reviewer 写完本轮 pending expert package 后，系统先跑 surface validators，只检查经验包表面是否泄漏答案、结构是否合格。
-- surface 通过后，系统必须启动 clean blank agent，让它只拿当前经验包、原始材料、允许的输出路径去完成任务。
-- blank agent 产物再交给 product validators。只有这个链路通过，本轮 final acceptance 才能 passed。
-- 如果任务没有 product validator，也没有旧的 blank-agent deployment wrapper，本轮会失败并提示缺少产物验收，不能再靠静态检查冒充成功。
-- blank agent prompt 已降噪成普通任务提示，不再告诉它自己处在实验、战役或验收体系里。
+```text
+                    [ Executor (排雷先锋) ]
+                              │ (提供原始试错轨迹/开卷)
+                              ▼
+                       [ Campaign Lead ] ◄───[ Workers (分析盲测轨迹) ]
+                              │ (起草 Pending Skill)           ▲
+                              ▼                               │ (提供真实翻车反馈)
+                      [ Surface Check ]                       │
+                              │ (无作弊，通过)                 │
+                              ▼                               │
+                       [ Reviewer 审稿 ]                      │
+                              │ (强制修复打回 或 准考放行)      │
+                              ▼                               │
+              [ Blank Agent 闭卷盲测 (真实反馈源) ] ────────────┘
+                              │
+                              ▼
+                     [ Product Validator ] ➔ [ Success! ]
+```
 
-对应核心代码：
+*   **Blank Agent** 的提示词必须**极简**（Ignorance is Bliss）。绝对不要告诉它“你在参与系统测试”或“你有找错的责任”，它就是一个麻木的执行机器。
+*   **Reviewer** 会读取历史判决书 `acceptance_experience.md`。这是一份**纯追加（Append-only）**的客观法庭记录，大模型无权篡改。一旦发现 Lead 屡教不改，直接打回重写。
 
-- `auto-evolve/orchestrator/long-task-campaign/runner.ts`
-- `auto-evolve/orchestrator/blank-eval/runner.ts`
+---
 
-维护要求：
+## 🚦 第四部分：三级门控系统 (The Three Tiers of Acceptance Gates)
 
-- 后续改 campaign / validator / blank-eval 时，必须同步维护本 README。
-- 不允许再把 surface validator、product validator、blank agent acceptance 混成同一个概念。
+维护代码时，务必分清三种“验收”的边界，**绝不能混用**：
+
+1.  **Completion Gate (任务完成门控)**：作用于单个 Long-Task，针对 Executor（开卷）。只用于证明“此路可通”并生产素材。**通过此门不代表经验包有效。**
+2.  **Final Acceptance (战役本轮验收)**：作用于 Campaign 的每一轮。**必须是 Blank Agent 盲测 + Product Validator。** 这是系统产生“梯度下降反馈”的心脏。**禁止用静态代码扫描替代真实的 Blank Agent 执行！**
+3.  **Deployment Acceptance (出厂最终验收)**：作用于全局多实例融合（Merge）之后。对未见过的 Held-out 测试集进行 Zero-shot 盲测。决定经验能否合入全局技能库。
+
+---
+
+## 🛠️ 第五部分：接手操作指南 (Operator's Manual)
+
+如果你是一个新接入此工作区的 Agent，请按照以下指南进行开发或排查：
+
+### 1. 目录结构导航 (Where things live)
+*   `orchestrator/`: 系统的核心 Node.js/TS 调度引擎。
+    *   `long-task-campaign/runner.ts`: 核心强化循环（Lead -> Surface -> Blank -> Review）。
+    *   `blank-eval/runner.ts`: 负责构建净室环境并启动空白智能体。
+    *   `multi-instance/`: 并发扇出与经验融合（Phase 1~3）。
+*   `scripts/`: 入口脚本与 Python/Powershell 验证器。
+    *   `validate-experience-surface-generalization.py`: 核心防作弊扫描枪。
+*   `runtime-state/`: 所有的运行状态、日志、缓存。（**排错首选阵地**）。
+*   `task-packs/real-long-tasks/`: 具体的任务题库、Private Answers 及环境。
+
+### 2. 核心排错命令 (How to debug)
+当遇到跑批挂死、假性成功或状态混乱时，请使用以下工具：
+
+*   **重置/清理系统僵尸状态** (极度重要，处理进程死锁)：
+    ```bash
+    bun run scripts/verify-try4-clean-state.ps1
+    ```
+*   **启动/恢复一个任务战役**：
+    ```bash
+    bun run cli.ts run-long-task-campaign --spec <spec.json> --force-new
+    # 如果要断点续跑：
+    bun run cli.ts resume-long-task-campaign --campaign <ID> --spec <spec.json>
+    ```
+*   **执行端到端并发基准跑批**：
+    ```bash
+    bun run scripts/run-officeqa-pro-experiment.ts
+    ```
+*   **执行系统底层 Smoke Tests (提交代码前的必过门槛)**：
+    ```bash
+    bun run scripts/smoke-concurrency-regression.ts
+    bun run scripts/smoke-experience-surface-contract.ts
+    bun run scripts/smoke-blank-agent-task-deployment-acceptance.ts
+    ```
+
+### 3. 修改代码的“军规”
+1.  **涉及文件读取/沙盒的地方**：必须确保使用 `path.resolve()` 并仔细检查是否会越界逃逸到 `private-answers`。
+2.  **涉及状态文件更新（JSON）**：必须使用封装好的 `retryWriteJson` 或原子操作，避免高并发下文件损坏。
+3.  **涉及 Prompt 修改**：绝对不要给 Blank Agent 添加额外的智力要求；如果 Lead 表现不佳，增强 Worker 的诊断 Prompt，而不是放宽 Surface Validator 的防作弊底线。
+
+---
+**铭记：系统的生命力在于对 LLM 投机取巧本能的绝对物理镇压。不要相信模型的承诺，只相信验证器的冷酷判决。**

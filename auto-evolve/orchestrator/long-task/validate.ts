@@ -150,6 +150,24 @@ export async function validateLongTaskSpec(
     }
   }
 
+  const specJsonString = JSON.stringify(spec).toLowerCase()
+  const leakageKeywords = ["--ground-truth", "expected_answer", "official_answer", "gold_answer"]
+  for (const keyword of leakageKeywords) {
+    if (specJsonString.includes(keyword)) {
+      errors.push(`Spec Leakage Guard: Spec contains forbidden keyword '${keyword}'. Use a private file path instead.`)
+    }
+  }
+
+  for (const validator of spec.validators) {
+    if (validator.type !== "script" || !validator.args) continue
+    for (const arg of validator.args) {
+      const trimmed = arg.trim()
+      if (/^[-+]?\d[\d,]*(?:\.\d+)?%?$/.test(trimmed) && !["0.01", "1", "0", "120000"].includes(trimmed)) {
+        errors.push(`Spec Leakage Guard: Validator args contain a numeric literal '${arg}'. This leaks answers. Use a file path.`)
+      }
+    }
+  }
+
   return { errors }
 }
 

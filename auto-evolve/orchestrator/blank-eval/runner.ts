@@ -1,6 +1,6 @@
 import path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
-import { cp, lstat, mkdir, rm, stat } from "node:fs/promises"
+import { cp, lstat, mkdir, readdir, rm, stat } from "node:fs/promises"
 import { resolveModelSelection } from "../model-selection"
 import { runOpencodeTask } from "../opencode"
 import { loadConfig } from "../schema"
@@ -275,6 +275,52 @@ async function snapshot(root: string, spec: LongTaskSpec, timedOut: boolean) {
   await writeJsonFile(path.join(dir, "stall-summary.json"), { snapshotAt: nowISO(), timedOut, entries })
 }
 
+function shouldCopySkillEntry(name: string) {
+  const lower = name.toLowerCase()
+  if (!name || name.startsWith(".")) return false
+  if (lower === "node_modules" || lower === "__pycache__") return false
+  if (lower === "temp" || lower === "tmp" || lower === "cache") return false
+  if (lower.includes(".opencode") || lower.includes(".runtime")) return false
+  if (lower.includes("cache") || lower.includes("temp")) return false
+  return true
+}
+
+async function copyCleanSkillRoot(sourceRoot: string, targetRoot: string) {
+  await ensureDirectory(targetRoot)
+  const entries = await readdir(sourceRoot, { withFileTypes: true })
+  for (const entry of entries) {
+    if (!shouldCopySkillEntry(entry.name)) continue
+    if (entry.isSymbolicLink()) continue
+    const source = path.join(sourceRoot, entry.name)
+    const target = path.join(targetRoot, entry.name)
+    if (entry.isDirectory()) {
+      await copyCleanSkillRoot(source, target)
+      continue
+    }
+    if (entry.isFile()) {
+      await ensureDirectory(path.dirname(target))
+      await cp(source, target, { force: true })
+    }
+  }
+}
+
+async function prepareCleanSkillRoots(sourceRoots: string[], cleanRoot: string) {
+  const out: string[] = []
+  await ensureDirectory(cleanRoot)
+  for (const [index, sourceRoot] of unique(sourceRoots).entries()) {
+    if (!(await pathExists(sourceRoot))) continue
+    const safeName =
+      path.basename(sourceRoot)
+        .replace(/[^a-zA-Z0-9._-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "skill-root"
+    const targetRoot = path.join(cleanRoot, `${String(index + 1).padStart(2, "0")}-${safeName}`)
+    await copyCleanSkillRoot(sourceRoot, targetRoot)
+    out.push(targetRoot)
+  }
+  return unique(out)
+}
+
 export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResult> {
   const config = await loadConfig(input.cwd)
   const loaded = await loadLongTaskSpec(input.specPath, { allowMissingInitialExpertContextPaths: true })
@@ -286,11 +332,16 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
   const bundlePath = path.join(runDir, "blank_eval_bundle.json")
   const validatorRoot = path.join(runDir, "validators")
   const sessionDir = path.join(runDir, "session")
+  const cleanSkillRoot = path.join(runDir, "clean-skill-roots")
   const resultPath = path.join(runDir, "blank_eval_result.json")
   const scope = input.runtimeScope ?? `blank-eval:${runID}`
 
   try {
-    const skillRoots = unique(input.skillRoots.map((item) => path.resolve(item)))
+    await ensureDirectory(runDir)
+    await ensureDirectory(validatorRoot)
+
+    const sourceSkillRoots = unique(input.skillRoots.map((item) => path.resolve(item)))
+    const skillRoots = await prepareCleanSkillRoots(sourceSkillRoots, cleanSkillRoot)
     const entries = await entrypoints(skillRoots)
     const guides = await existing([...(input.promptInlinePaths ?? []), ...guidance(spec, loaded.specPath)])
     const cRefs = capRefs(spec)
@@ -312,8 +363,6 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
     }
     const fix = (item: string) => norm.get(item) ?? item
 
-    await ensureDirectory(runDir)
-    await ensureDirectory(validatorRoot)
     if (input.resetEditablePaths !== false) await reset(runDir, spec)
 
     await writeJsonFile(bundlePath, {
@@ -322,6 +371,7 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       sourceID: input.sourceID,
       mode: input.mode ?? "deployment",
       specPath: loaded.specPath,
+      sourceSkillRoots,
       skillRoots,
       skillEntryPoints: entries,
       materials: spec.materials,

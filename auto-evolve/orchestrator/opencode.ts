@@ -2,7 +2,7 @@ import path from "node:path"
 import process from "node:process"
 import os from "node:os"
 import { randomUUID } from "node:crypto"
-import { copyFile, readFile, readdir, rm, stat } from "node:fs/promises"
+import { copyFile, readFile, readdir, realpath, rm, stat } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
 import { buildActionTrace } from "./action-trace"
 import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
@@ -203,24 +203,45 @@ function collectResponseText(events: OpencodeEvent[]) {
     .trim()
 }
 
-function normalizePattern(input: string) {
-  return path.resolve(input).replace(/\\/g, "/")
+function addPermissionPathVariants(
+  rules: Record<string, "allow" | "deny">,
+  cwd: string,
+  absolute: string,
+  allowChildren: boolean,
+) {
+  const variants = new Set<string>()
+  const normalizedAbsolute = absolute.replace(/\\/g, "/")
+  const opencodeCwd = path.join(cwd, "packages", "opencode")
+  const relative = path.relative(opencodeCwd, absolute).replace(/\\/g, "/")
+  const worktreeRelative = path.relative(cwd, absolute).replace(/\\/g, "/")
+
+  variants.add(normalizedAbsolute)
+  if (relative && !relative.startsWith("..")) variants.add(relative)
+  if (worktreeRelative && !worktreeRelative.startsWith("..")) variants.add(worktreeRelative)
+
+  for (const variant of variants) {
+    rules[variant] = "allow"
+    if (allowChildren) {
+      rules[`${variant}/*`] = "allow"
+      rules[`${variant}/**`] = "allow"
+    }
+  }
 }
 
-async function buildReadListPermissionRules(paths: string[]) {
+async function buildReadListPermissionRules(cwd: string, paths: string[]) {
   const rules: Record<string, "allow" | "deny"> = {
     "*": "deny",
   }
 
   for (const item of paths) {
-    const resolved = normalizePattern(item)
-    rules[resolved] = "allow"
+    const absolute = path.resolve(item)
     try {
       const info = await stat(item)
-      if (info.isDirectory()) {
-        rules[`${resolved}/*`] = "allow"
-      }
+      const canonical = await realpath(absolute).catch(() => absolute)
+      addPermissionPathVariants(rules, cwd, absolute, info.isDirectory())
+      if (canonical !== absolute) addPermissionPathVariants(rules, cwd, canonical, info.isDirectory())
     } catch {
+      addPermissionPathVariants(rules, cwd, absolute, false)
       continue
     }
   }
@@ -233,34 +254,15 @@ async function buildEditPermissionRules(cwd: string, paths: string[]) {
     "*": "deny",
   }
 
-  // OpenCode resolves edit paths relative to the process cwd (packages/opencode).
-  // Tool permission checks may use either process-cwd-relative paths or
-  // worktree-relative paths, so provide both alongside absolute paths.
-  const opencodeCwd = path.join(cwd, "packages", "opencode")
   for (const item of paths) {
     const absolute = path.resolve(item)
-    const relative = path.relative(opencodeCwd, absolute).replace(/\\/g, "/")
-    const worktreeRelative = path.relative(cwd, absolute).replace(/\\/g, "/")
-    if (relative && !relative.startsWith("..")) {
-      rules[relative] = "allow"
-    }
-    if (worktreeRelative && !worktreeRelative.startsWith("..")) {
-      rules[worktreeRelative] = "allow"
-    }
-    // Also allow absolute path as fallback
-    rules[absolute.replace(/\\/g, "/")] = "allow"
     try {
       const info = await stat(absolute)
-      if (info.isDirectory()) {
-        if (relative && !relative.startsWith("..")) {
-          rules[`${relative}/*`] = "allow"
-        }
-        if (worktreeRelative && !worktreeRelative.startsWith("..")) {
-          rules[`${worktreeRelative}/*`] = "allow"
-        }
-        rules[`${absolute.replace(/\\/g, "/")}/*`] = "allow"
-      }
+      const canonical = await realpath(absolute).catch(() => absolute)
+      addPermissionPathVariants(rules, cwd, absolute, info.isDirectory())
+      if (canonical !== absolute) addPermissionPathVariants(rules, cwd, canonical, info.isDirectory())
     } catch {
+      addPermissionPathVariants(rules, cwd, absolute, false)
       continue
     }
   }
@@ -274,8 +276,8 @@ async function makeOverridePermissions(
 ) {
   return {
     "*": "deny",
-    read: await buildReadListPermissionRules(input.readPaths),
-    list: await buildReadListPermissionRules(input.readPaths),
+    read: await buildReadListPermissionRules(cwd, input.readPaths),
+    list: await buildReadListPermissionRules(cwd, input.readPaths),
     edit: await buildEditPermissionRules(cwd, input.editPaths),
     external_directory: {
       "*": "deny",
