@@ -18,8 +18,6 @@ function normalizeComparePath(input: string) {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized
 }
 
-const DEFAULT_WINDOWS_RUNTIME_ROOT = "D:\\opencode-auto-evolve-runtime"
-
 export function resolvePathTruth(target: string) {
   const absoluteTarget = path.resolve(target)
   const missingSegments: string[] = []
@@ -57,17 +55,9 @@ function normalizeRuntimeRootCandidate(input: string | undefined) {
   return path.resolve(trimmed)
 }
 
-function defaultExternalRuntimeRoot() {
-  if (process.platform !== "win32") return undefined
-  // Only prefer D: when the drive exists. If not, fall back to repo-local .runtime.
-  if (!existsSync("D:\\")) return undefined
-  return DEFAULT_WINDOWS_RUNTIME_ROOT
-}
-
 export function runtimeRoot(cwd: string) {
   const fromEnv = normalizeRuntimeRootCandidate(process.env.AUTO_EVOLVE_RUNTIME_ROOT)
-  const external = fromEnv ?? defaultExternalRuntimeRoot()
-  if (external) return resolvePathTruth(external)
+  if (fromEnv) return resolvePathTruth(fromEnv)
   return autoEvolvePath(cwd, ".runtime")
 }
 

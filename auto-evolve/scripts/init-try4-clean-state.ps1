@@ -191,9 +191,32 @@ function Remove-AutoEvolveRuntimeCache {
 function Stop-ResidualRuntimeProcesses {
   param([string[]]$Keywords)
   $selfPid = $PID
+  function Test-ProtectedDesktopOpenCodeProcess {
+    param([int]$ProcessId)
+    $protectedRoots = @("E:\OpenCode")
+    $currentPid = $ProcessId
+    for ($i = 0; $i -lt 12 -and $currentPid -gt 0; $i++) {
+      $p = Get-CimInstance Win32_Process -Filter "ProcessId = $currentPid" -ErrorAction SilentlyContinue
+      if ($null -eq $p) { break }
+      $name = [string]$p.Name
+      $cmd = if ($null -ne $p.CommandLine) { [string]$p.CommandLine } else { "" }
+      $exe = if ($null -ne $p.ExecutablePath) { [string]$p.ExecutablePath } else { "" }
+      foreach ($root in $protectedRoots) {
+        if (($name -ieq "OpenCode.exe" -or $name -ieq "opencode-cli.exe" -or $name -ieq "opencode.exe") -and
+            ($cmd.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) -or
+             $cmd.IndexOf($root, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+             $exe.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase))) {
+          return $true
+        }
+      }
+      $currentPid = [int]$p.ParentProcessId
+    }
+    return $false
+  }
   $stopped = @()
   $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
     $_.ProcessId -ne $selfPid -and
+    -not (Test-ProtectedDesktopOpenCodeProcess -ProcessId ([int]$_.ProcessId)) -and
     ($_.Name -match "bun.exe|node.exe|powershell.exe|opencode-cli.exe") -and
     (Contains-AnyKeyword -Text $_.CommandLine -Keywords @(
       "run-long-task-campaign",

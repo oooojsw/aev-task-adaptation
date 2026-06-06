@@ -17,6 +17,12 @@ interface WindowsProcessInfo {
   commandLine?: string
 }
 
+interface WindowsProcessLineageInfo extends WindowsProcessInfo {
+  name?: string
+  executablePath?: string
+  parentPid?: number
+}
+
 const scopeRegistry = new Map<string, RegisteredRuntimeProcess[]>()
 let loaded = false
 let pendingSave: Promise<void> = Promise.resolve()
@@ -116,7 +122,6 @@ export async function registerRuntimeProcess(scope: string | undefined, pid: num
     await flushRegistry()
   }
 }
-
 async function readWindowsCreation(pid: number) {
   if (process.platform !== "win32") return undefined
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -202,12 +207,87 @@ function isSameWindowsProcess(record: RegisteredRuntimeProcess, info: WindowsPro
   return info.creation === record.creation
 }
 
+function protectedDesktopOpenCodeRoots() {
+  const raw = process.env.AUTO_EVOLVE_PROTECTED_OPENCODE_ROOTS?.trim()
+  const roots = raw ? raw.split(";") : ["E:\\OpenCode"]
+  return roots.map((item) => path.resolve(item.trim()).toLowerCase()).filter(Boolean)
+}
+
+function pathOrCommandMatchesProtectedRoot(input: string | undefined, roots: string[]) {
+  if (!input) return false
+  const normalized = input.replace(/\//g, "\\").toLowerCase()
+  return roots.some((root) => normalized.includes(root.replace(/\//g, "\\")))
+}
+
+async function readWindowsProcessLineage(pid: number) {
+  const rows: WindowsProcessLineageInfo[] = []
+  if (process.platform !== "win32" || !Number.isFinite(pid) || pid <= 0) return rows
+
+  const script = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$targetPid = ${Math.floor(pid)}`,
+    "for ($i = 0; $i -lt 12 -and $targetPid -gt 0; $i++) {",
+    "  $p = Get-CimInstance Win32_Process -Filter \"ProcessId = $targetPid\" -ErrorAction SilentlyContinue",
+    "  if ($null -eq $p) { break }",
+    "  [PSCustomObject]@{ Id = $p.ProcessId; Name = $p.Name; ParentProcessId = $p.ParentProcessId; CommandLine = $p.CommandLine; ExecutablePath = $p.ExecutablePath; CreationDate = $p.CreationDate } | ConvertTo-Json -Compress",
+    "  $targetPid = [int]$p.ParentProcessId",
+    "}",
+  ].join("; ")
+
+  const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
+  if (exitCode !== 0) return rows
+
+  for (const line of stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+    try {
+      const raw = JSON.parse(line) as {
+        Id?: unknown
+        Name?: unknown
+        ParentProcessId?: unknown
+        CommandLine?: unknown
+        ExecutablePath?: unknown
+        CreationDate?: unknown
+      }
+      const parsedPid = Number(raw.Id)
+      if (!Number.isFinite(parsedPid) || parsedPid <= 0) continue
+      rows.push({
+        pid: parsedPid,
+        name: typeof raw.Name === "string" ? raw.Name : undefined,
+        parentPid: typeof raw.ParentProcessId === "number" ? raw.ParentProcessId : Number(raw.ParentProcessId),
+        commandLine: typeof raw.CommandLine === "string" ? raw.CommandLine : undefined,
+        executablePath: typeof raw.ExecutablePath === "string" ? raw.ExecutablePath : undefined,
+        creation: typeof raw.CreationDate === "string" ? raw.CreationDate : undefined,
+      })
+    } catch {}
+  }
+  return rows
+}
+
+export async function isProtectedDesktopOpenCodeProcess(pid: number | undefined | null) {
+  if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) return false
+  if (process.platform !== "win32") return false
+
+  const roots = protectedDesktopOpenCodeRoots()
+  if (roots.length === 0) return false
+  const lineage = await readWindowsProcessLineage(pid)
+  const protectedLineageHit = lineage.some((row) => {
+    const name = row.name?.toLowerCase() ?? ""
+    if (name !== "opencode.exe" && name !== "opencode-cli.exe") return false
+    return pathOrCommandMatchesProtectedRoot(row.executablePath, roots) || pathOrCommandMatchesProtectedRoot(row.commandLine, roots)
+  })
+  return protectedLineageHit
+}
+
 export async function terminateProcessTree(pid: number | undefined | null) {
   if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) return false
   if (pid === process.pid) return false
   if (!(await isProcessAlive(pid))) return false
 
   if (process.platform === "win32") {
+    if (await isProtectedDesktopOpenCodeProcess(pid)) return false
     const child = Bun.spawn(["taskkill", "/PID", String(pid), "/T", "/F"], {
       stdout: "pipe",
       stderr: "pipe",
@@ -281,6 +361,11 @@ export async function cleanupRuntimeProcessScope(scope: string | undefined) {
       } else {
         unreadableCount += 1
       }
+    }
+
+    if (await isProtectedDesktopOpenCodeProcess(record.pid)) {
+      skippedCount += 1
+      continue
     }
 
     const killed = await terminateProcessTree(record.pid)

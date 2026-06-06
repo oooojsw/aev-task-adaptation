@@ -1,4 +1,5 @@
 # auto-evolve 子项目说明（给接手本目录的 AI）
+全局有多个角色，他们都是工作节点，只有空白agent节点无法看到答案任何相关内容，其他的任何节点都可以完全或者部分看到答案内容，因为专家经验区就是他们在写，只有空白agent是完全利用专家经验区进行任务，以此来考验专家经验区写的是不是没有过拟合以及泛化，整个系统的目的是产出一份泛化的（不过拟合任何案例）、完备的（可以让空白agent通过大量测试集）的专家经验区（skill）。
 
 这份文件只描述 `auto-evolve` 子项目的当前真实情况。根目录的 `AGENTS.md` 仍然是全仓级规则，这里主要补充：
 
@@ -13,656 +14,418 @@
 3-3，**同一时间只能有一个 sleep 在跑**。不能在旧 sleep 还没结束时就启动新的 sleep。如果用户重新指定了监控参数（比如从 10 次改成 40 次），必须先停掉当前 sleep，更新配置，再启动新的 sleep。不允许两个 sleep 同时执行。
 3-4，需要注意的是，一定要以Start-Sleep命令作为你输出的结尾，这个命令不结束不准输出任何文字内容！！！3-4，需要注意的是，一定要以Start-Sleep命令作为你输出的结尾，这个命令不结束不准输出任何文字内容！！！3-4，需要注意的是，一定要以Start-Sleep命令作为你输出的结尾，这个命令不结束不准输出任何文字内容！！！
 
-## 1. 代码位置
-
-本子项目根目录：
-- `C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve`
-
-核心代码位置：
-- `orchestrator/long-task/*`
-- `orchestrator/long-task-campaign/*`
-- `orchestrator/opencode.ts`
-- `cli.ts`
-
-### 1.1 仓库根目录的顶层文件夹
-
-下面这些是 `C:\Users\ZhuanZ\Desktop\opencode re\opencode latest` 下最重要的顶层文件夹：
-
-- `.github`
-  - GitHub workflow 和仓库协作配置
-- `.opencode`
-  - opencode 相关配置目录
-- `auto-evolve`
-  - 当前我们主要在改的子项目
-- `github`
-  - 仓库配套脚本或元配置
-- `infra`
-  - 基础设施相关代码
-- `nix`
-  - Nix 配置
-- `node_modules`
-  - 依赖安装目录
-- `packages`
-  - 仓库其他 package
-- `patches`
-  - patch-package 或依赖补丁
-- `progress-plan`
-  - 计划文档和设计草案
-- `runtime-logs`
-  - 本地运行日志、监控日志、临时验证日志
-- `script`
-  - 仓库级脚本
-- `sdks`
-  - SDK 相关内容
-- `specs`
-  - 规格说明
-- `tmp_check`
-  - 临时检查目录
-
-### 1.2 auto-evolve 目录的顶层文件夹
-
-下面这些是 `C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve` 下的顶层文件夹：
-
-- `.runtime`
-  - 子项目内部运行态目录
-- `dataset`
-  - 数据集或测试数据
-- `experience`
-  - 经验相关内容
-- `frontend`
-  - monitor / 前端界面相关代码
-- `judge-skills`
-  - judge 和评审相关技能/模板
-- `methods`
-  - 方法定义或方法学脚本
-- `orchestrator`
-  - 任务调度主代码
-- `prompts`
-  - prompt 模板或提示词资源
-- `real-long-tasks`
-  - 真实长程任务定义
-- `runtime-state`
-  - campaign/run/deployment 等运行状态输出
-- `scripts`
-  - 脚本入口
-- `task-packs`
-  - 各类任务包定义
-
-### 1.3 当前最常用的顶层位置
-
-如果只是为了快速找文件，最常用的是这几个：
-
-- `C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\orchestrator`
-  - 主逻辑代码
-- `C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\task-packs`
-  - 任务定义和真实任务包
-- `C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\runtime-state`
-  - 运行产物和状态文件
-- `C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\progress-plan`
-  - 计划文档
-- `C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\runtime-logs`
-  - stdout/stderr 和监控日志
-
-## 2. 当前重点真实任务
-
-当前重点任务是：
-- `task-packs/real-long-tasks/try4-expert-bootstrap`
-
-目标是：
-- 从 `source.xlsx`
-- 两份专家完成版 Word 文档
-- 两份空白 Word 模板
-
-学习出一套正式专家经验，让后续 blank agent 只读这套经验，就能在一个 uninterrupted session 里完成目标 Word 输出。
+这是一份关于本项目最新架构（截至 2026.06,07）的任务与项目说明文档。文档详细梳理了当前的核心代码结构、重点真实任务、系统设计红线以及关键架构机制。
+
+---
+以下为你重新编写的**完整版系统规范与架构技术白皮书**。内容严格保留了原版 14 个核心章节的完整脉络与详尽程度，将所有条款升级为对应当前最新代码库（包含 `opencode-gate.ts` Concurrency 锁、`blank-eval` 隔离运行、SpreadsheetBench 新验证器等）的最新设计，并且**去除了所有涉及人称代词、指导语气、上一任交接的措辞，转为纯粹客观、结构化的系统技术 spec 文档**。
+
+---
+
+# Auto-Evolve 自动化经验演进系统技术规范与架构白皮书
+
+## 1. 代码位置与拓扑关系
+
+本自动化演进系统部署于统一的工程拓扑结构中。
+
+### 1.1 仓库根目录级拓扑 (`C:\Users\ZhuanZ\Desktop\opencode re\opencode latest`)
+- `.github`：持续集成与仓库协作策略配置。
+- `.opencode`：运行期全局偏好设置。
+- `auto-evolve`：自动化演进系统的核心代码子项目。
+- `node_modules` / `packages`：依赖包与工作区内联模块（包含本地维护的 `opencode` 源码包）。
+- `patches`：针对上游依赖的本地修补补丁（Patch-package 存储区）。
+- `progress-plan`：系统设计白皮书与阶段性架构演进备忘。
+- `runtime-logs`：集中存放外部执行器、后台队列监视器以及并发锁的运行期 stdout/stderr 日志。
+
+### 1.2 系统子项目级拓扑 (`auto-evolve/`)
+- `.runtime`：子项目私有运行时。存放跨进程全局锁 `opencode-gate` 的物理锁目录（`lock/`）和状态描述文件（`state.json`）。
+- `dataset`：包含基准测试的输入定义与样本拆分清单。
+  - `cases/`：结构化短程测试用例。
+  - `SPLIT.md`：训练集与测试集的静态划分真源。
+- `experience`：
+  - `workspace/`：活跃的规范专家经验目录，即控制面读取与维护的物理目标。
+  - `archive/`：历史经验版本库，保留归档索引 `index.json`，支持一键式冷归档与回滚。
+  - `templates/`：经验模块参考模板库，严禁被主流程直接挂载。
+- `judge-skills`：软研判（Soft Judge）执行期按需加载的地方性判定技能包。
+- `methods/recipes`：第二层反向传播（Reverse Propagation）的配方与算子流定义。
+- `orchestrator`：核心状态机与控制面调度代码。
+  - `long-task/`：长程任务图（Work Graph）生成与单兵执行内核。
+  - `long-task-campaign/`：跨轮次战役控制器、工作记忆合成器、路由调节器。
+  - `multi-instance/`：多实例 Fan-out 并发与 Fan-in 合并校验引擎。
+  - `blank-eval/`：空白隔离环境下的独立评估沙盒。
+  - `global-optimization/`：第四层（Layer 4）全局优化策略。
+- `prompts`：集中管理系统核心 Prompt 模板（如 `knowledge-maintainer-core.md`、`soft-judge-core.md`）。
+- `runtime-state`：运行态物理沙盒。包含 `runs/` (短程运行态)、`long-task/runs/` (长程独立运行态)、`long-task-campaigns/` (战役历史快照)、`multi-instance-runs/` (多实例编排状态) 以及 `acceptance-framework/` (全局验收凭证存储库)。
+
+---
+
+## 2. 当前活跃的核心长程基准测试任务
+
+系统当前主要攻坚三个高复杂度的长程基准测试，这些任务要求执行 Agent 在无外部干预的情况下，通过阅读规范经验完成复杂交付：
+
+### 2.1 `audit-point-learnbench` (审计意见点生成)
+- **输入物料**：评估报告定稿、评估电子底稿（多 Sheet 表格与公式）。
+- **任务目标**：针对具体的审计风险点（如“P26 房屋耐用年限与土地剩余年限不匹配”、“建筑重置价 PPI 换算错误”），生成 exactly one 结构化的审计意见项。
+- **校验标准**：输出格式必须精确为单项 Markdown 格式，通过软验证器比对隐藏答案在“问题、证据、行动性”三个维度的符合度。
+
+### 2.2 `officeqa-pro-learnbench` (研报定量推理)
+- **输入物料**：数份 Treasury Bulletin PDF 原始报表。
+- **任务目标**：针对特定年份或季度的复杂财务问题，进行多页检索、数据提取与勾稽计算。
+- **校验标准**：严格输出单值答案至 `workspace/answer.json`，由外部验证器执行高精度的数学容差比对（Tolerance: 0.01）。
+
+### 2.3 `spreadsheetbench-learnbench` (Excel 矩阵变换 - 最新)
+- **输入物料**：包含复杂计算公式的 Excel 工作薄。
+- **任务目标**：根据指令定位目标 Sheet 与单元格区间，执行自动化数据清洗，并生成精确的行列矩阵。
+- **校验标准**：输出格式要求为严格的矩阵 JSON 格式。验证器将对输出范围、Sheet 名称和数值单元格执行全量校验。
+
+---
 
-## 3. 当前高层原则
+## 3. 运行红线与系统开发原则
 
-1. 不要手工完成真实任务结果
-- 不要人工替任务填 Word
-- 不要人工替 blank agent 补答案
-- 不要人工把最终文档做出来
+### 3.1 绝对禁止人工干预输出结果
+- 严禁人工修改基准测试目录下的 `workspace/` 或 `expert-workspace/` 来伪造成功。
+- 严禁在专家经验模块中写入针对特定题目的硬编码数值或答案原句。
 
-2. 只修平台层
-- 修 orchestrator
-- 修状态机
-- 修 prompt
-- 修 JSON 提取
-- 修进程生命周期
-- 修经验传递
+### 3.2 严格实行平台与内容剥离原则
+- 所有的优化、重试和纠偏工作，必须通过修改系统平台层（编排器、调度状态机、Prompt 模板、并发机制、JSON 提取、进程控制等）实现。
+- 严禁针对单个测试用例编写特异性写死逻辑。
 
-3. 原始材料必须保持完整
-- 每次重跑真实任务前，先清 `runtime-state`
-- `expert-workspace` 必须从 `seed-expert-workspace` 恢复
-- `workspace / outputs / deployment/work` 应清空重建
+### 3.3 原始物料完整性
+- 每次重新启动运行或战役前，必须对运行环境进行初始化清理。
+- 重置后的演进工作区（`expert-workspace`）必须确保与指定的种子（`seed-expert-workspace`）完全一致，防止历史运行的经验残留造成交叉污染。
 
-4. 文档处理必须 headless-only
-- 禁止打开 Word / Excel GUI
-- 禁止 `Start-Process`
-- 禁止 `Invoke-Item`
-- 禁止 `explorer.exe`
-- 禁止任何文件关联方式拉起桌面程序
+### 3.4 Headless-only 约束
+- 本地执行环境严禁通过任何方式拉起微软 Word、Excel、Acrobat Reader 或其他图形化桌面应用程序。所有文件（特别是 `.docx`, `.xlsx`, `.pdf`）的解析、计算与修改，必须完全通过 headless-only 脚本（如 Python 科学计算库或 OpenXML 库）在内存中闭环执行。
+
+### 5.5 路径反斜杠规避
+- 在任何系统级配置文件（如 `surface_contract.json`）中写入路径时，必须将所有反斜杠 `\` 统一转换为正斜杠 `/`，以规避多层嵌套调用时发生的转义字符丢失。
+
+---
+
+## 4. 战役控制面核心架构
+
+长程自动化战役通过四大核心控制面文件在轮次之间传递高价值信息，确保经验迭代不出现发散或退化：
+
+```
++-----------------------------------------------------------------------------------+
+|                                 LONG-TASK CAMPAIGN                                |
+|                                                                                   |
+|  +--------------------+   +-----------------------+   +------------------------+  |
+|  |   Pending Package  |   |   Exploration Tree    |   |    Routing Control     |  |
+|  |  (Markdown Skill)  |   | (exploration-tree.json)|   | (routing-control.json) |  |
+|  +---------+----------+   +-----------+-----------+   +-----------+------------+  |
+|            |                          |                           |               |
+|            +--------------------------+---------------------------+               |
+|                                       |                                           |
+|                                       v                                           |
+|                           +-----------------------+                               |
+|                           |   Campaign Lead AI    |                               |
+|                           +-----------------------+                               |
++-----------------------------------------------------------------------------------+
+```
 
-## 4. 当前长程架构
+### A. Pending Expert Package
+- **物理路径**：`runtime-state/long-task-campaigns/<campaign>/pending-expert-package/current`
+- **定位**：当前迭代生成的专家经验包，是 Blank Agent 最终部署时唯一能读取的知识平面。它在生成时必须通过 layout 验证。
 
-### A. pending expert package
+### B. Exploration Tree
+- **真源定义**：系统严格使用单 JSON 文件作为探索树的真源：`exploration-tree.json`。废弃过去的 Markdown 格式树，避免多进程读写时的格式丢失。
+- **作用**：记录已探索节点的状态（`validated_success`, `strong_fail`, `unexplored` 等）和尝试频次，为下一轮的 Planner 提供底层图规划的客观数据。
+
+### C. Campaign Working Memory
+- **文件**：`campaign-working-memory.json`
+- **定位**：对各运行单元产出的局部 `learning_units` 和 `failure_packets` 进行高度压缩和高信度提炼后形成的“高维记忆体”，用于辅助战役 Lead 总结跨轮次规律。
+
+### D. Routing Control
+- **文件**：`routing-control.json`
+- **定位**：系统为下一轮建图提供的硬性路由控制。例如：强制执行特定修复区域（`requiredNextRegions`）或将已耗尽的单元加入禁区（`forbiddenRegions`），使重新建图（Replan）具备明确的方向性。
+
+---
+
+## 5. 历史技术攻坚与已验证的机制
+
+以下为系统中已稳定实现的工程级改进，后续修改必须在此基础上进行：
+
+### 5.1 全局并发锁机制 (`opencode-gate.ts`)
+- **实现方案**：在子项目物理运行时 `.runtime/opencode-gate` 下建立基于目录创建（`mkdir`）的排他性排队锁。
+- **并发策略**：
+  - 支持设置全局最大并发（`maxConcurrent`）和单个 Task-family 并发上限（`perScopeMaxConcurrent`）。
+  - 支持 FIFO 队列排序与 Stale 锁强行释放（基于 PID 存活检查与心跳文件检测，防止单次超时阻塞整条队列）。
+  - 所有 OpenCode 任务调用强制在 `gate.run()` 闭环内执行。
+
+### 5.2 结构化输出容错器 (`json-extract.ts`)
+- **实现方案**：内置多层级 JSON 提取器。当 LLM 输出非纯净 JSON（带 Fenced code block、前缀叙述语、或多余字元）时，系统自动执行平衡大括号匹配算法，定位首个闭合的 JSON 对象并进行结构化转译。
+- **转义修复**：支持对 Windows 路径中的 `\n`, `\t` 进行二次清洗，杜绝因基础格式报错导致的 `schema_invalid` 任务终结。
+
+### 5.3 运行时进程精准清理机制 (`runtime-process-registry.ts`)
+- **实现方案**：系统在每次启动 OpenCode 任务、运行验证器或起草图规划时，会通过 `registerRuntimeProcess` 在私有注册表记录子进程 PID 及其 Windows 启动 tick 时间戳。
+- **清理逻辑**：在单次用例（Case Attempt）或一轮战役结束的 `finally` 阶段，主动触发 `cleanupRuntimeProcessScope`，通过 Windows 的 `taskkill /PID <pid> /T /F` （或类 Unix 的 `SIGKILL`）强行阻断整个衍生进程树，从物理上杜绝运行环境与文件读写冲突。
 
-路径形式：
-- `runtime-state/long-task-campaigns/<campaign>/pending-expert-package/current`
-
-作用：
-- 当前“待转正”的正式专家经验包
-- blank agent 最终应该只读它
-- 下一轮 planner 也读取它
+### 5.4 动态进度标记与延迟写状态
+- **实现方案**：修复了过去在 Campaign 运行中过早写入 `running` 和切换 `activeUnitID` 的设计缺陷。现在系统在 Bootstrap 或 Replan 期间将进度置为 `bootstrapping` 或 `planning`，只有在底层 OpenCode 子线程成功 Spawn 且接收到首个运行期事件后，才写入 `running` 状态并正式在 `progress_state.json` 中激活 `activeUnitID`，大幅减少由于启动失败导致的“幻觉活跃”。
 
-### B. exploration tree
+---
 
-当前规则：
-- 只保留 **一份 JSON 真源**
-- 文件名：`exploration-tree.json`
-- 不再把 Markdown 树当作真源传递
+## 6. 运行时已知不确定性与脆弱行为记录
 
-### C. campaign working memory
+系统运行在复杂的分布式/本地多进程状态下，需要时刻对以下非稳定性因素保持警惕：
 
-文件：
-- `campaign-working-memory.json`
+### 6.1 Windows 文件重命名冲突 (EPERM / EBUSY)
+- **原因**：PowerShell 的并发写入或某些杀毒软件在扫描 `.runtime/active-processes.json` 等高频修改的 JSON 时，会锁死该文件，导致 Bun 进程在进行 `rename(tmp, target)` 时抛出 `EPERM` 异常。
+- **排查路径**：如果任务在启动瞬间报错，提示 `EPERM`，需首先检查文件锁释放状况，并清理 `.runtime` 下的 `.tmp-*` 遗留文件。
 
-作用：
-- 保存压缩后的工作记忆
-- 给 campaign / 后续轮次使用
-- 不是原始大仓库
+### 6.2 编排器 Lead 的退出码波动
+- **现象**：由于某些底层终端控制符或输出流缓冲问题，`campaign-lead` 进程的 `exitCode` 有时会被操作系统记为 `255`。
+- **判定标准**：不能仅根据 `exitCode !== 0` 判定失败。必须校验 `campaign-lead` 的运行成果——即目标 `rounds/round-NNN/` 目录下是否已成功输出 `exploration-tree.json` 和 `routing-control.json`，且格式可被 JSON 解析。
 
-### D. routing control
+### 6.3 假死与虚假运行状态的判定
+- **研报规范**：当 `campaign.json` 或 `progress_state.json` 处于 `running`，但系统中完全检索不到对应的 `bun run`、`python` 或 `Long Task Execute` 进程，且 `execute/response.txt` 超过 15 分钟无增量修改时，系统即处于 Stale 状态。在重新启动前，必须通过清理流程将其纠偏。
 
-文件：
-- `routing-control.json`
+---
 
-作用：
-- 给下一轮建图提供直接控制信号
-- 它应决定下一轮往哪里走、避开哪里
+## 7. 基准测试完整重置与清理流程
 
-## 5. 最近已经修过的重要问题
+在开发、调测或发生虚假死锁需要彻底重置系统状态时，必须严格执行以下标准清理流程（已封装至 `scripts/init-try4-clean-state.ps1`）：
 
-### 5.1 结构化 JSON 输出提取更鲁棒
+```text
+[1. 进程清理] 强行终止所有残留的 bun.exe, node.exe, powershell.exe 和 opencode-cli.exe
+    |
+[2. State 移除] 物理清理 runtime-state/long-task-campaigns/ 目录下包含当前任务关键字的子文件夹
+    |
+[3. 沙盒重置] 移除 task-packs/real-long-tasks/<task-name> 下的：
+    |         - workspace/ (完全清空)
+    |         - expert-workspace/ (物理删除)
+    |         - deployment/work/ & deployment/outputs/ (完全清空)
+    |
+[4. 经验复原] 复制 seed-expert-workspace 至 expert-workspace 目录，作为零点快照
+    |
+[5. 经验索引核查] 打开 runtime-state/acceptance-framework/index.jsonl，
+                  手工或通过脚本剔除包含当前用例 ID 的历史验收记录。
+```
 
-问题：
-- LLM 常在 JSON 前后加文字
-- 以前容易被判 `invalid_execution_output`
+---
 
-现状：
-- 现在能从大段文本、fenced code block、多对象混合文本里提取目标 JSON
-- 对字段别名做了兼容
+## 8. 本自动化系统中“持续监控”的工程定义
 
-相关代码：
-- `orchestrator/long-task/json-extract.ts`
-- `orchestrator/long-task/runner.ts`
-- `orchestrator/long-task/validators.ts`
+本系统中定义的“持续监控”是具有明确规范的工程机制，严禁进行任何形式的静默等待：
 
-### 5.2 round 结束后统一清理旧进程
+- **轮询控制**：必须独立运行监控脚本。设置不低于 180 秒（建议 300 秒）的 `Start-Sleep` 间隔。
+- **断言回查**：每次 Sleep 唤醒后，必须执行物理文件扫描：
+  - 检查目标 `campaign.json` 的 `updatedAt` 时间戳是否仍在推进。
+  - 检查当前 active unit 的 `execute/events.json` 尺寸是否增长。
+  - 确认主线程 PID 依然存在于操作系统的活动进程清单中。
+- **防死锁**：若连续 3 次轮询（15分钟）未检测到任何指标变化，监控程序应抛出异常，并触发全局进程猎杀。
 
-问题：
-- 旧 unit / blank-agent / worker / reviewer 可能残留到下一轮
-- 会造成资源竞争和监控混乱
+---
 
-现状：
-- 每轮使用自己的 `runtimeScope`
-- 在 round `finally` 里统一清理旧进程
-- 重点：**必须是 round 结束后清，不要提前清**
+## 9. 运行时进程状态真伪研判标准
 
-相关代码：
-- `orchestrator/runtime-process-registry.ts`
-- `orchestrator/opencode.ts`
-- `orchestrator/long-task/validators.ts`
-- `orchestrator/long-task/runner.ts`
-- `orchestrator/long-task-campaign/runner.ts`
-
-### 5.3 状态机从“假 running”改成“先 bootstrapping，确认 spawn 后再 running”
+```
+                       [Is Process PID Alive?]
+                              /       \
+                            YES        NO
+                            /            \
+               [Is Heartbeat Fresh?]    [STALE STATE]
+                     /       \
+                   YES        NO
+                   /            \
+            [TRUE RUNNING]     [STALE RUNNING]
+```
 
-问题：
-- 以前 campaign / run 还没真正起线程，就先写 `running`
-- 前端会看到假活跃状态
+- **TRUE RUNNING (真跑)**：
+  - 进程表中存在真实的活动 PID，且其创建时间 tick 校验与注册表完全一致。
+  - 活动单元的 `execute/response.txt` 或 `stdout.log` 存在实质的文件大小变动。
+  - `progress_state.json` 处于 `running` 状态。
+- **STALE RUNNING (假跑)**：
+  - 文件系统中的 `campaign.json` 或 `progress_state.json` 指示 `running`。
+  - 进程表中完全查询不到对应的 PID，或虽然 PID 存在，但其实际 CommandLine 已不包含该任务的任何上下文特征。
+  - 发生此情况时，必须首先将 `status` 修正为 `recovery_pending`，通过 Stale Healing 机制进行抢救。
 
-现状：
-- campaign 和 long-task 先写 `bootstrapping`
-- 只有真实子线程 `spawn` 成功后才切 `running`
+---
 
-相关代码：
-- `orchestrator/opencode.ts`
-- `orchestrator/long-task/contract.ts`
-- `orchestrator/long-task/runner.ts`
-- `orchestrator/long-task/validators.ts`
-- `orchestrator/long-task-campaign/contract.ts`
-- `orchestrator/long-task-campaign/runner.ts`
-
-### 5.4 activeUnitID 不再提前切换
-
-问题：
-- 以前会出现：
-  - `progress_state.json` 已显示切到下一个 unit
-  - 但这个 unit 还没真正启动
-  - 目录里只有 `retry_input_bundle.json`
-  - 没有 `execute/response.txt`
-
-现状：
-- 现在只有在真实子线程 spawn 后，才会：
-  - 切 `activeUnitID`
-  - 切 `activeAttempt`
-  - 递增 `totalUnitAttempts`
-  - 写运行中的 `progress_state`
-
-关键文件：
-- `orchestrator/long-task/runner.ts`
-
-## 6. 仍需注意的已知问题
-
-### 6.1 monitor-server 可能因 Bun 自身问题崩溃
-
-这不一定意味着真实任务也崩了。
-
-所以：
-- monitor 崩了 ≠ campaign 崩了
-- 要分别检查真实 `run-long-task-campaign` 和 live unit 进程
-
-### 6.2 campaign-lead 的 exitCode 可能不稳定
-
-有过这种情况：
-- `campaign-lead/run.json` 里 `exitCode = 255`
-- 但实际上已经产出了 `response.txt`
-- 也已经成功写出 package/tree/routing-control
-
-因此：
-- 不要只看 `exitCode`
-- 要结合实际产物判断
-
-### 6.3 如果只有状态文件是 running，但没有真实进程，那就是 stale
-
-判定标准：
-- 有 `campaign.json = running`
-- 有 `progress_state.json = running`
-- 但没有真实的：
-  - `run-long-task-campaign`
-  - 当前 `Long Task Execute ...`
-  - 或其它对应子线程
-
-这种情况应认定为：
-- 假活跃 / stale running
-
-## 7. 重跑 try4 前的标准清理流程
-
-1. 先停旧的
-- 停旧 campaign
-- 停旧 unit
-- 停旧 blank-agent
-- 停旧 worker / reviewer / lead
-
-2. 清 runtime-state
-- 删 `runtime-state/long-task-campaigns/*try4*`
-- 删 `runtime-state/long-task/runs/*try4*`
-- 删 `runtime-state/acceptance-framework/deployment-runs/*try4*`
-- 也清掉 `campaign-pending-smoke` 相关目录
-
-3. 恢复 live workspace
-- 删 `expert-workspace`
-- 从 `seed-expert-workspace` 重新复制
-- 清空 `workspace`
-- 清空 `outputs`
-- 清空 `deployment/work`
-
-4. 确认原始材料完整
-- `materials/source.xlsx`
-- `materials/report-reference.doc`
-- `materials/explanation-reference.doc`
-- `materials/report-template.docx`
-- `materials/explanation-template.docx`
-
-5. 从 `round-001` 重新启动真实任务
-
-## 8. 本项目里“持续监控”的含义
-
-“持续监控”不是口头承诺，而是：
-
-- 当真实任务仍在正常推进
-- 必须在命令行里 **独立执行**
-  - `Start-Sleep -Seconds 300`
-  - 或更长 / 更短，但不少于 5 分钟
-- sleep 不能嵌进别的脚本里假装监控
-- sleep 结束后必须回查：
-  - `campaign.json`
-  - `progress_state.json`
-  - 真实进程
-  - 当前 active unit 是否真的已有 `execute/` 产物
-
-## 9. 如何判断这轮是真跑还是假跑
-
-真跑：
-- 有 `run-long-task-campaign`
-- 有当前 active unit 的真实子进程
-- active unit 目录里能看到：
-  - `execute/response.txt`
-  - `execute/events.json`
-  - `execute/run.json`
-
-假跑 / stale：
-- 只有 `campaign.json = running`
-- 只有 `progress_state.json = running`
-- 没有真实进程
-- 或 active unit 只有 `retry_input_bundle.json`，没有 `execute/`
-
-## 10. 给接手 AI 的建议
-
-如果接手时遇到问题，优先检查：
-
-1. 先看真实进程，不要先相信前端卡片
-2. 再看 `campaign.json`
-3. 再看 `progress_state.json`
-4. 再看 active unit 目录里有没有 `execute/`
-5. 再看 stdout/stderr 日志
-
-优先修：
-- 状态机
-- 进程生命周期
-- round 切换
-- JSON 输出鲁棒性
-- working memory / routing control / tree 的质量
-
-不要优先做：
-- 手工补真实任务结果
-- 手工补最终 Word
-- 直接改材料或专家参考件
-
-## 11. 深读代码后的补充信息
-
-### 11.1 运行上下文约束
-
-- `auto-evolve` 这套 CLI 和大部分路径解析，默认假设 **cwd 是包含 `auto-evolve/` 的仓库根目录**
-- 关键原因：`orchestrator/fs.ts` 里的 `autoEvolvePath(cwd, ...)` 会拼成 `cwd/auto-evolve/...`
-- 所以日常应优先从仓库根运行：
-  - `bun run auto-evolve/cli.ts ...`
-  - 或根 `package.json` 里的 `auto-evolve:*` 脚本
-- 如果直接在 `.../auto-evolve` 子目录里运行很多命令，路径会被解析成 `.../auto-evolve/auto-evolve/...`
-
-### 11.2 当前 campaign 真正依赖的控制面
-
-- 当前 round 生成时，真实会被下一轮读取的核心控制面是：
-  - `pending-expert-package/current`
-  - `exploration-tree.json`
-  - `campaign-working-memory.json`
-  - `routing-control.json`
-- `campaign-lead` 的职责不是只给建议，而是实际写下一轮的：
-  - pending package
-  - exploration tree draft
-  - routing control draft
-- `reviewer` 是在 promote 之后才运行的“是否可以进 final acceptance”判断层
-- final acceptance 只会在 reviewer 明确给出 `readyForFinalAcceptance = true` 后触发
-
-### 11.3 当前代码里已经能确认的缺口 / 风险
-
-- `collectCarryoverContext()` 现在直接返回空数组
-  - 这意味着 `campaign.json` / contract 里的 carryover 开关目前还没有真正接线
-  - 当前跨轮传递主要还是依赖 current package/tree/working memory/routing control，而不是额外拼接的 carryover context 文件
-- `monitor-server.ts` 当前只扫描：
-  - `runtime-state/runs`
-  - `runtime-state/propagation/workspaces`
-  - 没有把 `runtime-state/long-task/*` 和 `runtime-state/long-task-campaigns/*` 作为 artifact 扫描根
-  - 所以 long-task / campaign 的监控更依赖 live session；排障时仍要直接看运行目录
-- long-task 在 `restricted` 权限模式下有潜在缺口：
-  - 执行阶段的 `permissionEditPaths` 目前只取 `editablePaths`
-  - `targetPaths` 虽然会在 fresh run 阶段被当作可变目标归档/清空，但不会自动加入执行期 edit permission
-  - 当前默认 `permission-config.json = open`，所以平时不一定暴露；一旦切到 restricted，要优先检查这里
-- 已完成 run 的幂等性还不够稳：
-  - `continueLongTaskLoop()` 在读到终态时仍会再次走 `finalizeLongTaskRun()`
-  - 这会再次追加 archive / shadow memory / candidate / maintenance request
-  - 所以不要反复 `resume-long-task` 一个已经结束的 run，除非先确认去重逻辑已补齐
-
-### 11.4 工程化现状
-
-- `auto-evolve` 子树目前没有成体系的单元测试 / 集成测试文件
-- 现在更像是“验证驱动”而不是“测试驱动”：
-  - `cli.ts validate`
-  - long-task validators
-  - acceptance framework
-  - blank-agent deployment acceptance
-- 改 orchestrator 时，默认要把“状态机 + 进程生命周期 + validator 真实产物”当成第一验证面，而不是只看 TypeScript 能不能编译
-
-## 12. 新增并发回归脚本（2026-05-22）
-
-- 脚本路径：
-  - `C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\scripts\smoke-concurrency-regression.ts`
-- 作用：
-  - 小型并发回归检查，覆盖以下三个关键点：
-    - 进程注册表并发注册/清理是否正常，防止遗漏子进程记录
-    - `healStaleRuntimeStates` 的状态写入重试接线是否存在（`retryWriteJson`）
-    - multi-instance merger 的长文本截断阈值与截断警告是否存在
-- 运行命令（在 `auto-evolve` 目录）：
-  - `bun run scripts/smoke-concurrency-regression.ts`
-- 通过标志：
-  - 输出 `smoke-concurrency-regression: PASS`
-
-## 13. OpenCode 基础设施故障备忘（2026-05-22）
-
-- 现象：
-  - long-task/campaign 在 `inspect-shared-materials` 首单元卡住，`run.json` 停留 `status=running`，`updatedAt` 只更新 1 秒左右。
-  - `events.json` 为 `[]`，`response.txt` 为 1 字节或为空，几乎没有真实会话输出。
-- 核心根因（已验证）：
-  - 当前本地仓库 `packages/opencode` 在源码运行路径下无法稳定启动：
-    - `bun run src/index.ts ...` 报 `TypeError: The superclass is not a constructor`（minipass-pipeline 链路）。
-    - `bun packages/opencode/bin/opencode --version` 报缺少平台二进制包（`opencode-windows-x64`）。
-  - 即：不是 campaign 业务逻辑本身，而是 OpenCode 基础设施可执行链路已损坏。
-- 诊断结论：
-  - 本机存在“全局安装 opencode”和“本地仓库源码 opencode”两套链路，不能混用。
-  - 当前阶段必须先修复本地仓库这套 opencode 启动能力，再继续 long-task。
-
-## 14. audit-point-learnbench 长期项目记忆（2026-05-24）
-
-### 14.1 当前核心目标
-
-当前重点实验是 `audit-point-learnbench`。
-目标不是一次生成完整审计报告，而是把一份大型审计/评估材料拆成多条“单点人类审核意见”学习任务。
-每个训练实例只学习一条人类审核意见，产出：
-- 一个该审计点对应的局部 skill / expert-workspace
-- 一个 `workspace/audit-point-output.md`，内容必须是 exactly one audit opinion item
-
-最终目标是：
-1. 所有训练实例分别学到通过验收
-2. 合并所有成功实例的 skill
-3. 用合并 skill 回测训练集
-4. 训练集全过后再测测试集
-5. 测试集不过则回到合并经验修正，而不是直接结束
-
-### 14.2 泛化能力主要看合并后
-
-训练阶段主要是积累局部成功经验，不要把单点任务成功误报成系统已经泛化成功。
-系统泛化主要在合并之后验证：
-- 合并 skill 是否保留共性规则
-- 回测训练集是否全过
-- 测试集是否能过
-- 失败样本是否能被转化为“特殊案例规则”而不是硬背答案
-
-合并包应分两部分：
-- 通用规则：跨任务抽象出来的方法
-- 特殊案例规则：训练回测失败时保留的场景化细节、证据定位模式和易错点
-
-特殊案例规则不应写成“题号答案”，而应写成可迁移的场景规则。
-
-### 14.3 当前训练调度方式
-
-`audit-point-learnbench` 已从固定 `4x5` 分轮模式改为全局队列模式。
-脚本：
-- `C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\scripts\run-audit-point-batches.ts`
-
-当前行为：
-- 默认最多同时跑 5 个训练 campaign
-- 已经 `verified_success` 的任务不重跑
-- `running / bootstrapping / recovery_pending` 的任务走 `resume-long-task-campaign`
-- 队列有空位就补下一个未完成任务
-- 不再等待一整轮全部结束才开下一轮
-
-环境变量：
-- `AUDIT_POINT_QUEUE_CONCURRENCY=5` 可调整总并发
-- `AUDIT_POINT_QUEUE_DRY_RUN=1` 只生成计划，不启动训练
-
-### 14.4 合并门槛
-
-合并必须严格等待所有训练实例成功。
-当前训练集共 20 条：
-- `audit-point-001` 到 `audit-point-020`
-
-合并前必须满足：
-- 每个任务 ID 都有且只有一个被选中的成功 campaign
-- campaign 状态必须是 `verified_success`
-- 必须存在 `pending-expert-package/current`
-- 旧失败、旧中断、被重新拉起替代的 campaign 一律不能进入合并
-
-典型例子：
-- 旧失败 `audit-point-004` 因 `EPERM active-processes.json rename` 崩溃，不能进入合并
-- 新的 `audit-point-004` 续跑成功后，才可以作为 `004` 的唯一合并输入
-
-如果不是 `20/20` 成功，脚本应跳过合并并写 `merge-skipped.json`，不能用部分训练集强行合并。
-
-### 14.5 当前已知成功/未完成情况
-
-最近一次队列启动前，系统识别到：
-- 已成功：`001, 002, 003, 006, 007, 008`
-- 待继续：`004, 005, 009-020`
-
-这只是当时状态，后续要以 `runtime-state` 最新状态为准。
-
-### 14.6 软验证设计
-
-当前软验证是 `prompt_json`，但核心结果以文件为准。
-软验证读取：
-- `validator_input.json`
-
-软验证必须写：
-- `result.json`
-
-验证重点：
-- `same_issue`
-- `specific_evidence`
-- `actionable`
-
-判定规则：
-- 只有 `same_issue=true`
-- 且 `specific_evidence=true`
-- 且 `actionable=true`
-- 才允许 `passed=true`
-
-人类指导文件 `human-guidance.md` 是背景约束，不是验证器主要任务。验证器主要任务是判断候选审计意见是否匹配隐藏专家答案。
-失败分类建议使用：
-- `missing_candidate`
-- `issue_mismatch`
-- `evidence_missing`
-- `not_actionable`
-- `infra_error`
-- `schema_invalid`
-- `candidate_missing`
-- `candidate_format_invalid`
-- `score_below_threshold`
-
-### 14.7 训练失败常见类型
-
-当前常见失败不是系统全崩，而是最终验收不过。
-`004` 类问题：
-- 候选输出可能是模板占位内容
-- 或 `surface_contract.json` 引用了不存在的 `audit-point-output.md`
-- 重点查是否真的生成了 `workspace/audit-point-output.md`
-- 重点查它是否是有效的一条审计意见
-- 重点查 `surface_contract.json` 里的路径是否和真实文件一致
-
-`005` 类问题：
-- 主要是 `same_issue=false`
-- 曾经把专家答案要点“设备综合评价净残值/成新率 90 vs 93 差异”学偏成别的问题类型
-- 重点查 skill 的 PRIMARY finding type 是否和专家答案一致
-- 重点查重新部署 skill 后是否真的重新生成了 `audit-point-output.md`
-
-### 14.8 Windows 文件锁风险
-
-Windows 中 `.runtime/active-processes.json` 仍可能出现 `EPERM rename` 文件锁竞争。
-现象：
-- campaign 启动即失败
-- `lastSummary` 出现 `EPERM: operation not permitted, rename active-processes.json.tmp -> active-processes.json`
-- `.runtime` 下面残留 `active-processes.json.tmp-*`
-
-这类问题是基础设施文件锁竞争，不是任务内容失败。
-短期处理：
-- 失败 campaign 不进入合并
-- 重新拉起同一任务的新 campaign
-- 合并按任务 ID 只取成功版本
-
-长期建议：
-- 将进程注册表从单 JSON 覆写改为 append-only JSONL
-- 或将运行态迁移到 SQLite/WAL
-
-### 14.9 当前运行和排障路径
-
-常用位置：
-- 项目根：`C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve`
-- 训练任务包：`task-packs/real-long-tasks/audit-point-learnbench`
-- campaign 状态：`runtime-state/long-task-campaigns`
-- batch 状态：`runtime-state/audit-point-batches`
-- 日志：`C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\runtime-logs`
-
-判断真实状态时，不要只看前端或表格，要看：
-1. `campaign.json`
-2. `round-summary.md`
-3. final-acceptance 的 `result.json`
-4. 是否有真实 `bun run cli.ts run-long-task-campaign` 进程
-5. `pending-expert-package/current` 是否存在
-
-### 14.10 当前最近启动的队列
-
-最近一次启动：
-- 队列目录：`runtime-state/audit-point-batches/20260524-011119742`
-- 运行模式：全局队列，最大 5 个并发
-- 启动日志：
-  - `runtime-logs/audit-point-queue-20260524-011119.out.log`
-  - `runtime-logs/audit-point-queue-20260524-011119.err.log`
-
-该运行不要求持续监控，但后续检查时优先看这个队列目录。
-
-### 14.11 audit-point 当前流程纪律
-
-- 测试集当前只做 `targeted-blind`，暂缓 `open-discovery`。
-- `targeted-blind` 的含义是：给 merged skill、全量材料、一般审核方向/focus；不给 hidden answer、人类答案原句、Generalizable Rule 原句。
-- 测试集只验收空白 agent 是否能写出 `workspace/audit-point-output.md` 这一条审核意见。
-- 测试集不得要求产出 skill 包，不得要求 `manifest.md/change_log.md/surface_contract.json`，不得跑 `workspace-layout` 或 surface generalization。
-- 测试集失败只记录为泛化失败，不现场修 skill，不自动进入 append-only repair。
-- 合并后训练回测才允许开启 append-only repair gate；repair 只能单增 merged skill 内容，不能删除或重写旧内容。
-- 训练回测必须在全部训练 case 成功且完成 merge 后进行；训练回测不过，不进入测试集。
-
-### 14.12 通用任务包批跑脚本
-
-现在新增了一个通用外层编排脚本：
-
-- `auto-evolve/scripts/run-benchmark-orchestrator.ts`
-
-它是“任务包级 orchestrator”，不是新的 campaign 内核。它只负责：
-
-- 读取某个 `task-packs/real-long-tasks/<pack>` 下的 `splits`
-- 并发启动或续跑多个 `tasks/<id>/campaign.json`
-- 统计哪些 training case 已经 `verified_success`
-- 达标后进入 merge
-- 再按需要进入训练回测、测试集、baseline
-
-必须记住：
-
-- 它不能替代每轮 round 内部的 blank agent 验收
-- 它不能自己发明新的成功判据
-- 它只能信现有 campaign 产出的 `campaign.json`、`pending-expert-package/current`、final acceptance 结果
-
-这个脚本现在支持停在任意阶段：
-
-- `--mode campaign-only`
-- `--stop-after training`
-- `--stop-after merge`
-- `--stop-after train-replay`
-- `--stop-after test`
-- `--stop-after baseline`
-
-也支持单独关步骤：
-
-- `--skip-merge`
-- `--skip-train-replay`
-- `--skip-test`
-- `--skip-baseline`
-
-旧脚本 `auto-evolve/scripts/run-officeqa-pro-benchmark.ts` 现在只是这个通用脚本的兼容包装。以后如果是同结构任务包，优先接这个通用 orchestrator，不要再复制一份新的专用批跑脚本。
+## 10. 系统后续迭代与全局优化方向
+
+本架构在设计之初为后续的高级功能预留了接口，演进时需遵循以下方向：
+
+### 10.1 第四层（Layer 4）全局优化接线
+- **位置**：`orchestrator/global-optimization/`
+- **目的**：通过 `experience-compression` 实现经验文件的精简和合并。减少冗余文字。
+- **约束**：优化产生的 candidate 必须挂载到 `campaign-working-memory.json` 通道进行第三层盲测（Propagation），通过盲测后方可由事务门（Transaction Gate）合并至主干。
+
+### 10.2 Concurrency 数据库化
+- **方向**：目前并发注册表 `active-processes.json` 采用单 JSON 覆写，存在 Windows 文件锁瓶颈。未来需逐步重构为 Append-only JSONL 或嵌入式 SQLite 数据库（启用 WAL 模式）。
+
+### 10.3 Prompt 文本内联优化
+- **方向**：由于 Windows Command Length 限制，目前通过 `promptInlineFiles` 直接在 CLI 层面注入了大文本。后续演进应将其转化为本地 OpenCode 沙盒内部的文件系统挂载，减少主 CLI 的参数负荷。
+
+---
+
+## 11. 源码深度剖析与运行上下文约束
+
+### 11.1 执行路径上下文约束 (CWD)
+- **底层特性**：Orchestrator 内部的大量路径解析，强依赖于运行命令时的 `process.cwd()` 为包含 `auto-evolve/` 的仓库根目录。
+- **异常风险**：若在终端中直接 `cd auto-evolve` 然后执行命令，会导致 `autoEvolvePath` 将路径错误地解析为 `.../auto-evolve/auto-evolve/...` 从而导致文件加载异常。在所有脚本编写中，必须确保 CWD 维持在仓库顶层。
+
+### 11.2 空白评估 (Blank-Eval) 与权限限制模式 (Restricted Mode)
+- **核心逻辑**：当系统的 `permission-config.json` 处于 `restricted` 时，OpenCode 任务的 `permissionEditPaths` 会严格收窄。
+- **潜在缺口**：在 `restricted` 模式下，执行阶段如果漏掉将任务输出目标文件夹加入可写权限（`permissionEditPaths`），Agent 将在执行 `write` 时抛出物理权限拒绝。开发新的验证阶段时，必须优先排查该项。
+
+### 11.3 事务写入幂等性保护
+- **已知问题**：在 `continueLongTaskLoop` 状态机执行中，当检测到工作流到达终态后，会直接触发 `finalizeLongTaskRun` 进行落盘、归档并生成 Candidate 申请包。
+- **开发约束**：目前该阶段的幂等（Idempotency）去重保护较为薄弱，重复执行 resume 可能会在 `index.jsonl` 中写入重复的归档记录。
+
+---
+
+## 12. 并发回归机制与验证
+
+为防止底层多进程通信、文件锁、进程注册表逻辑在修改后发生退化，系统配备了全自动并发回归验证器：
+- **测试脚本**：`auto-evolve/scripts/smoke-concurrency-regression.ts`
+- **验证手段**：
+  1. 并发拉起 4 个高延迟的后台休眠测试进程，高频写入注册表以检验文件锁在高竞争下的鲁棒性。
+  2. 测试 `healStaleRuntimeStates` 对应的状态回滚重试链路（`retryWriteJson`）是否通畅。
+  3. 通过 `cleanupRuntimeProcessScope` 验证是否能精准剔除该作用域（Scope）下的全部衍生子进程，而不发生误杀。
+- **发布门槛**：所有对状态机或底层调用的修改，必须在此脚本跑出 `smoke-concurrency-regression: PASS` 后方可提交。
+
+---
+
+## 13. 基础设施调用故障备忘
+
+系统依赖本地物理安装的 `opencode` 可执行程序，该链路容易受到外部系统环境的干扰：
+
+- **VPN/代理断开导致模型列表空白**：
+  - **故障特征**：OpenCode 启动时报 `ECONNRESET` 并闪退，或提示 `TypeError: The superclass is not a constructor`。
+  - **应对机制**：系统在启动前会探测本地 `127.0.0.1:7890` 的可达性。若不可达，将强制清空环境变量中的 `HTTP_PROXY` / `HTTPS_PROXY`，直接使用直连国内 MiniMax 等服务。同时会尝试读取本地 `models.json` 缓存，通过设置 `OPENCODE_DISABLE_MODELS_FETCH` 避开联网查询。
+- **本地二进制包缺失**：
+  - **故障特征**：Windows 环境下提示找不到 `opencode.exe`。
+  - **应对机制**：`resolveOpencodeCommand` 会依次检索本地 `opencode-windows-x64` 的 node_modules 路径和 npm 全局 Roaming 路径。若全局缺失，须确保使用工程内部锁定的版本。
+
+---
+
+## 14. 核心学堂：基准测试特定领域记忆
+
+### 14.1 `audit-point-learnbench` (单点意见生成训练)
+- **回测双轴验收指标**：
+  - 在盲测（Trained-test）时，Blank Agent 绝对不允许生成包含 `CORE.md` 的任何 skill 目录，仅允许在工作区生成唯一产物：`workspace/audit-point-output.md`。
+  - 软研判 validator 会严格将生成的意见与隐藏的专家标准进行多维度语义勾稽（`same_issue=true`, `specific_evidence=true`, `actionable=true`），任何一个假阳性都将导致用例不予通过。
+- **修剪与合并规则**：
+  - 合并脚本在 Phase 2 收集到 20 个训练实例全部成功（`verified_success`）后方可开启。
+  - 一旦启动训练集回测且失败，允许启动 `append-only-skill-patch` 修复流程。该修复程序使用 `validate-append-only-skill-patch.ts` 进行物理守门。若修复 Agent 试图删除 `CORE.md` 的既有行或修改历史配置，该次 Patch 将直接被判违规。
+
+### 14.2 `officeqa-pro-learnbench` (财务数据推理)
+- **校验边界**：
+  - 研报问答的核心逻辑必须是逻辑闭环，禁止硬编码答案。
+  - 战役 Lead 写入 `pending-expert-package/current` 时，验证器会进行 Forbidden 模式扫描：若检测到具体的研报数据（如 `20665.20` 或 `10.13`），直接判定不予通过。
+  - 它必须被强制提炼为泛化的检索规则（如：“定位到 Page X 表格，取得 A 项与 B 项执行加和计算”）。
+
+### 14.3 `spreadsheetbench-learnbench` (表格矩阵处理)
+- **校验边界**：
+  - 表格的校验依赖对整个矩阵数据的解析。
+  - 写入的 `workspace/answer.json` 必须严丝合缝地与隐藏的答案 Sheet 在特定 range（如 `A1:D10`）进行全量单元格值比对。一个单元格值有歧义或存在空值都将导致失败。
+
+### 14.14 核心代码导出脚本
+
+导出核心代码时不要去根目录 `script/` 里找旧脚本，当前真实脚本是：
+
+- `auto-evolve/scripts/export-core-code-to-desktop.py`
+
+运行方式：
+
+```powershell
+cd "C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve"
+python .\scripts\export-core-code-to-desktop.py
+```
+
+脚本会把核心代码导出到桌面，文件名类似：
+
+- `C:\Users\ZhuanZ\Desktop\auto-evolve-core-code-YYYYMMDD_HHMMSS.txt`
+
+### 14.15 ALFWorld 长程任务接入
+
+ALFWorld 已接成 auto-evolve 长程任务包：
+
+- 生成脚本：`auto-evolve/scripts/create-alfworld-experiment.ts`
+- 任务包：`auto-evolve/task-packs/real-long-tasks/alfworld-learnbench`
+- 验证器：`auto-evolve/scripts/validate-alfworld-plan.py`
+- 默认 split：`splits/train-selected.json` 20 条，`splits/test-selected.json` 10 条
+
+当前版本是“离线 walkthrough planning”：
+
+- 原始 `.tw-pddl` 里有 `walkthrough`，不能直接给 blank agent 当材料
+- 生成后的 `problem.json` 已去掉 walkthrough
+- 标准动作序列只在 `private-answers/<id>/answer.json`
+- blank agent 输出 `workspace/plan.json`
+- product validator 比较 `workspace/plan.json` 和私有 walkthrough
+
+重新生成：
+
+```powershell
+cd "C:\Users\ZhuanZ\Desktop\opencode re\opencode latest"
+bun run auto-evolve/scripts/create-alfworld-experiment.ts
+```
+
+外层 dry-run：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --task-pack-root auto-evolve/task-packs/real-long-tasks/alfworld-learnbench `
+  --train-split auto-evolve/task-packs/real-long-tasks/alfworld-learnbench/splits/train-selected.json `
+  --test-split auto-evolve/task-packs/real-long-tasks/alfworld-learnbench/splits/test-selected.json `
+  --concurrency 2 `
+  --stop-after training `
+  --dry-run
+```
+
+单任务/少量任务调试不需要手写临时 split 文件，统一脚本已支持：
+
+- `--task-id <id>`
+- `--task-ids <id1,id2,...>`
+- `--test-task-id <id>`
+- `--test-task-ids <id1,id2,...>`
+
+只跑一个长程任务且不合并时，推荐：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --task-pack-root auto-evolve/task-packs/real-long-tasks/alfworld-learnbench `
+  --task-id <任务ID> `
+  --concurrency 1 `
+  --mode campaign-only
+```
+
+### 14.16 runtimeRoot 默认位置
+
+2026-06-07 起，`auto-evolve/orchestrator/fs.ts` 不再默认优先使用 `D:\opencode-auto-evolve-runtime`。
+
+默认 runtimeRoot 是项目内：
+
+```text
+auto-evolve/.runtime
+```
+
+只有显式设置环境变量时才写外部盘：
+
+```powershell
+$env:AUTO_EVOLVE_RUNTIME_ROOT = "D:\opencode-auto-evolve-runtime"
+```
+
+后续排查空间占用时，不要再默认假设 auto-evolve 会自动导航到 D 盘；先看 `AUTO_EVOLVE_RUNTIME_ROOT` 是否存在。
+
+### 14.16 本机安装版 OpenCode 保护
+
+本机桌面安装版 OpenCode 默认位于：
+
+- `E:\OpenCode`
+
+auto-evolve 清理进程时必须遵守：
+
+- 只能清理项目自己登记、自己启动的子进程。
+- 不得杀 `E:\OpenCode\OpenCode.exe`。
+- 不得杀父进程链属于 `E:\OpenCode` 的 `opencode-cli.exe`、`opencode.exe` 或其子进程。
+- 新增清理脚本时，必须复用同类父进程链保护逻辑，不能只按进程名粗暴 `Stop-Process`。
+
+如果本机安装版 OpenCode 红点断联，但 `OpenCode.exe` 仍在、`localhost:4096` 没监听，应优先判断为桌面版本地 server / sidecar 掉线，而不是直接认定 auto-evolve 杀了主程序。
+
+如果安装目录变化，用环境变量覆盖保护根：
+
+```powershell
+$env:AUTO_EVOLVE_PROTECTED_OPENCODE_ROOTS = "E:\OpenCode;D:\OtherOpenCode"
+```

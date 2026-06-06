@@ -260,6 +260,10 @@ function isLiveRunStatus(status: LongTaskProgressState["status"]) {
   return status === "planning" || status === "bootstrapping" || status === "running" || status === "waiting_for_retry"
 }
 
+function hasLegacyCampaignRecoveryAction(state: LongTaskCampaignState) {
+  return (state as { recovery?: { action?: unknown } }).recovery?.action === "resume_round_postrun"
+}
+
 function parseTimestampMs(value: unknown) {
   if (typeof value !== "string" || value.trim().length === 0) return undefined
   const parsed = Date.parse(value)
@@ -303,6 +307,33 @@ async function healStaleRuntimeStates(cwd: string) {
       try {
         state = await readJsonFile<LongTaskCampaignState>(campaignStatePath)
       } catch {
+        continue
+      }
+      if (state.status === "recovery_pending" && hasLegacyCampaignRecoveryAction(state)) {
+        const history = await readJsonLinesIfExists<LongTaskCampaignRoundRecord>(campaignPaths.historyPath)
+        const recovery =
+          (await determineCampaignRecoveryDecision({
+            cwd,
+            campaignPaths,
+            state,
+            history,
+          })) ??
+          ({
+            action: "restart_round",
+            roundNumber: Math.max(1, state.currentRound || 1),
+            reason:
+              "Campaign had a legacy resume_round_postrun recovery marker, but no safe source run could be recovered; restart the current round from the latest safe checkpoint.",
+            detectedAt: now,
+          } satisfies LongTaskCampaignRecoveryDecision)
+        await retryWriteJson(campaignStatePath, {
+          ...state,
+          ownerPID: undefined,
+          ownerCommandHint: undefined,
+          heartbeatAt: undefined,
+          updatedAt: now,
+          lastSummary: `Normalized legacy recovery marker: ${recovery.reason}`,
+          recovery,
+        } satisfies LongTaskCampaignState)
         continue
       }
       if (!isLiveCampaignStatus(state.status)) continue
@@ -567,7 +598,17 @@ async function findLatestLongTaskRunForCampaignRound(input: {
   return candidates[0]
 }
 
-async function determineCampaignRecoveryDecision(input: {
+async function readLongTaskRunProgressByID(input: { cwd: string; runID: string }) {
+  const progressPath = autoEvolvePath(input.cwd, "runtime-state", "long-task", "runs", input.runID, "progress_state.json")
+  if (!(await pathExists(progressPath))) return undefined
+  try {
+    return await readJsonFile<LongTaskProgressState>(progressPath)
+  } catch {
+    return undefined
+  }
+}
+
+export async function determineCampaignRecoveryDecision(input: {
   cwd: string
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   state: LongTaskCampaignState
@@ -579,11 +620,26 @@ async function determineCampaignRecoveryDecision(input: {
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
 
   if (latestRoundRecord && !latestRoundRecord.finalAcceptanceSignal) {
+    const progress = await readLongTaskRunProgressByID({
+      cwd: input.cwd,
+      runID: latestRoundRecord.sourceRunID,
+    })
+    if (!progress) {
+      return {
+        action: "restart_round",
+        roundNumber: activeRound,
+        reason: `Round ${roundID(activeRound)} has an incomplete post-run record, but its source run ${latestRoundRecord.sourceRunID} is no longer readable; restart the round from the latest safe checkpoint.`,
+        detectedAt: nowISO(),
+      } satisfies LongTaskCampaignRecoveryDecision
+    }
+    const terminal = isTerminalLongTaskStatus(progress.status)
     return {
-      action: "resume_round_postrun",
+      action: terminal ? "harvest_round_run" : "resume_round_run",
       roundNumber: activeRound,
       runID: latestRoundRecord.sourceRunID,
-      reason: `Round ${roundID(activeRound)} already produced run artifacts, but lead/reviewer/final acceptance did not finish cleanly.`,
+      reason: terminal
+        ? `Round ${roundID(activeRound)} produced run artifacts but missed final acceptance bookkeeping; resume from the harvested round boundary.`
+        : `Round ${roundID(activeRound)} produced a partial round record while the inner run was still ${progress.status}; resume that inner long-task run directly.`,
       detectedAt: nowISO(),
     } satisfies LongTaskCampaignRecoveryDecision
   }
@@ -4894,6 +4950,17 @@ export async function resumeLongTaskCampaign(input: {
     state: existingState,
     history,
   })
+  if (recoveryPlan && hasLegacyCampaignRecoveryAction(existingState)) {
+    await writeLongTaskCampaignState(campaignPaths, {
+      ...existingState,
+      ownerPID: undefined,
+      ownerCommandHint: undefined,
+      heartbeatAt: undefined,
+      updatedAt: nowISO(),
+      lastSummary: `Normalized legacy recovery marker: ${recoveryPlan.reason}`,
+      recovery: recoveryPlan,
+    })
+  }
   const completedRound = history.reduce((max, item) => Math.max(max, item.roundNumber), 0)
   const startRound = recoveryPlan
     ? recoveryPlan.roundNumber
@@ -5018,11 +5085,6 @@ export async function resumeLongTaskCampaign(input: {
                   cwd: input.cwd,
                   runID: activeRecoveryPlan.runID,
                 })
-              : activeRecoveryPlan?.action === "resume_round_postrun" && activeRecoveryPlan.runID
-                ? await rehydrateExistingLongTaskRunResult({
-                    cwd: input.cwd,
-                    runID: activeRecoveryPlan.runID,
-                  })
                 : await runLongTask({
                     cwd: input.cwd,
                     specPath: roundPaths.generatedSpecPath,

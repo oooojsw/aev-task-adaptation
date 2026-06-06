@@ -20,7 +20,6 @@ export type LongTaskCampaignRecoveryAction =
   | "restart_round"
   | "resume_round_run"
   | "harvest_round_run"
-  | "resume_round_postrun"
 
 export interface LongTaskCampaignRecoveryDecision {
   action: LongTaskCampaignRecoveryAction

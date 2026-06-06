@@ -16,6 +16,8 @@ type CampaignRow = {
   cdir: string
   pending: string
   updated: string
+  heartbeatAt: string
+  ownerPID?: number
 }
 
 type TrainQueueResult = {
@@ -39,6 +41,8 @@ type BenchmarkConfig = {
   taskPackRoot: string
   trainSplit: string
   testSplit?: string
+  taskIDs?: string[]
+  testTaskIDs?: string[]
   outDir: string
   concurrency: number
   mode: OrchestratorMode
@@ -155,8 +159,60 @@ function score(row: CampaignRow) {
   return Date.parse(row.updated || "") || 0
 }
 
+const staleBootstrapGraceMs = (() => {
+  const value = Number.parseInt(process.env.AUTO_EVOLVE_STALE_BOOTSTRAP_GRACE_MS ?? "", 10)
+  if (Number.isFinite(value) && value > 0) return value
+  return 60 * 60 * 1000
+})()
+
+const staleOwnerTimeoutMs = (() => {
+  const value = Number.parseInt(process.env.AUTO_EVOLVE_STALE_OWNER_TIMEOUT_MS ?? "", 10)
+  if (Number.isFinite(value) && value > 0) return value
+  return 2 * 60 * 60 * 1000
+})()
+
+function parseTimestampMs(value: unknown) {
+  if (typeof value !== "string" || value.trim().length === 0) return undefined
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function isPidAlive(pid: number) {
+  if (!Number.isFinite(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isFreshEnough(row: CampaignRow) {
+  const referenceMs = parseTimestampMs(row.heartbeatAt) ?? parseTimestampMs(row.updated)
+  if (typeof referenceMs !== "number") return false
+  const ageMs = Date.now() - referenceMs
+  const threshold = row.status === "bootstrapping" ? staleBootstrapGraceMs : staleOwnerTimeoutMs
+  return ageMs <= threshold
+}
+
+function shouldResumeCampaign(row: CampaignRow) {
+  if (row.status === "recovery_pending") return true
+  if (row.status !== "running" && row.status !== "bootstrapping") return false
+  if (typeof row.ownerPID === "number" && isPidAlive(row.ownerPID)) return true
+  return isFreshEnough(row)
+}
+
 async function readIDs(file: string) {
   return JSON.parse(await readFile(file, "utf8")) as string[]
+}
+
+function parseIDList(value: string | undefined) {
+  if (!value) return undefined
+  const ids = value
+    .split(/[,\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  return ids.length > 0 ? ids : undefined
 }
 
 async function writeJson(file: string, value: unknown) {
@@ -201,6 +257,8 @@ async function campaigns(taskPackRoot: string, ids: string[]) {
       cdir,
       pending,
       updated: String(row.updatedAt ?? row.createdAt ?? ""),
+      heartbeatAt: String(row.heartbeatAt ?? ""),
+      ownerPID: typeof row.ownerPID === "number" ? row.ownerPID : undefined,
     }
     got.set(hit, [...(got.get(hit) ?? []), rec])
   }
@@ -229,7 +287,7 @@ async function planTrain(config: BenchmarkConfig, ids: string[]) {
   for (const id of ids) {
     if (ok.has(id)) continue
     const latest = map.get(id)?.[0]
-    const live = config.resumeRunning && latest && ["running", "bootstrapping", "recovery_pending"].includes(latest.status)
+    const live = config.resumeRunning && latest && shouldResumeCampaign(latest)
     todo.push({
       id,
       spec: campaignSpecPath(config.taskPackRoot, id),
@@ -550,8 +608,8 @@ function shouldStopAfter(config: BenchmarkConfig, phase: NonNullable<BenchmarkCo
 }
 
 export async function runTaskPackBenchmark(config: BenchmarkConfig) {
-  const trainIDsAll = await readIDs(config.trainSplit)
-  const testIDsAll = config.testSplit && existsSync(config.testSplit) ? await readIDs(config.testSplit) : []
+  const trainIDsAll = config.taskIDs ?? (await readIDs(config.trainSplit))
+  const testIDsAll = config.testTaskIDs ?? (config.testSplit && existsSync(config.testSplit) ? await readIDs(config.testSplit) : [])
   const trainIDs = config.trainLimit ? trainIDsAll.slice(0, config.trainLimit) : trainIDsAll
   const testIDs = config.testLimit ? testIDsAll.slice(0, config.testLimit) : testIDsAll
 
@@ -814,6 +872,8 @@ function parseConfig(args: string[]): BenchmarkConfig {
   const trainSplit = resolveMaybeRelative(getOption(args, "--train-split"), path.join(taskPackRoot, "splits", "train-selected.json"))
   if (!trainSplit) throw new Error("Missing train split path.")
   const testSplit = resolveMaybeRelative(getOption(args, "--test-split"))
+  const taskIDs = parseIDList(getOption(args, "--task-ids")) ?? parseIDList(getOption(args, "--task-id"))
+  const testTaskIDs = parseIDList(getOption(args, "--test-task-ids")) ?? parseIDList(getOption(args, "--test-task-id"))
   const label = getOption(args, "--label")?.trim() || defaultLabel(taskPackRoot)
   const outDir =
     resolveMaybeRelative(getOption(args, "--out")) ??
@@ -840,9 +900,9 @@ function parseConfig(args: string[]): BenchmarkConfig {
   const trainLimitRaw = getOption(args, "--train-limit")
   const testLimitRaw = getOption(args, "--test-limit")
   const runMerge = !hasFlag(args, "--skip-merge") && modeOpt !== "campaign-only"
-  const runTrainReplay = !hasFlag(args, "--skip-train-replay")
-  const runTest = !hasFlag(args, "--skip-test")
-  let runBaseline = !hasFlag(args, "--skip-baseline")
+  const runTrainReplay = !hasFlag(args, "--skip-train-replay") && modeOpt !== "campaign-only"
+  const runTest = !hasFlag(args, "--skip-test") && modeOpt !== "campaign-only"
+  let runBaseline = !hasFlag(args, "--skip-baseline") && modeOpt !== "campaign-only"
   if (stopAfter && stopAfter !== "baseline") runBaseline = false
   if (stopAfter === "training") {
     return {
@@ -850,6 +910,8 @@ function parseConfig(args: string[]): BenchmarkConfig {
       taskPackRoot,
       trainSplit,
       testSplit,
+      taskIDs,
+      testTaskIDs,
       outDir,
       concurrency,
       mode: modeOpt,
@@ -873,6 +935,8 @@ function parseConfig(args: string[]): BenchmarkConfig {
       taskPackRoot,
       trainSplit,
       testSplit,
+      taskIDs,
+      testTaskIDs,
       outDir,
       concurrency,
       mode: modeOpt,
@@ -896,6 +960,8 @@ function parseConfig(args: string[]): BenchmarkConfig {
       taskPackRoot,
       trainSplit,
       testSplit,
+      taskIDs,
+      testTaskIDs,
       outDir,
       concurrency,
       mode: modeOpt,
@@ -921,6 +987,8 @@ function parseConfig(args: string[]): BenchmarkConfig {
     taskPackRoot,
     trainSplit,
     testSplit,
+    taskIDs,
+    testTaskIDs,
     outDir,
     concurrency,
     mode: modeOpt,

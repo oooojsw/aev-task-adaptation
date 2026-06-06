@@ -199,6 +199,17 @@ $$\text{SOP 质量} \propto \frac{1}{\text{作弊空间 (Surface Gate)}} \times 
 - `--skip-test`
 - `--skip-baseline`
 
+单任务/少量任务调试可以不写临时 split 文件，直接覆盖训练 ID：
+
+- `--task-id <id>`：只跑一个训练任务
+- `--task-ids <id1,id2,...>`：只跑指定几个训练任务
+- `--test-task-id <id>` / `--test-task-ids <id1,id2,...>`：只跑指定测试任务
+
+如果只是调试单个长程任务，推荐搭配：
+
+- `--concurrency 1`
+- `--mode campaign-only` 或 `--stop-after training`
+
 ### 6.3 典型用法
 
 OfficeQA 训练后直接停：
@@ -223,8 +234,131 @@ bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
   --stop-after train-replay
 ```
 
+单个 ALFWorld 任务，只跑 campaign、不合并：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --task-pack-root auto-evolve/task-packs/real-long-tasks/alfworld-learnbench `
+  --task-id train-pick-two-obj-and-place-spraybottle-none-toilet-402-trial-t20190911-213113-817208 `
+  --concurrency 1 `
+  --mode campaign-only
+```
+
 ### 6.4 与旧脚本的关系
 
 旧入口 `auto-evolve/scripts/run-officeqa-pro-benchmark.ts` 现在只是这个通用脚本的薄包装，保留旧入口是为了兼容你之前已经在用的命令和环境变量。
 
 如果以后新接一个同结构的数据集，优先直接接这个通用 orchestrator，而不是再复制一份 OfficeQA/SpreadsheetBench 风格的专用批跑脚本。
+
+---
+
+## 第七部分：Campaign Recovery 规则
+
+`recovery_pending` 不是终点。恢复时只能使用三种动作：
+
+- `restart_round`：源 run 已经不可读，重启当前 round。
+- `resume_round_run`：源 run 仍在运行态，继续 inner long-task。
+- `harvest_round_run`：源 run 已经到达终态，把已有 run 重新收割，然后继续 lead / reviewer / final acceptance / 下一轮逻辑。
+
+历史上曾出现过 `resume_round_postrun`，它会把 `stagnation_failure` 这类终态 run 误当成“只补 final acceptance”的半成品，导致同一轮反复验收、无法推进下一轮。该动作已经废弃；以后不要重新引入。
+
+特别注意：如果 round record 缺少 `finalAcceptanceSignal`，必须先读取对应 inner run 的 `progress_state.json`。如果 inner run 是 `stagnation_failure`、`blocked_failure`、`verified_success`、`exhausted_failure` 等终态，应走 `harvest_round_run`，让 campaign 完成收割、诊断、lead 修 skill、blank-agent 验收，并在失败时自然进入下一轮。
+
+2026-06-07 加固：
+
+- `healStaleRuntimeStates(...)` 会主动清洗历史残留的 `recovery.action = resume_round_postrun`，重算为当前合法动作并写回 `campaign.json`。
+- `resumeLongTaskCampaign(...)` 直接恢复旧目录时，也会在真正进入 round 前把旧 recovery 标记改写为当前合法动作。
+- 通用 benchmark orchestrator 不再只相信 `campaign.json` 里写着 `running`。它会同时看 owner PID 是否还活、heartbeat 是否新鲜；没有真实进程且心跳过期的旧 running 不再当作可直接续跑对象。
+- 修改这块后至少跑 `bun run auto-evolve/scripts/smoke-campaign-recovery-decision.ts`。这个烟测包含旧 `resume_round_postrun` 脏状态复现，必须输出 `harvest_round_run`。
+
+---
+
+## 第八部分：ALFWorld 长程任务接入
+
+2026-06-07 已新增 ALFWorld 长程任务包：
+
+- 生成脚本：`auto-evolve/scripts/create-alfworld-experiment.ts`
+- 产物任务包：`auto-evolve/task-packs/real-long-tasks/alfworld-learnbench`
+- Product validator：`auto-evolve/scripts/validate-alfworld-plan.py`
+- 默认规模：`20` 个 train，`10` 个 eval_in_distribution test
+
+当前第一版是“离线 walkthrough planning”接入：
+
+- 原始数据来自 `C:\Users\ZhuanZ\Desktop\experiment\datasets\ALFWorld`
+- 每个 `.tw-pddl` 原始文件包含 `walkthrough` 标准动作序列
+- 生成任务时，`tasks/<id>/problem.json` 只保留 task、PDDL domain/problem、solvable 等可见信息
+- `walkthrough` 只写入 `private-answers/<id>/answer.json`
+- 空白 agent 需要写 `workspace/plan.json`
+- `validate-alfworld-plan.py` 比较 `workspace/plan.json` 和私有 walkthrough
+
+安全边界：
+
+- 不要把原始 `.tw-pddl` 直接作为材料挂给空白 agent，因为里面带 `walkthrough`
+- `private-answers` 只允许 product validator 读取
+- 这个版本证明的是多步动作规划和经验泛化，不是完整 simulator 在线交互；后续如果需要在线环境交互，再增加环境 wrapper
+
+典型 dry-run：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --task-pack-root auto-evolve/task-packs/real-long-tasks/alfworld-learnbench `
+  --train-split auto-evolve/task-packs/real-long-tasks/alfworld-learnbench/splits/train-selected.json `
+  --test-split auto-evolve/task-packs/real-long-tasks/alfworld-learnbench/splits/test-selected.json `
+  --concurrency 2 `
+  --stop-after training `
+  --dry-run
+```
+
+---
+
+## 第九部分：Runtime Root 默认位置
+
+2026-06-07 起，OpenCode 临时会话运行根目录不再默认优先写入 D 盘。
+
+默认位置：
+
+```text
+auto-evolve/.runtime
+```
+
+仍然保留环境变量覆盖：
+
+```powershell
+$env:AUTO_EVOLVE_RUNTIME_ROOT = "D:\opencode-auto-evolve-runtime"
+```
+
+也就是说，默认回到项目内本地运行；只有显式设置 `AUTO_EVOLVE_RUNTIME_ROOT` 时，才会把临时运行缓存放到外部盘。
+
+---
+
+## 第九部分：核心代码导出规则
+
+2026-06-07 加固：
+
+- 当前核心代码导出脚本是 `auto-evolve/scripts/export-core-code-to-desktop.py`。
+- 导出产物会生成到桌面，文件名形如 `auto-evolve-core-code-YYYYMMDD_HHMMSS.txt`。
+- 导出范围必须包含 `README.md` 和 `AGENTS.md`。这两个文件不是普通文档，而是接手 AI 理解系统目标、运行红线、恢复规则和长期维护约定的入口。
+- 如果以后调整导出范围，不要只导出 `.ts/.py` 代码；必须保留这些架构和接手说明，否则迁移包会变成“有发动机但没有驾驶手册”。
+
+---
+
+## 第十部分：本机安装版 OpenCode 保护规则
+
+2026-06-07 加固：
+
+- 本机安装版 OpenCode 位于 `E:\OpenCode`，主进程通常是 `OpenCode.exe`，本地服务 sidecar 可能是 `opencode-cli.exe`。
+- auto-evolve 项目运行时使用的是项目内 CLI，例如 `packages/opencode/node_modules/opencode-windows-x64/bin/opencode.exe`，它和本机桌面安装版不是同一个进程族。
+- 进程清理只允许清理 auto-evolve 自己登记、自己启动的子进程。即使 PID 被错误写入 `.runtime/active-processes.json`，只要该 PID 或它的父进程链属于 `E:\OpenCode`，也必须跳过，不得 `taskkill`。
+- 底层保护位于 `auto-evolve/orchestrator/runtime-process-registry.ts`：
+  - `isProtectedDesktopOpenCodeProcess(...)` 会沿 Windows 父进程链检查 `E:\OpenCode`。
+  - `terminateProcessTree(...)` 在真正 `taskkill /T /F` 前会先调用保护判断。
+  - `cleanupRuntimeProcessScope(...)` 遇到受保护桌面版进程时只跳过并清掉错误登记，不保留为反复清理目标。
+- try4 清理和核查脚本也带同样保护：
+  - `auto-evolve/scripts/init-try4-clean-state.ps1`
+  - `auto-evolve/scripts/verify-try4-clean-state.ps1`
+- 如果本机安装目录以后不再是 `E:\OpenCode`，可以用环境变量 `AUTO_EVOLVE_PROTECTED_OPENCODE_ROOTS` 覆盖，多个目录用分号分隔。
+
+判断桌面版断联时要分清两类现象：
+
+- `OpenCode.exe` 还在，但 `localhost:4096` 没监听：通常是桌面版本地 server / sidecar 掉了，不等于主程序被 auto-evolve 杀掉。
+- 项目内 `opencode.exe` 子任务被清理：这是 auto-evolve 正常清理自己的运行子进程，不应影响 `E:\OpenCode` 桌面版。

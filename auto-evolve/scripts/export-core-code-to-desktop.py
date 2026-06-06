@@ -9,8 +9,10 @@ OUT = os.path.join(DESKTOP, f"auto-evolve-core-code-{STAMP}.txt")
 
 # Core code scope for this project.
 INCLUDE_FILES = {
+    "AGENTS.md",
     "cli.ts",
     "monitor-server.ts",
+    "README.md",
 }
 
 INCLUDE_DIRS = {
