@@ -362,3 +362,62 @@ $env:AUTO_EVOLVE_RUNTIME_ROOT = "D:\opencode-auto-evolve-runtime"
 
 - `OpenCode.exe` 还在，但 `localhost:4096` 没监听：通常是桌面版本地 server / sidecar 掉了，不等于主程序被 auto-evolve 杀掉。
 - 项目内 `opencode.exe` 子任务被清理：这是 auto-evolve 正常清理自己的运行子进程，不应影响 `E:\OpenCode` 桌面版。
+
+---
+
+## 第十一部分：统一运行看板与长任务预算
+
+2026-06-07 加固：
+
+以前排查长程任务需要同时翻 `scorecard.md`、`campaign.json`、`progress_state.json`、进程表和手动恢复日志。现在新增统一运行看板：
+
+```text
+auto-evolve/runtime-state/run-dashboard/active-runs.md
+auto-evolve/runtime-state/run-dashboard/active-runs.json
+```
+
+刷新命令：
+
+```powershell
+bun run auto-evolve/scripts/update-run-dashboard.ts
+```
+
+通用批跑脚本 `auto-evolve/scripts/run-benchmark-orchestrator.ts` 每次写外层状态时也会自动刷新这份看板。
+
+看板含义：
+
+- `healthy_running`：owner 进程存在，任务正常运行。
+- `long_running`：运行时间较长，但未证明卡死，只观察。
+- `stale_running`：状态文件写着 running，但 owner PID 不存在，应恢复。
+- `stuck_running`：owner PID 存在，但心跳和产物长时间不动，应恢复或终止后恢复。
+- `recovery_pending`：已经进入恢复状态，外层应调用 `resume-long-task-campaign`。
+- `completed`：终态任务。
+
+通用批跑脚本现在会在训练队列中周期性执行 watchdog：
+
+- 补位前扫描 active campaign 健康状态。
+- 发现 `stale_running`、`stuck_running` 或 `recovery_pending` 时，把该任务重新放入恢复队列。
+- 恢复方式仍然是磁盘断点续传：新进程读取 `campaign.json`、round history、long-task progress 和已有产物继续，不恢复旧 OpenCode 对话 session。
+
+OpenCode 子 session 运行预算也改成 profile：
+
+```text
+short:  soft 30m,  hard 60m
+medium: soft 90m,  hard 120m
+long:   soft 120m, hard 180m
+unbounded-with-watchdog: soft 120m, hard 720m
+```
+
+默认 profile 是 `long`，适合 OfficeQA / SpreadsheetBench / DocVQA 这类真实长程任务。可以用环境变量覆盖：
+
+```powershell
+$env:AUTO_EVOLVE_OPENCODE_RUNTIME_PROFILE = "medium"
+$env:AUTO_EVOLVE_OPENCODE_SOFT_DEADLINE_MS = "7200000"
+$env:AUTO_EVOLVE_OPENCODE_HARD_TIMEOUT_MS = "10800000"
+```
+
+注意：
+
+- soft deadline 不是运行中给 agent 追加消息，而是在 session 启动 prompt 中预置自我收敛规则。
+- hard timeout 是系统层进程超时，超过后会终止进程树并把失败写回运行产物。
+- 接手正在跑的任务时，先看 `active-runs.md`，不要只看前端或旧 `scorecard.md`。

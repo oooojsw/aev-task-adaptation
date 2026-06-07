@@ -1,12 +1,14 @@
 import path from "node:path"
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
+import { setTimeout as sleep } from "node:timers/promises"
 import { createCoordinatorRun } from "../orchestrator/multi-instance/coordinator"
 import { runCoordinatorPhase2Merge } from "../orchestrator/multi-instance/merger"
 import { runCoordinatorPhase3Validate } from "../orchestrator/multi-instance/validator"
 import { saveCoordinatorState } from "../orchestrator/multi-instance/repository"
 import { runBlankEval } from "../orchestrator/blank-eval/runner"
 import { pathExists } from "../orchestrator/fs"
+import { readCampaignHealth, writeRunDashboard } from "../orchestrator/run-health"
 
 type OrchestratorMode = "campaign-only" | "full-pipeline"
 
@@ -127,6 +129,12 @@ type BenchmarkState = {
 const repoRoot = path.resolve(import.meta.dir, "..", "..")
 const autoRoot = path.join(repoRoot, "auto-evolve")
 const runtimeCampaignRoot = path.join(autoRoot, "runtime-state", "long-task-campaigns")
+const dashboardRoot = path.join(autoRoot, "runtime-state", "run-dashboard")
+const TRAIN_WATCHDOG_INTERVAL_MS = (() => {
+  const value = Number.parseInt(process.env.AUTO_EVOLVE_TRAIN_WATCHDOG_INTERVAL_MS ?? "", 10)
+  if (Number.isFinite(value) && value > 0) return value
+  return 5 * 60 * 1000
+})()
 
 function stamp() {
   const d = new Date()
@@ -363,6 +371,14 @@ async function persistState(stateFile: string, scorecardFile: string, state: Ben
   state.updatedAt = nowISO()
   await writeJson(stateFile, state)
   await writeScorecard(scorecardFile, state)
+  await writeRunDashboard({
+    campaignRoot: runtimeCampaignRoot,
+    dashboardRoot,
+    label: state.config.label,
+    phase: state.phase,
+    trainVerified: state.trainResults.filter((item) => item.status === "verified_success").length,
+    trainTotal: state.trainResults.length,
+  })
 }
 
 async function runOneCampaign(config: BenchmarkConfig, pick: { id: string; spec: string; campaign?: string }) {
@@ -415,6 +431,7 @@ async function queueTrain(
   const recoveries = new Map<string, number>()
   let next = 0
   const active = new Set<Promise<void>>()
+  const activeIDs = new Set<string>()
 
   const mark = async (id: string, patch: Partial<BenchmarkState["trainResults"][number]>) => {
     const row = state.trainResults.find((item) => item.id === id)
@@ -424,6 +441,7 @@ async function queueTrain(
   }
 
   async function start(pick: { id: string; spec: string; campaign?: string }) {
+    activeIDs.add(pick.id)
     await mark(pick.id, { status: "running" })
     const task = runOneCampaign(config, pick)
       .then(async (row) => {
@@ -440,17 +458,55 @@ async function queueTrain(
           campaign: path.basename(row.campaignDir),
         })
       })
-      .finally(() => active.delete(task))
+      .finally(() => {
+        active.delete(task)
+        activeIDs.delete(pick.id)
+      })
     active.add(task)
   }
 
+  const queuedRecoveryKeys = new Set<string>()
+  async function enqueueRecoveriesFromHealth() {
+    const map = await campaigns(config.taskPackRoot, state.trainIDs)
+    for (const id of state.trainIDs) {
+      const rowState = state.trainResults.find((item) => item.id === id)
+      if (!rowState || rowState.status === "verified_success") continue
+      const latest = map.get(id)?.[0]
+      if (!latest) continue
+      if (latest.status === "verified_success" && (await pathExists(latest.pending))) {
+        await mark(id, { status: "verified_success", campaignDir: latest.cdir })
+        continue
+      }
+      const health = await readCampaignHealth(latest.cdir)
+      if (!health || health.suggestedAction !== "resume") continue
+      if (activeIDs.has(id) && health.health !== "stale_running" && health.health !== "stuck_running") continue
+      const attempts = recoveries.get(id) ?? 0
+      if (attempts >= 3) continue
+      const key = `${id}:${path.basename(latest.cdir)}:${health.health}:${health.updatedAt ?? ""}`
+      if (queuedRecoveryKeys.has(key)) continue
+      queuedRecoveryKeys.add(key)
+      recoveries.set(id, attempts + 1)
+      todo.push({
+        id,
+        spec: campaignSpecPath(config.taskPackRoot, id),
+        campaign: path.basename(latest.cdir),
+      })
+      await mark(id, {
+        status: latest.status === "recovery_pending" ? "recovery_pending" : "running",
+        campaignDir: latest.cdir,
+      })
+    }
+  }
+
   while (next < todo.length || active.size > 0) {
+    await enqueueRecoveriesFromHealth()
     while (next < todo.length && active.size < config.concurrency) {
       await start(todo[next]!)
       next += 1
     }
-    if (active.size > 0) await Promise.race(active)
+    if (active.size > 0) await Promise.race([Promise.race(active), sleep(TRAIN_WATCHDOG_INTERVAL_MS)])
     await writeJson(path.join(config.outDir, "train-queue-results.json"), rows)
+    await persistState(stateFile, scorecardFile, state)
   }
   return rows
 }

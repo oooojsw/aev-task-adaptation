@@ -26,20 +26,71 @@ import {
 } from "./task-artifacts"
 import { createTaskDescriptor } from "./task-model"
 
-const OPENCODE_TASK_TIMEOUT_MS = 60 * 60 * 1000
-const OPENCODE_PROMPT_SOFT_BUDGET_MS = 30 * 60 * 1000
-const OPENCODE_TASK_SILENT_TIMEOUT_MS = (() => {
-  const value = Number.parseInt(process.env.AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_MS ?? "", 10)
-  if (Number.isFinite(value) && value > 0) return value
-  return 15 * 60 * 1000
-})()
-const OPENCODE_TASK_SILENT_TIMEOUT_AFTER_ACTIVITY_MS = (() => {
-  const value = Number.parseInt(process.env.AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_AFTER_ACTIVITY_MS ?? "", 10)
-  if (Number.isFinite(value) && value > 0) return value
-  // Once runtime output has started, prefer hard-timeout guard and avoid
-  // prematurely terminating long silent compute windows.
-  return Math.min(OPENCODE_TASK_TIMEOUT_MS, Math.max(OPENCODE_TASK_SILENT_TIMEOUT_MS, 60 * 60 * 1000))
-})()
+export type OpencodeRuntimeBudgetProfile = "short" | "medium" | "long" | "unbounded-with-watchdog"
+
+export type OpencodeRuntimeBudget = {
+  profile?: OpencodeRuntimeBudgetProfile
+  softDeadlineMs?: number
+  hardTimeoutMs?: number
+  silentTimeoutMs?: number
+  silentTimeoutAfterActivityMs?: number
+}
+
+const RUNTIME_BUDGET_PROFILES: Record<OpencodeRuntimeBudgetProfile, Required<OpencodeRuntimeBudget>> = {
+  short: {
+    profile: "short",
+    softDeadlineMs: 30 * 60 * 1000,
+    hardTimeoutMs: 60 * 60 * 1000,
+    silentTimeoutMs: 15 * 60 * 1000,
+    silentTimeoutAfterActivityMs: 60 * 60 * 1000,
+  },
+  medium: {
+    profile: "medium",
+    softDeadlineMs: 90 * 60 * 1000,
+    hardTimeoutMs: 2 * 60 * 60 * 1000,
+    silentTimeoutMs: 20 * 60 * 1000,
+    silentTimeoutAfterActivityMs: 75 * 60 * 1000,
+  },
+  long: {
+    profile: "long",
+    softDeadlineMs: 2 * 60 * 60 * 1000,
+    hardTimeoutMs: 3 * 60 * 60 * 1000,
+    silentTimeoutMs: 30 * 60 * 1000,
+    silentTimeoutAfterActivityMs: 90 * 60 * 1000,
+  },
+  "unbounded-with-watchdog": {
+    profile: "unbounded-with-watchdog",
+    softDeadlineMs: 2 * 60 * 60 * 1000,
+    hardTimeoutMs: 12 * 60 * 60 * 1000,
+    silentTimeoutMs: 30 * 60 * 1000,
+    silentTimeoutAfterActivityMs: 2 * 60 * 60 * 1000,
+  },
+}
+
+function numberEnv(name: string, fallback: number) {
+  const value = Number.parseInt(process.env[name] ?? "", 10)
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function defaultRuntimeBudgetProfile(): OpencodeRuntimeBudgetProfile {
+  const raw = process.env.AUTO_EVOLVE_OPENCODE_RUNTIME_PROFILE
+  if (raw === "short" || raw === "medium" || raw === "long" || raw === "unbounded-with-watchdog") return raw
+  return "long"
+}
+
+function resolveRuntimeBudget(input?: OpencodeRuntimeBudget): Required<OpencodeRuntimeBudget> {
+  const profile = input?.profile ?? defaultRuntimeBudgetProfile()
+  const base = RUNTIME_BUDGET_PROFILES[profile]
+  return {
+    profile,
+    softDeadlineMs: input?.softDeadlineMs ?? numberEnv("AUTO_EVOLVE_OPENCODE_SOFT_DEADLINE_MS", base.softDeadlineMs),
+    hardTimeoutMs: input?.hardTimeoutMs ?? numberEnv("AUTO_EVOLVE_OPENCODE_HARD_TIMEOUT_MS", base.hardTimeoutMs),
+    silentTimeoutMs: input?.silentTimeoutMs ?? numberEnv("AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_MS", base.silentTimeoutMs),
+    silentTimeoutAfterActivityMs:
+      input?.silentTimeoutAfterActivityMs ??
+      numberEnv("AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_AFTER_ACTIVITY_MS", base.silentTimeoutAfterActivityMs),
+  }
+}
 const OPENCODE_PROMPT_INLINE_TEXT_FILE_MAX_BYTES = 256 * 1024
 const OPENCODE_PROMPT_INLINE_TEXT_EXTENSIONS = new Set([".md", ".txt", ".json", ".jsonl", ".yaml", ".yml"])
 
@@ -89,6 +140,7 @@ export interface OpencodeTaskInput {
   model?: string
   agent?: string
   variant?: string
+  runtimeBudget?: OpencodeRuntimeBudget
   runtimeScope?: string
   concurrencyScope?: string
   injectPlatformSafetyRules?: boolean
@@ -615,25 +667,31 @@ function formatLocalTimestamp(input: Date) {
   })
 }
 
-function buildRuntimeBudgetPromptPrefix(input: { runStart: Date }) {
-  const softDeadline = new Date(input.runStart.getTime() + OPENCODE_PROMPT_SOFT_BUDGET_MS)
+function minutes(ms: number) {
+  return Math.max(1, Math.round(ms / 60_000))
+}
+
+function buildRuntimeBudgetPromptPrefix(input: { runStart: Date; budget: Required<OpencodeRuntimeBudget> }) {
+  const softMinutes = minutes(input.budget.softDeadlineMs)
+  const softDeadline = new Date(input.runStart.getTime() + input.budget.softDeadlineMs)
   return [
     "[Runtime Budget Contract | Mandatory]",
     "You must treat this as a hard working contract for the current session.",
     "",
     "Runtime budget for this session:",
-    "- Soft convergence deadline: 30 minutes from run start (mandatory target).",
+    `- Runtime profile: ${input.budget.profile}.`,
+    `- Soft convergence deadline: ${softMinutes} minutes from run start (mandatory target).`,
     `- Run start (local): ${formatLocalTimestamp(input.runStart)}`,
     `- Run start (ISO): ${input.runStart.toISOString()}`,
-    `- 30-minute soft deadline (local): ${formatLocalTimestamp(softDeadline)}`,
-    `- 30-minute soft deadline (ISO): ${softDeadline.toISOString()}`,
+    `- Soft deadline (local): ${formatLocalTimestamp(softDeadline)}`,
+    `- Soft deadline (ISO): ${softDeadline.toISOString()}`,
     "",
     "Mandatory execution policy:",
     "1. Maintain a tool_call_count counter starting from your first tool call.",
     "2. At every 25th tool call (25/50/75/...), run an immediate time checkpoint.",
     "3. Preferred checkpoint command: `Get-Date -Format o`.",
     '4. Fallback checkpoint command: `python -c \"from datetime import datetime; print(datetime.now().astimezone().isoformat())\"`.',
-    "5. If remaining time to the 30-minute soft deadline is <= 8 minutes: do not open new branches; converge only on this session's required deliverable.",
+    "5. If remaining time to the soft deadline is <= 15 minutes: do not open new branches; converge only on this session's required deliverable.",
     "6. If remaining time <= 5 minutes: stop exploration; run only minimum required checks for this session and prepare structured output.",
     "7. If remaining time <= 2 minutes: return structured result immediately. If incomplete, return explicit blockers. Never claim success with blockers.",
     "8. Never break output protocol (for example JSON-only sessions must still return JSON-only output).",
@@ -642,26 +700,27 @@ function buildRuntimeBudgetPromptPrefix(input: { runStart: Date }) {
     "你必须把下面规则当作当前 session 的硬约束。",
     "",
     "当前 session 预算：",
-    "- 软收敛截止：开始后 30 分钟（强制目标）",
+    `- 运行档位：${input.budget.profile}。`,
+    `- 软收敛截止：开始后 ${softMinutes} 分钟（强制目标）`,
     `- 开始时间（本地）：${formatLocalTimestamp(input.runStart)}`,
     `- 开始时间（ISO）：${input.runStart.toISOString()}`,
-    `- 30分钟软截止（本地）：${formatLocalTimestamp(softDeadline)}`,
-    `- 30分钟软截止（ISO）：${softDeadline.toISOString()}`,
+    `- 软截止（本地）：${formatLocalTimestamp(softDeadline)}`,
+    `- 软截止（ISO）：${softDeadline.toISOString()}`,
     "",
     "强制执行策略：",
     "1. 从第一次工具调用开始维护 tool_call_count。",
     "2. 每到第 25 次工具调用（25/50/75/...）必须立刻做时间自检。",
     "3. 优先命令：`Get-Date -Format o`。",
     '4. 备选命令：`python -c \"from datetime import datetime; print(datetime.now().astimezone().isoformat())\"`。',
-    "5. 距离 30 分钟软截止 <= 8 分钟：禁止开新分支，只允许收敛到本 session 必需产物。",
+    "5. 距离软截止 <= 15 分钟：禁止开新分支，只允许收敛到本 session 必需产物。",
     "6. 距离软截止 <= 5 分钟：停止探索，只做本 session 最小必要校验并准备结构化输出。",
     "7. 距离软截止 <= 2 分钟：立即返回结构化结果；未完成必须明确 blockers，严禁伪成功。",
     "8. 不能破坏输出协议（例如 JSON-only 场景必须继续 JSON-only）。",
   ].join("\n")
 }
 
-function withRuntimeBudgetPrompt(input: { prompt: string; runStart: Date }) {
-  return `${buildRuntimeBudgetPromptPrefix({ runStart: input.runStart })}\n\n${input.prompt}`
+function withRuntimeBudgetPrompt(input: { prompt: string; runStart: Date; budget: Required<OpencodeRuntimeBudget> }) {
+  return `${buildRuntimeBudgetPromptPrefix({ runStart: input.runStart, budget: input.budget })}\n\n${input.prompt}`
 }
 
 function isInfrastructureCrash(result: Pick<OpencodeRunResult, "exitCode" | "stderr" | "events" | "responseText">) {
@@ -870,8 +929,9 @@ async function runOpencodeTaskOnce(
   }
 
   const runStart = new Date()
+  const runtimeBudget = resolveRuntimeBudget(input.runtimeBudget)
   const startedAt = runStart.toISOString()
-  const runtimePrompt = withRuntimeBudgetPrompt({ prompt: input.prompt, runStart })
+  const runtimePrompt = withRuntimeBudgetPrompt({ prompt: input.prompt, runStart, budget: runtimeBudget })
   args.push("--", runtimePrompt)
   let started = false
   let lastOutputAt: string | undefined
@@ -960,9 +1020,9 @@ async function runOpencodeTaskOnce(
       },
       stdinText: undefined,
       runtimeScope: input.runtimeScope,
-      timeoutMs: OPENCODE_TASK_TIMEOUT_MS,
-      silentTimeoutMs: OPENCODE_TASK_SILENT_TIMEOUT_MS,
-      silentTimeoutAfterActivityMs: OPENCODE_TASK_SILENT_TIMEOUT_AFTER_ACTIVITY_MS,
+      timeoutMs: runtimeBudget.hardTimeoutMs,
+      silentTimeoutMs: runtimeBudget.silentTimeoutMs,
+      silentTimeoutAfterActivityMs: runtimeBudget.silentTimeoutAfterActivityMs,
       onSpawn: async () => {
         await input.onSpawn?.()
         await input.onPulse?.()
@@ -1013,7 +1073,7 @@ async function runOpencodeTaskOnce(
   const timeoutNotes: string[] = []
   if (hardTimedOut) {
     timeoutNotes.push(
-      `OpenCode task timed out after ${OPENCODE_TASK_TIMEOUT_MS} ms and the full process tree was terminated.`,
+      `OpenCode task timed out after ${runtimeBudget.hardTimeoutMs} ms and the full process tree was terminated.`,
     )
   }
   if (silentTimedOut) {
