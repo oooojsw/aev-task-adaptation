@@ -331,7 +331,7 @@ $env:AUTO_EVOLVE_RUNTIME_ROOT = "D:\opencode-auto-evolve-runtime"
 
 ---
 
-## 第九部分：核心代码导出规则
+## 第十部分：核心代码导出规则
 
 2026-06-07 加固：
 
@@ -342,7 +342,7 @@ $env:AUTO_EVOLVE_RUNTIME_ROOT = "D:\opencode-auto-evolve-runtime"
 
 ---
 
-## 第十部分：本机安装版 OpenCode 保护规则
+## 第十一部分：本机安装版 OpenCode 保护规则
 
 2026-06-07 加固：
 
@@ -365,9 +365,18 @@ $env:AUTO_EVOLVE_RUNTIME_ROOT = "D:\opencode-auto-evolve-runtime"
 
 ---
 
-## 第十一部分：统一运行看板与长任务预算
+## 第十二部分：统一运行看板与长任务预算
 
 2026-06-07 加固：
+
+接手正在跑的 benchmark 时，第一步不要先翻聊天记录，也不要只看前端卡片。先刷新并打开统一看板：
+
+```powershell
+bun run auto-evolve/scripts/update-run-dashboard.ts
+Get-Content auto-evolve/runtime-state/run-dashboard/active-runs.md
+```
+
+看板是当前任务运行状态的集中入口，会把分散在 `scorecard.md`、`campaign.json`、进程 owner、心跳和恢复状态里的信息汇总成一张表。
 
 以前排查长程任务需要同时翻 `scorecard.md`、`campaign.json`、`progress_state.json`、进程表和手动恢复日志。现在新增统一运行看板：
 
