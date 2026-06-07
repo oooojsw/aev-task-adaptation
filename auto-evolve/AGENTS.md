@@ -409,7 +409,7 @@ $env:AUTO_EVOLVE_RUNTIME_ROOT = "D:\opencode-auto-evolve-runtime"
 
 后续排查空间占用时，不要再默认假设 auto-evolve 会自动导航到 D 盘；先看 `AUTO_EVOLVE_RUNTIME_ROOT` 是否存在。
 
-### 14.16 本机安装版 OpenCode 保护
+### 14.17 本机安装版 OpenCode 保护
 
 本机桌面安装版 OpenCode 默认位于：
 
@@ -429,3 +429,60 @@ auto-evolve 清理进程时必须遵守：
 ```powershell
 $env:AUTO_EVOLVE_PROTECTED_OPENCODE_ROOTS = "E:\OpenCode;D:\OtherOpenCode"
 ```
+
+### 14.18 统一运行看板与长任务预算
+
+接手正在跑的 benchmark、campaign 或 long-task 时，第一步不要先翻聊天记录，也不要只看前端卡片或旧 `scorecard.md`。必须先刷新并打开统一运行看板：
+
+```powershell
+cd "C:\Users\ZhuanZ\Desktop\opencode re\opencode latest"
+bun run auto-evolve/scripts/update-run-dashboard.ts
+Get-Content auto-evolve/runtime-state/run-dashboard/active-runs.md
+```
+
+统一看板位置：
+
+```text
+auto-evolve/runtime-state/run-dashboard/active-runs.md
+auto-evolve/runtime-state/run-dashboard/active-runs.json
+```
+
+看板会把分散在 `scorecard.md`、`campaign.json`、owner PID、heartbeat 和恢复状态里的信息集中成一张表。判断真实运行状态时，以统一看板 + `campaign.json` + owner/heartbeat 为准。
+
+健康状态含义：
+
+- `healthy_running`：owner 进程存在，任务正常运行。
+- `long_running`：运行时间较长，但未证明卡死，只观察。
+- `stale_running`：状态文件写着 running，但 owner PID 不存在，应恢复。
+- `stuck_running`：owner PID 存在，但心跳和产物长时间不动，应恢复或终止后恢复。
+- `recovery_pending`：已经进入恢复状态，外层应调用 `resume-long-task-campaign`。
+- `completed`：终态任务。
+
+通用批跑脚本 `auto-evolve/scripts/run-benchmark-orchestrator.ts` 已接入 watchdog：
+
+- 训练队列中周期性扫描 active campaign 健康状态。
+- 发现 `stale_running`、`stuck_running` 或 `recovery_pending` 时，把该任务重新放入恢复队列。
+- 恢复方式是磁盘断点续传：新进程读取 `campaign.json`、round history、long-task progress 和已有产物继续，不恢复旧 OpenCode 对话 session。
+
+OpenCode 子 session 运行预算现在是 profile，不再默认 30 分钟：
+
+```text
+short:  soft 30m,  hard 60m
+medium: soft 90m,  hard 120m
+long:   soft 120m, hard 180m
+unbounded-with-watchdog: soft 120m, hard 720m
+```
+
+默认 profile 是 `long`，适合 OfficeQA / SpreadsheetBench / DocVQA 真实长程任务。可以用环境变量覆盖：
+
+```powershell
+$env:AUTO_EVOLVE_OPENCODE_RUNTIME_PROFILE = "medium"
+$env:AUTO_EVOLVE_OPENCODE_SOFT_DEADLINE_MS = "7200000"
+$env:AUTO_EVOLVE_OPENCODE_HARD_TIMEOUT_MS = "10800000"
+```
+
+注意：
+
+- soft deadline 不是运行中给 agent 追加消息，而是在 session 启动 prompt 中预置自我收敛规则。
+- hard timeout 是系统层进程超时，超过后会终止进程树并把失败写回运行产物。
+- 看板默认过滤旧 smoke campaign；如需排查 smoke，可设置 `AUTO_EVOLVE_DASHBOARD_INCLUDE_SMOKE=1`。
