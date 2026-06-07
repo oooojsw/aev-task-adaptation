@@ -7,7 +7,6 @@ import path from "path"
 import { readdir, rm } from "fs/promises"
 import { Filesystem } from "@/util/filesystem"
 import { Flock } from "@/util/flock"
-import { Arborist } from "@npmcli/arborist"
 
 export namespace Npm {
   const log = Log.create({ service: "npm" })
@@ -21,6 +20,37 @@ export namespace Npm {
 
   function directory(pkg: string) {
     return path.join(Global.Path.cache, "packages", pkg)
+  }
+
+  function name(pkg: string) {
+    const match = pkg.match(/^(@[^/]+\/[^@]+|[^@/]+)(?:@.*)?$/)
+    return match?.[1] ?? pkg
+  }
+
+  async function exec(dir: string, args: string[], pkg: string) {
+    const child = Bun.spawn(process.platform === "win32" ? ["cmd", "/c", "npm", ...args] : ["npm", ...args], {
+      cwd: dir,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        npm_config_audit: "false",
+        npm_config_fund: "false",
+        npm_config_progress: "false",
+      },
+    })
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ])
+    if (code === 0) return
+    throw new InstallFailedError(
+      { pkg },
+      {
+        cause: new Error((stderr || stdout || `npm exited with ${code}`).trim()),
+      },
+    )
   }
 
   function resolveEntryPoint(name: string, dir: string) {
@@ -62,38 +92,15 @@ export namespace Npm {
       pkg,
     })
 
-    const arborist = new Arborist({
-      path: dir,
-      binLinks: true,
-      progress: false,
-      savePrefix: "",
+    const root = path.join(dir, "node_modules", name(pkg), "package.json")
+    if (await Filesystem.exists(root)) return resolveEntryPoint(name(pkg), path.dirname(root))
+
+    await Filesystem.writeJson(path.join(dir, "package.json"), {
+      private: true,
     })
-    const tree = await arborist.loadVirtual().catch(() => {})
-    if (tree) {
-      const first = tree.edgesOut.values().next().value?.to
-      if (first) {
-        return resolveEntryPoint(first.name, first.path)
-      }
-    }
-
-    const result = await arborist
-      .reify({
-        add: [pkg],
-        save: true,
-        saveType: "prod",
-      })
-      .catch((cause) => {
-        throw new InstallFailedError(
-          { pkg },
-          {
-            cause,
-          },
-        )
-      })
-
-    const first = result.edgesOut.values().next().value?.to
-    if (!first) throw new InstallFailedError({ pkg })
-    return resolveEntryPoint(first.name, first.path)
+    await exec(dir, ["install", "--save-exact", pkg], pkg)
+    if (!(await Filesystem.exists(root))) throw new InstallFailedError({ pkg })
+    return resolveEntryPoint(name(pkg), path.dirname(root))
   }
 
   export async function install(dir: string) {
@@ -101,13 +108,7 @@ export namespace Npm {
     log.info("checking dependencies", { dir })
 
     const reify = async () => {
-      const arb = new Arborist({
-        path: dir,
-        binLinks: true,
-        progress: false,
-        savePrefix: "",
-      })
-      await arb.reify().catch(() => {})
+      await exec(dir, ["install"], dir)
     }
 
     if (!(await Filesystem.exists(path.join(dir, "node_modules")))) {

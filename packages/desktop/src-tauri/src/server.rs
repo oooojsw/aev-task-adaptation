@@ -128,7 +128,7 @@ pub fn spawn_local_server(
 
 pub struct HealthCheck(pub JoinHandle<Result<(), String>>);
 
-async fn check_health(url: &str, password: Option<&str>) -> bool {
+pub async fn check_health(url: &str, password: Option<&str>) -> bool {
     let Ok(url) = reqwest::Url::parse(url) else {
         return false;
     };

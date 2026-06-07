@@ -68,6 +68,9 @@ struct ServerState {
 /// Resolves with sidecar credentials as soon as the sidecar is spawned (before health check).
 struct SidecarReady(futures::future::Shared<oneshot::Receiver<ServerReadyData>>);
 
+const SIDECAR_WATCHDOG_INTERVAL_SECS: u64 = 10;
+const SIDECAR_WATCHDOG_MAX_MISSES: u32 = 6;
+
 #[tauri::command]
 #[specta::specta]
 fn kill_sidecar(app: AppHandle) {
@@ -429,21 +432,24 @@ async fn initialize(app: AppHandle) {
     let url = format!("http://{hostname}:{port}");
     let password = uuid::Uuid::new_v4().to_string();
 
+    cleanup_stale_sidecars(&app);
     tracing::info!("Spawning sidecar on {url}");
     let (child, health_check) =
         server::spawn_local_server(app.clone(), hostname.to_string(), port, password.clone());
+    let server_child = Arc::new(Mutex::new(Some(child)));
 
     // Make sidecar credentials available immediately (before health check completes)
     let (ready_tx, ready_rx) = oneshot::channel();
     let _ = ready_tx.send(ServerReadyData {
         url: url.clone(),
         username: Some("opencode".to_string()),
-        password: Some(password),
+        password: Some(password.clone()),
     });
     app.manage(SidecarReady(ready_rx.shared()));
     app.manage(ServerState {
-        child: Arc::new(Mutex::new(Some(child))),
+        child: server_child.clone(),
     });
+    spawn_sidecar_watchdog(app.clone(), server_child, hostname.to_string(), port, password);
 
     let loading_window_complete = event_once_fut::<LoadingWindowComplete>(&app);
 
@@ -547,6 +553,223 @@ fn spawn_cli_sync_task(app: AppHandle) {
     });
 }
 
+fn spawn_sidecar_watchdog(
+    app: AppHandle,
+    child: Arc<Mutex<Option<CommandChild>>>,
+    hostname: String,
+    port: u32,
+    password: String,
+) {
+    if std::env::var("OPENCODE_DESKTOP_SIDECAR_WATCHDOG")
+        .is_ok_and(|value| matches!(value.as_str(), "0" | "false" | "FALSE" | "off" | "OFF"))
+    {
+        tracing::info!("Sidecar watchdog disabled by OPENCODE_DESKTOP_SIDECAR_WATCHDOG");
+        return;
+    }
+
+    let interval_secs = std::env::var("OPENCODE_DESKTOP_SIDECAR_WATCHDOG_INTERVAL_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value >= 2)
+        .unwrap_or(SIDECAR_WATCHDOG_INTERVAL_SECS);
+    let max_misses = std::env::var("OPENCODE_DESKTOP_SIDECAR_WATCHDOG_MAX_MISSES")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(SIDECAR_WATCHDOG_MAX_MISSES);
+    let url = format!("http://{hostname}:{port}");
+
+    tokio::spawn(async move {
+        tracing::info!(
+            url = %url,
+            interval_secs,
+            max_misses,
+            "Starting sidecar watchdog"
+        );
+
+        let mut misses = 0u32;
+
+        loop {
+            sleep(Duration::from_secs(interval_secs)).await;
+
+            if server::check_health(&url, Some(&password)).await {
+                if misses > 0 {
+                    tracing::info!(url = %url, "Sidecar health recovered");
+                }
+                misses = 0;
+                continue;
+            }
+
+            misses = misses.saturating_add(1);
+            tracing::warn!(
+                url = %url,
+                misses,
+                max_misses,
+                "Sidecar health check failed"
+            );
+
+            if misses < max_misses {
+                continue;
+            }
+
+            tracing::error!(
+                url = %url,
+                "Sidecar is unhealthy; restarting in-place with existing credentials"
+            );
+
+            if let Some(existing) = child.lock().expect("Failed to acquire mutex lock").take() {
+                let _ = existing.kill();
+            }
+
+            sleep(Duration::from_secs(1)).await;
+
+            let (next_child, _health_check) =
+                server::spawn_local_server(app.clone(), hostname.clone(), port, password.clone());
+            *child.lock().expect("Failed to acquire mutex lock") = Some(next_child);
+            misses = 0;
+        }
+    });
+}
+
+#[cfg(windows)]
+fn cleanup_stale_sidecars(app: &AppHandle) {
+    use std::mem::size_of;
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+        System::{
+            Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+                TH32CS_SNAPPROCESS,
+            },
+            Threading::{
+                OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+                QueryFullProcessImageNameW, TerminateProcess,
+            },
+        },
+    };
+
+    let expected_sidecar = crate::cli::get_sidecar_path(app);
+    let expected_sidecar_exe = expected_sidecar.with_extension("exe");
+    let expected_sidecars = [
+        expected_sidecar.to_string_lossy().to_string(),
+        expected_sidecar_exe.to_string_lossy().to_string(),
+    ];
+    let current_pid = std::process::id();
+
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            tracing::warn!("Failed to create process snapshot for stale sidecar cleanup");
+            return;
+        }
+
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+
+        #[derive(Clone)]
+        struct ProcessInfo {
+            pid: u32,
+            parent_pid: u32,
+            name: String,
+        }
+
+        let mut processes = Vec::new();
+        let mut has_entry = Process32FirstW(snapshot, &mut entry) != 0;
+        while has_entry {
+            processes.push(ProcessInfo {
+                pid: entry.th32ProcessID,
+                parent_pid: entry.th32ParentProcessID,
+                name: process_entry_name(&entry),
+            });
+
+            has_entry = Process32NextW(snapshot, &mut entry) != 0;
+        }
+
+        for process in &processes {
+            if process.pid == current_pid
+                || process.parent_pid == current_pid
+                || !process.name.eq_ignore_ascii_case("opencode-cli.exe")
+            {
+                continue;
+            }
+
+            let process_path = query_process_image_path(process.pid);
+            let path_matches = process_path.as_ref().is_some_and(|path| {
+                expected_sidecars
+                    .iter()
+                    .any(|expected| path.eq_ignore_ascii_case(expected))
+            });
+            let parent_name = processes
+                .iter()
+                .find(|candidate| candidate.pid == process.parent_pid)
+                .map(|candidate| candidate.name.as_str());
+            let parent_is_missing_or_desktop = parent_name.is_none_or(|name| {
+                name.eq_ignore_ascii_case("OpenCode.exe")
+                    || name.eq_ignore_ascii_case("opencode-desktop.exe")
+            });
+
+            if path_matches || parent_is_missing_or_desktop {
+                tracing::warn!(
+                    pid = process.pid,
+                    parent_pid = process.parent_pid,
+                    path = ?process_path,
+                    "Terminating stale desktop sidecar from previous app process"
+                );
+                terminate_process(process.pid);
+            }
+        }
+
+        let _ = CloseHandle(snapshot);
+    }
+
+    fn process_entry_name(entry: &PROCESSENTRY32W) -> String {
+        let len = entry
+            .szExeFile
+            .iter()
+            .position(|ch| *ch == 0)
+            .unwrap_or(entry.szExeFile.len());
+        String::from_utf16_lossy(&entry.szExeFile[..len])
+    }
+
+    fn query_process_image_path(pid: u32) -> Option<String> {
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return None;
+            }
+
+            let mut buffer = vec![0u16; 32768];
+            let mut size = buffer.len() as u32;
+            let ok = QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut size) != 0;
+            let _ = CloseHandle(handle);
+
+            if !ok {
+                return None;
+            }
+
+            Some(String::from_utf16_lossy(&buffer[..size as usize]))
+        }
+    }
+
+    fn terminate_process(pid: u32) {
+        unsafe {
+            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if handle.is_null() {
+                tracing::warn!(pid, "Failed to open stale sidecar for termination");
+                return;
+            }
+
+            if TerminateProcess(handle, 0) == 0 {
+                tracing::warn!(pid, "Failed to terminate stale sidecar");
+            }
+
+            let _ = CloseHandle(handle);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn cleanup_stale_sidecars(_app: &AppHandle) {}
 
 fn get_sidecar_port() -> u32 {
     option_env!("OPENCODE_PORT")

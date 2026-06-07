@@ -113,11 +113,14 @@
     "electron"
   ],
   "overrides": {
+    "@shikijs/core": "3.20.0",
+    "framer-motion": "12.38.0",
     "@types/bun": "catalog:",
     "@types/node": "catalog:"
   },
   "patchedDependencies": {
     "@standard-community/standard-openapi@0.2.9": "patches/@standard-community%2Fstandard-openapi@0.2.9.patch",
+    "@babel/helper-compilation-targets@7.28.6": "patches/@babel%2Fhelper-compilation-targets@7.28.6.patch",
     "solid-js@1.9.10": "patches/solid-js@1.9.10.patch",
     "@ai-sdk/provider-utils@4.0.21": "patches/@ai-sdk%2Fprovider-utils@4.0.21.patch",
     "@ai-sdk/anthropic@3.0.64": "patches/@ai-sdk%2Fanthropic@3.0.64.patch"
