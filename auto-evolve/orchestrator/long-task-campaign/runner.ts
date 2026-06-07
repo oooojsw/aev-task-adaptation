@@ -21,6 +21,7 @@ import {
 } from "../experience-workspace"
 import { resumeLongTask, runLongTask } from "../long-task/runner"
 import { runLongTaskValidator } from "../long-task/validators"
+import { runValidationStage } from "../validation-engine/stage-runner"
 import { readOperationalContext, resolveExistingLongTaskRun } from "../long-task/repository"
 import { loadLongTaskSpec } from "../long-task/spec"
 import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
@@ -91,6 +92,7 @@ import type { OpencodeTaskInput } from "../opencode"
 import { writeTaskArtifacts } from "../task-artifacts"
 import type { ExecutionSpec, ModelPhase } from "../schema"
 import { campaignRoundRuntimeScope, cleanupRuntimeProcessScope, terminateProcessTree } from "../runtime-process-registry"
+import { defaultRunHealthPolicy, readCampaignHealth } from "../run-health"
 
 function nowISO() {
   return new Date().toISOString()
@@ -206,7 +208,7 @@ const STALE_BOOTSTRAP_GRACE_MS = (() => {
 const STALE_OWNER_TIMEOUT_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_STALE_OWNER_TIMEOUT_MS ?? "", 10)
   if (Number.isFinite(value) && value > 0) return value
-  return 2 * 60 * 60 * 1000
+  return defaultRunHealthPolicy().staleOwnerMs
 })()
 
 async function isPidAlive(pid: number) {
@@ -510,6 +512,13 @@ async function findExistingLiveCampaign(input: { cwd: string; title: string; bas
     const stateBaseSpecPath = typeof state.baseSpecPath === "string" ? path.resolve(state.baseSpecPath) : ""
     const sameTarget = stateBaseSpecPath === normalizedBaseSpecPath
     if (!sameTarget) continue
+    const health = await readCampaignHealth(campaignPaths.root)
+    if (
+      health &&
+      (health.health === "stale_running" || health.health === "stuck_running" || health.health === "recovery_pending")
+    ) {
+      continue
+    }
     if (typeof state.ownerPID === "number" && Number.isFinite(state.ownerPID) && state.ownerPID > 0) {
       if (state.ownerPID === process.pid) continue
       if (!(await isPidOwnedByHint(state.ownerPID, state.ownerCommandHint))) continue
@@ -3775,6 +3784,12 @@ async function runSurfaceGeneralizationPrecheck(input: {
       runner: "python",
       args: [cfg.configPath],
       timeoutMs: cfg.timeoutMs,
+      validation: {
+        target: "surface",
+        stage: "pre_blank",
+        answerAccess: "full_training",
+        allowedAudiences: ["worker", "lead", "reviewer", "dashboard", "memory", "audit"],
+      },
     }
     const unit: LongTaskWorkUnit = {
       id,
@@ -3911,20 +3926,30 @@ async function runCampaignFinalAcceptance(input: {
 
   const config = await loadConfig(input.cwd)
   const validatorResults: LongTaskValidatorResult[] = []
-  for (const validator of validatorPartitions.surfaceValidators) {
-    const result = await runLongTaskValidator({
+  let preBlankValidationStageResultPath: string | undefined
+  if (validatorPartitions.surfaceValidators.length) {
+    const preBlankValidators = validatorPartitions.surfaceValidators.map((validator) => ({
+      ...validator,
+      validation: {
+        ...validator.validation,
+        stage: validator.validation?.stage ?? "pre_blank",
+      },
+    }))
+    const preBlankStage = await runValidationStage({
       cwd: input.cwd,
       config,
-      contract: validator,
       spec: acceptanceSpec,
       unit: syntheticUnit,
+      stage: "pre_blank",
+      targets: ["surface", "layout", "behavior"],
       runID: input.sourceRunID,
       attempt: 1,
-      validatorDir: path.join(acceptanceRoot, validator.id),
+      stageDir: path.join(acceptanceRoot, "pre-blank-validation"),
       bundlePath,
       runtimeScope: input.runtimeScope,
       onActivation: input.onActivation,
       onPulse: input.onPulse,
+      validators: preBlankValidators,
       payload: {
         runID: input.sourceRunID,
         unitID: syntheticUnit.id,
@@ -3939,7 +3964,8 @@ async function runCampaignFinalAcceptance(input: {
         bundlePath,
       },
     })
-    validatorResults.push(result)
+    validatorResults.push(...preBlankStage.validatorResults)
+    preBlankValidationStageResultPath = preBlankStage.resultPath
   }
 
   const surfacePassed = validatorResults.every((result) => result.passed)
@@ -4023,6 +4049,7 @@ async function runCampaignFinalAcceptance(input: {
             evidenceRefs: [
               blankEval.runDir,
               blankEval.resultPath,
+              ...(blankEval.validationStageResultPath ? [blankEval.validationStageResultPath] : []),
               blankEval.sessionExecutionReportPath,
               ...blankEval.validatorResults.flatMap((result) => result.evidenceRefs ?? []),
             ],
@@ -4070,6 +4097,7 @@ async function runCampaignFinalAcceptance(input: {
     validatorResults,
     bundlePath,
     validationPackageRoot,
+    preBlankValidationStageResultPath,
     blankEvalResultPath,
     blankEvalRunDir,
     validatorPartitions: {
@@ -4908,7 +4936,7 @@ export async function resumeLongTaskCampaign(input: {
     throw new Error(`Campaign not found: ${input.campaignID}`)
   }
   enforceCampaignTruthPaths({ campaignPaths })
-  const existingState = await readLongTaskCampaignState(campaignPaths)
+  let existingState = await readLongTaskCampaignState(campaignPaths)
   const specBaseResolved = path.resolve(campaignSpec.baseSpecPath)
   const stateBaseResolved = path.resolve(existingState.baseSpecPath)
   if (specBaseResolved !== stateBaseResolved) {
@@ -4930,6 +4958,51 @@ export async function resumeLongTaskCampaign(input: {
     })
   }
 
+  let history = await readJsonLinesIfExists<LongTaskCampaignRoundRecord>(campaignPaths.historyPath)
+  const targetHealth = await readCampaignHealth(campaignPaths.root)
+  if (targetHealth?.suggestedAction === "takeover") {
+    const takeoverAt = nowISO()
+    const ownerPID =
+      typeof existingState.ownerPID === "number" && Number.isFinite(existingState.ownerPID) && existingState.ownerPID > 0
+        ? existingState.ownerPID
+        : undefined
+    const owned =
+      typeof ownerPID === "number" && ownerPID !== process.pid
+        ? await isPidOwnedByHint(ownerPID, existingState.ownerCommandHint)
+        : false
+    if (owned && typeof ownerPID === "number") {
+      await terminateProcessTree(ownerPID)
+    }
+    const recovery =
+      (await determineCampaignRecoveryDecision({
+        cwd: input.cwd,
+        campaignPaths,
+        state: existingState,
+        history,
+      })) ??
+      ({
+        action: "restart_round",
+        roundNumber: Math.max(1, existingState.currentRound || 1),
+        reason:
+          owned && typeof ownerPID === "number"
+            ? `Campaign owner process ${ownerPID} was alive but had stale heartbeat/artifacts; terminated its process tree and marked the campaign for takeover recovery.`
+            : "Campaign owner appeared stuck by shared health policy; marked the campaign for takeover recovery without terminating because ownership could not be confirmed.",
+        detectedAt: takeoverAt,
+      } satisfies LongTaskCampaignRecoveryDecision)
+    await writeLongTaskCampaignState(campaignPaths, {
+      ...existingState,
+      status: "recovery_pending",
+      ownerPID: process.pid,
+      ownerCommandHint: undefined,
+      heartbeatAt: takeoverAt,
+      updatedAt: takeoverAt,
+      lastSummary: recovery.reason,
+      recovery,
+    })
+    existingState = await readLongTaskCampaignState(campaignPaths)
+    history = await readJsonLinesIfExists<LongTaskCampaignRoundRecord>(campaignPaths.historyPath)
+  }
+
   const existingLiveCampaign = await findExistingLiveCampaign({
     cwd: input.cwd,
     title: existingState.title,
@@ -4943,7 +5016,6 @@ export async function resumeLongTaskCampaign(input: {
     })
   }
 
-  const history = await readJsonLinesIfExists<LongTaskCampaignRoundRecord>(campaignPaths.historyPath)
   const recoveryPlan = await determineCampaignRecoveryDecision({
     cwd: input.cwd,
     campaignPaths,

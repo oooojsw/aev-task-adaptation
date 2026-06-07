@@ -141,6 +141,53 @@
 
 ---
 
+## 4.5 验证器分类共识
+
+系统内所有验证器都必须先按两个维度归类：
+
+- **按对象分**：
+  - `Surface Validator`：验证专家经验区 / skill / pending expert package，目标是防作弊、防答案泄露、防结构混乱。
+  - `Product Validator`：验证 `workspace/` 下的真实产物，目标是确认空白 Agent 或执行 Agent 产出的答案、文件、报告是否正确。
+- **按机制分**：
+  - `Hard Check`：脚本级确定性检查，适合数字容差、格式、文件存在、正则、防泄露、答案比对。
+  - `Soft Check`：模型裁判按 rubric 审阅，适合文本质量、业务合理性、审计意见行动性等主观判断。
+
+生命周期上也必须分清：
+
+- `Local Validation` 是长程任务内部的开卷学习，允许用于发现路径和提炼失败教训。
+- `Blank Eval Final Acceptance` 是单题闭卷证明，必须让空白 Agent 只看专家经验和原始材料，再由 Product Validator 验产物。
+- `Post-Merge Validation` 是合并后的全域验证，包括训练集回测防退化和测试集盲测测泛化。
+
+核心原则：**Local 是为了学习，Blank Eval 才是证明；Surface 是查专家经验有没有小抄，Product 是改最终产物这张试卷。**
+
+### 4.6 Validation Engine 与结果路由
+
+新增 `orchestrator/validation-engine/` 作为验证执行与结果路由底座。它不是 blank agent，也不是 acceptance-framework：
+
+- `validation-engine` 负责执行验证器，并生成 `private/training/sanitized/score_only` 四种结果视图。
+- `blank-eval` 负责启动闭卷空白 Agent。空白 Agent 不允许调用验证器，也不允许读取任何验证结果视图。
+- `acceptance-framework` 负责记录验收政策和判决书，不直接承担通用验证执行。
+
+旧入口 `runLongTaskValidator()` 已接到 validation-engine 的 long-task adapter，外部调用签名保持不变。后续新增布局验证、防泄漏验证、软验证、合并后验证、回撤验证、测试集验证时，应优先通过 validation-engine 加载模块，而不是在业务 runner 里继续散写执行逻辑。
+
+验证模块必须可拔插。不同数据集/项目可以通过 `task-packs/validator-profiles/*.json` 挂载不同的 layout、surface、product、soft、rollback、regression 验证器。profile 内的 validator 可声明 `validation.target`、`validation.stage`、`validation.answerAccess`、`validation.allowedAudiences` 等元数据，业务层再按 stage/target 选择模块。不得把 OfficeQA 或任何单一数据集的文件布局硬编码成平台默认硬门。
+
+阶段级入口为 `runValidationStage()`：
+
+- Campaign final acceptance 的 Blank Agent 前验证使用 `pre_blank` stage，主要承载 surface/layout/behavior 类验证。
+- Blank Eval 结束后的产物验证使用 `post_blank` stage，主要承载 product/behavior/regression 类验证。
+- 每个 stage 会写 `stage-result.json`，汇总 validator result 以及 training/sanitized/score_only 视图路径。后续给 lead/worker/reviewer 的反馈应优先使用 training view，给 dashboard/carryover/memory 的反馈应优先使用 sanitized view。
+
+结果流向红线：
+
+- `private` 视图只给系统审计和必要 debug。
+- `training` 视图可给 executor / worker / lead / reviewer / merger / repair agent，用于开卷学习和修经验。
+- `sanitized` 视图可给 dashboard、carryover、长期记忆。
+- `score_only` 视图可给测试集统计。
+- `blank_agent` 对所有验证结果视图都没有读取权限。
+
+---
+
 ## 5. 历史技术攻坚与已验证的机制
 
 以下为系统中已稳定实现的工程级改进，后续修改必须在此基础上进行：
@@ -454,7 +501,7 @@ auto-evolve/runtime-state/run-dashboard/active-runs.json
 - `healthy_running`：owner 进程存在，任务正常运行。
 - `long_running`：运行时间较长，但未证明卡死，只观察。
 - `stale_running`：状态文件写着 running，但 owner PID 不存在，应恢复。
-- `stuck_running`：owner PID 存在，但心跳和产物长时间不动，应恢复或终止后恢复。
+- `stuck_running`：owner PID 存在，但心跳和产物长时间不动，应执行 `takeover`。
 - `recovery_pending`：已经进入恢复状态，外层应调用 `resume-long-task-campaign`。
 - `completed`：终态任务。
 
@@ -462,7 +509,9 @@ auto-evolve/runtime-state/run-dashboard/active-runs.json
 
 - 训练队列中周期性扫描 active campaign 健康状态。
 - 发现 `stale_running`、`stuck_running` 或 `recovery_pending` 时，把该任务重新放入恢复队列。
+- `stuck_running` 对应 `takeover`，不是普通空转 resume：旧 owner 还活着但已经假死，恢复进程需要先安全终止旧 owner，再从磁盘断点续跑。
 - 恢复方式是磁盘断点续传：新进程读取 `campaign.json`、round history、long-task progress 和已有产物继续，不恢复旧 OpenCode 对话 session。
+- 内外层共用 `auto-evolve/orchestrator/run-health.ts` 的健康判断，不能再出现外层判 stuck、内层仍按 live 拒绝接管。
 
 OpenCode 子 session 运行预算现在是 profile，不再默认 30 分钟：
 
@@ -486,3 +535,19 @@ $env:AUTO_EVOLVE_OPENCODE_HARD_TIMEOUT_MS = "10800000"
 - soft deadline 不是运行中给 agent 追加消息，而是在 session 启动 prompt 中预置自我收敛规则。
 - hard timeout 是系统层进程超时，超过后会终止进程树并把失败写回运行产物。
 - 看板默认过滤旧 smoke campaign；如需排查 smoke，可设置 `AUTO_EVOLVE_DASHBOARD_INCLUDE_SMOKE=1`。
+- takeover 回归烟测脚本是 `auto-evolve/scripts/smoke-run-health-takeover.ts`。
+
+
+# ⚠️ Windows 基础设施防坑强制纪律（Agent 必读）
+
+**警告：本项目运行在 Windows 高并发环境下。任何 Agent 在编写脚本、处理路径、读写文件时，必须严格遵守下表中的防坑方案，违者将导致系统严重崩溃！**
+
+| 序号 | 基础设施雷区 (Bug 类型) | 典型报错 / 表现症状 | 强制解决方案 (Action) |
+| :---: | :--- | :--- | :--- |
+| **1** | **PowerShell 语法限制** | 报错 `The token '&&' is not a valid statement separator`；脚本参数被截断。 | **禁用 `&&`**，多条命令必须用 `;` 或换行执行；**严禁使用 `$PID` 或 `$Args`** 作为自定义变量名，改用 `$MyPID` / `$CmdArgs`。 |
+| **2** | **命令行引号撕裂与中文乱码** | `bun -e "..."` 传参时引号或中文目录名（如 `定稿`）在终端被解析成乱码，导致找不到文件。 | **禁用长 Inline 脚本**：复杂的 JS/Python 逻辑必须先写入临时文件（`.mjs` / `.py`），执行后再删除；避免直接在命令行中拼接带中文或多层引号的参数。 |
+| **3** | **JSON 反斜杠 `\` 转义灾难** | Windows 路径直接写入 JSON 后，反序列化时 `\` 被吃掉，导致深层路径寻址全部失败。 | **强制转换正斜杠 `/`**：在生成配置文件、Prompt 注入和 JSON 序列化前，必须确保所有路径字符串已被替换为 Linux 风格的正斜杠 `/`。 |
+| **4** | **UTF-8 BOM 头解析异常** | PowerShell 创建的文件默认带 BOM，Python (`json.load`) 或 Node.js 解析时直接引发 `SyntaxError`。 | **强制兼容 BOM 读取**：Python 读文件一律使用 `encoding="utf-8-sig"`；Node.js 解析 JSON 前，一律先执行 `.replace(/^\uFEFF/, "")` 清理不可见字符。 |
+| **5** | **文件锁冲突竞争 (`EPERM`)** | 多进程同时读写 `active-processes.json` 等状态文件，抛出 `EPERM rename` 异常打崩进程。 | **强制原子写 + 退避重试**：严禁直接覆盖文件。必须先写入 `.tmp` 结尾文件，再使用 `rename`，且外部必须包裹 `try-catch` 与 **指数退避重试（重试 3~5 次）** 逻辑。 |
+| **6** | **参数长度上限 (`ENAMETOOLONG`)** | 试图将超长 Prompt 或 Skill 文件内容直接拼接到命令行传给子进程，导致 `uv_spawn` 秒退。 | **改用文件驱动通信**：严禁把大段文本作为命令参数传递。所有超过 500 字符的内容，必须落盘为临时文件，命令中**只传递绝对路径**。 |
+| **7** | **PID 快速复用导致的误杀/假活** | 依靠 `process.kill(pid, 0)` 判断存活，因 Windows 极快复用 PID 而误杀系统进程，或导致死锁任务被视为 `running`。 | **联合校验存活状态**：回收进程或判断任务活性时，必须结合 `campaign.json` 的 `heartbeatAt` 时间戳进行双重验证，心跳过期超 2 小时即视为假活（Stale）。 |

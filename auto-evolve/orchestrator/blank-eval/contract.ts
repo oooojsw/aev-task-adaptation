@@ -24,4 +24,5 @@ export interface BlankEvalResult {
   validatorResults: LongTaskValidatorResult[]
   sessionExecutionReportPath: string
   resultPath: string
+  validationStageResultPath?: string
 }

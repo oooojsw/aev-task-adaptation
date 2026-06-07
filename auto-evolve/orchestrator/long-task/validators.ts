@@ -18,6 +18,7 @@ import { writeTaskArtifacts } from "../task-artifacts"
 import { runManagedProcess } from "../managed-process"
 import { buildLongTaskPromptValidatorPrompt } from "./prompts"
 import { extractJsonObject } from "./json-extract"
+import { runLongTaskValidatorViaValidationEngine } from "../validation-engine/long-task-adapter"
 
 const GLOBAL_SCRIPT_VALIDATOR_TIMEOUT_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_SCRIPT_VALIDATOR_TIMEOUT_MS ?? "", 10)
@@ -507,34 +508,6 @@ export async function runLongTaskValidator(input: {
   onActivation?: OpencodeTaskInput["onSpawn"]
   onPulse?: OpencodeTaskInput["onPulse"]
 }) {
-  if (input.contract.type === "script") {
-    return runScriptValidator({
-      cwd: input.cwd,
-      contract: input.contract,
-      spec: input.spec,
-      unit: input.unit,
-      runID: input.runID,
-      attempt: input.attempt,
-      validatorDir: input.validatorDir,
-      payload: input.payload,
-      runtimeScope: input.runtimeScope,
-      onActivation: input.onActivation,
-      onPulse: input.onPulse,
-    })
-  }
-
-  return runPromptValidator({
-    cwd: input.cwd,
-    config: input.config,
-    contract: input.contract,
-    spec: input.spec,
-    unit: input.unit,
-    runID: input.runID,
-    attempt: input.attempt,
-    validatorDir: input.validatorDir,
-    bundlePath: input.bundlePath,
-    runtimeScope: input.runtimeScope,
-    onActivation: input.onActivation,
-    onPulse: input.onPulse,
-  })
+  const engineResult = await runLongTaskValidatorViaValidationEngine(input)
+  return engineResult.result
 }

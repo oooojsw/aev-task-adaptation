@@ -88,6 +88,72 @@ $$\text{SOP 质量} \propto \frac{1}{\text{作弊空间 (Surface Gate)}} \times 
 2.  **Final Acceptance (战役本轮验收)**：作用于 Campaign 的每一轮。**必须是 Blank Agent 盲测 + Product Validator。** 这是系统产生“梯度下降反馈”的心脏。**禁止用静态代码扫描替代真实的 Blank Agent 执行！**
 3.  **Deployment Acceptance (出厂最终验收)**：作用于全局多实例融合（Merge）之后。对未见过的 Held-out 测试集进行 Zero-shot 盲测。决定经验能否合入全局技能库。
 
+### 验证器分类共识
+
+系统里的 validator 不是一类东西，必须先问三个问题：**验谁、怎么验、发生在哪个阶段**。如果这三点混掉，就会把“查小抄”“改试卷”“开卷学习”“闭卷证明”搅成一团。
+
+#### 1. 按验证对象分：Surface vs Product
+
+*   **Surface Validator（表面验证 / 查小抄）**：检查专家经验区、skill、pending expert package。它不看最终答案文件，而是看“教材”本身有没有作弊，例如是否写死答案数字、泄露题目特有字符串、把答案藏进脚本或文件名、缺少入口文件、文件结构混乱。
+*   **Product Validator（产物验证 / 改试卷）**：检查 Agent 在 `workspace/` 下真正做出来的产物，例如 `answer.txt`、`answer.json`、Excel、Word、审计意见、报告等。它回答的问题是：这个产物对不对、格式是否合格、是否满足业务要求。
+
+二者不能互相替代：Surface 通过只说明“教材没有明显小抄”，不说明 Blank Agent 一定会做题；Product 通过只说明“这份产物对”，不说明专家经验没有过拟合或泄露。
+
+#### 2. 按验证机制分：Hard vs Soft
+
+*   **Hard Check（硬验证）**：由 Python / PowerShell / TS 等脚本执行，适合数字容差、JSON 格式、文件存在、正则扫描、防泄露、答案比对、矩阵比较等确定性判断。它的特点是冷酷、客观、可复现。
+*   **Soft Check（软验证）**：由另一个模型按 rubric 审阅，适合审计意见是否行动性强、报告是否合理、文字是否完整、业务逻辑是否能被接受等难以写成固定脚本的问题。
+
+Hard/Soft 只是“怎么验”，Surface/Product 才是“验什么”。所以可以有 hard surface、soft surface、hard product、soft product 四种组合。
+
+#### 3. 按生命周期分：Local、Blank Eval、Post-Merge
+
+*   **Local Validation（长程任务内部验证）**：开卷学习阶段。Executor / workers 可以利用更多上下文甚至答案相关信息，目标是找到可行路径、制造失败教训、帮助 Lead 修专家经验。Local 通过不等于任务最终成功。
+*   **Blank Eval Final Acceptance（单题闭卷验收）**：单道训练题能否记为 `verified_success` 的核心证明。流程必须是：先跑 Surface 防作弊，再启动完全隔离的 Blank Agent，只给它专家经验和原始材料，最后用 Product Validator 验它做出的真实产物。
+*   **Post-Merge Validation（合并后全域验证）**：多实例合并后的最终考试。Train replay 用来防止合并后退化；held-out test 用来验证未知题泛化能力。
+
+核心原则：**Local 是为了学习，Blank Eval 才是证明；Surface 是查专家经验有没有小抄，Product 是改最终产物这张试卷。**
+
+绝对红线：不能用 Surface 静态扫描替代 Blank Agent 闭卷执行，不能用 Executor 的开卷产物替代 Blank Agent 的闭卷产物，也不能把 Product Validator 直接拿去证明专家经验区没有泄露。
+
+### Validation Engine + Result Router
+
+新增 `orchestrator/validation-engine/` 作为统一验证执行与结果路由底座。它和现有模块的关系是：
+
+*   **validation-engine**：负责跑验证器、生成 `private/training/sanitized/score_only` 四种结果视图、控制谁能看哪一版结果。
+*   **blank-eval**：负责启动闭卷 Blank Agent 做题。Blank Agent 不调用验证器，也不能读取任何验证结果视图。
+*   **acceptance-framework**：负责把某次验证或盲测在系统语义上记成“判决书”，例如 local、candidate、deployment 等层级的 acceptance record。
+
+第一阶段已把旧入口 `runLongTaskValidator()` 接到 validation-engine 的 long-task adapter。外部调用签名不变，但每次验证现在会额外写出：
+
+*   `result.private.json`：系统审计视图，可保留完整原始信息。
+*   `result.training.json`：训练侧 agent 可读视图，默认脱敏答案数字和 private answer 路径。
+*   `result.sanitized.json`：dashboard / carryover / memory 可读视图，只保留类别化信息。
+*   `result.score_only.json`：测试集统计视图，只保留通过状态和分数。
+
+关键原则：验证器可以根据阶段读取 private answers 来完成反作弊或产物比对，但验证结果必须按视图分发；答案不能进入 Blank Agent 可见面，也不能进入最终专家经验区。
+
+验证模块必须可拔插，不允许把某个数据集的布局写死到平台层。现有 `task-packs/validator-profiles/*.json` 仍然是推荐挂载方式；profile 内的 validator 可以额外声明 `validation` 元数据，例如：
+
+```json
+{
+  "validation": {
+    "target": "layout",
+    "stage": "pre_blank",
+    "answerAccess": "none",
+    "allowedAudiences": ["lead", "reviewer", "dashboard", "memory", "audit"]
+  }
+}
+```
+
+业务层以后可以按 `stage` / `target` 选择验证模块，例如在 `pre_blank` 阶段加载某个项目自己的 layout validator、surface leak validator 或 soft validator。OfficeQA、SpreadsheetBench、AuditPoint、ALFWorld 都应该通过 profile 选择自己的验证体系，而不是在 runner 里硬编码。
+
+现在已有阶段级入口 `runValidationStage()`：
+
+*   Campaign final acceptance 的 Blank Agent 前验证已接入 `pre_blank` stage。它会按 profile/validator 元数据执行 `surface/layout/behavior` 类验证，失败时阻断后续 Blank Agent。
+*   Blank Eval 的产物验证已接入 `post_blank` stage。Blank Agent 只负责写产物，验证器由系统在外部调用，验证结果继续生成四视图。
+*   `stage-result.json` 会汇总本阶段所有 validator 的结果，并包含 training/sanitized/score_only 视图路径，供后续 lead、worker、reviewer、dashboard 或 memory 使用。
+
 ---
 
 ## 🛠️ 第五部分：接手操作指南 (Operator's Manual)
@@ -398,7 +464,7 @@ bun run auto-evolve/scripts/update-run-dashboard.ts
 - `healthy_running`：owner 进程存在，任务正常运行。
 - `long_running`：运行时间较长，但未证明卡死，只观察。
 - `stale_running`：状态文件写着 running，但 owner PID 不存在，应恢复。
-- `stuck_running`：owner PID 存在，但心跳和产物长时间不动，应恢复或终止后恢复。
+- `stuck_running`：owner PID 存在，但心跳和产物长时间不动，应执行 `takeover`。
 - `recovery_pending`：已经进入恢复状态，外层应调用 `resume-long-task-campaign`。
 - `completed`：终态任务。
 
@@ -406,7 +472,9 @@ bun run auto-evolve/scripts/update-run-dashboard.ts
 
 - 补位前扫描 active campaign 健康状态。
 - 发现 `stale_running`、`stuck_running` 或 `recovery_pending` 时，把该任务重新放入恢复队列。
+- `stale_running` / `recovery_pending` 的动作是 `resume`；`stuck_running` 的动作是 `takeover`，含义是旧 owner 还活着但已经假死，需要先安全终止旧 owner，再从磁盘断点续跑。
 - 恢复方式仍然是磁盘断点续传：新进程读取 `campaign.json`、round history、long-task progress 和已有产物继续，不恢复旧 OpenCode 对话 session。
+- 内外层现在共用 `auto-evolve/orchestrator/run-health.ts` 的健康判断，不再允许外层 45 分钟判 stuck、内层 2 小时内仍当 live 而拒绝接管。
 
 OpenCode 子 session 运行预算也改成 profile：
 
@@ -430,3 +498,19 @@ $env:AUTO_EVOLVE_OPENCODE_HARD_TIMEOUT_MS = "10800000"
 - soft deadline 不是运行中给 agent 追加消息，而是在 session 启动 prompt 中预置自我收敛规则。
 - hard timeout 是系统层进程超时，超过后会终止进程树并把失败写回运行产物。
 - 接手正在跑的任务时，先看 `active-runs.md`，不要只看前端或旧 `scorecard.md`。
+- takeover 回归烟测脚本：`auto-evolve/scripts/smoke-run-health-takeover.ts`。它会验证“PID 活着但 50 分钟无心跳/无产物”必须变成 `stuck_running/takeover`，而 5 分钟新鲜任务仍是 `healthy_running/watch`。
+---
+
+## 2026-06-07: Core Code Export Ignore Rules
+
+`scripts/export-core-code-to-desktop.py` now has embedded export-ignore rules. This is intentionally self-contained: future agents only need to run/copy this one script and cannot forget a second ignore file.
+
+The embedded list works like a small `.gitignore` for core-code exports only. It does not delete or hide files from the repository; it only prevents temporary debug payloads from being copied into the exported `auto-evolve-core-code-*.txt` bundle.
+
+Current intent:
+
+- keep real reusable validators, orchestrators, prompts, and frontend monitor code;
+- exclude old one-off JSON payloads such as `scripts/*_input.json`, round-specific validation inputs, UID-specific rerun helpers, and temporary `_*.py` verifier stubs;
+- allow `!pattern` exceptions for reusable files that match a broad ignore rule.
+
+When a future debug helper is created only for one run, add its pattern to `IGNORE_PATTERNS` inside `scripts/export-core-code-to-desktop.py` instead of relying on manual cleanup before export.

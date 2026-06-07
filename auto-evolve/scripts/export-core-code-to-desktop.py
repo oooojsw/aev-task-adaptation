@@ -1,4 +1,5 @@
 import os
+import fnmatch
 from datetime import datetime
 
 
@@ -56,12 +57,67 @@ EXT = {
 }
 
 
+# Export-only ignore rules. Keep this list inside the script so other agents only
+# need to run/copy one file and cannot forget a separate ignore config.
+IGNORE_PATTERNS = [
+    # One-off validation payloads and old round/UID debug inputs.
+    "scripts/*_input.json",
+    "scripts/*-input.json",
+    "scripts/*_config.json",
+    "scripts/*-config.json",
+    "scripts/*validator_input*.json",
+    "scripts/*validation_input*.json",
+    "scripts/current_surface_validation_*.json",
+    "scripts/pending_surface_*.json",
+    "scripts/r[0-9][0-9][0-9]_*.json",
+    "scripts/ew_*.json",
+    "scripts/fa_*.json",
+    "scripts/fag_*.json",
+    "scripts/expert_ws_*.json",
+    "scripts/temp_*.json",
+    "scripts/test_input.json",
+    "scripts/validate-input-*.json",
+    "scripts/validator_input*.json",
+    # Temporary verifier helpers created during manual debugging.
+    "scripts/_*.py",
+    # Specific historical rerun/resume helpers tied to old OfficeQA IDs.
+    "scripts/resume-uid0120-uid0223-rounds20.ts",
+    "scripts/run-uid0120-uid0223-rerun.ts",
+    # Keep these real reusable configs even though they match broad config rules.
+    "!scripts/formal-config.json",
+    "!scripts/formal-surface-generalization.json",
+]
+
+
 def should_skip_dir(name: str) -> bool:
     return name in SKIP_DIRS
 
 
-def should_keep(rel: str) -> bool:
+def matches_ignore(rel: str, patterns: list[str]) -> bool:
     rel = rel.replace("\\", "/")
+    base = os.path.basename(rel)
+    ignored = False
+    for pattern in patterns:
+        negated = pattern.startswith("!")
+        if negated:
+            pattern = pattern[1:]
+        pattern = pattern.rstrip("/")
+        if not pattern:
+            continue
+        matched = False
+        if "/" not in pattern and fnmatch.fnmatch(base, pattern):
+            matched = True
+        if fnmatch.fnmatch(rel, pattern):
+            matched = True
+        if matched:
+            ignored = not negated
+    return ignored
+
+
+def should_keep(rel: str, ignore_patterns: list[str]) -> bool:
+    rel = rel.replace("\\", "/")
+    if matches_ignore(rel, ignore_patterns):
+        return False
     base = os.path.basename(rel)
     if base in INCLUDE_FILES:
         return True
@@ -81,7 +137,7 @@ def iter_files():
                 rel = os.path.relpath(full, ROOT)
             except ValueError:
                 continue
-            if not should_keep(rel):
+            if not should_keep(rel, IGNORE_PATTERNS):
                 continue
             yield full, rel
 
@@ -100,6 +156,7 @@ def main():
         out.write("# auto-evolve core code export\n")
         out.write(f"# root: {ROOT}\n")
         out.write(f"# generated_at: {datetime.now().isoformat(timespec='seconds')}\n")
+        out.write(f"# embedded_ignore_patterns: {len(IGNORE_PATTERNS)}\n")
         out.write(f"# file_count: {len(files)}\n\n")
         for _, rel in files:
             out.write(f"- {rel.replace(os.sep, '/')}\n")

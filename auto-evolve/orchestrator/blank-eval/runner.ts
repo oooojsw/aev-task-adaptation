@@ -8,7 +8,7 @@ import { autoEvolvePath, ensureDirectory, pathExists, writeJsonFile } from "../f
 import { writeTaskArtifacts } from "../task-artifacts"
 import { loadLongTaskSpec } from "../long-task/spec"
 import { resolveLongTaskEditablePaths } from "../long-task/repository"
-import { runLongTaskValidator } from "../long-task/validators"
+import { runValidationStage } from "../validation-engine/stage-runner"
 import type { LongTaskSpec, LongTaskWorkUnit } from "../long-task/contract"
 import { experienceWorkspacePathsFromRoot, resolveExperienceWorkspaceLayout } from "../experience-workspace"
 import { cleanupRuntimeProcessScope } from "../runtime-process-registry"
@@ -464,24 +464,30 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       bundlePath,
     }
 
-    const validators: BlankEvalResult["validatorResults"] = []
-    for (const validator of spec.validators) {
-      validators.push(
-        await runLongTaskValidator({
-          cwd: input.cwd,
-          config,
-          contract: validator,
-          spec,
-          unit: work,
-          runID,
-          attempt: 1,
-          validatorDir: path.join(validatorRoot, validator.id),
-          bundlePath,
-          payload,
-          runtimeScope: scope,
-        }),
-      )
-    }
+    const postBlankValidators = spec.validators.map((validator) => ({
+      ...validator,
+      validation: {
+        ...validator.validation,
+        stage: validator.validation?.stage ?? "post_blank",
+        target: validator.validation?.target ?? "product",
+      },
+    }))
+    const validationStage = await runValidationStage({
+      cwd: input.cwd,
+      config,
+      spec,
+      unit: work,
+      stage: "post_blank",
+      targets: ["product", "behavior", "regression"],
+      runID,
+      attempt: 1,
+      stageDir: validatorRoot,
+      bundlePath,
+      payload,
+      runtimeScope: scope,
+      validators: postBlankValidators,
+    })
+    const validators: BlankEvalResult["validatorResults"] = validationStage.validatorResults
 
     const required = validators.filter((item) => spec.validators.find((v) => v.id === item.validatorID)?.required !== false)
     const passed = required.every((item) => item.passed)
@@ -496,6 +502,7 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       passed,
       summary,
       validatorResults: validators,
+      validationStageResultPath: validationStage.resultPath,
       sessionExecutionReportPath: artifacts.sessionExecutionReportPath,
       createdAt: nowISO(),
     }
@@ -511,6 +518,7 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       resultPath,
       sessionDir,
       validatorRoot,
+      validationStageResultPath: validationStage.resultPath,
       createdAt: nowISO(),
     })
 
@@ -522,6 +530,7 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       validatorResults: validators,
       sessionExecutionReportPath: artifacts.sessionExecutionReportPath,
       resultPath,
+      validationStageResultPath: validationStage.resultPath,
     }
   } finally {
     const clean = await cleanupRuntimeProcessScope(scope)

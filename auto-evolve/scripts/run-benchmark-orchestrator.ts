@@ -431,7 +431,7 @@ async function queueTrain(
   const recoveries = new Map<string, number>()
   let next = 0
   const active = new Set<Promise<void>>()
-  const activeIDs = new Set<string>()
+  const activeIDs = new Map<string, string>()
 
   const mark = async (id: string, patch: Partial<BenchmarkState["trainResults"][number]>) => {
     const row = state.trainResults.find((item) => item.id === id)
@@ -441,7 +441,8 @@ async function queueTrain(
   }
 
   async function start(pick: { id: string; spec: string; campaign?: string }) {
-    activeIDs.add(pick.id)
+    const activeToken = `${Date.now()}:${Math.random().toString(36).slice(2)}`
+    activeIDs.set(pick.id, activeToken)
     await mark(pick.id, { status: "running" })
     const task = runOneCampaign(config, pick)
       .then(async (row) => {
@@ -460,7 +461,7 @@ async function queueTrain(
       })
       .finally(() => {
         active.delete(task)
-        activeIDs.delete(pick.id)
+        if (activeIDs.get(pick.id) === activeToken) activeIDs.delete(pick.id)
       })
     active.add(task)
   }
@@ -478,7 +479,7 @@ async function queueTrain(
         continue
       }
       const health = await readCampaignHealth(latest.cdir)
-      if (!health || health.suggestedAction !== "resume") continue
+      if (!health || (health.suggestedAction !== "resume" && health.suggestedAction !== "takeover")) continue
       if (activeIDs.has(id) && health.health !== "stale_running" && health.health !== "stuck_running") continue
       const attempts = recoveries.get(id) ?? 0
       if (attempts >= 3) continue

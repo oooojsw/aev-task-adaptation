@@ -29,7 +29,7 @@ export type CampaignHealth = {
   ageSeconds?: number
   artifactAgeSeconds?: number
   reason: string
-  suggestedAction: "watch" | "resume" | "none"
+  suggestedAction: "watch" | "resume" | "takeover" | "none"
 }
 
 export type DashboardSummary = {
@@ -161,7 +161,7 @@ export async function readCampaignHealth(campaignDir: string, nowMs = Date.now()
     if (heartbeatStale && artifactStale) {
       health = "stuck_running"
       reason = `Owner PID ${ownerPID} is alive, but heartbeat and artifacts are stale.`
-      suggestedAction = "resume"
+      suggestedAction = "takeover"
     } else if (typeof heartbeatMs === "number" && nowMs - heartbeatMs > policy.longRunningMs) {
       health = "long_running"
       reason = `Owner PID ${ownerPID} is alive; run is long, but not proven stuck.`
@@ -288,7 +288,7 @@ export async function writeRunDashboard(input: {
     "",
     "## Problems",
     ...campaigns
-      .filter((row) => row.suggestedAction === "resume" || row.health === "stuck_running")
+      .filter((row) => row.suggestedAction === "resume" || row.suggestedAction === "takeover" || row.health === "stuck_running")
       .map((row) => `- ${row.taskID ?? row.campaignID}: ${row.reason}`),
     "",
   ].filter((line): line is string => typeof line === "string")

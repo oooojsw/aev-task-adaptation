@@ -6,6 +6,7 @@ import type {
   LongTaskInitialGraphDraft,
   LongTaskPathRef,
   LongTaskSpec,
+  LongTaskValidatorEngineHints,
   LongTaskValidatorContract,
 } from "./contract"
 import { DEFAULT_LONG_TASK_BUDGETS } from "./contract"
@@ -28,6 +29,55 @@ function normalizeStringArray(input: unknown) {
 
 function normalizeMaybeString(input: unknown) {
   return typeof input === "string" && input.trim().length > 0 ? input.trim() : undefined
+}
+
+function normalizeValidatorEngineHints(raw: unknown): LongTaskValidatorEngineHints | undefined {
+  if (!isObject(raw)) return undefined
+  const target =
+    raw.target === "surface" ||
+    raw.target === "product" ||
+    raw.target === "behavior" ||
+    raw.target === "regression" ||
+    raw.target === "transaction" ||
+    raw.target === "layout"
+      ? raw.target
+      : undefined
+  const stage =
+    raw.stage === "local_training" ||
+    raw.stage === "pre_blank" ||
+    raw.stage === "post_blank" ||
+    raw.stage === "post_merge" ||
+    raw.stage === "rollback" ||
+    raw.stage === "train_replay" ||
+    raw.stage === "heldout_test" ||
+    raw.stage === "judge"
+      ? raw.stage
+      : undefined
+  const answerAccess =
+    raw.answerAccess === "none" || raw.answerAccess === "private_oracle" || raw.answerAccess === "full_training"
+      ? raw.answerAccess
+      : undefined
+  const allowedAudiences = normalizeStringArray(raw.allowedAudiences).filter(
+    (item): item is NonNullable<LongTaskValidatorEngineHints["allowedAudiences"]>[number] =>
+      item === "executor" ||
+      item === "worker" ||
+      item === "lead" ||
+      item === "reviewer" ||
+      item === "merger" ||
+      item === "repair_agent" ||
+      item === "dashboard" ||
+      item === "blank_agent" ||
+      item === "memory" ||
+      item === "audit",
+  )
+  const out: LongTaskValidatorEngineHints = {
+    target,
+    stage,
+    answerAccess,
+    allowedAudiences: allowedAudiences.length ? allowedAudiences : undefined,
+    writeViews: typeof raw.writeViews === "boolean" ? raw.writeViews : undefined,
+  }
+  return Object.values(out).some((value) => value !== undefined) ? out : undefined
 }
 
 function normalizePathRef(raw: unknown): LongTaskPathRef | undefined {
@@ -107,6 +157,7 @@ function normalizeValidator(raw: unknown): LongTaskValidatorContract | undefined
         ? raw.successExitCodes.filter((item): item is number => typeof item === "number")
         : undefined,
       timeoutMs: typeof raw.timeoutMs === "number" && raw.timeoutMs > 0 ? raw.timeoutMs : undefined,
+      validation: normalizeValidatorEngineHints(raw.validation),
     }
   }
   if (raw.type === "prompt_json") {
@@ -142,6 +193,7 @@ function normalizeValidator(raw: unknown): LongTaskValidatorContract | undefined
       referencePaths: normalizeStringArray(raw.referencePaths),
       attachedFiles: normalizeStringArray(raw.attachedFiles),
       execution,
+      validation: normalizeValidatorEngineHints(raw.validation),
     }
   }
   return undefined

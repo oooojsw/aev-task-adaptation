@@ -113,6 +113,7 @@ export interface LongTaskScriptValidatorContract {
   inputMode?: "json_file" | "none"
   successExitCodes?: number[]
   timeoutMs?: number
+  validation?: LongTaskValidatorEngineHints
 }
 
 export interface LongTaskPromptValidatorContract {
@@ -133,9 +134,37 @@ export interface LongTaskPromptValidatorContract {
   referencePaths?: string[]
   attachedFiles?: string[]
   execution?: ExecutionSpec
+  validation?: LongTaskValidatorEngineHints
 }
 
 export type LongTaskValidatorContract = LongTaskScriptValidatorContract | LongTaskPromptValidatorContract
+
+export interface LongTaskValidatorEngineHints {
+  target?: "surface" | "product" | "behavior" | "regression" | "transaction" | "layout"
+  stage?:
+    | "local_training"
+    | "pre_blank"
+    | "post_blank"
+    | "post_merge"
+    | "rollback"
+    | "train_replay"
+    | "heldout_test"
+    | "judge"
+  answerAccess?: "none" | "private_oracle" | "full_training"
+  allowedAudiences?: Array<
+    | "executor"
+    | "worker"
+    | "lead"
+    | "reviewer"
+    | "merger"
+    | "repair_agent"
+    | "dashboard"
+    | "blank_agent"
+    | "memory"
+    | "audit"
+  >
+  writeViews?: boolean
+}
 
 export interface LongTaskSpec {
   id?: string

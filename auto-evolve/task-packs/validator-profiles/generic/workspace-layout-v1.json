@@ -9,7 +9,22 @@
       "runner": "bun",
       "placement": "completion_only",
       "required": true,
-      "blocking": true
+      "blocking": true,
+      "validation": {
+        "target": "layout",
+        "stage": "pre_blank",
+        "answerAccess": "none",
+        "allowedAudiences": [
+          "worker",
+          "lead",
+          "reviewer",
+          "merger",
+          "repair_agent",
+          "dashboard",
+          "memory",
+          "audit"
+        ]
+      }
     }
   ]
 }
