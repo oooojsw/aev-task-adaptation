@@ -537,6 +537,34 @@ $env:AUTO_EVOLVE_OPENCODE_HARD_TIMEOUT_MS = "10800000"
 - 看板默认过滤旧 smoke campaign；如需排查 smoke，可设置 `AUTO_EVOLVE_DASHBOARD_INCLUDE_SMOKE=1`。
 - takeover 回归烟测脚本是 `auto-evolve/scripts/smoke-run-health-takeover.ts`。
 
+### 14.19 Benchmark round-limit 后续流程
+
+通用批跑脚本 `auto-evolve/scripts/run-benchmark-orchestrator.ts` 支持“训练任务到达轮次上限但没有全部 `verified_success` 时，继续进入合并、回撤回测、add-only 修复和测试集”的流程。不要再把 `trainVerified < trainTotal` 自动理解成必须 abort；要看是否启用了 `--continue-after-round-limit`。
+
+OfficeQA 当前约定命令核心参数：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --task-pack-root auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench `
+  --train-split auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench/splits/train-selected.json `
+  --test-split auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench/splits/test-selected.json `
+  --train-limit 20 `
+  --test-limit 10 `
+  --concurrency 5 `
+  --continue-after-round-limit `
+  --replay-concurrency 3 `
+  --repair-attempts 3
+```
+
+行为含义：
+
+- `--continue-after-round-limit`：训练没全过但都到终态时，继续进入合并。
+- 合并只吃 `verified_success` 的可信 skill；未通过训练题不贡献合并，但保留给 train replay 检验。
+- 启用该参数时，train replay 默认 `all-train`，即合并后的 skill 要回测全部训练题。
+- `--replay-concurrency 3`：回撤/训练回测并发为 3，独立于训练并发。
+- `--repair-attempts 3`：回撤失败后自动走 add-only merge repair。
+- `--test-limit 10`：最后只跑 10 个 held-out test。
+
 
 # ⚠️ Windows 基础设施防坑强制纪律（Agent 必读）
 

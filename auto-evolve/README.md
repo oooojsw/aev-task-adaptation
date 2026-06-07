@@ -148,6 +148,40 @@ Hard/Soft 只是“怎么验”，Surface/Product 才是“验什么”。所以
 
 业务层以后可以按 `stage` / `target` 选择验证模块，例如在 `pre_blank` 阶段加载某个项目自己的 layout validator、surface leak validator 或 soft validator。OfficeQA、SpreadsheetBench、AuditPoint、ALFWorld 都应该通过 profile 选择自己的验证体系，而不是在 runner 里硬编码。
 
+### Benchmark Orchestrator 的 round-limit 后续流程
+
+通用批跑脚本 `scripts/run-benchmark-orchestrator.ts` 支持“训练任务到达轮次上限但没有全部成功时，仍继续进入合并/回撤/测试”的实验流程。这个能力不是把失败任务伪装成成功，而是：
+
+1. 训练阶段继续等待每个任务到达终态；如果还有任务仍在 running/recovery，则不会提前合并。
+2. 已经 `verified_success` 的训练任务作为可信 contributor 进入 Phase 2 合并。
+3. 未通过但已到达 `round_limit_reached` / `exhausted_failure` / 其他终态的训练任务不参与合并，但会保留为 train replay 的被测题。
+4. Train replay 可以用合并后的 skill 回测全部训练题，并发由 `--replay-concurrency` 单独控制；本轮 OfficeQA 约定值是 `3`。
+5. Train replay 失败后，若 `--repair-attempts` 大于 0，会自动走 add-only merge repair，修改合并后的 skill 草案，再重新验证失败题。
+6. 如果开启 `--continue-after-train-replay-failure`，即使修复后仍有训练回测失败，也会继续跑 held-out test，用于记录真实泛化分数。
+
+OfficeQA 这类“20 轮上限后仍要进入合并/回撤/测试”的推荐命令形态：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --task-pack-root auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench `
+  --train-split auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench/splits/train-selected.json `
+  --test-split auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench/splits/test-selected.json `
+  --train-limit 20 `
+  --test-limit 10 `
+  --concurrency 5 `
+  --continue-after-round-limit `
+  --replay-concurrency 3 `
+  --repair-attempts 3
+```
+
+相关参数：
+
+* `--continue-after-round-limit`：训练没全过但都到终态时，允许继续进入合并/回撤/测试。
+* `--train-replay-scope all-train|verified-only`：回撤回测范围。启用 `--continue-after-round-limit` 时默认是 `all-train`。
+* `--replay-concurrency 3`：训练回撤回测/rollback 验证并发，不再绑死训练并发。
+* `--continue-after-train-replay-failure`：回撤和 add-only 修复后仍失败时，仍继续 held-out test。启用 `--continue-after-round-limit` 时默认开启。
+* `--test-limit 10`：只跑 10 个测试集样本。
+
 现在已有阶段级入口 `runValidationStage()`：
 
 *   Campaign final acceptance 的 Blank Agent 前验证已接入 `pre_blank` stage。它会按 profile/validator 元数据执行 `surface/layout/behavior` 类验证，失败时阻断后续 Blank Agent。

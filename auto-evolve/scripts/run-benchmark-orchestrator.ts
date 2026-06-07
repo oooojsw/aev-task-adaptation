@@ -56,6 +56,17 @@ type BenchmarkConfig = {
   runTrainReplay: boolean
   runTest: boolean
   runBaseline: boolean
+  /**
+   * When true, a full-pipeline benchmark may continue into merge/replay/test
+   * even when some train campaigns hit their round limit without verified_success.
+   */
+  continueAfterTrainingIncomplete: boolean
+  /** Validate all train IDs during replay, or only the verified contributors. */
+  trainReplayScope: "verified-only" | "all-train"
+  /** Dedicated cap for train replay / rollback validation. */
+  replayConcurrency: number
+  /** Keep moving to held-out test after replay/repair still has failures. */
+  continueAfterTrainReplayFailure: boolean
   trainLimit?: number
   testLimit?: number
   validateRounds: number
@@ -80,6 +91,7 @@ type BenchmarkSummary = {
   baselinePassed?: number
   baselineTotal?: number
   mergedSkillDir?: string
+  trainingIncompleteContinued?: boolean
 }
 
 type BenchmarkState = {
@@ -312,6 +324,24 @@ function summarizeQueueResults(rows: TrainQueueResult[]) {
     failed: rows.filter((row) => row.status === "failed").length,
     exhausted: rows.filter((row) => row.status === "round_limit_reached" || row.status === "exhausted_failure").length,
   }
+}
+
+function isTerminalTrainStatus(status: string) {
+  return (
+    status === "verified_success" ||
+    status === "round_limit_reached" ||
+    status === "exhausted_failure" ||
+    status === "failed" ||
+    status === "blocked_failure" ||
+    status === "stagnation_failure" ||
+    status === "aborted"
+  )
+}
+
+function coordinatorStatusFromTrain(status: string) {
+  if (status === "verified_success") return "passed" as const
+  if (status === "round_limit_reached" || status === "exhausted_failure") return "exhausted" as const
+  return "failed" as const
 }
 
 async function writeScorecard(file: string, state: BenchmarkState) {
@@ -549,11 +579,12 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
       continue
     }
     const hit = ok.get(inst.id)
-    inst.status = hit ? "passed" : "failed"
+    const trainRow = state.trainResults.find((item) => item.id === inst.id)
+    inst.status = hit ? "passed" : coordinatorStatusFromTrain(trainRow?.status ?? "failed")
     inst.finishedAt = nowISO()
-    inst.campaignDir = hit?.cdir
+    inst.campaignDir = hit?.cdir ?? trainRow?.campaignDir
     inst.harvestedSkillPath = hit?.pending
-    inst.errorMessage = hit ? undefined : "missing verified campaign"
+    inst.errorMessage = hit ? undefined : `training did not reach verified_success: ${trainRow?.status ?? "unknown"}`
   }
   await saveCoordinatorState(stateRun)
 
@@ -579,8 +610,10 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
       cwd: repoRoot,
       state: stateRun,
       rounds: config.validateRounds,
-      validateLimit: config.concurrency,
-      filter: (instance) => instance.role !== "test" && instance.status === "passed",
+      validateLimit: config.replayConcurrency,
+      filter: (instance) =>
+        instance.role !== "test" &&
+        (config.trainReplayScope === "all-train" || instance.status === "passed"),
       repair:
         config.repairAttempts > 0
           ? {
@@ -599,7 +632,7 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
     }
     await writeJson(path.join(config.outDir, "train-replay-output.json"), replay)
     await persistState(stateFile, scorecardFile, state)
-    if (replay.passed !== replay.total) return { merge, replay, test: undefined }
+    if (replay.passed !== replay.total && !config.continueAfterTrainReplayFailure) return { merge, replay, test: undefined }
   }
 
   if (!config.runTest || testIDs.length === 0) return { merge, replay, test: undefined }
@@ -787,7 +820,11 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
     return report
   }
 
-  if (ok.size !== trainIDs.length) {
+  const incompleteTraining = ok.size !== trainIDs.length
+  const hasUnfinishedTraining = state.trainResults.some(
+    (row) => row.status !== "verified_success" && !isTerminalTrainStatus(row.status),
+  )
+  if (incompleteTraining && (!config.continueAfterTrainingIncomplete || hasUnfinishedTraining || ok.size === 0)) {
     const report: BenchmarkSummary = {
       config,
       trainIDs,
@@ -814,6 +851,7 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
       trainTotal: trainIDs.length,
       status: "merge_complete",
       mergedSkillDir: merged.merge.mergedSkillDir,
+      trainingIncompleteContinued: incompleteTraining,
     }
     const finalReportPath = path.join(config.outDir, "final-report.json")
     state.phase = "completed"
@@ -832,6 +870,7 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
       trainTotal: trainIDs.length,
       status: "train_replay_failed",
       mergedSkillDir: merged.merge.mergedSkillDir,
+      trainingIncompleteContinued: incompleteTraining,
     }
     const finalReportPath = path.join(config.outDir, "final-report.json")
     state.phase = "aborted"
@@ -850,6 +889,7 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
       trainTotal: trainIDs.length,
       status: "merge_complete",
       mergedSkillDir: merged.merge.mergedSkillDir,
+      trainingIncompleteContinued: incompleteTraining,
     }
     const finalReportPath = path.join(config.outDir, "final-report.json")
     state.phase = "completed"
@@ -870,6 +910,7 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
       trainedTestPassed: merged.test?.passed,
       trainedTestTotal: merged.test?.total,
       mergedSkillDir: merged.merge.mergedSkillDir,
+      trainingIncompleteContinued: incompleteTraining,
     }
     const finalReportPath = path.join(config.outDir, "final-report.json")
     state.phase = "completed"
@@ -893,6 +934,7 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
       trainTotal: trainIDs.length,
       status: "merge_complete",
       mergedSkillDir: merged.merge.mergedSkillDir,
+      trainingIncompleteContinued: incompleteTraining,
     }
     const finalReportPath = path.join(config.outDir, "final-report.json")
     state.phase = "completed"
@@ -914,6 +956,7 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
     baselinePassed: baselineRows.filter((row) => row.passed).length,
     baselineTotal: baselineRows.length,
     mergedSkillDir: merged.merge.mergedSkillDir,
+    trainingIncompleteContinued: incompleteTraining,
   }
   const finalReportPath = path.join(config.outDir, "final-report.json")
   state.phase = "completed"
@@ -954,6 +997,28 @@ function parseConfig(args: string[]): BenchmarkConfig {
   const concurrency = Math.max(1, Number.parseInt(getOption(args, "--concurrency") ?? "5", 10))
   const validateRounds = Math.max(1, Number.parseInt(getOption(args, "--validate-rounds") ?? "1", 10))
   const repairAttempts = Math.max(0, Number.parseInt(getOption(args, "--repair-attempts") ?? "3", 10))
+  const replayConcurrency = Math.max(
+    1,
+    Number.parseInt(getOption(args, "--replay-concurrency") ?? getOption(args, "--validate-concurrency") ?? "3", 10),
+  )
+  const continueAfterTrainingIncomplete =
+    hasFlag(args, "--continue-after-training-incomplete") || hasFlag(args, "--continue-after-round-limit")
+  const continueAfterTrainReplayFailure =
+    hasFlag(args, "--continue-after-train-replay-failure") || continueAfterTrainingIncomplete
+  const trainReplayScopeRaw = (
+    getOption(args, "--train-replay-scope") ?? (continueAfterTrainingIncomplete ? "all-train" : "verified-only")
+  )
+    .trim()
+    .toLowerCase()
+  const trainReplayScope =
+    trainReplayScopeRaw === "all-train" || trainReplayScopeRaw === "all"
+      ? "all-train"
+      : trainReplayScopeRaw === "verified-only" || trainReplayScopeRaw === "verified"
+        ? "verified-only"
+        : undefined
+  if (!trainReplayScope) {
+    throw new Error("Invalid --train-replay-scope. Use verified-only or all-train.")
+  }
   const trainLimitRaw = getOption(args, "--train-limit")
   const testLimitRaw = getOption(args, "--test-limit")
   const runMerge = !hasFlag(args, "--skip-merge") && modeOpt !== "campaign-only"
@@ -980,6 +1045,10 @@ function parseConfig(args: string[]): BenchmarkConfig {
       runTrainReplay: false,
       runTest: false,
       runBaseline: false,
+      continueAfterTrainingIncomplete,
+      trainReplayScope,
+      replayConcurrency,
+      continueAfterTrainReplayFailure,
       trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
       testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
       validateRounds,
@@ -1005,6 +1074,10 @@ function parseConfig(args: string[]): BenchmarkConfig {
       runTrainReplay: false,
       runTest: false,
       runBaseline: false,
+      continueAfterTrainingIncomplete,
+      trainReplayScope,
+      replayConcurrency,
+      continueAfterTrainReplayFailure,
       trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
       testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
       validateRounds,
@@ -1030,6 +1103,10 @@ function parseConfig(args: string[]): BenchmarkConfig {
       runTrainReplay: true,
       runTest: false,
       runBaseline: false,
+      continueAfterTrainingIncomplete,
+      trainReplayScope,
+      replayConcurrency,
+      continueAfterTrainReplayFailure,
       trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
       testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
       validateRounds,
@@ -1057,6 +1134,10 @@ function parseConfig(args: string[]): BenchmarkConfig {
     runTrainReplay,
     runTest,
     runBaseline,
+    continueAfterTrainingIncomplete,
+    trainReplayScope,
+    replayConcurrency,
+    continueAfterTrainReplayFailure,
     trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
     testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
     validateRounds,
