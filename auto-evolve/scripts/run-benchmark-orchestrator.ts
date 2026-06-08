@@ -327,6 +327,7 @@ async function planTrain(config: BenchmarkConfig, ids: string[]) {
   for (const id of ids) {
     if (ok.has(id)) continue
     const latest = map.get(id)?.[0]
+    if (latest && isTerminalTrainStatus(latest.status)) continue
     const live = config.resumeRunning && latest && shouldResumeCampaign(latest)
     todo.push({
       id,
