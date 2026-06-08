@@ -300,6 +300,26 @@ async function verified(taskPackRoot: string, ids: string[], map?: Map<string, C
   return got
 }
 
+async function syncLatestTrainTerminals(config: BenchmarkConfig, state: BenchmarkState, ids: string[]) {
+  const map = await campaigns(config.taskPackRoot, ids)
+  for (const id of ids) {
+    const rowState = state.trainResults.find((item) => item.id === id)
+    if (!rowState || rowState.status === "verified_success") continue
+    const latest = map.get(id)?.[0]
+    if (!latest) continue
+    if (latest.status === "verified_success" && (await pathExists(latest.pending))) {
+      rowState.status = "verified_success"
+      rowState.campaignDir = latest.cdir
+      rowState.updatedAt = nowISO()
+      continue
+    }
+    if (!isTerminalTrainStatus(latest.status)) continue
+    rowState.status = latest.status
+    rowState.campaignDir = latest.cdir
+    rowState.updatedAt = nowISO()
+  }
+}
+
 async function planTrain(config: BenchmarkConfig, ids: string[]) {
   const map = await campaigns(config.taskPackRoot, ids)
   const ok = config.reuseVerified ? await verified(config.taskPackRoot, ids, map) : new Map<string, CampaignRow>()
@@ -783,6 +803,7 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
       row.updatedAt = nowISO()
     }
   }
+  await syncLatestTrainTerminals(config, state, trainIDs)
   await writeJson(path.join(config.outDir, "verified-training.json"), Array.from(ok.values()))
   await persistState(stateFile, scorecardFile, state)
 
