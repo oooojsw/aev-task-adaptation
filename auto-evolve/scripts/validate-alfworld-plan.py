@@ -15,6 +15,68 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def load_payload(path_text: str | None) -> dict:
+    if not path_text:
+        return {}
+    path = os.path.abspath(path_text)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def infer_task_dir(payload: dict) -> str | None:
+    for item in payload.get("materials", []):
+        if not isinstance(item, dict):
+            continue
+        value = item.get("path")
+        role = item.get("role")
+        if isinstance(value, str) and role == "human-guidance" and os.path.exists(value):
+            return os.path.dirname(value)
+    for item in payload.get("materials", []):
+        if not isinstance(item, dict):
+            continue
+        value = item.get("path")
+        if not isinstance(value, str) or not os.path.exists(value):
+            continue
+        return os.path.dirname(value)
+    return None
+
+
+def payload_output_candidates(payload: dict) -> list[str]:
+    out: list[str] = []
+    for item in payload.get("targetPaths", []):
+        if isinstance(item, dict) and isinstance(item.get("path"), str):
+            out.append(item["path"])
+    for item in payload.get("expectedArtifacts", []):
+        if isinstance(item, str):
+            out.append(item)
+    return out
+
+
+def resolve_path(value: str, payload: dict, *, prefer_payload_output: bool = False) -> str:
+    if os.path.isabs(value):
+        return value
+    if prefer_payload_output:
+        wanted = os.path.basename(value).lower()
+        for item in payload_output_candidates(payload):
+            if os.path.basename(item).lower() == wanted and os.path.exists(item):
+                return item
+        for item in payload_output_candidates(payload):
+            if os.path.basename(item).lower() == wanted:
+                return item
+    task_dir = infer_task_dir(payload)
+    if task_dir:
+        candidate = os.path.abspath(os.path.join(task_dir, value))
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.abspath(value)
+
+
 def normalize_action(value: Any) -> str:
     text = str(value).strip().lower()
     text = re.sub(r"^\s*\d+[\).\:-]\s*", "", text)
@@ -48,21 +110,24 @@ def read_candidate(path: str) -> list[str]:
 def main() -> int:
     try:
         args = parse_args()
-        if not os.path.exists(args.candidate):
+        payload = load_payload(args.input_json)
+        candidate_path = resolve_path(args.candidate, payload, prefer_payload_output=True)
+        answer_path = resolve_path(args.answer, payload)
+        if not os.path.exists(candidate_path):
             print(
                 json.dumps(
                     {
                         "passed": False,
                         "blocking": True,
                         "summary": "Candidate plan file not found.",
-                        "details": [f"missing candidate: {args.candidate}"],
+                        "details": [f"missing candidate: {candidate_path}"],
                     },
                     ensure_ascii=False,
                 )
             )
             return 0
-        expected = read_expected(args.answer)
-        got = read_candidate(args.candidate)
+        expected = read_expected(answer_path)
+        got = read_candidate(candidate_path)
         passed = expected == got
         details = []
         if not passed:

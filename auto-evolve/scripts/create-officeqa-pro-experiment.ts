@@ -5,7 +5,29 @@ import { createHash } from "node:crypto"
 const cwd = path.resolve(import.meta.dir, "..", "..")
 const auto = path.join(cwd, "auto-evolve")
 const outRoot = path.join(auto, "task-packs", "real-long-tasks", "officeqa-pro-learnbench")
-const csvPath = path.join("C:", "Users", "ZhuanZ", "Desktop", "experiment", "datasets", "OfficeQA_pro", "officeqa_pro.csv")
+const defaultCsvPath = path.join("C:", "Users", "ZhuanZ", "Desktop", "experiment", "datasets", "OfficeQA_pro", "officeqa_pro.csv")
+const csvPath = process.env.OFFICEQA_PRO_CSV
+  ? path.resolve(process.env.OFFICEQA_PRO_CSV)
+  : defaultCsvPath
+// Optional: precise UID list (one UID per line, or extracted from a Markdown/JSON file via regex).
+// When set, the script materializes exactly these UIDs (in CSV order) instead of using stable-hash slicing.
+const uidsFile = process.env.OFFICEQA_PRO_UIDS_FILE
+  ? path.resolve(process.env.OFFICEQA_PRO_UIDS_FILE)
+  : null
+// DRY_RUN: when set, the script does NOT write/overwrite any file, remove any
+// directory, or copy any PDF. It only prints the planned actions and exits.
+// Recommended: keep this on whenever you are about to regenerate task specs.
+const dryRun = process.env.OFFICEQA_PRO_DRY_RUN === "1"
+// MISSING_ONLY: when set, only UIDs whose task directory does not exist get
+// materialized. Already-materialized task directories are skipped entirely
+// (no spec.json rewrite, no answer.txt overwrite, no PDF re-copy). This is
+// the safe way to top up a true-training-set list against an existing pack.
+const missingOnly = process.env.OFFICEQA_PRO_MISSING_ONLY === "1"
+// PRESERVE_EXISTING: when set, existing task directory runtime artifacts
+// (workspace/, expert-workspace/, validation-expert-workspace/, materials/*.pdf)
+// are snapshotted to <outRoot>/.task-snapshots/<timestamp>/<UID>/ before any
+// destructive operation. Defaults to 1 (safe); opt out with =0.
+const preserveExisting = process.env.OFFICEQA_PRO_PRESERVE_EXISTING !== "0"
 const corpusPdfRoot = path.join(
   "C:",
   "Users",
@@ -190,6 +212,23 @@ function splitLines(value: string) {
     .filter(Boolean)
 }
 
+// Extract unique UID tokens (UID followed by 4 digits) from arbitrary text.
+// Handles Markdown files (extracts from tables, bullet lists, headings),
+// JSON arrays, and plain newline-separated UID lists.
+function extractUids(text: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  const re = /\bUID\d{4}\b/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    if (!seen.has(m[0])) {
+      seen.add(m[0])
+      out.push(m[0])
+    }
+  }
+  return out
+}
+
 function pdfNameFromSourceFile(sourceFile: string) {
   return sourceFile.replace(/\.txt$/i, ".pdf")
 }
@@ -197,8 +236,38 @@ function pdfNameFromSourceFile(sourceFile: string) {
 async function writeTask(row: Row) {
   const id = row.uid
   const taskDir = path.join(outRoot, "tasks", id)
+  if (dryRun) {
+    // Defensive: writeTask must not run during dry-run. main() short-circuits
+    // before this, but keep an extra guard so a future refactor can't bypass it.
+    return id
+  }
   const materialsDir = path.join(taskDir, "materials")
   const privateAnswerDir = path.join(outRoot, "private-answers", id)
+  // PRESERVE_EXISTING: snapshot existing runtime artifacts to .task-snapshots/<ts>/<UID>/
+  // BEFORE the destructive rm below, so e.g. a real R4 workspace/answer.txt can be recovered.
+  if (preserveExisting) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+    const snapshotDir = path.join(outRoot, ".task-snapshots", stamp, id)
+    const runtimeDirs = ["workspace", "expert-workspace", "validation-expert-workspace", "materials"]
+    for (const runtimeName of runtimeDirs) {
+      const src = path.join(taskDir, runtimeName)
+      const dst = path.join(snapshotDir, runtimeName)
+      try {
+        const { existsSync, statSync } = await import("node:fs")
+        if (!existsSync(src)) continue
+        const stat = statSync(src)
+        await mkdir(path.dirname(dst), { recursive: true })
+        if (stat.isDirectory()) {
+          const { cp } = await import("node:fs/promises")
+          await cp(src, dst, { recursive: true, force: true })
+        } else {
+          await copyFile(src, dst)
+        }
+      } catch {
+        // best-effort snapshot
+      }
+    }
+  }
   for (const runtimeName of ["workspace", "expert-workspace", "validation-expert-workspace"]) {
     await rm(path.join(taskDir, runtimeName), { recursive: true, force: true })
   }
@@ -355,9 +424,71 @@ async function writeTask(row: Row) {
 }
 
 async function main() {
-  const rows = sortedByStableHash(parseCsv(await readFile(csvPath, "utf8"))).slice(0, taskLimit)
+  const allRows = parseCsv(await readFile(csvPath, "utf8"))
+  let rows: Row[]
+  let explicitUids: string[] | null = null
+  if (uidsFile) {
+    const uidsText = await readFile(uidsFile, "utf8")
+    explicitUids = extractUids(uidsText)
+    if (explicitUids.length === 0) {
+      throw new Error(`OFFICEQA_PRO_UIDS_FILE=${uidsFile} but no UID tokens found in it.`)
+    }
+    const byUid = new Map(allRows.map((r) => [r.uid, r]))
+    rows = []
+    const missing: string[] = []
+    for (const uid of explicitUids) {
+      const row = byUid.get(uid)
+      if (row) rows.push(row)
+      else missing.push(uid)
+    }
+    if (missing.length > 0) {
+      throw new Error(
+        `OFFICEQA_PRO_UIDS_FILE specified ${explicitUids.length} UIDs but ${missing.length} are missing from CSV ${csvPath}: ${missing.join(", ")}`,
+      )
+    }
+  } else {
+    rows = sortedByStableHash(allRows).slice(0, taskLimit)
+  }
   const trainSelected = rows.slice(0, Math.min(trainLimit, rows.length))
   const testSelected = rows.slice(trainSelected.length, Math.min(trainSelected.length + testLimit, rows.length))
+
+  if (dryRun) {
+    // Dry-run: print the plan, do NOT touch the filesystem.
+    // Probe existing task dirs so the user sees the actual skip count.
+    const { existsSync } = await import("node:fs")
+    const existing = rows.filter((r) => existsSync(path.join(outRoot, "tasks", r.uid))).map((r) => r.uid)
+    const wouldCreate = missingOnly ? rows.length - existing.length : rows.length
+    console.log(
+      JSON.stringify(
+        {
+          mode: "DRY_RUN",
+          dryRun,
+          preserveExisting,
+          csvPath,
+          uidsFile: uidsFile ?? null,
+          explicitUids: explicitUids?.length ?? null,
+          trainSelected,
+          testSelected,
+          wouldCreateTaskDirs: wouldCreate,
+          wouldSkipExisting: missingOnly ? existing.length : 0,
+          existingSkippedUIDs: missingOnly ? existing : [],
+          wouldWriteSplit: explicitUids
+            ? `train-${explicitUids.length}-skillopt.json`
+            : taskLimit === 5
+              ? "first-five.json"
+              : `first-${taskLimit}.json`,
+          wouldWriteSeedWorkspace: true,
+          wouldWriteConfigs: true,
+          wouldOverwriteExistingAnswerTxt: !preserveExisting,
+          note: "No files were written. Re-run with OFFICEQA_PRO_DRY_RUN unset (or =0) to actually materialize tasks.",
+        },
+        null,
+        2,
+      ),
+    )
+    return
+  }
+
   await mkdir(path.join(outRoot, "seed-expert-workspace"), { recursive: true })
   await writeFile(
     path.join(outRoot, "seed-expert-workspace", "README.md"),
@@ -372,10 +503,30 @@ async function main() {
     "utf8",
   )
   const ids: string[] = []
-  for (const row of rows) ids.push(await writeTask(row))
+  const skippedExisting: string[] = []
+  for (const row of rows) {
+    const existingTaskDir = path.join(outRoot, "tasks", row.uid)
+    let exists = false
+    try {
+      const { existsSync } = await import("node:fs")
+      exists = existsSync(existingTaskDir)
+    } catch {
+      exists = false
+    }
+    if (missingOnly && exists) {
+      skippedExisting.push(row.uid)
+      ids.push(row.uid)
+      continue
+    }
+    ids.push(await writeTask(row))
+  }
   const trainIDs = trainSelected.map((row) => row.uid)
   const testIDs = testSelected.map((row) => row.uid)
-  const splitName = taskLimit === 5 ? "first-five.json" : `first-${taskLimit}.json`
+  const splitName = explicitUids
+    ? `train-${explicitUids.length}-skillopt.json`
+    : taskLimit === 5
+      ? "first-five.json"
+      : `first-${taskLimit}.json`
   await writeFile(path.join(outRoot, "splits", splitName), JSON.stringify(ids, null, 2), "utf8")
   await writeFile(path.join(outRoot, "splits", "train-selected.json"), JSON.stringify(trainIDs, null, 2), "utf8")
   await writeFile(path.join(outRoot, "splits", "test-selected.json"), JSON.stringify(testIDs, null, 2), "utf8")
@@ -390,6 +541,7 @@ async function main() {
       {
         dataset: "OfficeQA Pro",
         sourceCsv: csvPath,
+        uidsFile: uidsFile ?? null,
         splitFile: splitName,
         trainSelected: trainIDs,
         testSelected: testIDs,
@@ -403,7 +555,22 @@ async function main() {
     ),
     "utf8",
   )
-  console.log(JSON.stringify({ outRoot, trainSelected: trainIDs, testSelected: testIDs, ids }, null, 2))
+  console.log(
+    JSON.stringify(
+      {
+        outRoot,
+        csvPath,
+        uidsFile,
+        explicitUids: explicitUids?.length ?? null,
+        preserveExisting,
+        trainSelected: trainIDs,
+        testSelected: testIDs,
+        ids,
+      },
+      null,
+      2,
+    ),
+  )
 }
 
 await main()

@@ -7,7 +7,7 @@
  *   merged-skill/
  *     INDEX.md       # how to use this skill
  *     CORE.md        # rules verified across multiple instances
- *     cases/         # per-instance notes
+ *     casebook/      # scenario notes named by task features, not raw ids
  *     meta.json      # provenance & confidence
  *
  * The merger only consumes verified training instance skills. Exhausted
@@ -19,10 +19,14 @@
 import path from "node:path"
 import { readdir, stat } from "node:fs/promises"
 import { ensureDirectory, pathExists, readTextFile, writeJsonFile, writeTextFile } from "../fs"
+import type { LongTaskSpec, LongTaskValidatorContract, LongTaskWorkUnit } from "../long-task/contract"
+import { loadLongTaskSpec } from "../long-task/spec"
 import { runOpencodeTask } from "../opencode"
 import { loadConfig } from "../schema"
 import type { CoordinatorState, InstanceState } from "./contract"
 import { appendCoordinatorLog, mergeDir, saveCoordinatorState } from "./repository"
+import { selectValidationModules } from "../validation-engine/registry"
+import { runValidationStage } from "../validation-engine/stage-runner"
 
 export interface RunMergerInput {
   cwd: string
@@ -35,6 +39,8 @@ export interface MergerOutcome {
   mergedSkillDir: string
   contributingInstances: string[]
   mergerRunDir: string
+  postMergeValidationResultPath?: string
+  postMergeValidationPassed?: boolean
 }
 
 /**
@@ -51,7 +57,7 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
   await ensureDirectory(mergerRoot)
   const mergedSkillDir = path.join(mergerRoot, "output")
   await ensureDirectory(mergedSkillDir)
-  await ensureDirectory(path.join(mergedSkillDir, "cases"))
+  await ensureDirectory(path.join(mergedSkillDir, "casebook"))
 
   const contributingInstances = state.instances.filter(
     (i) =>
@@ -162,13 +168,214 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
     await appendCoordinatorLog(state, "info", "Phase 2: merger output complete (INDEX, CORE, meta)")
   }
 
+  const postMergeValidation = await runPostMergeValidation({
+    cwd: input.cwd,
+    state,
+    config,
+    mergerRoot,
+    mergedSkillDir,
+    manifestPath,
+    contributingInstances,
+  })
+
   state.mergedSkillDir = mergedSkillDir
+  state.postMergeValidationStatus = postMergeValidation.status
+  state.postMergeValidationResultPath = postMergeValidation.resultPath
+  state.postMergeValidationSummary = postMergeValidation.summary
   await saveCoordinatorState(state)
+
+  if (postMergeValidation.status === "failed") {
+    throw new Error(`Phase 2 post-merge validation failed: ${postMergeValidation.summary}`)
+  }
 
   return {
     mergedSkillDir,
     contributingInstances: contributingInstances.map((i) => i.id),
     mergerRunDir: mergerRoot,
+    postMergeValidationResultPath: postMergeValidation.resultPath,
+    postMergeValidationPassed:
+      postMergeValidation.status === "skipped" ? undefined : postMergeValidation.status === "passed",
+  }
+}
+
+async function runPostMergeValidation(input: {
+  cwd: string
+  state: CoordinatorState
+  config: Awaited<ReturnType<typeof loadConfig>>
+  mergerRoot: string
+  mergedSkillDir: string
+  manifestPath: string
+  contributingInstances: InstanceState[]
+}) {
+  const loaded = await loadContributingSpecs(input)
+  const validators = uniqueValidatorsByID(loaded.flatMap((item) => item.spec.validators))
+  const selected = selectValidationModules({
+    validators,
+    stage: "post_merge",
+  })
+
+  if (!selected.length) {
+    await appendCoordinatorLog(
+      input.state,
+      "info",
+      "Phase 2: no post_merge validation modules configured; skipping validation-engine post-merge stage.",
+    )
+    return {
+      status: "skipped" as const,
+      summary: "No post_merge validation modules configured.",
+      resultPath: undefined,
+    }
+  }
+
+  const mergedSpec = buildPostMergeSpec(input.state, input.mergedSkillDir, validators, loaded[0]?.spec)
+  const unit = buildPostMergeUnit(input.state, input.manifestPath, input.mergedSkillDir, selected)
+  const stageDir = path.join(input.mergerRoot, "post-merge-validation")
+  const bundlePath = path.join(stageDir, "bundle.json")
+  const payload = buildPostMergePayload(input)
+  await ensureDirectory(stageDir)
+  await writeJsonFile(bundlePath, payload)
+
+  const stage = await runValidationStage({
+    cwd: input.cwd,
+    config: input.config,
+    spec: mergedSpec,
+    unit,
+    stage: "post_merge",
+    runID: `multi-instance-post-merge-${input.state.id}`,
+    attempt: 1,
+    stageDir,
+    bundlePath,
+    payload,
+    validators,
+  })
+
+  await appendCoordinatorLog(
+    input.state,
+    stage.passed ? "info" : "error",
+    `Phase 2: post-merge validation ${stage.passed ? "passed" : "failed"} (${selected.length} module(s)): ${stage.summary}`,
+  )
+
+  return {
+    status: stage.passed ? ("passed" as const) : ("failed" as const),
+    summary: stage.summary,
+    resultPath: stage.resultPath,
+  }
+}
+
+async function loadContributingSpecs(input: {
+  state: CoordinatorState
+  contributingInstances: InstanceState[]
+}) {
+  const out: Array<{ instance: InstanceState; spec: LongTaskSpec }> = []
+  for (const instance of input.contributingInstances) {
+    const specPath = path.join(instance.sourceTaskRoot, "spec.json")
+    try {
+      const loaded = await loadLongTaskSpec(specPath, { allowMissingInitialExpertContextPaths: true })
+      out.push({ instance, spec: loaded.spec })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      await appendCoordinatorLog(
+        input.state,
+        "warn",
+        `Phase 2: could not load post-merge validators from ${instance.id}: ${message}`,
+      )
+    }
+  }
+  return out
+}
+
+function uniqueValidatorsByID(validators: LongTaskValidatorContract[]) {
+  const byID = new Map<string, LongTaskValidatorContract>()
+  for (const validator of validators) byID.set(validator.id, validator)
+  return Array.from(byID.values())
+}
+
+function buildPostMergeSpec(
+  state: CoordinatorState,
+  mergedSkillDir: string,
+  validators: LongTaskValidatorContract[],
+  template?: LongTaskSpec,
+): LongTaskSpec {
+  return {
+    ...(template ?? {
+      title: "Post-merge validation",
+      goal: "Validate the merged expert surface after multi-instance merge.",
+      materials: [{ path: mergedSkillDir, label: "merged skill", role: "experience-workspace" }],
+      validators,
+      budgets: {
+        maxAttemptsPerUnit: 1,
+        maxTotalUnitAttempts: 1,
+        maxGraphReplans: 0,
+        maxValidatorCalls: validators.length || 1,
+        maxNoProgressCycles: 1,
+        maxUnitsPerGraph: 1,
+      },
+    }),
+    id: `post-merge-${state.id}`,
+    title: `Post-merge validation for ${state.label || state.id}`,
+    goal: "Validate the merged expert surface after multi-instance merge.",
+    materials: [{ path: mergedSkillDir, label: "merged skill", role: "experience-workspace" }],
+    targetPaths: [{ path: mergedSkillDir, label: "merged skill", role: "experience-workspace" }],
+    editablePaths: [],
+    initialExpertContextPaths: [],
+    formalPackageRoots: [mergedSkillDir],
+    validators,
+  }
+}
+
+function buildPostMergeUnit(
+  state: CoordinatorState,
+  manifestPath: string,
+  mergedSkillDir: string,
+  validators: LongTaskValidatorContract[],
+): LongTaskWorkUnit {
+  return {
+    id: "post-merge-surface",
+    title: "Post-merge merged skill validation",
+    goal: "Validate the merged expert surface before train replay or held-out test begins.",
+    inputs: [manifestPath, mergedSkillDir],
+    dependsOn: [],
+    expectedArtifacts: [mergedSkillDir],
+    claim: `Merged skill for ${state.id} is ready for post-merge validation.`,
+    checkPlan: "Run validation-engine post_merge modules against the merged skill output directory.",
+    validatorIDs: validators.map((item) => item.id),
+    retryBudget: 0,
+    status: "active",
+    attemptCount: 1,
+  }
+}
+
+function buildPostMergePayload(input: {
+  state: CoordinatorState
+  mergedSkillDir: string
+  manifestPath: string
+  contributingInstances: InstanceState[]
+}) {
+  return {
+    schema: "auto-evolve/multi-instance-post-merge-validation/v1",
+    task: {
+      id: input.state.id,
+      title: input.state.label,
+      phase: "post_merge",
+      goal: "Validate the merged expert surface before train replay or held-out test.",
+    },
+    targetPaths: [
+      {
+        path: input.mergedSkillDir,
+        label: "merged skill",
+        role: "experience-workspace",
+      },
+    ],
+    expectedArtifacts: [input.mergedSkillDir],
+    files: {
+      merged_skill_dir: input.mergedSkillDir,
+      input_manifest_path: input.manifestPath,
+    },
+    contributingInstances: input.contributingInstances.map((instance) => ({
+      id: instance.id,
+      sourceTaskRoot: instance.sourceTaskRoot,
+      harvestedSkillPath: instance.harvestedSkillPath,
+    })),
   }
 }
 

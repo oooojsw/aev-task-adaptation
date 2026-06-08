@@ -84,6 +84,10 @@ export interface CoordinatorState {
   runRoot: string
   /** Skill output directory used by phase 2/3/4. */
   mergedSkillDir?: string
+  /** Post-merge validation status for the merged skill surface, if configured. */
+  postMergeValidationStatus?: "passed" | "failed" | "skipped"
+  postMergeValidationResultPath?: string
+  postMergeValidationSummary?: string
   /** Configuration that produced this run (echoed for resume). */
   options: {
     skillsbenchRoot: string

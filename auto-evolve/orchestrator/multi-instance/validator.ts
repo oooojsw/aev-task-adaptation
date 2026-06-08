@@ -30,7 +30,13 @@ import { runSkillsBenchTask } from "../skillsbench-adapter"
 import { runOpencodeTask } from "../opencode"
 import { loadConfig } from "../schema"
 import { loadLongTaskSpec } from "../long-task/spec"
-import type { LongTaskPathRef, LongTaskPromptValidatorContract, LongTaskSpec, LongTaskValidatorContract } from "../long-task/contract"
+import type {
+  LongTaskPathRef,
+  LongTaskPromptValidatorContract,
+  LongTaskScriptValidatorContract,
+  LongTaskSpec,
+  LongTaskValidatorContract,
+} from "../long-task/contract"
 import { runBlankEval } from "../blank-eval/runner"
 import type { CoordinatorState, InstanceState } from "./contract"
 import { appendCoordinatorLog, saveCoordinatorState, validateDir } from "./repository"
@@ -68,81 +74,92 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput): Pro
   state.phase = "phase3_validate"
   await saveCoordinatorState(state)
   const startedAt = Date.now()
+  const heartbeatHandle = setInterval(() => {
+    state.heartbeatAt = new Date().toISOString()
+    state.updatedAt = state.heartbeatAt
+    void saveCoordinatorState(state).catch(() => undefined)
+  }, 60_000)
 
-  if (!state.mergedSkillDir) {
-    throw new Error(
-      "Phase 3 cannot run: state.mergedSkillDir is not set. Run Phase 2 (merge) first.",
-    )
-  }
-  let mergedSkillDir = state.mergedSkillDir
-
-  const validateRoot = validateDir(state.runRoot)
-  await ensureDirectory(validateRoot)
-
-  const rounds = input.rounds ?? 2
-  const limit = input.validateLimit ?? state.options.fanoutLimit ?? state.instances.length
-  const filter = input.filter ?? defaultFilter
-
-  const eligible = state.instances.filter(filter)
-  const inFlight = new Set<Promise<unknown>>()
-  const regressions: string[] = []
-
-  for (const instance of eligible) {
-    while (inFlight.size >= limit) {
-      await Promise.race(inFlight)
+  try {
+    if (!state.mergedSkillDir) {
+      throw new Error(
+        "Phase 3 cannot run: state.mergedSkillDir is not set. Run Phase 2 (merge) first.",
+      )
     }
-    const job = runOneValidation(input.cwd, state, instance, mergedSkillDir, rounds, regressions)
-      .finally(() => inFlight.delete(job))
-    inFlight.add(job)
-  }
-  await Promise.all(inFlight)
+    let mergedSkillDir = state.mergedSkillDir
 
-  let repairAttempts = 0
-  let repairFixed = 0
-  if (input.repair?.enabled && input.repair.mode === "append_only") {
-    const targets = eligible.filter((row) => row.role !== "test" && row.validateStatus === "failed")
-    for (const row of targets) {
-      const got = await runOneRepair({
-        cwd: input.cwd,
-        state,
-        instance: row,
-        mergedSkillDir,
-        rounds,
-        repair: input.repair,
-      })
-      repairAttempts += got.attempts
-      if (got.fixed) {
-        repairFixed += 1
-        mergedSkillDir = state.mergedSkillDir ?? mergedSkillDir
+    const validateRoot = validateDir(state.runRoot)
+    await ensureDirectory(validateRoot)
+
+    const rounds = input.rounds ?? 2
+    const limit = input.validateLimit ?? state.options.fanoutLimit ?? state.instances.length
+    const filter = input.filter ?? defaultFilter
+
+    const eligible = state.instances.filter(filter)
+    const inFlight = new Set<Promise<unknown>>()
+    const regressions: string[] = []
+
+    for (const instance of eligible) {
+      while (inFlight.size >= limit) {
+        await Promise.race(inFlight)
+      }
+      const job = runOneValidation(input.cwd, state, instance, mergedSkillDir, rounds, regressions)
+        .finally(() => inFlight.delete(job))
+      inFlight.add(job)
+    }
+    await Promise.all(inFlight)
+
+    let repairAttempts = 0
+    let repairFixed = 0
+    if (input.repair?.enabled && input.repair.mode === "append_only") {
+      state.phase = "phase4_repair"
+      await saveCoordinatorState(state)
+      const targets = eligible.filter((row) => row.role !== "test" && row.validateStatus === "failed")
+      for (const row of targets) {
+        const got = await runOneRepair({
+          cwd: input.cwd,
+          state,
+          instance: row,
+          mergedSkillDir,
+          rounds,
+          repair: input.repair,
+        })
+        repairAttempts += got.attempts
+        if (got.fixed) {
+          repairFixed += 1
+          mergedSkillDir = state.mergedSkillDir ?? mergedSkillDir
+        }
       }
     }
+
+    const total = eligible.length
+    const passed = eligible.filter((i) => i.validateStatus === "passed").length
+    const failed = eligible.filter((i) => i.validateStatus === "failed").length
+    const skipped = state.instances.length - total
+
+    const summary: ValidateOutcome = {
+      total,
+      passed,
+      failed,
+      skipped,
+      regressions,
+      repairAttempts,
+      repairFixed,
+      durationMs: Date.now() - startedAt,
+    }
+    await writeJsonFile(path.join(validateRoot, "summary.json"), summary)
+    await appendCoordinatorLog(
+      state,
+      "info",
+      `Phase 3: ${passed}/${total} passed${regressions.length > 0 ? `, regressions: ${regressions.join(", ")}` : ""}`,
+    )
+
+    state.phase = "completed"
+    await saveCoordinatorState(state)
+    return summary
+  } finally {
+    clearInterval(heartbeatHandle)
   }
-
-  const total = eligible.length
-  const passed = eligible.filter((i) => i.validateStatus === "passed").length
-  const failed = eligible.filter((i) => i.validateStatus === "failed").length
-  const skipped = state.instances.length - total
-
-  const summary: ValidateOutcome = {
-    total,
-    passed,
-    failed,
-    skipped,
-    regressions,
-    repairAttempts,
-    repairFixed,
-    durationMs: Date.now() - startedAt,
-  }
-  await writeJsonFile(path.join(validateRoot, "summary.json"), summary)
-  await appendCoordinatorLog(
-    state,
-    "info",
-    `Phase 3: ${passed}/${total} passed${regressions.length > 0 ? `, regressions: ${regressions.join(", ")}` : ""}`,
-  )
-
-  state.phase = "completed"
-  await saveCoordinatorState(state)
-  return summary
 }
 
 async function runOneValidation(
@@ -436,11 +453,28 @@ function inferTargets(spec: LongTaskSpec, root: string, slotDir: string): LongTa
       .filter((item) => !isSkillish(spec, item)),
   )
   const source = artifacts.length ? artifacts : (spec.targetPaths ?? []).map((item) => item.path).filter((item) => !isSkillish(spec, item))
-  return uniqueStrings(source).map((item) => ({
+  return sortCandidateLikeTargets(uniqueStrings(source)).map((item) => ({
     path: mapInto(root, slotDir, item),
     label: path.basename(item) || "blank eval output",
     role: "target-artifact",
   }))
+}
+
+function candidatePriority(item: string) {
+  const base = path.basename(item).toLowerCase()
+  if (base === "answer.txt") return 0
+  if (base === "answer.json") return 1
+  if (base === "plan.json") return 2
+  if (base.startsWith("answer.")) return 3
+  if (base.includes("answer")) return 4
+  return 10
+}
+
+function sortCandidateLikeTargets(items: string[]) {
+  return items
+    .map((item, index) => ({ item, index, priority: candidatePriority(item) }))
+    .sort((a, b) => a.priority - b.priority || a.index - b.index)
+    .map((entry) => entry.item)
 }
 
 function inferEdits(spec: LongTaskSpec, root: string, slotDir: string, targets: LongTaskPathRef[]) {
@@ -470,9 +504,21 @@ function isSkillValidator(item: LongTaskValidatorContract) {
 async function patchValidator(input: {
   item: LongTaskValidatorContract
   root: string
-  target?: string
+  targets: LongTaskPathRef[]
   human?: string
 }): Promise<LongTaskValidatorContract> {
+  const target = selectValidatorCandidateTarget(input.item, input.targets)
+  if (input.item.type === "script") {
+    const val: LongTaskScriptValidatorContract = {
+      ...input.item,
+      args: patchScriptValidatorArgs({
+        args: input.item.args ?? [],
+        root: input.root,
+        target,
+      }),
+    }
+    return val
+  }
   if (input.item.type !== "prompt_json") return input.item
   const answer = await firstExisting([
     input.item.inputFiles?.answerPath ?? "",
@@ -484,11 +530,49 @@ async function patchValidator(input: {
     inputFiles: {
       ...(input.item.inputFiles ?? {}),
       answerPath: answer ?? input.item.inputFiles?.answerPath,
-      candidatePath: input.target ?? input.item.inputFiles?.candidatePath,
+      candidatePath: target ?? input.item.inputFiles?.candidatePath,
       humanGuidancePath: input.human ?? input.item.inputFiles?.humanGuidancePath,
     },
   }
   return val
+}
+
+function expectedCandidateBasename(item: LongTaskValidatorContract) {
+  if (item.type === "script") {
+    for (let i = 0; i < (item.args ?? []).length; i += 1) {
+      const prev = item.args?.[i - 1]
+      if (prev === "--candidate" || prev === "--candidate-path") {
+        const value = item.args?.[i]
+        return value ? path.basename(value).toLowerCase() : undefined
+      }
+    }
+  }
+  if (item.type === "prompt_json" && item.inputFiles?.candidatePath) {
+    return path.basename(item.inputFiles.candidatePath).toLowerCase()
+  }
+  return undefined
+}
+
+function selectValidatorCandidateTarget(item: LongTaskValidatorContract, targets: LongTaskPathRef[]) {
+  if (!targets.length) return undefined
+  const expected = expectedCandidateBasename(item)
+  if (expected) {
+    const hit = targets.find((target) => path.basename(target.path).toLowerCase() === expected)
+    if (hit) return hit.path
+  }
+  return targets[0]?.path
+}
+
+function patchScriptValidatorArgs(input: { args: string[]; root: string; target?: string }) {
+  return input.args.map((arg, index, all) => {
+    const prev = all[index - 1]
+    if ((prev === "--candidate" || prev === "--candidate-path") && input.target) return input.target
+    if (prev === "--answer" || prev === "--answer-path" || prev === "--expected") {
+      if (path.isAbsolute(arg)) return arg
+      return path.resolve(input.root, arg)
+    }
+    return arg
+  })
 }
 
 async function writeBlankEvalSpec(input: {
@@ -514,7 +598,7 @@ async function writeBlankEvalSpec(input: {
         patchValidator({
           item,
           root,
-          target: targets[0]?.path,
+          targets,
           human,
         }),
       ),

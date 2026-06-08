@@ -46,10 +46,32 @@ def infer_task_dir(payload: dict) -> Path | None:
     return None
 
 
+def payload_output_candidates(payload: dict) -> list[Path]:
+    candidates: list[Path] = []
+    for key in ("targetPaths",):
+        for item in payload.get(key, []):
+            if not isinstance(item, dict):
+                continue
+            value = item.get("path")
+            if isinstance(value, str) and value.strip():
+                candidates.append(Path(value))
+    for value in payload.get("expectedArtifacts", []):
+        if isinstance(value, str) and value.strip():
+            candidates.append(Path(value))
+    return candidates
+
+
 def resolve_candidate_path(candidate: str, payload: dict) -> Path:
     raw = Path(candidate)
     if raw.is_absolute():
         return raw
+    raw_name = raw.name.lower()
+    for item in payload_output_candidates(payload):
+        if item.name.lower() == raw_name and item.exists():
+            return item
+    for item in payload_output_candidates(payload):
+        if item.name.lower() == raw_name:
+            return item
     task_dir = infer_task_dir(payload)
     if task_dir is not None:
         task_relative = task_dir / candidate

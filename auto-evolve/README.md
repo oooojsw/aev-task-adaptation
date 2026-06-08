@@ -159,6 +159,29 @@ Hard/Soft 只是“怎么验”，Surface/Product 才是“验什么”。所以
 5. Train replay 失败后，若 `--repair-attempts` 大于 0，会自动走 add-only merge repair，修改合并后的 skill 草案，再重新验证失败题。
 6. 如果开启 `--continue-after-train-replay-failure`，即使修复后仍有训练回测失败，也会继续跑 held-out test，用于记录真实泛化分数。
 
+### 合并后专家经验区的最小格式
+
+多实例合并后的 skill / expert workspace 必须保持一个可被 Blank Agent 直接读取的最小结构：
+
+* `INDEX.md`：入口文件，说明 Blank Agent 应如何选择 `CORE.md` 和 `casebook/` 中的专项经验。
+* `CORE.md`：全局通用流程、通用检查规则和跨任务不变的操作原则。
+* `surface_contract.json`：表层防泄漏与泛化约束声明。
+* `meta.json`：合并来源、版本、贡献实例和 casebook 映射信息。
+* `casebook/`：任务特点专项经验。这里的文件名必须按任务特点命名，而不是按原始 case id 顺序命名。
+* `patches/training-backtest-patches.md`：训练回测和 add-only repair 的补丁说明。
+* `patches/patch-log.jsonl`：补丁追加记录。
+* `open_observations.md`：仍未完全确认、但需要保留给后续分析的观察。
+
+`casebook/` 的命名规则是：用小写 kebab-case 描述任务特征、材料类型、表格/字段定位方式、公式或证据路线，例如 `treasury-statement-line-total-reconciliation.md`、`quarterly-debt-table-cross-page-lookup.md`、`spreadsheet-formula-range-normalization.md`。原始任务 ID 可以写在文件正文和 `meta.json` 映射里；只有同类任务重名时，才允许把 ID 作为后缀，例如 `quarterly-debt-table-cross-page-lookup-uid0227.md`。禁止把 `case-001.md`、`audit-point-001.md`、`UID0227.md` 这类纯序号/纯 ID 名称作为默认 casebook 文件名。
+
+### Train Replay / Repair 收口规则
+
+合并后的 train replay 如果失败，repair 阶段可能继续运行很久。此阶段必须持续刷新 `merge-and-validate/coordinator-state.json` 的 `heartbeatAt`，并在 repair 时把 `phase` 标记为 `phase4_repair`，否则外部看板会把仍在修复的 owner 误判成假活或异常停止。
+
+`merge-repair.md` 必须保持数据集无关：不要默认所有任务都是 audit opinion；修复前要先看 task instruction、目标输出文件和 validator contract。OfficeQA 数值题通常要写 `workspace/answer.txt` 的纯数字，审计意见类任务才写 `workspace/audit-point-output.md`。
+
+`patches/patch-log.jsonl` 是 JSON Lines，不是 JSON array。历史合并产物里若误初始化为 `[]` 或 `{}`，append-only 检查允许它迁移成第一条 JSONL；但一旦已有真实 JSONL 内容，任何覆盖旧日志的行为仍会被拒绝。
+
 OfficeQA 这类“20 轮上限后仍要进入合并/回撤/测试”的推荐命令形态：
 
 ```powershell
@@ -548,3 +571,48 @@ Current intent:
 - allow `!pattern` exceptions for reusable files that match a broad ignore rule.
 
 When a future debug helper is created only for one run, add its pattern to `IGNORE_PATTERNS` inside `scripts/export-core-code-to-desktop.py` instead of relying on manual cleanup before export.
+
+---
+
+## 2026-06-08: Script Validator Stage-Local Candidate Paths
+
+Post-merge train replay / held-out test blank evals write outputs into stage-local directories such as:
+
+```text
+runtime-state/benchmark-runs/<run>/merge-and-validate/phase3-validate/<case>/task-work/workspace/...
+```
+
+Script validators must validate that stage-local output, not an old `./workspace/...` file under the repo or task root. This matters for OfficeQA, SpreadsheetBench, and ALFWorld because their specs use script validators with arguments like `--candidate ./workspace/answer.txt`, `--candidate ./workspace/answer.json`, or `--candidate ./workspace/plan.json`.
+
+Current safeguards:
+
+- `orchestrator/multi-instance/validator.ts` rewrites script validator `--candidate` to the generated stage-local target path when building blank-eval specs.
+- `--answer`, `--answer-path`, and `--expected` script arguments are resolved against the source task root when they are relative paths.
+- `scripts/validate-officeqa-answer.py`, `scripts/validate-spreadsheetbench-answer.py`, and `scripts/validate-alfworld-plan.py` now load the validator payload and prefer `targetPaths` / `expectedArtifacts` for candidate resolution.
+
+Do not interpret a replay/test failure as a model failure until checking the validator read path. If the blank agent wrote the correct stage-local answer but the validator reports a different predicted value, inspect `validator_input.json`, `targetPaths`, and the script `--candidate` argument first.
+
+## 2026-06-08: Phase 2 Post-Merge Validation Engine Hook
+
+Multi-instance Phase 2 merge is now connected to the unified validation engine.
+
+Previous behavior:
+
+- `orchestrator/multi-instance/merger.ts` only checked that the merged skill output had a few required files such as `INDEX.md`, `CORE.md`, and `meta.json`.
+- Validator profiles could define `validation.stage = "post_merge"`, and `smoke-validation-engine.ts` proved the stage runner worked, but the real merger did not invoke that stage.
+
+Current behavior:
+
+- After the merger writes `phase2-merge/output`, Phase 2 loads validator modules from the contributing training task specs.
+- It selects every module whose metadata resolves to `stage: "post_merge"`.
+- It runs those modules through `runValidationStage({ stage: "post_merge" })` with the merged skill directory exposed as `targetPaths[0]` and `expectedArtifacts[0]`.
+- If no `post_merge` module is configured, Phase 2 logs a compatible `skipped` status and continues.
+- If configured required modules fail, Phase 2 records the result path/summary in coordinator state and throws before train replay or held-out test begins.
+
+State fields added to `merge-and-validate/coordinator-state.json`:
+
+- `postMergeValidationStatus`: `passed`, `failed`, or `skipped`.
+- `postMergeValidationResultPath`: path to `phase2-merge/post-merge-validation/stage-result.json` when a stage ran.
+- `postMergeValidationSummary`: human-readable stage summary.
+
+This keeps post-merge validation pluggable. Dataset-specific file layout checks, leakage checks, soft surface review, or other merged-skill validators should be attached through validator profiles instead of hardcoded in `merger.ts`.
