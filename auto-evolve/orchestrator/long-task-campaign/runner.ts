@@ -26,6 +26,12 @@ import { readOperationalContext, resolveExistingLongTaskRun } from "../long-task
 import { loadLongTaskSpec } from "../long-task/spec"
 import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { runBlankEval } from "../blank-eval/runner"
+import {
+  writeBlankAgentEvidenceBundle,
+  readLatestBlankAgentEvidenceBundlePath,
+  readBlankAgentEvidenceReadablePaths,
+  assertNoDirectoryReadPaths,
+} from "./blank-agent-evidence"
 import type {
   LongTaskBudgets,
   LongTaskOperationalContextItem,
@@ -3366,6 +3372,8 @@ async function runCampaignWorkers(input: {
   acceptanceExperienceJsonlPath?: string
   finalAcceptanceFeedbackPath?: string
   reviewerSuggestionPath?: string
+  blankAgentEvidenceBundlePath?: string
+  blankAgentEvidenceReadPaths?: string[]
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   runtimeScope?: string
@@ -3392,7 +3400,11 @@ async function runCampaignWorkers(input: {
         acceptanceExperiencePath: input.acceptanceExperiencePath,
         finalAcceptanceFeedbackPath: input.finalAcceptanceFeedbackPath,
         reviewerSuggestionPath: input.reviewerSuggestionPath,
+        blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
       })
+      if (input.blankAgentEvidenceReadPaths?.length) {
+        assertNoDirectoryReadPaths(input.blankAgentEvidenceReadPaths, "campaign-worker blank-agent-evidence read paths")
+      }
       const result = await runCampaignSuggestionTask({
         cwd: input.cwd,
         baseSpec: input.baseSpec,
@@ -3413,6 +3425,8 @@ async function runCampaignWorkers(input: {
           ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
           ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
           ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
+          ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
+          ...(input.blankAgentEvidenceReadPaths ?? []),
         ],
         permissionReadPaths: [
           input.runTracePath,
@@ -3427,6 +3441,8 @@ async function runCampaignWorkers(input: {
           ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
           ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
           ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
+          ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
+          ...(input.blankAgentEvidenceReadPaths ?? []),
         ],
         stageDir,
         phase: "campaign_worker",
@@ -3472,6 +3488,8 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
   acceptanceExperienceJsonlPath?: string
   finalAcceptanceFeedbackPath: string
   reviewerSuggestionPath?: string
+  blankAgentEvidenceBundlePath?: string
+  blankAgentEvidenceReadPaths?: string[]
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
@@ -3495,7 +3513,12 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     acceptanceExperiencePath: input.acceptanceExperiencePath,
     finalAcceptanceFeedbackPath: input.finalAcceptanceFeedbackPath,
     reviewerSuggestionPath: input.reviewerSuggestionPath,
+    blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
   })
+  // Evidence paths are exact files only (no directories). Assert before granting read access.
+  if (input.blankAgentEvidenceReadPaths?.length) {
+    assertNoDirectoryReadPaths(input.blankAgentEvidenceReadPaths, "blank-agent-evidence read paths")
+  }
   const sharedRefs = [
     input.runTracePath,
     input.runTraceDigestPath,
@@ -3509,6 +3532,8 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
     ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
     ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
+    ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
+    ...(input.blankAgentEvidenceReadPaths ?? []),
   ]
   const result = await runCampaignSuggestionTask({
     cwd: input.cwd,
@@ -3607,6 +3632,8 @@ async function runCampaignLead(input: {
   acceptanceExperienceJsonlPath?: string
   finalAcceptanceFeedbackPath?: string
   repairChecklist?: string[]
+  blankAgentEvidenceBundlePath?: string
+  blankAgentEvidenceReadPaths?: string[]
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   runtimeScope?: string
@@ -3635,7 +3662,11 @@ async function runCampaignLead(input: {
     acceptanceExperiencePath: input.acceptanceExperiencePath,
     finalAcceptanceFeedbackPath: input.finalAcceptanceFeedbackPath,
     repairChecklist: input.repairChecklist,
+    blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
   })
+  if (input.blankAgentEvidenceReadPaths?.length) {
+    assertNoDirectoryReadPaths(input.blankAgentEvidenceReadPaths, "campaign-lead blank-agent-evidence read paths")
+  }
   return runCampaignSuggestionTask({
     cwd: input.cwd,
     baseSpec: input.baseSpec,
@@ -3656,6 +3687,8 @@ async function runCampaignLead(input: {
       ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
       ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
       ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
+      ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
+      ...(input.blankAgentEvidenceReadPaths ?? []),
     ],
     permissionReadPaths: [
       input.runTraceDigestPath,
@@ -3670,6 +3703,8 @@ async function runCampaignLead(input: {
       ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
       ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
       ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
+      ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
+      ...(input.blankAgentEvidenceReadPaths ?? []),
     ],
     permissionEditPaths: [input.nextPendingPackageRoot, input.nextExplorationTreePath, input.nextRoutingControlPath],
     stageDir,
@@ -3694,6 +3729,8 @@ async function runCampaignReviewer(input: {
   blankAgentAcceptanceDiagnosisPath: string
   acceptanceExperiencePath?: string
   acceptanceExperienceJsonlPath?: string
+  blankAgentEvidenceBundlePath?: string
+  blankAgentEvidenceReadPaths?: string[]
   stageDir?: string
   suggestionPath?: string
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
@@ -3713,7 +3750,11 @@ async function runCampaignReviewer(input: {
     dispatchTicketsPath: input.dispatchTicketsPath,
     blankAgentAcceptanceDiagnosisPath: input.blankAgentAcceptanceDiagnosisPath,
     acceptanceExperiencePath: input.acceptanceExperiencePath,
+    blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
   })
+  if (input.blankAgentEvidenceReadPaths?.length) {
+    assertNoDirectoryReadPaths(input.blankAgentEvidenceReadPaths, "campaign-reviewer blank-agent-evidence read paths")
+  }
   const result = await runCampaignSuggestionTask({
     cwd: input.cwd,
     baseSpec: input.baseSpec,
@@ -3731,6 +3772,8 @@ async function runCampaignReviewer(input: {
       input.blankAgentAcceptanceDiagnosisPath,
       ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
       ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
+      ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
+      ...(input.blankAgentEvidenceReadPaths ?? []),
     ],
     permissionReadPaths: [
       input.pendingPackageRoot,
@@ -3742,6 +3785,8 @@ async function runCampaignReviewer(input: {
       input.blankAgentAcceptanceDiagnosisPath,
       ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
       ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
+      ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
+      ...(input.blankAgentEvidenceReadPaths ?? []),
     ],
     stageDir,
     phase: "campaign_review",
@@ -3879,6 +3924,8 @@ async function runCampaignFinalAcceptance(input: {
   finalAcceptanceRoot?: string
   finalAcceptanceResultPath?: string
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+  passID: string
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
   onPulse?: OpencodeTaskInput["onPulse"]
@@ -4107,6 +4154,55 @@ async function runCampaignFinalAcceptance(input: {
     },
     createdAt: nowISO(),
   }
+
+  // Step 8: generate blank agent evidence bundle (for downstream workers/lead/reviewer/diagnosis)
+  // and persist it to campaign-level blank-agent-evidence/ so the next round can read it.
+  if (blankEvalRunDir) {
+    const blankEvalSessionExecutionReportPath = validatorResults
+      .map((vr) => vr.rawOutputPath)
+      .find((p): p is string => Boolean(p && p.includes("session_execution_report")))
+      ?? path.join(blankEvalRunDir, "execute", "session_execution_report.md")
+    const blankEvalSessionDir = path.dirname(blankEvalSessionExecutionReportPath)
+    const blankEvalValidationStageResultPath = validatorResults
+      .flatMap((vr) => vr.evidenceRefs ?? [])
+      .find((p): p is string => Boolean(p && p.endsWith("stage-result.json")))
+
+    try {
+      const evidence = await writeBlankAgentEvidenceBundle({
+        cwd: input.cwd,
+        campaignID: input.campaignID,
+        campaignRoot: input.campaignPaths.root,
+        roundNumber: input.roundNumber,
+        passID: input.passID,
+        sourceRunID: input.sourceRunID,
+        baseSpec: input.baseSpec,
+        acceptanceRoot,
+        acceptanceResultPath,
+        finalAcceptance: {
+          passed: finalAcceptance.passed,
+          summary: finalAcceptance.summary,
+          validatorResults: finalAcceptance.validatorResults.map((vr) => ({
+            validatorID: vr.validatorID,
+            passed: vr.passed,
+            evidenceRefs: vr.evidenceRefs,
+            rawOutputPath: vr.rawOutputPath,
+          })),
+          blankEvalRunDir: finalAcceptance.blankEvalRunDir,
+          blankEvalResultPath: finalAcceptance.blankEvalResultPath,
+          blankEvalValidationStageResultPath,
+          blankEvalSessionDir,
+          blankEvalSessionExecutionReportPath,
+        },
+      })
+      ;(finalAcceptance as Record<string, unknown>).blankAgentEvidenceBundlePath = evidence.bundlePath
+      ;(finalAcceptance as Record<string, unknown>).blankAgentEvidenceReadPaths = (await readBlankAgentEvidenceReadablePaths(evidence.bundlePath))
+    } catch (error) {
+      // Evidence bundle is best-effort: never block acceptance write on its failure
+      const message = error instanceof Error ? error.message : String(error)
+      console.error("[runCampaignFinalAcceptance] evidence bundle generation failed:", message)
+    }
+  }
+
   await writeJsonFile(acceptanceResultPath, finalAcceptance)
   return finalAcceptance
 }
@@ -4569,6 +4665,11 @@ export async function runLongTaskCampaign(input: {
         )
 
         const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths)
+        // Step 10: workers need the latest blank-agent evidence from previous round's failure.
+        const latestBlankEvidence = await readLatestBlankAgentEvidenceBundlePath(campaignPaths.root)
+        const latestBlankEvidenceReadPaths = latestBlankEvidence
+          ? await readBlankAgentEvidenceReadablePaths(latestBlankEvidence)
+          : []
         const workerSuggestions = shouldRunCampaignWorkers(roundNumber)
           ? await runCampaignWorkers({
               cwd: input.cwd,
@@ -4587,6 +4688,8 @@ export async function runLongTaskCampaign(input: {
               acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
               acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
               reviewerSuggestionPath: latestReviewerSuggestionPath,
+              blankAgentEvidenceBundlePath: latestBlankEvidence,
+              blankAgentEvidenceReadPaths: latestBlankEvidenceReadPaths,
               campaignPaths,
               roundPaths,
               runtimeScope: roundRuntimeScope,
@@ -4607,6 +4710,30 @@ export async function runLongTaskCampaign(input: {
           const reviewerPassSuggestionPath = path.join(reviewerPassRoot, "review-suggestion.json")
           const acceptancePassRoot = path.join(roundPaths.finalAcceptanceRoot, passID)
           const acceptancePassResultPath = path.join(acceptancePassRoot, "result.json")
+
+          // Dynamically resolve the current pass's evidence bundle:
+          //   - If a previous pass in this round produced finalAcceptance with a
+          //     fresh evidence bundle, prefer THAT (it reflects the most recent
+          //     failure that this Lead/Reviewer is supposed to act on).
+          //   - Otherwise, fall back to the round-start "latest" bundle (from
+          //     a prior round's failure).
+          // Without this override, Pass-02 Lead/Reviewer would still see the
+          // stale Round-N-1 evidence while diagnosing Pass-01 failures.
+          let currentEvidenceBundlePath: string | undefined = latestBlankEvidence
+          let currentEvidenceReadPaths: string[] = latestBlankEvidenceReadPaths
+          if (finalAcceptance) {
+            const fa = finalAcceptance as Record<string, unknown>
+            if (typeof fa.blankAgentEvidenceBundlePath === "string") {
+              currentEvidenceBundlePath = fa.blankAgentEvidenceBundlePath
+            }
+            if (Array.isArray(fa.blankAgentEvidenceReadPaths)) {
+              currentEvidenceReadPaths = fa.blankAgentEvidenceReadPaths as string[]
+            } else if (currentEvidenceBundlePath) {
+              currentEvidenceReadPaths = await readBlankAgentEvidenceReadablePaths(
+                currentEvidenceBundlePath,
+              )
+            }
+          }
 
           // Build repair checklist from previous pass failure for pass-02 lead
           let repairChecklist: string[] | undefined
@@ -4641,6 +4768,8 @@ export async function runLongTaskCampaign(input: {
             acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
             finalAcceptanceFeedbackPath,
             repairChecklist,
+            blankAgentEvidenceBundlePath: currentEvidenceBundlePath,
+            blankAgentEvidenceReadPaths: currentEvidenceReadPaths,
             campaignPaths,
             roundPaths,
             runtimeScope: roundRuntimeScope,
@@ -4706,6 +4835,8 @@ export async function runLongTaskCampaign(input: {
                 blankAgentAcceptanceDiagnosisPath: campaignPaths.blankAgentAcceptanceDiagnosisPath,
                 acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
                 acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
+                blankAgentEvidenceBundlePath: currentEvidenceBundlePath,
+                blankAgentEvidenceReadPaths: currentEvidenceReadPaths,
                 stageDir: reviewerPassRoot,
                 suggestionPath: reviewerPassSuggestionPath,
                 roundPaths,
@@ -4746,6 +4877,8 @@ export async function runLongTaskCampaign(input: {
             finalAcceptanceRoot: acceptancePassRoot,
             finalAcceptanceResultPath: acceptancePassResultPath,
             roundPaths,
+            campaignPaths,
+            passID,
             runtimeScope: roundRuntimeScope,
             onActivation: activateCampaignRound,
             onPulse: pulseCampaignRound,
@@ -4796,6 +4929,8 @@ export async function runLongTaskCampaign(input: {
               acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
               finalAcceptanceFeedbackPath,
               reviewerSuggestionPath: reviewerPassSuggestionPath,
+              blankAgentEvidenceBundlePath: (finalAcceptance as Record<string, unknown>).blankAgentEvidenceBundlePath as string | undefined,
+              blankAgentEvidenceReadPaths: (finalAcceptance as Record<string, unknown>).blankAgentEvidenceReadPaths as string[] | undefined,
               roundPaths,
               runtimeScope: roundRuntimeScope,
               onActivation: activateCampaignRound,
@@ -5356,6 +5491,10 @@ export async function resumeLongTaskCampaign(input: {
         )
 
         const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths)
+        const latestBlankEvidence = await readLatestBlankAgentEvidenceBundlePath(campaignPaths.root)
+        const latestBlankEvidenceReadPaths = latestBlankEvidence
+          ? await readBlankAgentEvidenceReadablePaths(latestBlankEvidence)
+          : []
         const workerSuggestions = shouldRunCampaignWorkers(roundNumber)
           ? await runCampaignWorkers({
               cwd: input.cwd,
@@ -5374,6 +5513,8 @@ export async function resumeLongTaskCampaign(input: {
               acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
               acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
               reviewerSuggestionPath: latestReviewerSuggestionPath,
+              blankAgentEvidenceBundlePath: latestBlankEvidence,
+              blankAgentEvidenceReadPaths: latestBlankEvidenceReadPaths,
               campaignPaths,
               roundPaths,
               runtimeScope: roundRuntimeScope,
@@ -5455,6 +5596,8 @@ export async function resumeLongTaskCampaign(input: {
                 blankAgentAcceptanceDiagnosisPath: campaignPaths.blankAgentAcceptanceDiagnosisPath,
                 acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
                 acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
+                blankAgentEvidenceBundlePath: currentEvidenceBundlePath,
+                blankAgentEvidenceReadPaths: currentEvidenceReadPaths,
                 stageDir: reviewerPassRoot,
                 suggestionPath: reviewerPassSuggestionPath,
                 roundPaths,
@@ -5495,6 +5638,8 @@ export async function resumeLongTaskCampaign(input: {
             finalAcceptanceRoot: acceptancePassRoot,
             finalAcceptanceResultPath: acceptancePassResultPath,
             roundPaths,
+            campaignPaths,
+            passID,
             runtimeScope: roundRuntimeScope,
             onActivation: activateCampaignRound,
             onPulse: pulseCampaignRound,
@@ -5545,6 +5690,8 @@ export async function resumeLongTaskCampaign(input: {
               acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
               finalAcceptanceFeedbackPath,
               reviewerSuggestionPath: reviewerPassSuggestionPath,
+              blankAgentEvidenceBundlePath: (finalAcceptance as Record<string, unknown>).blankAgentEvidenceBundlePath as string | undefined,
+              blankAgentEvidenceReadPaths: (finalAcceptance as Record<string, unknown>).blankAgentEvidenceReadPaths as string[] | undefined,
               roundPaths,
               runtimeScope: roundRuntimeScope,
               onActivation: activateCampaignRound,

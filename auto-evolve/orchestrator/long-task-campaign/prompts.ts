@@ -42,6 +42,10 @@ function roleSpecificRules(role: LongTaskCampaignWorkerRole) {
         "- This is the highest-priority worker role. Focus only on why blank-agent final acceptance did not pass.",
         "- Treat blank-agent final acceptance as the campaign's primary objective. Other successes are secondary unless they help this gate pass.",
         "- Use final_acceptance_result, dispatch_tickets, acceptance_experience, and blank-agent execution evidence before general run summaries.",
+        "- Always inspect blank_agent_evidence_bundle if provided.",
+        "- First identify the exact failure phase: material discovery, file parsing, page/table selection, calculation, output schema, file write, or final self-check.",
+        "- Cite compact tool call indexes and exact workspace/session paths in refs.",
+        "- Separate agent reasoning errors from platform/tool/permission errors.",
         "- Identify the exact failure class: missing target files, placeholder residue, wrong/missing values, tool/runtime blocker, package guidance gap, or validator/config issue.",
         "- Convert every diagnosis into concrete lead repairs: which expert-package guidance must be added, clarified, removed, or consolidated.",
         "- Convert every diagnosis into concrete planner requirements: what the next graph must cover and what repeated regions should be avoided.",
@@ -91,6 +95,8 @@ export function buildCampaignWorkerPrompt(input: {
   acceptanceExperiencePath?: string
   finalAcceptanceFeedbackPath?: string
   reviewerSuggestionPath?: string
+  blankAgentEvidenceBundlePath?: string
+  blankAgentEvidenceReadPaths?: string[]
 }) {
   return [
     "You are a campaign worker agent inside a multi-round long-task learning campaign.",
@@ -117,6 +123,9 @@ export function buildCampaignWorkerPrompt(input: {
         ? [`latest_final_acceptance_result: ${input.finalAcceptanceFeedbackPath}`]
         : []),
       ...(input.reviewerSuggestionPath ? [`latest_reviewer_suggestion: ${input.reviewerSuggestionPath}`] : []),
+      ...(input.blankAgentEvidenceBundlePath
+        ? [`blank_agent_evidence_bundle: ${input.blankAgentEvidenceBundlePath}`]
+        : []),
     ]),
     "",
     "Worker rules:",
@@ -133,6 +142,14 @@ export function buildCampaignWorkerPrompt(input: {
     "- If latest_blank_agent_acceptance_diagnosis exists, treat it as higher priority than ordinary worker history.",
     "- For non-drift_guard_synthesizer roles: if blank-agent execution hits system-level blockers (timeout/spawn/EPERM/path/encoding/runtime startup), propose BOTH package_advice and exploration_advice updates.",
     "- For non-drift_guard_synthesizer roles: for system blockers inside blank-agent execution, include bypass-oriented advice instead of diagnosis-only text.",
+    "- If blank_agent_evidence_bundle exists, read it before making blank-agent acceptance suggestions.",
+    "- Use validation-training.compact.json to understand what failed.",
+    "- Use tool-calls.compact.json and execution.compact.md to understand how the blank agent actually failed.",
+    "- If compact evidence lists workspace text files, open the exact files only when their contents are needed.",
+    "- Do not infer blank-agent behavior only from validator summaries when execution evidence exists.",
+    "- Treat pathRefs as complete paths even if surrounding previews are truncated.",
+    "- Never request or rely on result.private.json, private-answers, ground-truth, answer-key, or hidden validator files.",
+    "- Translate internal evidence into safe generalized package guidance. Do not copy hidden answers, case-specific numeric targets, or validator-only truth into the pending package.",
     ...roleSpecificRules(input.role),
     "",
     "Return JSON only, with this shape:",
@@ -166,6 +183,8 @@ export function buildCampaignLeadPrompt(input: {
   acceptanceExperiencePath?: string
   finalAcceptanceFeedbackPath?: string
   repairChecklist?: string[]
+  blankAgentEvidenceBundlePath?: string
+  blankAgentEvidenceReadPaths?: string[]
 }) {
   return [
     "You are the campaign lead for a multi-round long-task learning campaign.",
@@ -207,6 +226,9 @@ export function buildCampaignLeadPrompt(input: {
       ...(input.acceptanceExperiencePath ? [`acceptance_experience: ${input.acceptanceExperiencePath}`] : []),
       ...(input.finalAcceptanceFeedbackPath
         ? [`latest_final_acceptance_result: ${input.finalAcceptanceFeedbackPath}`]
+        : []),
+      ...(input.blankAgentEvidenceBundlePath
+        ? [`blank_agent_evidence_bundle: ${input.blankAgentEvidenceBundlePath}`]
         : []),
     ]),
     "",
@@ -250,6 +272,11 @@ export function buildCampaignLeadPrompt(input: {
     "- If you remove a stale blockedBy item, mention the cleanup briefly in tree_highlights or package_highlights so the next round understands why it disappeared.",
     "- Treat open dispatch tickets as mandatory repairs that must be visibly encoded into package/tree/routing for the next round.",
     "- If blank_agent_acceptance_diagnosis exists, process it before ordinary worker suggestions. Its conclusions are the top-priority repair input for the campaign's main goal.",
+    "- If blank_agent_evidence_bundle exists, read it before editing the pending package.",
+    "- Fix the package based on actual blank-agent failure behavior: tool path, file access, extraction, calculation, output writing, or verification drift.",
+    "- Do not only patch around validator summary wording when execution evidence exists.",
+    "- Use validation-training.compact.json + tool-calls.compact.json + execution.compact.md to find the real failure phase, not just validator surface text.",
+    "- Do not copy raw blank-agent scratch values into the package unless they are generic method examples without hidden answer leakage.",
     "- If blank_agent_acceptance_diagnosis identifies a package guidance gap, you must encode safe executable guidance into the pending expert package, not just tree or routing.",
     "- Never copy blank_agent_acceptance_diagnosis verbatim into the expert package. Translate internal evidence into source-location, derivation, filling, and self-check guidance that a blank agent can use without hidden answers.",
     "- If latest_final_acceptance_result exists and failed, treat it as the highest-priority concrete repair input for this pass.",
@@ -285,6 +312,8 @@ export function buildCampaignReviewerPrompt(input: {
   dispatchTicketsPath: string
   blankAgentAcceptanceDiagnosisPath?: string
   acceptanceExperiencePath?: string
+  blankAgentEvidenceBundlePath?: string
+  blankAgentEvidenceReadPaths?: string[]
 }) {
   return [
     "You are the round reviewer for a multi-round long-task learning campaign.",
@@ -304,6 +333,9 @@ export function buildCampaignReviewerPrompt(input: {
         ? [`blank_agent_acceptance_diagnosis: ${input.blankAgentAcceptanceDiagnosisPath}`]
         : []),
       ...(input.acceptanceExperiencePath ? [`acceptance_experience: ${input.acceptanceExperiencePath}`] : []),
+      ...(input.blankAgentEvidenceBundlePath
+        ? [`blank_agent_evidence_bundle: ${input.blankAgentEvidenceBundlePath}`]
+        : []),
     ]),
     "",
     "Reviewer rules:",
@@ -314,6 +346,8 @@ export function buildCampaignReviewerPrompt(input: {
     "- Do not copy old rejection text blindly from `acceptance_experience`; confirm with current package + run trace before keeping the same reason.",
     "- If dispatch tickets are still open and the package does not clearly repair them, mark not ready and name the missed ticket areas.",
     "- If blank_agent_acceptance_diagnosis exists, verify that the lead actually addressed its package_advice and planner-facing repair requirements.",
+    "- If blank_agent_evidence_bundle exists, verify whether the pending package actually addresses the blank agent failure path shown there.",
+    "- Prefer concrete mismatch evidence from tool-calls.compact.json over vague diagnosis prose.",
     "- You only assess whether this package looks likely to pass the final blank-agent acceptance.",
     "- Mark not ready if the package hardcodes final task answers instead of teaching blank-agent how to derive them from the provided materials.",
     "- Mark not ready if the same operational rule is copied across many files without a clear canonical home.",
