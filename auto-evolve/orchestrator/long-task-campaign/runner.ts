@@ -3379,6 +3379,7 @@ async function runCampaignWorkers(input: {
   runtimeScope?: string
   onActivation?: OpencodeTaskInput["onSpawn"]
   onPulse?: OpencodeTaskInput["onPulse"]
+  carryoverFiles?: string[]
 }) {
   const workerRoles = defaultCampaignWorkerRoles()
   const suggestions = await Promise.all(
@@ -3427,6 +3428,7 @@ async function runCampaignWorkers(input: {
           ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
           ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
           ...(input.blankAgentEvidenceReadPaths ?? []),
+          ...(input.carryoverFiles ?? []),
         ],
         permissionReadPaths: [
           input.runTracePath,
@@ -3443,6 +3445,7 @@ async function runCampaignWorkers(input: {
           ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
           ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
           ...(input.blankAgentEvidenceReadPaths ?? []),
+          ...(input.carryoverFiles ?? []),
         ],
         stageDir,
         phase: "campaign_worker",
@@ -4670,6 +4673,14 @@ export async function runLongTaskCampaign(input: {
         const latestBlankEvidenceReadPaths = latestBlankEvidence
           ? await readBlankAgentEvidenceReadablePaths(latestBlankEvidence)
           : []
+        // Step 11: collect carryover context from prior rounds so workers
+        // can learn from past failures instead of repeating the same mistakes.
+        const carryoverFiles = await collectCarryoverContext({
+          baseSpec,
+          campaignSpec,
+          campaignPaths,
+          history,
+        })
         const workerSuggestions = shouldRunCampaignWorkers(roundNumber)
           ? await runCampaignWorkers({
               cwd: input.cwd,
@@ -4695,6 +4706,7 @@ export async function runLongTaskCampaign(input: {
               runtimeScope: roundRuntimeScope,
               onActivation: activateCampaignRound,
               onPulse: pulseCampaignRound,
+              carryoverFiles,
             })
           : []
 
@@ -5495,6 +5507,14 @@ export async function resumeLongTaskCampaign(input: {
         const latestBlankEvidenceReadPaths = latestBlankEvidence
           ? await readBlankAgentEvidenceReadablePaths(latestBlankEvidence)
           : []
+        // Collect carryover context from prior rounds so workers can learn
+        // from past failures instead of repeating the same mistakes.
+        const carryoverFiles = await collectCarryoverContext({
+          baseSpec,
+          campaignSpec,
+          campaignPaths,
+          history,
+        })
         const workerSuggestions = shouldRunCampaignWorkers(roundNumber)
           ? await runCampaignWorkers({
               cwd: input.cwd,
@@ -5520,6 +5540,7 @@ export async function resumeLongTaskCampaign(input: {
               runtimeScope: roundRuntimeScope,
               onActivation: activateCampaignRound,
               onPulse: pulseCampaignRound,
+              carryoverFiles,
             })
           : []
 
@@ -5535,6 +5556,43 @@ export async function resumeLongTaskCampaign(input: {
           const reviewerPassSuggestionPath = path.join(reviewerPassRoot, "review-suggestion.json")
           const acceptancePassRoot = path.join(roundPaths.finalAcceptanceRoot, passID)
           const acceptancePassResultPath = path.join(acceptancePassRoot, "result.json")
+
+          // Dynamically resolve the current pass's evidence bundle.
+          // IMPORTANT:
+          // - pass-01 should use the latest evidence from previous rounds.
+          // - pass-02 should prefer the fresh evidence produced by pass-01 final acceptance.
+          // - This must exist in resumeLongTaskCampaign too, not only in runLongTaskCampaign.
+          // Without these variables, resume can crash with:
+          //   currentEvidenceBundlePath is not defined
+          let currentEvidenceBundlePath: string | undefined = latestBlankEvidence
+          let currentEvidenceReadPaths: string[] = latestBlankEvidenceReadPaths
+
+          if (finalAcceptance) {
+            const fa = finalAcceptance as Record<string, unknown>
+
+            if (typeof fa.blankAgentEvidenceBundlePath === "string") {
+              currentEvidenceBundlePath = fa.blankAgentEvidenceBundlePath
+            }
+
+            if (Array.isArray(fa.blankAgentEvidenceReadPaths)) {
+              currentEvidenceReadPaths = fa.blankAgentEvidenceReadPaths as string[]
+            } else if (currentEvidenceBundlePath) {
+              currentEvidenceReadPaths = await readBlankAgentEvidenceReadablePaths(
+                currentEvidenceBundlePath,
+              )
+            }
+          }
+
+          // Build repair checklist from previous pass failure for pass-02 lead
+          let repairChecklist: string[] | undefined
+          if (passIndex >= 2 && finalAcceptanceFeedbackPath) {
+            try {
+              const prevResult = await readJsonFile<Record<string, unknown>>(finalAcceptanceFeedbackPath)
+              repairChecklist = buildRepairChecklistFromFinalAcceptance(prevResult)
+            } catch {
+              // If previous result is unreadable, lead will still get finalAcceptanceFeedbackPath
+            }
+          }
 
           await runCampaignLead({
             cwd: input.cwd,
@@ -5557,6 +5615,9 @@ export async function resumeLongTaskCampaign(input: {
             acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
             acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
             finalAcceptanceFeedbackPath,
+            repairChecklist,
+            blankAgentEvidenceBundlePath: currentEvidenceBundlePath,
+            blankAgentEvidenceReadPaths: currentEvidenceReadPaths,
             campaignPaths,
             roundPaths,
             runtimeScope: roundRuntimeScope,
