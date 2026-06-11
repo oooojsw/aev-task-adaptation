@@ -38,7 +38,7 @@ const report = await runTaskPackBenchmark({
   runBaseline: process.env.OFFICEQA_PRO_SKIP_BASELINE !== "1",
   validateRounds: Math.max(1, Number.parseInt(process.env.OFFICEQA_PRO_VALIDATE_ROUNDS ?? "1", 10)),
   repairAttempts: Math.max(0, Number.parseInt(process.env.OFFICEQA_PRO_REPAIR_ATTEMPTS ?? "3", 10)),
-  trainLimit: 20,
+  trainLimit: Math.max(1, Number.parseInt(process.env.OFFICEQA_PRO_TRAIN_LIMIT ?? "20", 10)),
   testLimit: 10,
 })
 
