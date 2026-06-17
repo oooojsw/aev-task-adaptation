@@ -1,0 +1,3 @@
+At position 112180:
+Hex: 3c773a743ee3808ae4b8ade58d8ee4babae6b091e585b1e5928ce59bbde4bc81e4b89ae59bbde69c89e8b584e4baa7e6b395
+String: <w:t>《中华人民共和国企业国有资产法》（</w:t></w

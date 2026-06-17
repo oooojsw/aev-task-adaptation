@@ -1,0 +1,19 @@
+{
+  "passed": false,
+  "score": 30,
+  "same_issue": false,
+  "specific_evidence": false,
+  "actionable": false,
+  "gap": "Issue type does not match expert answer (equipment completeness ratio deviation)",
+  "learning": "Align issue type first, then ensure actionable corrective measures.",
+  "blocking": false,
+  "summary": "Issue type: same_issue=false, specific_evidence=false, actionable=false",
+  "failure_class": "issue_mismatch",
+  "details": [
+    "same_issue=false",
+    "specific_evidence=false",
+    "actionable=false",
+    "candidate_has_placeholders=false",
+    "score=30"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "passed": false,
+  "score": 30,
+  "same_issue": false,
+  "specific_evidence": false,
+  "actionable": false,
+  "gap": "Issue mismatch: candidate wrote about accounts payable AG9='2023' (populated), but audit topic '建筑物表 AG9 内容清除' expects building table AG9 blank (cleared). Wrong source document.",
+  "learning": "Align issue type first - check that AG9 reference is from building table, not accounts payable register.",
+  "blocking": false,
+  "summary": "Issue type: same_issue=false, specific_evidence=false, actionable=false",
+  "failure_class": "issue_mismatch",
+  "details": [
+    "same_issue=false",
+    "specific_evidence=false",
+    "actionable=false",
+    "candidate_has_placeholders=false",
+    "score=30",
+    "candidate_has_AG9_ref=true",
+    "candidate_has_building_table_ref=false",
+    "candidate_has_accounts_payable_ref=false"
+  ]
+}
