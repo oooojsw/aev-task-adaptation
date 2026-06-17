@@ -795,3 +795,93 @@ bun run auto-evolve/scripts/smoke-direct-chat-siliconflow-capabilities.ts
 - 多材料不会被静默丢弃；文本材料进入 prompt 前如果超过模型预算，会在 `prompt-audit.json` 标记 `truncated=true`。PDF/图片材料作为原生 asset，不做本地文本截断。
 - Direct Chat 分数必须结合 `prompt-audit.json` 看：如果模型预算太小导致关键材料被截断，这属于材料预算/模型上下文限制，不应直接解释成 skill 无效。
 - Direct Chat 结果必须结合 `errorCategory` 看：`validation` 是答案没过，`auth/quota/rate_limit/context_length` 是供应商或配置问题，不能混成同一类失败。
+
+## 2026-06-17: SkillOpt OfficeQA 测试层桥接
+
+新增 SkillOpt 旁路评测桥接脚本：
+
+```text
+auto-evolve/scripts/export-officeqa-skillopt-bridge.ts
+```
+
+用途：
+
+- 把 Auto-Evolve 的 OfficeQA task-pack split 转成 SkillOpt `eval_only.py` 可读取的 `split_dir`。
+- 把 Auto-Evolve 多文件 skill / expert workspace 合并成 SkillOpt 需要的单个 `merged-skill.md`。
+- 先旁路复用 SkillOpt 的 OfficeQA 测试层，不直接替换 Auto-Evolve 主链路。
+
+典型导出命令：
+
+```powershell
+$out = "auto-evolve/runtime-state/skillopt-bridge/officeqa-test10"
+bun run auto-evolve/scripts/export-officeqa-skillopt-bridge.ts `
+  --task-pack-root "auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench" `
+  --split "auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench/splits/test-10.json" `
+  --out-dir $out `
+  --split-name test `
+  --skill-root "auto-evolve/runtime-state/benchmark-runs/<run>/merge-and-validate/phase2-merge/output"
+```
+
+如果当前 SkillOpt 没有官方 OfficeQA parsed/text corpus，可显式让桥接脚本生成一个本地文本语料目录：
+
+```powershell
+$out = "auto-evolve/runtime-state/skillopt-bridge/officeqa-test10-with-docs"
+bun run auto-evolve/scripts/export-officeqa-skillopt-bridge.ts `
+  --task-pack-root "auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench" `
+  --split "auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench/splits/test-10.json" `
+  --out-dir $out `
+  --split-name test `
+  --skill-root "auto-evolve/runtime-state/benchmark-runs/<run>/merge-and-validate/phase2-merge/output" `
+  --build-local-text-corpus `
+  --corpus-mode page-window `
+  --ocr-page-window 0
+```
+
+这个模式会额外生成：
+
+```text
+<out>/docs/transformed/*.txt
+<out>/docs/raw-ocr/*.json
+<out>/docs/corpus-manifest.json
+```
+
+`page-window` 是推荐默认：只围绕 Fraser URL 的 `page=` 页码生成 OCR 文本，避免整本 PDF 扫描过慢。`--corpus-mode full` 会扫整本 PDF，只适合小文件或离线预处理。
+
+导出后会生成：
+
+```text
+<out>/split/train/items.json
+<out>/split/val/items.json
+<out>/split/test/items.json
+<out>/split/split_manifest.json
+<out>/merged-skill.md
+<out>/bridge-summary.json
+```
+
+`bridge-summary.json` 里会写出可直接复制执行的 SkillOpt 命令。形态如下：
+
+```powershell
+cd "C:\Users\ZhuanZ\Desktop\SkillOpt"
+$env:OFFICEQA_DOCS_DIR = "<out>\docs"   # 使用 --build-local-text-corpus 或已有 docs corpus 时需要
+python scripts/eval_only.py `
+  --config configs/officeqa/default.yaml `
+  --skill "<out>\merged-skill.md" `
+  --split test `
+  --split_dir "<out>\split" `
+  --out_root "<out>\skillopt-eval-run"
+```
+
+桥接 item 字段约定：
+
+- `question` 从每个 task 的 `instruction.md` 提取。
+- `ground_truth` 从 task-pack 的 `private-answers/<UID>/answer.txt` 读取，只供 SkillOpt evaluator 使用；SkillOpt 的 OfficeQA prompt 不会把该字段发给目标模型。
+- `source_docs` 从 `instruction.md` 的 Fraser URL 提取。
+- `source_files` 把本地 PDF 文件名转换成同 stem 的 `.txt` 文件名，例如 `treasury_bulletin_1980_06.pdf` -> `treasury_bulletin_1980_06.txt`，以匹配 SkillOpt 的 parsed/text document corpus。
+- `source_pdf_paths` 和 `page_hints` 是桥接脚本内部字段，用于可选本地 corpus 生成；SkillOpt prompt 不会把这些内部路径直接发给目标模型。
+
+重要边界：
+
+- 这个桥接脚本只是旁路评测入口，用来快速验证 SkillOpt 的交互式 OfficeQA rollout 是否优于 Auto-Evolve 当前 single-shot Direct Chat。
+- 它不修改 task-pack、private answers、validator，也不改变 blank-opencode 主证明链路。
+- 真正跑 SkillOpt 前仍需要确认 `SkillOpt` 的 `OFFICEQA_DOCS_DIR` / `env.data_dirs` 指向可用的 OfficeQA parsed/text corpus，否则 SkillOpt 只能看到 source hints，交互式检索优势发挥不出来。
+- 本地文本 corpus 生成是 SkillOpt 旁路测试的材料适配层，不是 Direct Chat 的默认路径。Direct Chat 的“是否本地 OCR”仍由 `direct-chat` 自己的模型能力路由决定。
