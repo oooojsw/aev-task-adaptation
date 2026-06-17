@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 // resume-50train-remaining.ts
 // 续跑 officeqa-pro 50 训练集中剩下未 verified 的 case
-// - 3 并发
-// - 不合并不回撤测试不跑测试集
-// - 跑完训练集 50 个为目标
+// 跳过 running 状态（让原 campaign 自己跑）
+// 只跑 round_limit_reached + queued + failed
+// 3 并发 / 7 轮
 
 import path from "node:path"
 import { readFile, writeFile, readdir, mkdir } from "node:fs/promises"
@@ -68,21 +68,16 @@ async function main() {
     Object.assign(resultsByID, r)
   }
 
-  const notDone = Object.entries(resultsByID)
+  // 只跑 round_limit_reached + queued + failed，跳过 running
+  const targets = Object.entries(resultsByID)
     .filter(([_, v]) => {
       const s = v?.status
-      return s !== "verified_success" && s !== "round_limit_reached_pass"
+      return s === "round_limit_reached" || s === "queued" || s === "failed" || s === "recovery_pending"
     })
     .map(([id, v]) => ({ id, status: v.status, campaignDir: v.campaignDir }))
 
-  const roundLimited = Object.entries(resultsByID)
-    .filter(([_, v]) => v?.status === "round_limit_reached")
-    .map(([id, v]) => ({ id, status: v.status, campaignDir: v.campaignDir }))
+  console.log(`[resume-50train] found ${targets.length} to resume (skipping running)`, targets.map(t=>`${t.id}:${t.status}`).join(','))
 
-  const targets = [...notDone, ...roundLimited]
-  console.log(`[resume-50train] found ${targets.length} unfinished: ${notDone.length} not-verified + ${roundLimited.length} round_limit`)
-
-  // limit by concurrency: take N at a time
   const batchSize = concurrency
   for (let i = 0; i < targets.length; i += batchSize) {
     const batch = targets.slice(i, i + batchSize)
@@ -104,7 +99,6 @@ async function main() {
         console.log(`  [${t.id}] resuming campaign=${campaignID} maxRounds=${extraRounds}`)
         const result = await resumeLongTaskCampaign({ cwd, campaignID, specPath })
         console.log(`  [${t.id}] done status=${result.status} rounds=${result.roundsCompleted}`)
-        // update orchestrator-state.json
         const newStatus = result.status === "verified_success" ? "verified_success" : result.status
         const idx = state.trainResults.findIndex((x: any) => x.id === t.id)
         if (idx >= 0) {

@@ -616,3 +616,182 @@ State fields added to `merge-and-validate/coordinator-state.json`:
 - `postMergeValidationSummary`: human-readable stage summary.
 
 This keeps post-merge validation pluggable. Dataset-specific file layout checks, leakage checks, soft surface review, or other merged-skill validators should be attached through validator profiles instead of hardcoded in `merger.ts`.
+
+---
+
+## 2026-06-14: Hierarchical Merge Strategy In Unified Benchmark Orchestrator
+
+The benchmark orchestrator now supports a second merge strategy without adding a parallel runner.
+
+Existing default behavior is unchanged:
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts ... --merge-strategy flat
+```
+
+To run tree-style skill merging, use the same orchestrator and switch only the merge strategy:
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --task-pack-root "auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench" `
+  --train-split "auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench/splits/train-50.json" `
+  --merge-strategy hierarchical `
+  --merge-group-size 5 `
+  --merge-input all `
+  --failure-policy negative-evidence `
+  --merge-grouping status-balanced `
+  --hierarchical-local-replay level1 `
+  --hierarchical-repair-attempts 1
+```
+
+Conceptually this supports flows like:
+
+```text
+50 single-case skills -> 10 group skills -> 2 cluster skills -> 1 final skill
+```
+
+Important semantics:
+
+- Successful skills are positive method evidence.
+- Failed / round-limit skills can be included as negative evidence or diagnostics, but must not be promoted as proven solution paths.
+- Level-1 local replay tests only the cases that were originally successful inside that group.
+- If a formerly successful case fails after group merge, the system may run one repair pass to restore the missed method.
+- Repair policy is path-aware: `CORE.md` / `INDEX.md` are append-only; `casebook/*.md` can be rewritten; `meta.json` and `surface_contract.json` can be regenerated.
+- Every hierarchical group output runs the same pluggable `post_merge` validation-engine stage used by the flat merger. If a configured required validator fails, the group is blocked before replay or upward merge.
+- Higher-level merge currently merges upward without mandatory replay by default; final train replay and held-out test still use the existing Phase 3 validator path.
+
+Relevant files:
+
+- `orchestrator/multi-instance/hierarchical-merger.ts`
+- `methods/recipes/multi-instance/prompts/hierarchical-merge-generic.md`
+- `methods/recipes/multi-instance/prompts/hierarchical-merge-repair.md`
+- `scripts/validate-append-only-skill-patch.ts`
+- `scripts/run-benchmark-orchestrator.ts`
+- `scripts/run-officeqa-pro-benchmark.ts`
+
+OfficeQA wrapper environment variables:
+
+```powershell
+$env:OFFICEQA_PRO_MERGE_STRATEGY = "hierarchical"
+$env:OFFICEQA_PRO_MERGE_GROUP_SIZE = "5"
+$env:OFFICEQA_PRO_MERGE_INPUT = "all"
+$env:OFFICEQA_PRO_FAILURE_POLICY = "negative-evidence"
+$env:OFFICEQA_PRO_HIERARCHICAL_LOCAL_REPLAY = "level1"
+$env:OFFICEQA_PRO_HIERARCHICAL_REPAIR_ATTEMPTS = "1"
+```
+
+---
+
+## 2026-06-16: Direct Chat 可拔插单轮评测
+
+新增 Direct Chat 辅助评测链路。它不替代 `blank-opencode`，只用于论文里的单轮问答 baseline、跨厂商横向测试和 skill prompt 迁移测试。
+
+核心边界：
+
+- `blank-opencode` 仍然是主证明：启动空白 OpenCode agent，真实读材料、用工具、写 workspace，再由 product validator 判分。
+- `direct-chat` 是辅助评测：把训练/合并后的 skill 压成一个文本 bundle，把测试题压成 `question + materials`，直接调用目标模型一次，让模型输出最终答案。
+- Direct Chat prompt 只能包含三块：`skill`、`question`、`materials`。
+- Direct Chat prompt 允许额外有一层通用说明，告诉模型这三块分别是什么、它要做什么、最终答案必须如何输出；这层说明不能包含答案、validator 参数、private path 或任务历史。
+- Direct Chat prompt 禁止包含：private answer、private answer 路径、validator 参数、原始 spec 全文、campaign memory、worker/lead/reviewer 轨迹、blank-agent 轨迹。
+- Direct Chat 模型不能自己判自己；输出仍由系统外部 product validator 判分。
+
+新增核心文件：
+
+- `orchestrator/direct-chat/contract.ts`
+- `orchestrator/direct-chat/skill-bundler.ts`
+- `orchestrator/direct-chat/dataset-bundler.ts`
+- `orchestrator/direct-chat/provider-client.ts`
+- `orchestrator/direct-chat/providers/*`
+- `orchestrator/direct-chat/runner.ts`
+- `scripts/run-direct-chat-eval.ts`
+- `scripts/smoke-direct-chat-eval.ts`
+- `scripts/smoke-direct-chat-siliconflow-capabilities.ts`
+- `direct-chat-models.example.json`
+
+第一版支持：
+
+- OfficeQA task pack 打包为 `direct-chat-dataset.bundle.jsonl`。
+- Skill 目录打包为 `skill.bundle.txt` 和 manifest。
+- OfficeQA PDF 不做任何本地文本抽取；PDF 作为 `document_asset`，只交给已声明并认证 `fileInputMode` 的模型。模型没有声明或该 provider 未认证 PDF 输入时，该 case 记为 `config` 失败。
+- Direct Chat 材料路由现在支持本地 OCR fallback：目标模型能原生读取图片/PDF 时，继续发送原始 asset；目标模型不能稳定读取时，先由本地 `PyMuPDF + Umi-OCR(PaddleOCR-json)` 把材料识别成 Markdown 文本，再把这份 OCR 文本作为材料发给目标模型。这个 fallback 发生在 `orchestrator/direct-chat/ocr-fallback.ts`，并调用 `scripts/direct-chat-local-ocr.py`。
+- OfficeQA 多 PDF 会全部作为模型原生 PDF/file 材料进入请求；不再使用 Fraser `page=...` 在本地抽页。硅基流动普通文本/VLM 配置不能直接吃 PDF；只有 `siliconflow-deepseek-ocr-pdf` 这类 OCR/document 模型配置会把 PDF 按官方 `image_url` PDF/base64 方式发送。
+- 默认 `direct-chat-models.example.json` 已开启本地 `ocrFallback.mode = local-umi`。因此像 `siliconflow-qwen3-6-35b-a3b` 这类不能直接处理 OfficeQA PDF 的模型，也可以通过“先本地 OCR、后回答”的方式参与 Direct Chat 测试，不依赖云端 OCR fallback。
+- 通用 task-pack materializer 支持 `.md/.txt/.json/.jsonl/.yaml/.yml/.pdf/.xlsx/.xlsm`：文本直接进入材料，PDF 作为模型原生 file asset，Excel 仍抽 workbook/sheet/preview/formula 摘要。
+- 每次模型调用都会写 `prompt-audit.json`，记录 skill/material 原始 token、实际进入 prompt 的 token、是否截断和材料能力警告。
+- 每题还会写 `material-routing.json` / `material-routing.md`，明确记录每份材料是“直接保留文本”“原生 asset 直送模型”还是“改走 OCR fallback”，并记录 OCR 引擎与缓存命中情况。
+- 每个模型可配置 `contextWindowTokens`、`promptBudgetTokens`、`skillBudgetTokens`、`materialBudgetTokens`，不同厂商按各自上下文预算裁剪。
+- Provider 错误会分类记录：`auth`、`quota`、`rate_limit`、`context_length`、`provider_5xx`、`timeout`、`network`、`bad_request`、`validation` 等，不再把模型调用失败和答案验证失败混在一起。
+- 答案文件由 validator contract 统一决定：文本题写 `answer.txt`，JSON 题写 `answer.json`，Markdown 题写 `answer.md`，validator 的 `--candidate` 会被替换到对应路径。
+- 可启用无 skill 对照：同一模型会额外生成 `<model>__no-skill` 结果目录。
+- 图片材料不做 OCR；adapter 只传递 image pointer 和 “需要模型图片能力” 标记。文本模型不能把这类材料视为已读。
+- 数据集 adapter 入口已独立：`officeqa`、`spreadsheetbench`、`alfworld`、`generic`。SpreadsheetBench/ALFWorld 当前复用通用 materializer，但调用入口已按数据集命名，后续可逐个增强。
+- 厂家已拆成可切换 provider module：`providers/siliconflow.ts`、`providers/openai-compatible.ts`、`providers/mock.ts`。`provider-client.ts` 只负责路由和重试，不再把所有厂家写死在一个大分支里。
+- `openai-compatible` `/chat/completions` 模型调用仍作为通用兜底。硅基流动已单独配置为：文本模型 `imageInputMode=fileInputMode=none`；视觉模型可用 `imageInputMode=openai-image-url`；OCR/document 模型可用 `fileInputMode=siliconflow-image-url-pdf`，把 PDF 作为 `image_url` content part 发送。
+- `Qwen/Qwen3.6-35B-A3B` 已加入为 `siliconflow-qwen3-6-35b-a3b`，并发 2，256K 上下文，使用 OpenCode `siliconflow-cn` auth 兜底。真实探测显示普通文本请求可用，但 PDF 作为 `image_url` data URL 会被硅基流动返回 `cannot identify image file`，因此不能直接跑 OfficeQA PDF 测试集。
+- `mock` transport 本地烟测。
+- 统一 benchmark orchestrator 支持 `--eval-runner direct-chat`，训练、合并、train replay 仍走原链路，held-out test 可切换为 Direct Chat。
+- 每题保存 `prompt.system.txt`、`prompt.user.txt`、`response.txt`、`answer.txt`、`validator-result.json`、`result.json`。
+- Direct Chat 会要求模型用 `<answer>...</answer>` 包住最终答案。答案提取器优先读取该标签；若模型没遵守标签，也会尝试从 `Final answer:`、JSON 数组/对象行、纯数字行或末尾数字中提取最终答案，避免整段推理直接进入 validator。
+- 总表保存 `summary.json`、`summary.csv`、`summary.md`。
+- 材料遗漏默认阻断；如果只是做 OfficeQA instruction-only 文本 baseline，必须显式加 `--allow-omitted-materials` 或 `--direct-chat-allow-omitted-materials`。
+
+典型命令：
+
+```powershell
+bun run auto-evolve/scripts/run-direct-chat-eval.ts `
+  --skill-root "<merged-skill-dir>" `
+  --task-pack-root auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench `
+  --split auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench/splits/test-selected.json `
+  --models-config auto-evolve/direct-chat-models.example.json `
+  --models dashscope-qwen-plus `
+  --allow-omitted-materials `
+  --global-concurrency 4
+```
+
+统一 benchmark orchestrator 中使用：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --task-pack-root auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench `
+  --train-split auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench/splits/train-selected.json `
+  --test-split auto-evolve/task-packs/real-long-tasks/officeqa-pro-learnbench/splits/test-selected.json `
+  --eval-runner direct-chat `
+  --direct-chat-models-config auto-evolve/direct-chat-models.example.json `
+  --direct-chat-models dashscope-qwen-plus `
+  --direct-chat-global-concurrency 4
+```
+
+本地烟测：
+
+```powershell
+bun run auto-evolve/scripts/smoke-direct-chat-eval.ts
+bun run auto-evolve/scripts/smoke-direct-chat-siliconflow-capabilities.ts
+```
+
+这个烟测验证：
+
+- prompt 不泄漏 `private-answers` 路径。
+- mock 模型输出能被现有 OfficeQA validator 判分。
+- 有 PDF source 但未转文本时，默认会被材料遗漏门阻断。
+- 硅基流动视觉配置会把图片材料编码为 OpenAI-compatible `image_url`；普通视觉/文本模型的 PDF 会被拦截；DeepSeek-OCR/PaddleOCR-VL 类配置的 PDF 会按 `image_url` PDF/base64 方式进入请求。
+
+相关参数：
+
+- `--eval-runner blank-opencode|direct-chat`：默认 `blank-opencode`。
+- `--direct-chat-models-config <json>`：Direct Chat 模型配置。
+- `--direct-chat-models <id1,id2>`：只跑指定模型。
+- `--direct-chat-global-concurrency <n>`：Direct Chat 总并发。
+- `--direct-chat-max-pdf-chars <n>`：历史兼容参数；当前 Direct Chat 不本地抽 PDF 文本，PDF 走原生 file asset 能力。
+- `--direct-chat-allow-omitted-materials`：允许材料遗漏，只适合显式 baseline。
+- `--direct-chat-no-skill-baseline`：在 held-out test 里同时跑 no-skill 对照。
+- `--direct-chat-adapter officeqa|spreadsheetbench|alfworld|generic`：手动指定数据集 adapter。
+
+材料完整性规则：
+
+- 对 PDF/图片任务，Direct Chat 依赖厂商模型自己的文件/图像能力；本地不 OCR、不抽 PDF 文本。
+- 文本、JSON、Excel 摘要仍作为普通文本 prompt 发送。
+- `material-audit/*.json` 记录 task spec 期望材料、实际进入 bundle 的材料、遗漏材料和转换警告。
+- `omittedSources` 非空时默认阻断；除非显式允许 omitted materials。
+- 多材料不会被静默丢弃；文本材料进入 prompt 前如果超过模型预算，会在 `prompt-audit.json` 标记 `truncated=true`。PDF/图片材料作为原生 asset，不做本地文本截断。
+- Direct Chat 分数必须结合 `prompt-audit.json` 看：如果模型预算太小导致关键材料被截断，这属于材料预算/模型上下文限制，不应直接解释成 skill 无效。
+- Direct Chat 结果必须结合 `errorCategory` 看：`validation` 是答案没过，`auth/quota/rate_limit/context_length` 是供应商或配置问题，不能混成同一类失败。
