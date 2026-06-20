@@ -680,6 +680,69 @@ $env:OFFICEQA_PRO_HIERARCHICAL_LOCAL_REPLAY = "level1"
 $env:OFFICEQA_PRO_HIERARCHICAL_REPAIR_ATTEMPTS = "1"
 ```
 
+### Direct Chat 单题筛选与结果分类
+
+`scripts/run-direct-chat-eval.ts` 支持：
+
+```text
+--case-ids UID0006
+--case-ids UID0001,UID0006
+```
+
+筛选在统一 Direct Chat runner 中执行。指定 UID 不存在时必须报错，禁止静默运行整个 split；实际 UID 会写入 `config.snapshot.json -> caseIDs`。
+
+Direct Chat 失败至少要分成三类：
+
+1. `validation`：材料完整、答案成功提取，但外部 product validator 判错。
+2. `answer_extraction/output_truncation`：模型推理中已有明确最终值但旧提取器漏抓，或输出额度耗尽导致没有写出最终答案。
+3. `missing_external_material`：题目明确要求额外公共数据源，但 task spec / source_docs 没有提供该材料。此类不能计作纯模型失败。
+
+答案提取器只接受 `<answer>`、明确 final-answer 句和 “I will output/provide/return/go with” 这类强收口表达。长推理文本不会再用“最后一个数字”猜答案。思考模型必须保留足够输出预算，让其最终写出 `<answer>`；Qwen3.6-35B-A3B 当前为 `maxOutputTokens: 4096`。
+
+对于输出额度耗尽但推理正文已经明确给出最终舍入值的情况，提取器也允许识别强语义收口形式，例如：
+
+```text
+rounded to the nearest ...: 32.703
+39,482.0286 -> 39,482.03
+```
+
+不能把 `Total Value = ...`、页码、年份或任意最后一个数字当最终答案。历史运行若因提取器版本产生假失败，应保留原始 `summary.json`，另行记录修复后离线重放结果，不篡改历史原始响应。
+
+Direct Chat 答案提取现在采用候选评分，而不是固定正则顺序。大致优先级是：
+
+```text
+完整 <answer> 标签
+不完整但可恢复的 <answer> 标签
+Final answer / 最终答案
+I will output / return / provide
+Rounded to nearest / 箭头后的最终值
+The answer/result is
+Average / difference / percent change
+普通 sum
+独立 JSON 或独立数字行
+```
+
+每题会保存：
+
+```text
+results/<model>/<case>/answer-extraction.json
+```
+
+其中包含：
+
+- 最终选择的答案。
+- 命中来源，例如 `answer_tag`、`rounded_result`、`arrow_result`。
+- `high / medium / low` 置信度。
+- 排名前 20 的候选值、分数和原文位置。
+
+如果模型返回很长的推理文本，却没有任何可信的最终答案表达，系统不再把整段推理写入 `answer.txt` 交给 product validator，而是直接记录：
+
+```text
+errorCategory: answer_extraction
+```
+
+这样模型答错、验证器失败和答案提取失败可以分别统计。
+
 ---
 
 ## 2026-06-16: Direct Chat 可拔插单轮评测
@@ -885,3 +948,355 @@ python scripts/eval_only.py `
 - 它不修改 task-pack、private answers、validator，也不改变 blank-opencode 主证明链路。
 - 真正跑 SkillOpt 前仍需要确认 `SkillOpt` 的 `OFFICEQA_DOCS_DIR` / `env.data_dirs` 指向可用的 OfficeQA parsed/text corpus，否则 SkillOpt 只能看到 source hints，交互式检索优势发挥不出来。
 - 本地文本 corpus 生成是 SkillOpt 旁路测试的材料适配层，不是 Direct Chat 的默认路径。Direct Chat 的“是否本地 OCR”仍由 `direct-chat` 自己的模型能力路由决定。
+
+---
+
+## 2026-06-18: Task-Pack Purity And Runtime Workspace Isolation
+
+测试集和训练集的 task-pack 目录必须保持“题库只读”。原始题目目录只应该保存：
+
+- `instruction.md`
+- `spec.json`
+- `campaign.json`
+- `materials/` 下由 `spec.materials` 明确声明的原始材料
+
+运行产物不能再写回：
+
+```text
+task-packs/real-long-tasks/<dataset>/tasks/<UID>/workspace
+task-packs/real-long-tasks/<dataset>/tasks/<UID>/expert-workspace
+task-packs/real-long-tasks/<dataset>/tasks/<UID>/materials/page*.txt
+```
+
+平台层现在在 long-task 和 blank-eval 启动时，把 task-local runtime path 隔离到 run 目录：
+
+```text
+runtime-state/long-task/runs/<runID>/task-workspace/workspace
+runtime-state/long-task/runs/<runID>/task-workspace/expert-workspace
+runtime-state/blank-eval-runs/<runID>/task-workspace/workspace
+runtime-state/blank-eval-runs/<runID>/task-workspace/expert-workspace
+```
+
+材料路径仍然指向原始 task-pack PDF，只读使用；答案输出、临时 notes、专家经验草案和 validator candidate 路径会进入 runtime workspace。
+
+相关代码：
+
+- `orchestrator/long-task/repository.ts`：`isolateLongTaskRuntimePaths()` 负责把 `./workspace`、`./expert-workspace`、`./validation-expert-workspace` 重定向到 run-local workspace。
+- `orchestrator/long-task/runner.ts`：新 long-task run 初始化后使用隔离后的运行态 spec。
+- `orchestrator/blank-eval/runner.ts`：blank agent 闭卷产物也写入 blank-eval run-local workspace。
+- `orchestrator/long-task-campaign/runner.ts`：campaign seed/reset 不再写回 base spec 旁边的 task-local runtime paths。
+
+如果未来发现 task-pack 里又出现 `page*.txt`、`analysis.txt`、`workspace/answer.txt` 等文件，优先怀疑是手工调试脚本或新 adapter 绕过了平台层，直接写进了题库目录。正式实验前要按 `spec.materials` 白名单清理材料目录，只保留声明材料。
+
+## 2026-06-18: OpenCode Isolated Runtime Uses Alibaba Coding Plan
+
+Auto-Evolve 默认 OpenCode 模型已从 MiniMax 切换到：
+
+```text
+alibaba-coding-plan-cn/qwen3.6-plus
+```
+
+这个切换现在可以直接在项目总配置里改：
+
+```text
+auto-evolve/config.json -> modelConfig.defaults.model
+```
+
+`config.json` 也已经内联了常用运行配置：
+
+```text
+modelConfig
+judgeConfig
+permissionConfig
+monitorConfig
+concurrencyConfig
+stageConcurrency
+```
+
+读取优先级是：`config.json` 内联配置 > 对应外部小配置文件 > 代码默认值。外部的 `model-config.json`、`concurrency-config.json` 等文件仍保留，主要为了兼容旧脚本和旧迁移包；新实验优先改总配置。
+
+并发现在分两层：
+
+- `concurrencyConfig` 是机器级总闸门，控制同一时间最多允许多少 OpenCode 子会话进入系统，例如总并发、单 scope 上限、队列深度和获取锁超时。
+- `stageConcurrency` 是流程级阶段并发，控制训练、合并、层级合并、训练回测、测试集 blank eval、Direct Chat 测试和 baseline 各自开多少路。
+
+推荐以后优先在 `auto-evolve/config.json` 改这些键：
+
+```json
+{
+  "stageConcurrency": {
+    "training": 5,
+    "merge": 1,
+    "hierarchicalMerge": 2,
+    "trainReplay": 3,
+    "testBlank": 3,
+    "testDirectChat": 4,
+    "baseline": 3
+  }
+}
+```
+
+通用启动脚本仍支持命令行临时覆盖：
+
+```text
+--train-concurrency / --concurrency
+--merge-concurrency
+--hierarchical-merge-concurrency / --merge-group-concurrency
+--replay-concurrency / --validate-concurrency
+--test-concurrency / --blank-test-concurrency
+--direct-chat-global-concurrency / --direct-chat-test-concurrency
+--baseline-concurrency
+```
+
+OfficeQA 包装脚本也会读取同一个 `stageConcurrency`，并允许用环境变量临时覆盖，例如 `OFFICEQA_PRO_TRAIN_CONCURRENCY`、`OFFICEQA_PRO_REPLAY_CONCURRENCY`、`OFFICEQA_PRO_TEST_CONCURRENCY`、`OFFICEQA_PRO_DIRECT_CHAT_CONCURRENCY`。这样以后“训练几并发、合并几并发、回撤测试几并发、测试集几并发”都属于总控配置，不需要再去散落脚本里找。
+
+这个切换只影响本项目配置和平台默认兜底，不修改宿主机主配置：
+
+```text
+C:\Users\ZhuanZ\.config\opencode\opencode.json
+```
+
+OpenCode 子会话仍通过隔离运行时启动。`orchestrator/opencode.ts` 会把宿主机的 OpenCode auth 和模型缓存复制到每个 run-local 的隔离目录：
+
+```text
+runtime-state/opencode-isolated-env/<runLabel>/data/opencode/auth.json
+runtime-state/opencode-isolated-env/<runLabel>/cache/opencode/models.json
+```
+
+因此阿里 Coding Plan 的 provider/model 能在隔离子进程内解析，但不会把 auto-evolve 的运行时改动写回本机 OpenCode 配置。当前本机模型缓存中 `alibaba-coding-plan-cn` 可用模型包括 `qwen3.6-plus`、`qwen3.7-plus`、`qwen3.7-max`、`qwen3-coder-plus`、`qwen3-coder-next`、`glm-4.7`、`glm-5`、`kimi-k2.5`、`MiniMax-M2.5`。
+
+## 2026-06-19: Direct Chat 厂家配置纳入总控
+
+Direct Chat 的厂家、模型、能力声明和默认选择现在统一放在：
+
+```text
+auto-evolve/config.json -> directChatConfig
+```
+
+这里可以直接配置：
+
+- `defaultModelIDs`：默认跑哪些模型。
+- `models`：各厂家模型的 API 地址、鉴权环境变量、OpenCode auth provider、上下文窗口、输出预算、图片/PDF 能力、单模型并发和厂家专用请求参数。
+- `concurrency` / `retry`：Direct Chat 全局并发与重试策略。
+- `ocrFallback`：本地 OCR 路由和缓存位置。
+- `adapterID`、`officeqaMaterialMode`、`officeqaDocsDir`：数据集和 OfficeQA 材料模式。
+- `allowOmittedMaterials`、`includeNoSkillBaseline`：材料遗漏和无 skill 对照策略。
+
+统一读取优先级：
+
+```text
+命令行临时参数
+  > config.json 的 directChatConfig
+  > direct-chat-models.example.json 兼容配置
+  > 代码默认值
+```
+
+因此以后使用通用 benchmark 运行 Direct Chat，只需要指定：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --task-pack-root "<task-pack>" `
+  --train-split "<train-split>" `
+  --test-split "<test-split>" `
+  --eval-runner direct-chat
+```
+
+不再强制传 `--direct-chat-models-config`。独立入口 `run-direct-chat-eval.ts` 也不再强制传 `--models-config`；它会使用总控中的 `defaultModelIDs`。如果某次实验想临时换厂家或模型，仍可用 `--models`、`--direct-chat-models` 或外部 models config 覆盖，不会修改总控。
+
+注意：总控只保存鉴权引用，例如 `apiKeyEnv` 或 `opencodeAuthProviderID`，不应把真实 API key 明文写进仓库。
+
+### 无 Skill 基线提示隔离
+
+本机 Codex OAuth 反代可通过 `codex-proxy-gpt-5-4-mini` 模型项接入 Direct Chat。它使用 `http://127.0.0.1:8318/v1`，账号由反代项目的同步守护进程自动跟随本机 Codex 登录切换；模型并发默认是 3。
+
+GPT-5.4-mini 的 OfficeQA 对照实验使用同一份 SkillOpt 对齐 test-172 和官方 oracle 页面文本，分别保存 `no-skill` 与 `with-skill` 两组，不允许相互覆盖；反代当前默认推理强度为 `medium`。
+
+`--no-skill-only` 现在使用独立的纯基线提示路径。该路径不会再注入空的 `<SKILL>` 区块，也不会出现 `follow the skill`、`expert guidance` 或 `DIRECT CHAT OVERRIDE AFTER SKILL` 等暗示。模型只收到通用初始说明、当前问题、当前材料和输出格式约束。
+
+正式基线结果必须满足：
+
+- `config.snapshot.json -> noSkillOnly = true`
+- 结果目录模型名带 `__no-skill`
+- 每题 `result.json -> skillMode = no-skill`
+- `prompt.system.txt` 不包含 `<SKILL>` 或 skill 专用指令
+
+带 skill 与无 skill 结果不得混合聚合。新测试集基线应保存独立的 split 快照和 cohort provenance，明确列出被排除的旧测试运行。
+
+### Direct Chat 自动补跑临时故障
+
+Direct Chat 整批首轮结束后，会自动筛选基础设施类临时失败并补跑，不再人工复制 UID。默认只补跑：
+
+```text
+network / timeout / rate_limit / provider_5xx
+```
+
+默认最多补跑 2 轮，每轮前等待 30 秒。`validation` 和 `answer_extraction` 不自动补跑，因为它们属于模型答案或输出问题，重复调用会不公平地增加答题次数。配置位置：
+
+```text
+auto-evolve/config.json -> directChatConfig.transientRecovery
+```
+
+每轮补跑前的原始文件会保存到 `transient-recovery-history/`，补跑审计保存在 `transient-recovery.json`。最终 `summary.json` 只统计补跑收口后的每题最终结果。
+
+### 2026-06-21: Direct Chat Skill 层级与可信性硬门
+
+Direct Chat 不再把多文件经验区按字母顺序拼接后静默截断。`buildSkillBundle()` 会生成完整归档和可选择的注入层级：
+
+- `full`：把全部可发布经验内容完整注入。正式 SkillOpt 对齐实验默认使用这一模式。
+- `head-tail`：只对 Skill 做显式头尾截取，中间插入截断标记；适合上下文较小的模型。
+- `core-files`：完整注入 `INDEX.md` 和 `CORE.md`，不在文件内部裁切。
+
+总控配置：
+
+```json
+{
+  "directChatConfig": {
+    "skillInput": {
+      "mode": "full",
+      "headRatio": 0.65
+    }
+  }
+}
+```
+
+临时覆盖：
+
+```powershell
+bun run auto-evolve/scripts/run-direct-chat-eval.ts --skill-input-mode full <其他参数>
+bun run auto-evolve/scripts/run-direct-chat-eval.ts --skill-input-mode head-tail <其他参数>
+bun run auto-evolve/scripts/run-direct-chat-eval.ts --skill-input-mode core-files <其他参数>
+```
+
+关键规则：
+
+- 问题全文和数据集 adapter 已发布的材料永远不在 prompt 层截断。
+- `full` / `core-files` 放不下时，在第一条模型请求前失败，不自动降级。
+- 只有显式选择 `head-tail` 时才允许截 Skill。
+- 同一模型整批测试固定使用同一个层级，并按材料最大的题目预检。
+- `run-preflight.json`、`config.snapshot.json`、`prompt-audit.json` 和逐题 `result.json` 会记录层级、hash、原始/注入 token 和截断状态。
+- 可用 `--preflight-only` 对整批题目做容量检查，不调用目标模型。
+
+当前总控已设置为全局 `full`，模型配置中没有单独的 `head-tail` 覆盖。`Qwen/Qwen3.5-4B` 的上下文按官方模型配置修正为 262,144 tokens；当前 OfficeQA 172 条中最重 prompt 预计 59,412 tokens，可以完整注入 110,754 字节的最终 Skill，无需截断。
+
+OfficeQA `skillopt-oracle-json` 现在按 FRASER URL 的年月匹配本地文档，同一 PDF 的多个页码不会再按数组下标错配。单页 24,000 字符、总 oracle context 80,000 字符的发布上限与本机 SkillOpt 实现一致；URL 无法映射、parsed JSON 缺失或页面无文本会进入 `omittedSources` 并阻断正式运行。
+
+总表只把 `summary.json -> validity.status=valid` 的来源视为正式完成。旧运行没有新预检证明时保留历史数据，但标记为 `legacy-unverified/invalid`，不能继续作为正式成功率。
+
+### Direct Chat 命名运行模式
+
+Direct Chat 现在支持在总控配置中定义命名模式，位置：
+
+```text
+auto-evolve/config.json -> directChatConfig.runModes
+```
+
+独立入口使用：
+
+```powershell
+bun run auto-evolve/scripts/run-direct-chat-eval.ts --run-mode skill-full <其他参数>
+```
+
+总控 benchmark 的 Direct Chat 测试使用：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts --eval-runner direct-chat --direct-chat-run-mode skill-full <其他参数>
+```
+
+当前内置模式：
+
+- `skill-full`：正式技能评测。完整注入最终 skill；题目和材料必须完整保留。
+- `skill-core`：紧凑技能评测。只注入 `core-files` 版本 skill；题目和材料必须完整保留。
+- `skill-head-tail`：显式压缩技能评测。只允许压缩 skill 中段；题目和材料必须完整保留。
+- `no-skill-full-materials`：无技能基线。不注入训练得到的 skill，只给任务提示和完整材料。
+- `paired-skill-vs-noskill`：成对对照。同一批题同时跑完整 skill 和无 skill 基线。
+- `native-pdf-skill-full`：原生材料链路。完整注入 skill，并使用数据集原始 PDF/材料路由能力。
+
+优先级规则：命令行显式参数最高，例如 `--skill-input-mode`、`--officeqa-material-mode`、`--no-skill-only` 会覆盖 `--run-mode` 展开的默认行为；未传 `--run-mode` 时使用 `directChatConfig.defaultRunMode`。每次运行的 `config.snapshot.json` 会记录 `runModeID` 和 `runModeDescription`，后续查历史时不用再反推当时到底是带 skill、无 skill 还是 paired。
+
+### Direct Chat 统一总表自动汇总
+
+每次 `runDirectChatEvaluation()` 完成临时故障补跑并写出本次 `summary.json/csv/md` 后，系统会自动刷新统一 Excel 总表：
+
+```text
+auto-evolve/runtime-state/direct-chat-reports/direct-chat-evaluation-master.xlsx
+```
+
+刷新脚本：
+
+```text
+auto-evolve/scripts/update-direct-chat-master-report.py
+```
+
+它会扫描 `runtime-state/direct-chat-runs/` 下所有已经完成且存在 `summary.json` 的运行。原始运行目录和各自的 summary 文件保持不变；统一总表只是追加式总账视图。刷新采用文件锁、同目录临时文件和原子替换，多个 Direct Chat 进程同时结束时不会互相覆盖。总表更新失败只会在当前运行目录留下 `master-report-update-error.log`，不会把已经完成的模型评测改判为失败。
+
+总表工作表：
+
+- `Dashboard`：总运行数、逐题结果数、正式实验数量和正式成功率图。
+- `Official Experiments`：经过明确来源组合的正式实验总结果。
+- `Run Ledger`：每个运行、模型占一行；正式整批、子集、烟测、补跑、旧聚合全部保留并分类。
+- `Case Results`：所有历史运行的逐题结果，不因后续补跑而删除旧行。
+- `Official Case Results`：正式组合实验按 UID 收口后的结果；来源顺序靠后的补跑覆盖同 UID 的旧基础设施失败。
+- `Errors`：所有模型答错、解析失败和供应商基础设施失败。
+- `Fields`：字段与状态说明。
+
+正式组合实验及补跑覆盖顺序配置在：
+
+```text
+auto-evolve/direct-chat-master-report.json
+```
+
+普通新运行不需要修改这个配置，也会自动进入 `Run Ledger` 和 `Case Results`。只有需要在论文或正式报告中把主跑与多个补跑合成一个最终成功率时，才需要新增一个 `experiments` 配置项。验证总表结构和当前正式数字：
+
+```powershell
+python auto-evolve/scripts/smoke-direct-chat-master-report.py
+```
+
+总表鲁棒性规则：
+
+- 损坏的 `summary.json`、`config.snapshot.json` 或单题 `result.json` 不会打崩整张表；对应运行会进入警告行或 `result_json_read_error`。
+- 正式组合默认使用 `replacePolicy: prefer-non-infrastructure`。后续补跑如果仍是额度、鉴权、网络、超时等基础设施失败，不会覆盖先前已有的真实模型结果。
+- 组合实验可用 `modelIDs`、`providers`、`skillModes` 显式限制来源，防止同一运行目录中的多模型或带/不带 skill 结果串线。
+- 模型输出会移除 Excel 不允许的控制字符，限制超长单元格，并把 `= / + / - / @` 开头的文本按普通文本写入，防止公式注入。
+- `Case Results`、`Official Case Results` 和 `Errors` 超过单个 Excel Sheet 容量时自动拆成续表，不丢弃历史记录。
+- 如果用户正在 Excel 中打开总表，刷新结果会先保存到 `direct-chat-evaluation-master.pending.xlsx`，状态写入 `master-report-status.json`。关闭 Excel 后，下一次刷新会自动转正，不会覆盖或丢失已完成测试。
+- 生成过程使用跨进程锁、过期锁回收、临时文件和原子替换；多个测试同时结束时按顺序刷新。
+
+独立入口支持 `--resume-existing`：同一输出目录恢复时，已有 `result.json` 的题目不会重跑；整批补齐后仍会自动处理其中的临时基础设施失败。统一 benchmark 的 Direct Chat 测试默认开启该断点续跑能力。
+
+### 本机 Qwen 网页桥接
+
+本机另有一个真实浏览器驱动的 Qwen 网页桥接：
+
+```text
+E:\project\260410各种反代\6\universal-web-api
+```
+
+它使用独立 Chrome profile 操作 `chat.qwen.ai`，对 Auto-Evolve 暴露标准接口：
+
+```text
+http://127.0.0.1:8199/v1/chat/completions
+```
+
+Direct Chat 总控中的模型 ID 是 `qwen-web-current`。这个名称故意不绑定具体模型：请求使用受控 Qwen 网页中当前选中的模型，因此正式实验前必须先在受控网页确认模型名称。该通道单标签运行，配置并发固定为 `1`；PDF/图片仍按 Direct Chat 的本地 OCR fallback 转成文本后发送，不能把它记录成原生 PDF/视觉输入实验。
+
+启动方式：
+
+```powershell
+cd "E:\project\260410各种反代\6\universal-web-api"
+python .\start.py
+```
+
+健康检查：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8199/health
+```
+
+独立 Direct Chat 调用时可用：
+
+```powershell
+bun run auto-evolve/scripts/run-direct-chat-eval.ts `
+  --models qwen-web-current `
+  --global-concurrency 1 `
+  <其他 task-pack、split、skill 参数>
+```

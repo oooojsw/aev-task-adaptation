@@ -4,13 +4,26 @@ import { existsSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
 import { createCoordinatorRun } from "../orchestrator/multi-instance/coordinator"
 import { runCoordinatorPhase2Merge } from "../orchestrator/multi-instance/merger"
+import {
+  runCoordinatorHierarchicalMerge,
+  type HierarchicalMergeFailurePolicy,
+  type HierarchicalMergeGrouping,
+  type HierarchicalMergeInputFilter,
+  type HierarchicalReplayLevels,
+} from "../orchestrator/multi-instance/hierarchical-merger"
 import { runCoordinatorPhase3Validate } from "../orchestrator/multi-instance/validator"
 import { saveCoordinatorState } from "../orchestrator/multi-instance/repository"
 import { runBlankEval } from "../orchestrator/blank-eval/runner"
 import { pathExists } from "../orchestrator/fs"
 import { readCampaignHealth, writeRunDashboard } from "../orchestrator/run-health"
+import { buildDirectChatDatasetWithAdapter } from "../orchestrator/direct-chat/adapters"
+import { buildSkillBundle } from "../orchestrator/direct-chat/skill-bundler"
+import { runDirectChatEvaluation } from "../orchestrator/direct-chat/runner"
+import type { DirectChatModelsConfig } from "../orchestrator/direct-chat/contract"
+import { loadConfig } from "../orchestrator/schema"
 
 type OrchestratorMode = "campaign-only" | "full-pipeline"
+type EvalRunner = "blank-opencode" | "direct-chat"
 
 type CampaignRow = {
   id: string
@@ -47,14 +60,54 @@ type BenchmarkConfig = {
   testTaskIDs?: string[]
   outDir: string
   concurrency: number
+  stageConcurrency: {
+    training: number
+    merge: number
+    hierarchicalMerge: number
+    trainReplay: number
+    testBlank: number
+    testDirectChat: number
+    baseline: number
+  }
   mode: OrchestratorMode
   stopAfter?: "training" | "merge" | "train-replay" | "test" | "baseline"
   dryRun: boolean
   reuseVerified: boolean
   resumeRunning: boolean
   runMerge: boolean
+  mergeStrategy: "flat" | "hierarchical"
+  hierarchicalMerge: {
+    groupSize: number
+    inputFilter: HierarchicalMergeInputFilter
+    failurePolicy: HierarchicalMergeFailurePolicy
+    grouping: HierarchicalMergeGrouping
+    localReplay: {
+      enabled: boolean
+      levels: HierarchicalReplayLevels
+      repairOnFailure: boolean
+      repairAttemptsPerCase: number
+      rerunAfterRepair: boolean
+    }
+  }
   runTrainReplay: boolean
   runTest: boolean
+  evalRunner: EvalRunner
+  directChat?: {
+    runModeID?: string
+    runModeDescription?: string
+    modelsConfigPath?: string
+    modelsConfig?: DirectChatModelsConfig
+    modelIDs?: string[]
+    globalConcurrency?: number
+    allowOmittedMaterials: boolean
+    includeNoSkillBaseline: boolean
+    noSkillOnly?: boolean
+    adapterID?: string
+    officeqaMaterialMode?: "native-pdf" | "skillopt-oracle-json"
+    officeqaDocsDir?: string
+    maxPdfCharsPerFile?: number
+    skillInputMode?: "full" | "head-tail" | "core-files"
+  }
   runBaseline: boolean
   /**
    * When true, a full-pipeline benchmark may continue into merge/replay/test
@@ -65,6 +118,10 @@ type BenchmarkConfig = {
   trainReplayScope: "verified-only" | "all-train"
   /** Dedicated cap for train replay / rollback validation. */
   replayConcurrency: number
+  /** Dedicated cap for held-out blank-agent validation. */
+  testConcurrency: number
+  /** Dedicated cap for no-skill baseline blank-agent validation. */
+  baselineConcurrency: number
   /** Keep moving to held-out test after replay/repair still has failures. */
   continueAfterTrainReplayFailure: boolean
   trainLimit?: number
@@ -118,6 +175,9 @@ type BenchmarkState = {
   }>
   merge?: {
     mergedSkillDir?: string
+    strategy?: "flat" | "hierarchical"
+    reportPath?: string
+    reportMarkdownPath?: string
   }
   trainReplay?: {
     passed: number
@@ -223,7 +283,7 @@ function shouldResumeCampaign(row: CampaignRow) {
 }
 
 async function readIDs(file: string) {
-  return JSON.parse(await readFile(file, "utf8")) as string[]
+  return JSON.parse((await readFile(file, "utf8")).replace(/^\uFEFF/, "")) as string[]
 }
 
 function parseIDList(value: string | undefined) {
@@ -552,7 +612,7 @@ async function queueTrain(
 
   while (next < todo.length || active.size > 0) {
     await enqueueRecoveriesFromHealth()
-    while (next < todo.length && active.size < config.concurrency) {
+    while (next < todo.length && active.size < config.stageConcurrency.training) {
       await start(todo[next]!)
       next += 1
     }
@@ -591,7 +651,7 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
         role: "test" as const,
       })),
     ],
-    fanoutLimit: config.concurrency,
+    fanoutLimit: config.stageConcurrency.training,
   })
 
   for (const inst of stateRun.instances) {
@@ -609,10 +669,30 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
   }
   await saveCoordinatorState(stateRun)
 
-  const merge = await runCoordinatorPhase2Merge({ cwd: repoRoot, state: stateRun })
+  const merge =
+    config.mergeStrategy === "hierarchical"
+      ? await runCoordinatorHierarchicalMerge({
+          cwd: repoRoot,
+          state: stateRun,
+          options: {
+            groupSize: config.hierarchicalMerge.groupSize,
+            inputFilter: config.hierarchicalMerge.inputFilter,
+            failurePolicy: config.hierarchicalMerge.failurePolicy,
+            grouping: config.hierarchicalMerge.grouping,
+            localReplay: config.hierarchicalMerge.localReplay,
+            concurrency: config.stageConcurrency.hierarchicalMerge,
+            localReplayConcurrency: config.stageConcurrency.trainReplay,
+          },
+        })
+      : await runCoordinatorPhase2Merge({ cwd: repoRoot, state: stateRun })
   stateRun.mergedSkillDir = merge.mergedSkillDir
   await saveCoordinatorState(stateRun)
-  state.merge = { mergedSkillDir: merge.mergedSkillDir }
+  state.merge = {
+    mergedSkillDir: merge.mergedSkillDir,
+    strategy: config.mergeStrategy,
+    reportPath: "reportPath" in merge ? merge.reportPath : undefined,
+    reportMarkdownPath: "reportMarkdownPath" in merge ? merge.reportMarkdownPath : undefined,
+  }
   await writeJson(path.join(config.outDir, "merge-output.json"), merge)
   await persistState(stateFile, scorecardFile, state)
 
@@ -660,17 +740,74 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
 
   state.phase = "test"
   await persistState(stateFile, scorecardFile, state)
-  const test = await runCoordinatorPhase3Validate({
-    cwd: repoRoot,
-    state: stateRun,
-    rounds: config.validateRounds,
-    validateLimit: config.concurrency,
-    filter: (instance) => instance.role === "test",
-  })
+  const test =
+    config.evalRunner === "direct-chat"
+      ? await runDirectChatHeldoutTest(config, testIDs, merge.mergedSkillDir)
+      : await runCoordinatorPhase3Validate({
+          cwd: repoRoot,
+          state: stateRun,
+          rounds: config.validateRounds,
+          validateLimit: config.testConcurrency,
+          filter: (instance) => instance.role === "test",
+        })
   state.test = { passed: test.passed, total: test.total, failed: test.failed }
-  await writeJson(path.join(config.outDir, "trained-test-output.json"), test)
+  await writeJson(path.join(config.outDir, config.evalRunner === "direct-chat" ? "direct-chat-test-output.json" : "trained-test-output.json"), test)
   await persistState(stateFile, scorecardFile, state)
   return { merge, replay, test }
+}
+
+async function runDirectChatHeldoutTest(config: BenchmarkConfig, testIDs: string[], mergedSkillDir: string) {
+  const directChat = config.directChat
+  if (!directChat) {
+    throw new Error("Direct Chat test configuration is missing.")
+  }
+  const modelsConfig = directChat.modelsConfigPath
+    ? (JSON.parse(await readFile(directChat.modelsConfigPath, "utf8")) as DirectChatModelsConfig)
+    : directChat.modelsConfig
+  if (!modelsConfig || Object.keys(modelsConfig.models || {}).length === 0) {
+    throw new Error(
+      "Direct Chat has no configured models. Add directChatConfig.models to auto-evolve/config.json or pass --direct-chat-models-config <json>.",
+    )
+  }
+  const runRoot = path.join(config.outDir, "direct-chat-test")
+  const skill = await buildSkillBundle({ skillRoot: mergedSkillDir, outDir: runRoot })
+  const splitPath = path.join(runRoot, "direct-chat-test-ids.json")
+  await writeJson(splitPath, testIDs)
+  const dataset = await buildDirectChatDatasetWithAdapter({
+    adapterID: directChat.adapterID,
+    taskPackRoot: config.taskPackRoot,
+    splitPath,
+    splitName: "test",
+    outDir: runRoot,
+    allowOmittedMaterials: directChat.allowOmittedMaterials,
+    maxPdfCharsPerFile: directChat.maxPdfCharsPerFile,
+    officeqaMaterialMode: directChat.officeqaMaterialMode,
+    officeqaDocsDir: directChat.officeqaDocsDir,
+  })
+  const result = await runDirectChatEvaluation({
+    skillBundlePath: skill.bundlePath,
+    datasetBundlePath: dataset.bundlePath,
+    outDir: runRoot,
+    models: modelsConfig,
+    runModeID: directChat.runModeID,
+    runModeDescription: directChat.runModeDescription,
+    modelIDs: directChat.modelIDs,
+    globalConcurrency: directChat.globalConcurrency ?? config.stageConcurrency.testDirectChat,
+    includeNoSkillBaseline: directChat.includeNoSkillBaseline,
+    noSkillOnly: directChat.noSkillOnly,
+    skillInputMode: directChat.skillInputMode,
+    resumeExisting: true,
+  })
+  const passed = result.results.filter((item) => item.passed).length
+  return {
+    passed,
+    total: result.results.length,
+    failed: result.results.length - passed,
+    skipped: 0,
+    regressions: result.results.filter((item) => !item.passed).map((item) => `${item.modelID}:${item.caseID}`),
+    durationMs: 0,
+    directChatRunDir: runRoot,
+  }
 }
 
 async function runBaseline(config: BenchmarkConfig, testIDs: string[], state: BenchmarkState, stateFile: string, scorecardFile: string) {
@@ -701,7 +838,7 @@ async function runBaseline(config: BenchmarkConfig, testIDs: string[], state: Be
     active.add(task)
   }
   while (queue.length > 0 || active.size > 0) {
-    while (queue.length > 0 && active.size < config.concurrency) await start(queue.shift()!)
+    while (queue.length > 0 && active.size < config.baselineConcurrency) await start(queue.shift()!)
     if (active.size > 0) await Promise.race(active)
     await writeJson(path.join(config.outDir, "baseline-results.json"), rows)
   }
@@ -716,6 +853,107 @@ function defaultLabel(taskPackRoot: string) {
 
 function shouldStopAfter(config: BenchmarkConfig, phase: NonNullable<BenchmarkConfig["stopAfter"]>) {
   return config.stopAfter === phase
+}
+
+function parseChoice<T extends string>(input: {
+  raw: string | undefined
+  fallback: T
+  aliases: Record<string, T>
+  optionName: string
+  expected: string
+}) {
+  const normalized = (input.raw ?? input.fallback).trim().toLowerCase().replace(/-/g, "_")
+  const value = input.aliases[normalized]
+  if (!value) throw new Error(`Invalid ${input.optionName}. Use ${input.expected}.`)
+  return value
+}
+
+function parseHierarchicalMergeConfig(args: string[]): Pick<BenchmarkConfig, "mergeStrategy" | "hierarchicalMerge"> {
+  const mergeStrategy = parseChoice<"flat" | "hierarchical">({
+    raw: getOption(args, "--merge-strategy"),
+    fallback: "flat",
+    optionName: "--merge-strategy",
+    expected: "flat or hierarchical",
+    aliases: {
+      flat: "flat",
+      hierarchical: "hierarchical",
+      tree: "hierarchical",
+    },
+  })
+  const inputFilter = parseChoice<HierarchicalMergeInputFilter>({
+    raw: getOption(args, "--merge-input"),
+    fallback: "success_only",
+    optionName: "--merge-input",
+    expected: "success-only, failed-only, or all",
+    aliases: {
+      success: "success_only",
+      success_only: "success_only",
+      verified: "success_only",
+      verified_only: "success_only",
+      failed: "failed_only",
+      failure: "failed_only",
+      failures: "failed_only",
+      failed_only: "failed_only",
+      all: "all",
+    },
+  })
+  const failurePolicy = parseChoice<HierarchicalMergeFailurePolicy>({
+    raw: getOption(args, "--failure-policy"),
+    fallback: "negative_evidence",
+    optionName: "--failure-policy",
+    expected: "exclude, negative-evidence, or diagnostic-only",
+    aliases: {
+      exclude: "exclude",
+      negative: "negative_evidence",
+      negative_evidence: "negative_evidence",
+      diagnostic: "diagnostic_only",
+      diagnostic_only: "diagnostic_only",
+    },
+  })
+  const grouping = parseChoice<HierarchicalMergeGrouping>({
+    raw: getOption(args, "--merge-grouping"),
+    fallback: "status_balanced",
+    optionName: "--merge-grouping",
+    expected: "sequential or status-balanced",
+    aliases: {
+      sequential: "sequential",
+      status_balanced: "status_balanced",
+      balanced: "status_balanced",
+    },
+  })
+  const replayLevels = parseChoice<HierarchicalReplayLevels>({
+    raw: getOption(args, "--hierarchical-local-replay"),
+    fallback: "none",
+    optionName: "--hierarchical-local-replay",
+    expected: "none, level1, or all",
+    aliases: {
+      none: "none",
+      off: "none",
+      false: "none",
+      level1: "level1",
+      level_1: "level1",
+      first: "level1",
+      all: "all",
+    },
+  })
+  const groupSize = Math.max(2, Number.parseInt(getOption(args, "--merge-group-size") ?? "5", 10))
+  const repairAttemptsPerCase = Math.max(0, Number.parseInt(getOption(args, "--hierarchical-repair-attempts") ?? "1", 10))
+  return {
+    mergeStrategy,
+    hierarchicalMerge: {
+      groupSize,
+      inputFilter,
+      failurePolicy,
+      grouping,
+      localReplay: {
+        enabled: replayLevels !== "none",
+        levels: replayLevels,
+        repairOnFailure: !hasFlag(args, "--hierarchical-no-repair") && repairAttemptsPerCase > 0,
+        repairAttemptsPerCase,
+        rerunAfterRepair: hasFlag(args, "--hierarchical-rerun-after-repair"),
+      },
+    },
+  }
 }
 
 export async function runTaskPackBenchmark(config: BenchmarkConfig) {
@@ -988,7 +1226,18 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
   return report
 }
 
-function parseConfig(args: string[]): BenchmarkConfig {
+function parsePositiveIntOption(args: string[], names: string[], fallback: number) {
+  for (const name of names) {
+    const raw = getOption(args, name)
+    if (!raw) continue
+    const parsed = Number.parseInt(raw, 10)
+    if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed)
+  }
+  return fallback
+}
+
+async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
+  const projectConfig = await loadConfig(repoRoot)
   const taskPackRoot = resolveMaybeRelative(getOption(args, "--task-pack-root"))
   if (!taskPackRoot) throw new Error("Missing required option: --task-pack-root <path-to-task-pack-root>")
   const trainSplit = resolveMaybeRelative(getOption(args, "--train-split"), path.join(taskPackRoot, "splits", "train-selected.json"))
@@ -1016,17 +1265,114 @@ function parseConfig(args: string[]): BenchmarkConfig {
   if (stopAfterRaw && !stopAfter) {
     throw new Error("Invalid --stop-after. Use training, merge, train-replay, test, or baseline.")
   }
-  const concurrency = Math.max(1, Number.parseInt(getOption(args, "--concurrency") ?? "5", 10))
+  const stageConcurrency = {
+    training: parsePositiveIntOption(args, ["--train-concurrency", "--concurrency"], projectConfig.stageConcurrency.training),
+    merge: parsePositiveIntOption(args, ["--merge-concurrency"], projectConfig.stageConcurrency.merge),
+    hierarchicalMerge: parsePositiveIntOption(
+      args,
+      ["--hierarchical-merge-concurrency", "--merge-group-concurrency"],
+      projectConfig.stageConcurrency.hierarchicalMerge,
+    ),
+    trainReplay: parsePositiveIntOption(
+      args,
+      ["--replay-concurrency", "--validate-concurrency"],
+      projectConfig.stageConcurrency.trainReplay,
+    ),
+    testBlank: parsePositiveIntOption(args, ["--test-concurrency", "--blank-test-concurrency"], projectConfig.stageConcurrency.testBlank),
+    testDirectChat: parsePositiveIntOption(
+      args,
+      ["--direct-chat-global-concurrency", "--direct-chat-test-concurrency"],
+      projectConfig.stageConcurrency.testDirectChat,
+    ),
+    baseline: parsePositiveIntOption(args, ["--baseline-concurrency"], projectConfig.stageConcurrency.baseline),
+  }
+  const concurrency = stageConcurrency.training
   const validateRounds = Math.max(1, Number.parseInt(getOption(args, "--validate-rounds") ?? "1", 10))
   const repairAttempts = Math.max(0, Number.parseInt(getOption(args, "--repair-attempts") ?? "3", 10))
-  const replayConcurrency = Math.max(
-    1,
-    Number.parseInt(getOption(args, "--replay-concurrency") ?? getOption(args, "--validate-concurrency") ?? "3", 10),
-  )
+  const replayConcurrency = stageConcurrency.trainReplay
+  const testConcurrency = stageConcurrency.testBlank
+  const baselineConcurrency = stageConcurrency.baseline
   const continueAfterTrainingIncomplete =
     hasFlag(args, "--continue-after-training-incomplete") || hasFlag(args, "--continue-after-round-limit")
   const continueAfterTrainReplayFailure =
     hasFlag(args, "--continue-after-train-replay-failure") || continueAfterTrainingIncomplete
+  const evalRunner = parseChoice<EvalRunner>({
+    raw: getOption(args, "--eval-runner"),
+    fallback: "blank-opencode",
+    optionName: "--eval-runner",
+    expected: "blank-opencode or direct-chat",
+    aliases: {
+      blank: "blank-opencode",
+      blank_opencode: "blank-opencode",
+      opencode: "blank-opencode",
+      direct: "direct-chat",
+      direct_chat: "direct-chat",
+      chat: "direct-chat",
+    },
+  })
+  const directChatRunModeID = getOption(args, "--direct-chat-run-mode") ?? projectConfig.directChatConfig.defaultRunMode
+  const directChatRunMode = directChatRunModeID
+    ? projectConfig.directChatConfig.runModes?.[directChatRunModeID]
+    : undefined
+  if (directChatRunModeID && !directChatRunMode) {
+    const available = Object.keys(projectConfig.directChatConfig.runModes || {}).sort().join(", ") || "(none)"
+    throw new Error(`Unknown Direct Chat run mode: ${directChatRunModeID}. Available modes: ${available}`)
+  }
+  const directChat = {
+    runModeID: directChatRunModeID,
+    runModeDescription: typeof directChatRunMode?.description === "string" ? directChatRunMode.description : undefined,
+    modelsConfigPath: resolveMaybeRelative(getOption(args, "--direct-chat-models-config")),
+    modelsConfig: projectConfig.directChatConfig,
+    modelIDs: parseIDList(getOption(args, "--direct-chat-models")) ?? projectConfig.directChatConfig.defaultModelIDs,
+    globalConcurrency:
+      typeof directChatRunMode?.globalConcurrency === "number" && directChatRunMode.globalConcurrency > 0
+        ? Math.floor(directChatRunMode.globalConcurrency)
+        : stageConcurrency.testDirectChat,
+    allowOmittedMaterials:
+      hasFlag(args, "--direct-chat-allow-omitted-materials") ||
+      directChatRunMode?.allowOmittedMaterials === true ||
+      projectConfig.directChatConfig.allowOmittedMaterials,
+    includeNoSkillBaseline:
+      directChatRunMode?.skillMode !== "no-skill" &&
+      (hasFlag(args, "--direct-chat-no-skill-baseline") ||
+        hasFlag(args, "--direct-chat-include-no-skill-baseline") ||
+        directChatRunMode?.includeNoSkillBaseline === true ||
+        directChatRunMode?.skillMode === "paired" ||
+        projectConfig.directChatConfig.includeNoSkillBaseline),
+    noSkillOnly: directChatRunMode?.noSkillOnly === true || directChatRunMode?.skillMode === "no-skill",
+    adapterID: getOption(args, "--direct-chat-adapter") ?? projectConfig.directChatConfig.adapterID,
+    officeqaMaterialMode:
+      getOption(args, "--direct-chat-officeqa-material-mode") === "skillopt-oracle-json"
+        ? "skillopt-oracle-json"
+        : getOption(args, "--direct-chat-officeqa-material-mode") === "native-pdf"
+          ? "native-pdf"
+          : directChatRunMode?.officeqaMaterialMode || projectConfig.directChatConfig.officeqaMaterialMode,
+    officeqaDocsDir: resolveMaybeRelative(getOption(args, "--direct-chat-officeqa-docs-dir")) ??
+      (projectConfig.directChatConfig.officeqaDocsDir
+        ? resolveMaybeRelative(projectConfig.directChatConfig.officeqaDocsDir)
+        : undefined),
+    maxPdfCharsPerFile: getOption(args, "--direct-chat-max-pdf-chars")
+      ? Math.max(1000, Number.parseInt(getOption(args, "--direct-chat-max-pdf-chars")!, 10))
+      : undefined,
+    skillInputMode:
+      getOption(args, "--direct-chat-skill-input-mode") === "head-tail" ||
+      getOption(args, "--direct-chat-skill-input-mode") === "core-files" ||
+      getOption(args, "--direct-chat-skill-input-mode") === "full"
+        ? (getOption(args, "--direct-chat-skill-input-mode") as "full" | "head-tail" | "core-files")
+        : directChatRunMode?.skillInputMode || projectConfig.directChatConfig.skillInput?.mode,
+  }
+  if (
+    evalRunner === "direct-chat" &&
+    !hasFlag(args, "--dry-run") &&
+    modeOpt !== "campaign-only" &&
+    !hasFlag(args, "--skip-test") &&
+    !directChat.modelsConfigPath &&
+    Object.keys(directChat.modelsConfig.models || {}).length === 0
+  ) {
+    throw new Error(
+      "Direct Chat eval requires directChatConfig.models in auto-evolve/config.json or --direct-chat-models-config <json>.",
+    )
+  }
   const trainReplayScopeRaw = (
     getOption(args, "--train-replay-scope") ?? (continueAfterTrainingIncomplete ? "all-train" : "verified-only")
   )
@@ -1047,6 +1393,7 @@ function parseConfig(args: string[]): BenchmarkConfig {
   const runTrainReplay = !hasFlag(args, "--skip-train-replay") && modeOpt !== "campaign-only"
   const runTest = !hasFlag(args, "--skip-test") && modeOpt !== "campaign-only"
   let runBaseline = !hasFlag(args, "--skip-baseline") && modeOpt !== "campaign-only"
+  const mergeConfig = parseHierarchicalMergeConfig(args)
   if (stopAfter && stopAfter !== "baseline") runBaseline = false
   if (stopAfter === "training") {
     return {
@@ -1058,18 +1405,24 @@ function parseConfig(args: string[]): BenchmarkConfig {
       testTaskIDs,
       outDir,
       concurrency,
+      stageConcurrency,
       mode: modeOpt,
       stopAfter,
       dryRun: hasFlag(args, "--dry-run"),
       reuseVerified: !hasFlag(args, "--no-reuse-verified"),
       resumeRunning: !hasFlag(args, "--no-resume-running"),
       runMerge: false,
+      ...mergeConfig,
       runTrainReplay: false,
       runTest: false,
+      evalRunner,
+      directChat,
       runBaseline: false,
       continueAfterTrainingIncomplete,
       trainReplayScope,
       replayConcurrency,
+      testConcurrency,
+      baselineConcurrency,
       continueAfterTrainReplayFailure,
       trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
       testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
@@ -1087,18 +1440,24 @@ function parseConfig(args: string[]): BenchmarkConfig {
       testTaskIDs,
       outDir,
       concurrency,
+      stageConcurrency,
       mode: modeOpt,
       stopAfter,
       dryRun: hasFlag(args, "--dry-run"),
       reuseVerified: !hasFlag(args, "--no-reuse-verified"),
       resumeRunning: !hasFlag(args, "--no-resume-running"),
       runMerge: true,
+      ...mergeConfig,
       runTrainReplay: false,
       runTest: false,
+      evalRunner,
+      directChat,
       runBaseline: false,
       continueAfterTrainingIncomplete,
       trainReplayScope,
       replayConcurrency,
+      testConcurrency,
+      baselineConcurrency,
       continueAfterTrainReplayFailure,
       trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
       testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
@@ -1116,18 +1475,24 @@ function parseConfig(args: string[]): BenchmarkConfig {
       testTaskIDs,
       outDir,
       concurrency,
+      stageConcurrency,
       mode: modeOpt,
       stopAfter,
       dryRun: hasFlag(args, "--dry-run"),
       reuseVerified: !hasFlag(args, "--no-reuse-verified"),
       resumeRunning: !hasFlag(args, "--no-resume-running"),
       runMerge: true,
+      ...mergeConfig,
       runTrainReplay: true,
       runTest: false,
+      evalRunner,
+      directChat,
       runBaseline: false,
       continueAfterTrainingIncomplete,
       trainReplayScope,
       replayConcurrency,
+      testConcurrency,
+      baselineConcurrency,
       continueAfterTrainReplayFailure,
       trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
       testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
@@ -1147,18 +1512,24 @@ function parseConfig(args: string[]): BenchmarkConfig {
     testTaskIDs,
     outDir,
     concurrency,
+    stageConcurrency,
     mode: modeOpt,
     stopAfter,
     dryRun: hasFlag(args, "--dry-run"),
     reuseVerified: !hasFlag(args, "--no-reuse-verified"),
     resumeRunning: !hasFlag(args, "--no-resume-running"),
     runMerge,
+    ...mergeConfig,
     runTrainReplay,
     runTest,
+    evalRunner,
+    directChat,
     runBaseline,
     continueAfterTrainingIncomplete,
     trainReplayScope,
     replayConcurrency,
+    testConcurrency,
+    baselineConcurrency,
     continueAfterTrainReplayFailure,
     trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
     testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
@@ -1168,7 +1539,7 @@ function parseConfig(args: string[]): BenchmarkConfig {
 }
 
 async function main() {
-  const config = parseConfig(process.argv.slice(2))
+  const config = await parseConfig(process.argv.slice(2))
   const report = await runTaskPackBenchmark(config)
   console.log(JSON.stringify(report, null, 2))
 }

@@ -12,6 +12,7 @@ export type DirectChatErrorCategory =
   | "network"
   | "bad_request"
   | "parse"
+  | "answer_extraction"
   | "validation"
   | "config"
   | "unknown"
@@ -31,12 +32,17 @@ export interface DirectChatModelConfig {
   promptBudgetTokens?: number
   skillBudgetTokens?: number
   materialBudgetTokens?: number
+  skillInputMode?: "full" | "head-tail" | "core-files"
+  skillHeadRatio?: number
   supportsImageInputs?: boolean
   supportsFileInputs?: boolean
   imageInputMode?: DirectChatImageInputMode
   fileInputMode?: DirectChatFileInputMode
   timeoutMs?: number
   concurrency?: number
+  minIntervalMs?: number
+  reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
+  outputTokenParameter?: "max_tokens" | "max_completion_tokens" | "max_output_tokens"
   mockResponse?: string
   requestBodyExtra?: Record<string, unknown>
 }
@@ -50,6 +56,27 @@ export interface DirectChatModelsConfig {
     maxAttempts?: number
     backoffMs?: number
   }
+  skillInput?: {
+    mode?: "full" | "head-tail" | "core-files"
+    headRatio?: number
+  }
+  defaultRunMode?: string
+  runModes?: Record<string, {
+    description?: string
+    skillMode?: "with-skill" | "no-skill" | "paired"
+    skillInputMode?: "full" | "head-tail" | "core-files"
+    officeqaMaterialMode?: "native-pdf" | "skillopt-oracle-json"
+    allowOmittedMaterials?: boolean
+    includeNoSkillBaseline?: boolean
+    noSkillOnly?: boolean
+    globalConcurrency?: number
+  }>
+  transientRecovery?: {
+    enabled?: boolean
+    maxRounds?: number
+    delayMs?: number
+    categories?: DirectChatErrorCategory[]
+  }
   ocrFallback?: {
     enabled?: boolean
     mode?: "local-umi"
@@ -57,6 +84,8 @@ export interface DirectChatModelsConfig {
     helperScriptPath?: string
     umiExePath?: string
     pageWindow?: number
+    cacheRoot?: string
+    pdfRenderDpi?: number
   }
 }
 
@@ -75,6 +104,19 @@ export interface SkillBundleManifest {
   schema: "skill-bundle-manifest/v1"
   sourceSkillRoot: string
   bundlePath: string
+  archiveBundlePath?: string
+  publicationMode?: "explicit" | "compiled"
+  publicationSha256?: string
+  publicationBytes?: number
+  publicationTiers?: Array<{
+    id: "full" | "core-files"
+    path: string
+    sha256: string
+    bytes: number
+    sourceFiles: string[]
+  }>
+  includedSections?: Array<{ file: string; heading: string }>
+  excludedSections?: Array<{ file: string; heading: string; reason: string }>
   files: SkillBundleFile[]
   excludedFiles: string[]
   createdAt: string
@@ -114,7 +156,7 @@ export interface DirectChatMaterialRoutingAudit {
     materialID: string
     title: string
     type: DirectChatMaterial["type"]
-    action: "kept_text" | "kept_native_asset" | "ocr_fallback"
+    action: "kept_text" | "kept_native_asset" | "rendered_pdf_pages" | "ocr_fallback"
     reason: string
     engine?: string
     cacheHit?: boolean
@@ -159,8 +201,13 @@ export interface DirectChatPromptAudit {
   estimatedPromptTokens: number
   skill: {
     originalTokens: number
+    sanitizedTokens?: number
     includedTokens: number
     truncated: boolean
+    selectionTruncated?: boolean
+    sourceOriginalTokens?: number
+    tier?: string
+    sha256?: string
   }
   materials: Array<{
     id: string
@@ -204,10 +251,18 @@ export interface DirectChatRunConfig {
   datasetBundlePath: string
   outDir: string
   models: DirectChatModelsConfig
+  runModeID?: string
+  runModeDescription?: string
   modelIDs?: string[]
+  caseIDs?: string[]
   globalConcurrency?: number
   allowOmittedMaterials?: boolean
   includeNoSkillBaseline?: boolean
+  noSkillOnly?: boolean
+  /** Reuse completed per-case result.json files in outDir after interruption. */
+  resumeExisting?: boolean
+  skillInputMode?: "full" | "head-tail" | "core-files"
+  preflightOnly?: boolean
 }
 
 export interface DirectChatCallResult {
@@ -215,8 +270,11 @@ export interface DirectChatCallResult {
   usage?: {
     inputTokens?: number
     outputTokens?: number
+    reasoningTokens?: number
     totalTokens?: number
   }
+  resolvedModel?: string
+  finishReason?: string
   raw?: unknown
 }
 
@@ -231,9 +289,16 @@ export interface DirectChatCaseResult {
   rawResponsePath: string
   validatorResultPath?: string
   usage?: DirectChatCallResult["usage"]
+  resolvedModel?: string
+  finishReason?: string
+  responseAuditPath?: string
+  requestAuditPath?: string
+  outputBudgetExceeded?: boolean
   latencyMs: number
   attempts: number
   error: string | null
   errorCategory?: DirectChatErrorCategory
   skillMode?: "with-skill" | "no-skill"
+  skillTier?: "full" | "head-tail" | "core-files" | "custom" | "none"
+  skillHash?: string
 }

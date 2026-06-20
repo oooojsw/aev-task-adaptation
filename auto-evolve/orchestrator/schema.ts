@@ -3,6 +3,7 @@ import { autoEvolvePath, caseMetadataPath, listCaseDirectories, pathExists, read
 import { loadDatasetSplit } from "./dataset-split"
 import { experienceWorkspacePaths, resolveExperienceWorkspaceLayout, validateExperienceWorkspaceLayout } from "./experience-workspace"
 import { OpenCodeGate } from "./opencode-gate"
+import type { DirectChatModelsConfig } from "./direct-chat/contract"
 
 export type CompareMode = "text_exact" | "text_contains" | "json_exact"
 export type ModelPhase = "bootstrap" | "solve" | "refine" | "verify" | "regression"
@@ -66,6 +67,39 @@ export interface LoadedConcurrencyConfig {
   minSpawnIntervalMs: number
 }
 
+export interface LoadedStageConcurrencyConfig {
+  /** Long-task campaign fan-out during training. */
+  training: number
+  /** Flat Phase-2 merge is a single merger agent; keep explicit for config symmetry. */
+  merge: number
+  /** Number of hierarchical merge groups allowed to run at once within one level. */
+  hierarchicalMerge: number
+  /** Train replay / rollback validation fan-out. */
+  trainReplay: number
+  /** Held-out test fan-out when using blank OpenCode. */
+  testBlank: number
+  /** Held-out test fan-out when using Direct Chat. */
+  testDirectChat: number
+  /** No-skill baseline fan-out. */
+  baseline: number
+}
+
+export interface LoadedDirectChatConfig extends DirectChatModelsConfig {
+  /** Models selected when a Direct Chat command does not provide --models. */
+  defaultModelIDs: string[]
+  /** Dataset adapter selected when a Direct Chat command does not provide one. */
+  adapterID?: string
+  /** Permit incomplete material bundles only for explicitly configured baselines. */
+  allowOmittedMaterials: boolean
+  /** Run the same cases without the learned skill for a paired baseline. */
+  includeNoSkillBaseline: boolean
+  /** OfficeQA material source used by the standalone Direct Chat entrypoint. */
+  officeqaMaterialMode: "native-pdf" | "skillopt-oracle-json"
+  officeqaDocsDir?: string
+  /** Named experiment mode used when a Direct Chat command does not pass --run-mode. */
+  defaultRunMode?: string
+}
+
 export interface AutoEvolveConfig {
   version: number
   datasetDir: string
@@ -112,6 +146,10 @@ export interface AutoEvolveConfig {
   concurrencyConfigFile: string
   concurrencyConfigPath: string
   concurrencyConfig: LoadedConcurrencyConfig
+  stageConcurrency: LoadedStageConcurrencyConfig
+  directChatConfigFile: string
+  directChatConfigPath: string
+  directChatConfig: LoadedDirectChatConfig
 }
 
 export interface CaseMaterial {
@@ -179,8 +217,9 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   permissionConfigFile: "permission-config.json",
   monitorConfigFile: "monitor-config.json",
   concurrencyConfigFile: "concurrency-config.json",
+  directChatConfigFile: "direct-chat-models.example.json",
   defaultAgent: undefined,
-  defaultModel: "minimax-cn-coding-plan/MiniMax-M2.7",
+  defaultModel: "alibaba-coding-plan-cn/qwen3.6-plus",
   defaultVariant: undefined,
   defaultMethod: "sequential-refine",
   defaultPropagationMethod: "single-branch-baseline",
@@ -192,7 +231,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   modelConfig: {
     version: 1,
     defaults: {
-      model: "minimax-cn-coding-plan/MiniMax-M2.7",
+      model: "alibaba-coding-plan-cn/qwen3.6-plus",
       agent: undefined,
       variant: undefined,
     },
@@ -234,6 +273,63 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
     maxQueueDepth: 60,
     acquireTimeoutMs: 60 * 60 * 1000,
     minSpawnIntervalMs: 0,
+  },
+  stageConcurrency: {
+    training: 5,
+    merge: 1,
+    hierarchicalMerge: 2,
+    trainReplay: 3,
+    testBlank: 3,
+    testDirectChat: 4,
+    baseline: 3,
+  },
+  directChatConfigPath: "",
+  directChatConfig: {
+    models: {},
+    defaultModelIDs: [],
+    allowOmittedMaterials: false,
+    includeNoSkillBaseline: false,
+    officeqaMaterialMode: "native-pdf",
+    defaultRunMode: "skill-full",
+    runModes: {
+      "skill-full": {
+        description: "Use the learned skill in full form; questions and materials must fit without truncation.",
+        skillMode: "with-skill",
+        skillInputMode: "full",
+        officeqaMaterialMode: "skillopt-oracle-json",
+      },
+      "skill-core": {
+        description: "Use the compact core-files skill tier; questions and materials must fit without truncation.",
+        skillMode: "with-skill",
+        skillInputMode: "core-files",
+        officeqaMaterialMode: "skillopt-oracle-json",
+      },
+      "skill-head-tail": {
+        description: "Use explicit head-tail skill compression only; questions and materials are never truncated.",
+        skillMode: "with-skill",
+        skillInputMode: "head-tail",
+        officeqaMaterialMode: "skillopt-oracle-json",
+      },
+      "no-skill-full-materials": {
+        description: "No learned skill baseline with full task/material prompt.",
+        skillMode: "no-skill",
+        noSkillOnly: true,
+        officeqaMaterialMode: "skillopt-oracle-json",
+      },
+    },
+    concurrency: {
+      global: 4,
+    },
+    retry: {
+      maxAttempts: 3,
+      backoffMs: 3000,
+    },
+    transientRecovery: {
+      enabled: true,
+      maxRounds: 2,
+      delayMs: 30_000,
+      categories: ["network", "timeout", "rate_limit", "provider_5xx"],
+    },
   },
 }
 
@@ -295,18 +391,228 @@ function buildDefaultModelConfig(legacyDefaults: ModelSelection): LoadedModelCon
   }
 }
 
+function normalizeLoadedModelConfig(rawModelConfig: unknown, fallback: LoadedModelConfig): LoadedModelConfig {
+  if (!isObject(rawModelConfig)) return fallback
+  const rawDefaults = normalizeModelSelection(rawModelConfig.defaults, fallback.defaults)
+  const rawPhases = isObject(rawModelConfig.phases) ? rawModelConfig.phases : {}
+  const rawLimits = isObject(rawModelConfig.limits) ? rawModelConfig.limits : {}
+  const phases = { ...fallback.phases }
+  for (const [phaseName, value] of Object.entries(rawPhases)) {
+    if (!isModelPhase(phaseName)) continue
+    phases[phaseName] = normalizeModelSelection(value)
+  }
+  return {
+    version: typeof rawModelConfig.version === "number" ? rawModelConfig.version : fallback.version,
+    defaults: rawDefaults,
+    limits: {
+      requestsPerMinute:
+        typeof rawLimits.requestsPerMinute === "number" && rawLimits.requestsPerMinute > 0
+          ? rawLimits.requestsPerMinute
+          : fallback.limits.requestsPerMinute,
+    },
+    phases,
+  }
+}
+
+function normalizeJudgeConfig(raw: unknown, fallback: LoadedJudgeConfig = DEFAULT_CONFIG.judgeConfig): LoadedJudgeConfig {
+  if (!isObject(raw)) return { ...fallback }
+  return {
+    version: typeof raw.version === "number" ? raw.version : fallback.version,
+    mode: typeof raw.mode === "string" && isJudgeMode(raw.mode) ? raw.mode : fallback.mode,
+    autoRunSkillIDs: Array.isArray(raw.autoRunSkillIDs)
+      ? raw.autoRunSkillIDs.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : fallback.autoRunSkillIDs,
+  }
+}
+
 async function loadJudgeConfig(configPath: string): Promise<LoadedJudgeConfig> {
   if (!(await pathExists(configPath))) {
     return { ...DEFAULT_CONFIG.judgeConfig }
   }
+  return normalizeJudgeConfig(await readJsonFile<Record<string, unknown>>(configPath))
+}
 
-  const raw = await readJsonFile<Record<string, unknown>>(configPath)
+function normalizePermissionConfig(
+  raw: unknown,
+  fallback: LoadedPermissionConfig = DEFAULT_CONFIG.permissionConfig,
+): LoadedPermissionConfig {
+  if (!isObject(raw)) return { ...fallback }
   return {
-    version: typeof raw.version === "number" ? raw.version : DEFAULT_CONFIG.judgeConfig.version,
-    mode: typeof raw.mode === "string" && isJudgeMode(raw.mode) ? raw.mode : DEFAULT_CONFIG.judgeConfig.mode,
-    autoRunSkillIDs: Array.isArray(raw.autoRunSkillIDs)
-      ? raw.autoRunSkillIDs.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-      : DEFAULT_CONFIG.judgeConfig.autoRunSkillIDs,
+    version: typeof raw.version === "number" ? raw.version : fallback.version,
+    mode: typeof raw.mode === "string" && isPermissionMode(raw.mode) ? raw.mode : fallback.mode,
+  }
+}
+
+function normalizeMonitorConfig(
+  raw: unknown,
+  fallback: LoadedMonitorConfig = DEFAULT_CONFIG.monitorConfig,
+): LoadedMonitorConfig {
+  if (!isObject(raw)) return { ...fallback }
+  return {
+    version: typeof raw.version === "number" ? raw.version : fallback.version,
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    autoStart: typeof raw.autoStart === "boolean" ? raw.autoStart : fallback.autoStart,
+    hostname:
+      typeof raw.hostname === "string" && raw.hostname.trim()
+        ? raw.hostname
+        : fallback.hostname,
+    port: typeof raw.port === "number" && raw.port > 0 ? raw.port : fallback.port,
+    intervalSeconds:
+      typeof raw.intervalSeconds === "number" && raw.intervalSeconds > 0
+        ? raw.intervalSeconds
+        : fallback.intervalSeconds,
+    defaultLimit:
+      typeof raw.defaultLimit === "number" && raw.defaultLimit > 0
+        ? raw.defaultLimit
+        : fallback.defaultLimit,
+    openBrowserOnStart:
+      typeof raw.openBrowserOnStart === "boolean"
+        ? raw.openBrowserOnStart
+        : fallback.openBrowserOnStart,
+  }
+}
+
+function normalizeConcurrencyConfig(
+  raw: unknown,
+  fallback: LoadedConcurrencyConfig = DEFAULT_CONFIG.concurrencyConfig,
+): LoadedConcurrencyConfig {
+  if (!isObject(raw)) return { ...fallback }
+  return {
+    maxConcurrent:
+      typeof raw.maxConcurrent === "number" && raw.maxConcurrent > 0
+        ? Math.floor(raw.maxConcurrent)
+        : fallback.maxConcurrent,
+    perScopeMaxConcurrent:
+      typeof raw.perScopeMaxConcurrent === "number" && raw.perScopeMaxConcurrent > 0
+        ? Math.floor(raw.perScopeMaxConcurrent)
+        : fallback.perScopeMaxConcurrent,
+    maxQueueDepth:
+      typeof raw.maxQueueDepth === "number" && raw.maxQueueDepth > 0
+        ? Math.floor(raw.maxQueueDepth)
+        : fallback.maxQueueDepth,
+    acquireTimeoutMs:
+      typeof raw.acquireTimeoutMs === "number" && raw.acquireTimeoutMs > 0
+        ? Math.floor(raw.acquireTimeoutMs)
+        : fallback.acquireTimeoutMs,
+    minSpawnIntervalMs:
+      typeof raw.minSpawnIntervalMs === "number" && raw.minSpawnIntervalMs >= 0
+        ? Math.floor(raw.minSpawnIntervalMs)
+        : fallback.minSpawnIntervalMs,
+  }
+}
+
+function positiveIntegerField(raw: Record<string, unknown>, key: string, fallback: number) {
+  const value = raw[key]
+  return typeof value === "number" && value > 0 ? Math.floor(value) : fallback
+}
+
+function normalizeStageConcurrencyConfig(
+  raw: unknown,
+  fallback: LoadedStageConcurrencyConfig = DEFAULT_CONFIG.stageConcurrency,
+): LoadedStageConcurrencyConfig {
+  if (!isObject(raw)) return { ...fallback }
+  return {
+    training: positiveIntegerField(raw, "training", fallback.training),
+    merge: positiveIntegerField(raw, "merge", fallback.merge),
+    hierarchicalMerge: positiveIntegerField(raw, "hierarchicalMerge", fallback.hierarchicalMerge),
+    trainReplay: positiveIntegerField(raw, "trainReplay", fallback.trainReplay),
+    testBlank: positiveIntegerField(raw, "testBlank", fallback.testBlank),
+    testDirectChat: positiveIntegerField(raw, "testDirectChat", fallback.testDirectChat),
+    baseline: positiveIntegerField(raw, "baseline", fallback.baseline),
+  }
+}
+
+function normalizeDirectChatConfig(
+  raw: unknown,
+  fallback: LoadedDirectChatConfig = DEFAULT_CONFIG.directChatConfig,
+): LoadedDirectChatConfig {
+  if (!isObject(raw)) {
+    return {
+      ...fallback,
+      models: { ...fallback.models },
+      defaultModelIDs: [...fallback.defaultModelIDs],
+      concurrency: fallback.concurrency ? { ...fallback.concurrency } : undefined,
+      retry: fallback.retry ? { ...fallback.retry } : undefined,
+      skillInput: fallback.skillInput ? { ...fallback.skillInput } : undefined,
+      defaultRunMode: fallback.defaultRunMode,
+      runModes: fallback.runModes ? { ...fallback.runModes } : undefined,
+      transientRecovery: fallback.transientRecovery ? { ...fallback.transientRecovery } : undefined,
+      ocrFallback: fallback.ocrFallback ? { ...fallback.ocrFallback } : undefined,
+    }
+  }
+  const rawModels = isObject(raw.models) ? raw.models : {}
+  const models: DirectChatModelsConfig["models"] = { ...fallback.models }
+  for (const [modelID, modelConfig] of Object.entries(rawModels)) {
+    if (!modelID.trim() || !isObject(modelConfig)) continue
+    models[modelID] = {
+      ...(isObject(models[modelID]) ? models[modelID] : {}),
+      ...modelConfig,
+    } as DirectChatModelsConfig["models"][string]
+  }
+  const rawConcurrency = isObject(raw.concurrency) ? raw.concurrency : {}
+  const rawRetry = isObject(raw.retry) ? raw.retry : {}
+  const rawSkillInput = isObject(raw.skillInput) ? raw.skillInput : {}
+  const rawRunModes = isObject(raw.runModes) ? raw.runModes : {}
+  const runModes: DirectChatModelsConfig["runModes"] = { ...(fallback.runModes || {}) }
+  for (const [modeID, modeConfig] of Object.entries(rawRunModes)) {
+    if (!modeID.trim() || !isObject(modeConfig)) continue
+    const existing = isObject(runModes[modeID]) ? runModes[modeID] : {}
+    runModes[modeID] = {
+      ...existing,
+      ...modeConfig,
+    } as NonNullable<DirectChatModelsConfig["runModes"]>[string]
+  }
+  const rawTransientRecovery = isObject(raw.transientRecovery) ? raw.transientRecovery : {}
+  const rawOcrFallback = isObject(raw.ocrFallback) ? raw.ocrFallback : {}
+  const officeqaMaterialMode =
+    raw.officeqaMaterialMode === "skillopt-oracle-json" || raw.officeqaMaterialMode === "native-pdf"
+      ? raw.officeqaMaterialMode
+      : fallback.officeqaMaterialMode
+  return {
+    models,
+    defaultModelIDs: Array.isArray(raw.defaultModelIDs)
+      ? raw.defaultModelIDs.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : [...fallback.defaultModelIDs],
+    adapterID: normalizeOptionalString(raw.adapterID) ?? fallback.adapterID,
+    allowOmittedMaterials:
+      typeof raw.allowOmittedMaterials === "boolean" ? raw.allowOmittedMaterials : fallback.allowOmittedMaterials,
+    includeNoSkillBaseline:
+      typeof raw.includeNoSkillBaseline === "boolean"
+        ? raw.includeNoSkillBaseline
+        : fallback.includeNoSkillBaseline,
+    officeqaMaterialMode,
+    officeqaDocsDir: normalizeOptionalString(raw.officeqaDocsDir) ?? fallback.officeqaDocsDir,
+    defaultRunMode: normalizeOptionalString(raw.defaultRunMode) ?? fallback.defaultRunMode,
+    runModes,
+    concurrency: {
+      ...(fallback.concurrency || {}),
+      ...rawConcurrency,
+    },
+    retry: {
+      ...(fallback.retry || {}),
+      ...rawRetry,
+    },
+    skillInput: {
+      mode:
+        rawSkillInput.mode === "full" || rawSkillInput.mode === "head-tail" || rawSkillInput.mode === "core-files"
+          ? rawSkillInput.mode
+          : fallback.skillInput?.mode || "full",
+      headRatio:
+        typeof rawSkillInput.headRatio === "number"
+          ? Math.min(0.9, Math.max(0.1, rawSkillInput.headRatio))
+          : fallback.skillInput?.headRatio ?? 0.65,
+    },
+    transientRecovery: {
+      ...(fallback.transientRecovery || {}),
+      ...rawTransientRecovery,
+    },
+    ocrFallback:
+      fallback.ocrFallback || Object.keys(rawOcrFallback).length > 0
+        ? {
+            ...(fallback.ocrFallback || {}),
+            ...rawOcrFallback,
+          }
+        : undefined,
   }
 }
 
@@ -406,120 +712,47 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
     typeof raw.concurrencyConfigFile === "string" && raw.concurrencyConfigFile.trim()
       ? raw.concurrencyConfigFile
       : DEFAULT_CONFIG.concurrencyConfigFile
+  const directChatConfigFile =
+    typeof raw.directChatConfigFile === "string" && raw.directChatConfigFile.trim()
+      ? raw.directChatConfigFile
+      : DEFAULT_CONFIG.directChatConfigFile
   const modelConfigPath = autoEvolvePath(cwd, modelConfigFile)
   const permissionConfigPath = autoEvolvePath(cwd, permissionConfigFile)
   const judgeConfigPath = autoEvolvePath(cwd, judgeConfigFile)
   const monitorConfigPath = autoEvolvePath(cwd, monitorConfigFile)
   const concurrencyConfigPath = autoEvolvePath(cwd, concurrencyConfigFile)
+  const directChatConfigPath = autoEvolvePath(cwd, directChatConfigFile)
   let modelConfig = buildDefaultModelConfig(legacyDefaults)
   if (await pathExists(modelConfigPath)) {
-    const rawModelConfig = await readJsonFile<Record<string, unknown>>(modelConfigPath)
-    const rawDefaults = normalizeModelSelection(rawModelConfig.defaults, modelConfig.defaults)
-    const rawPhases = isObject(rawModelConfig.phases) ? rawModelConfig.phases : {}
-    const rawLimits = isObject(rawModelConfig.limits) ? rawModelConfig.limits : {}
-    const phases = { ...modelConfig.phases }
-    for (const [phaseName, value] of Object.entries(rawPhases)) {
-      if (!isModelPhase(phaseName)) continue
-      phases[phaseName] = normalizeModelSelection(value)
-    }
-    modelConfig = {
-      version: typeof rawModelConfig.version === "number" ? rawModelConfig.version : modelConfig.version,
-      defaults: rawDefaults,
-      limits: {
-        requestsPerMinute:
-          typeof rawLimits.requestsPerMinute === "number" && rawLimits.requestsPerMinute > 0
-            ? rawLimits.requestsPerMinute
-            : undefined,
-      },
-      phases,
-    }
+    modelConfig = normalizeLoadedModelConfig(await readJsonFile<Record<string, unknown>>(modelConfigPath), modelConfig)
   }
-  let permissionConfig: LoadedPermissionConfig = {
-    version: 1,
-    mode: "open",
-  }
+  modelConfig = normalizeLoadedModelConfig(raw.modelConfig, modelConfig)
+  let permissionConfig: LoadedPermissionConfig = { ...DEFAULT_CONFIG.permissionConfig }
   if (await pathExists(permissionConfigPath)) {
-    const rawPermissionConfig = await readJsonFile<Record<string, unknown>>(permissionConfigPath)
-    permissionConfig = {
-      version:
-        typeof rawPermissionConfig.version === "number"
-          ? rawPermissionConfig.version
-          : permissionConfig.version,
-      mode:
-        typeof rawPermissionConfig.mode === "string" && isPermissionMode(rawPermissionConfig.mode)
-          ? rawPermissionConfig.mode
-          : permissionConfig.mode,
-    }
+    permissionConfig = normalizePermissionConfig(await readJsonFile<Record<string, unknown>>(permissionConfigPath), permissionConfig)
   }
-  const judgeConfig = await loadJudgeConfig(judgeConfigPath)
-  let monitorConfig: LoadedMonitorConfig = {
-    version: 1,
-    enabled: true,
-    autoStart: true,
-    hostname: "127.0.0.1",
-    port: 4219,
-    intervalSeconds: 2,
-    defaultLimit: 50,
-    openBrowserOnStart: true,
-  }
+  permissionConfig = normalizePermissionConfig(raw.permissionConfig, permissionConfig)
+  let judgeConfig = await loadJudgeConfig(judgeConfigPath)
+  judgeConfig = normalizeJudgeConfig(raw.judgeConfig, judgeConfig)
+  let monitorConfig: LoadedMonitorConfig = { ...DEFAULT_CONFIG.monitorConfig }
   if (await pathExists(monitorConfigPath)) {
-    const rawMonitorConfig = await readJsonFile<Record<string, unknown>>(monitorConfigPath)
-    monitorConfig = {
-      version:
-        typeof rawMonitorConfig.version === "number"
-          ? rawMonitorConfig.version
-          : monitorConfig.version,
-      enabled: typeof rawMonitorConfig.enabled === "boolean" ? rawMonitorConfig.enabled : monitorConfig.enabled,
-      autoStart:
-        typeof rawMonitorConfig.autoStart === "boolean" ? rawMonitorConfig.autoStart : monitorConfig.autoStart,
-      hostname:
-        typeof rawMonitorConfig.hostname === "string" && rawMonitorConfig.hostname.trim()
-          ? rawMonitorConfig.hostname
-          : monitorConfig.hostname,
-      port:
-        typeof rawMonitorConfig.port === "number" && rawMonitorConfig.port > 0
-          ? rawMonitorConfig.port
-          : monitorConfig.port,
-      intervalSeconds:
-        typeof rawMonitorConfig.intervalSeconds === "number" && rawMonitorConfig.intervalSeconds > 0
-          ? rawMonitorConfig.intervalSeconds
-          : monitorConfig.intervalSeconds,
-      defaultLimit:
-        typeof rawMonitorConfig.defaultLimit === "number" && rawMonitorConfig.defaultLimit > 0
-          ? rawMonitorConfig.defaultLimit
-          : monitorConfig.defaultLimit,
-      openBrowserOnStart:
-        typeof rawMonitorConfig.openBrowserOnStart === "boolean"
-          ? rawMonitorConfig.openBrowserOnStart
-          : monitorConfig.openBrowserOnStart,
-    }
+    monitorConfig = normalizeMonitorConfig(await readJsonFile<Record<string, unknown>>(monitorConfigPath), monitorConfig)
   }
+  monitorConfig = normalizeMonitorConfig(raw.monitorConfig, monitorConfig)
   let concurrencyConfig: LoadedConcurrencyConfig = { ...DEFAULT_CONFIG.concurrencyConfig }
   if (await pathExists(concurrencyConfigPath)) {
-    const rawConcurrencyConfig = await readJsonFile<Record<string, unknown>>(concurrencyConfigPath)
-    concurrencyConfig = {
-      maxConcurrent:
-        typeof rawConcurrencyConfig.maxConcurrent === "number" && rawConcurrencyConfig.maxConcurrent > 0
-          ? Math.floor(rawConcurrencyConfig.maxConcurrent)
-          : concurrencyConfig.maxConcurrent,
-      perScopeMaxConcurrent:
-        typeof rawConcurrencyConfig.perScopeMaxConcurrent === "number" && rawConcurrencyConfig.perScopeMaxConcurrent > 0
-          ? Math.floor(rawConcurrencyConfig.perScopeMaxConcurrent)
-          : concurrencyConfig.perScopeMaxConcurrent,
-      maxQueueDepth:
-        typeof rawConcurrencyConfig.maxQueueDepth === "number" && rawConcurrencyConfig.maxQueueDepth > 0
-          ? Math.floor(rawConcurrencyConfig.maxQueueDepth)
-          : concurrencyConfig.maxQueueDepth,
-      acquireTimeoutMs:
-        typeof rawConcurrencyConfig.acquireTimeoutMs === "number" && rawConcurrencyConfig.acquireTimeoutMs > 0
-          ? Math.floor(rawConcurrencyConfig.acquireTimeoutMs)
-          : concurrencyConfig.acquireTimeoutMs,
-      minSpawnIntervalMs:
-        typeof rawConcurrencyConfig.minSpawnIntervalMs === "number" && rawConcurrencyConfig.minSpawnIntervalMs >= 0
-          ? Math.floor(rawConcurrencyConfig.minSpawnIntervalMs)
-          : concurrencyConfig.minSpawnIntervalMs,
-    }
+    concurrencyConfig = normalizeConcurrencyConfig(await readJsonFile<Record<string, unknown>>(concurrencyConfigPath), concurrencyConfig)
   }
+  concurrencyConfig = normalizeConcurrencyConfig(raw.concurrencyConfig, concurrencyConfig)
+  const stageConcurrency = normalizeStageConcurrencyConfig(raw.stageConcurrency)
+  let directChatConfig = normalizeDirectChatConfig(undefined)
+  if (await pathExists(directChatConfigPath)) {
+    directChatConfig = normalizeDirectChatConfig(
+      await readJsonFile<Record<string, unknown>>(directChatConfigPath),
+      directChatConfig,
+    )
+  }
+  directChatConfig = normalizeDirectChatConfig(raw.directChatConfig, directChatConfig)
   // Apply the loaded concurrency limits to the global gate. This is the only
   // place loadConfig has side-effects on a singleton — it's intentional so
   // that any code path that calls loadConfig (CLI commands, smoke tests,
@@ -625,6 +858,10 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
     concurrencyConfigFile,
     concurrencyConfigPath,
     concurrencyConfig,
+    stageConcurrency,
+    directChatConfigFile,
+    directChatConfigPath,
+    directChatConfig,
   }
 
   return { ...config, configPath }
