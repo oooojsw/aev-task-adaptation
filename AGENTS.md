@@ -1,4 +1,4 @@
-- Auto-Evolve 的正式私有开发主链是 `https://github.com/oooojsw/auto-evolve-mainline`，本机主链为 `C:\Users\ZhuanZ\Desktop\opencode re\auto-evolve-mainline`，分支为 `main`；本仓库中的 `auto-evolve/` 是实际运行宿主。修改 Auto-Evolve 前先读 `auto-evolve/AGENTS.md`、`auto-evolve/README.md` 和主链 `MAINLINE.md`，验证后同步主链。禁止向主链提交 runtime、数据集材料、答案、workspace、Cookie 或密钥。
+- 完整项目正式私有开发主链是 `https://github.com/oooojsw/opencode-auto-evolve-mainline`，本机主链为 `C:\Users\ZhuanZ\Desktop\opencode re\opencode-auto-evolve-mainline`，分支为 `main`；本仓库仍是实际运行宿主。修改 OpenCode 或 Auto-Evolve 核心前先读 `auto-evolve/AGENTS.md`、`auto-evolve/README.md` 和主链 `MAINLINE.md`，验证后同步主链。禁止向主链提交 runtime、数据集材料、答案、workspace、Cookie、密钥或生成产物。
 - To regenerate the JavaScript SDK, run `./packages/sdk/js/script/build.ts`.
 - ALWAYS USE PARALLEL TOOLS WHEN APPLICABLE.
 - The default branch in this repo is `dev`.

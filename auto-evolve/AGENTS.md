@@ -1,23 +1,22 @@
 # auto-evolve 子项目说明（给接手本目录的 AI）
 
-## 0. Auto-Evolve 正式开发主链（最高优先级）
+## 0. 完整项目正式开发主链（最高优先级）
 
-- **云端正式主链（私有仓库）**：`https://github.com/oooojsw/auto-evolve-mainline`
-- **本机主链仓库**：`C:/Users/ZhuanZ/Desktop/opencode re/auto-evolve-mainline`
-- **实际运行宿主**：`C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/auto-evolve`
+- **云端正式主链（私有仓库）**：`https://github.com/oooojsw/opencode-auto-evolve-mainline`
+- **本机主链仓库**：`C:/Users/ZhuanZ/Desktop/opencode re/opencode-auto-evolve-mainline`
+- **实际运行宿主**：`C:/Users/ZhuanZ/Desktop/opencode re/opencode latest`
 - **正式分支**：`main`
 
-以后 Auto-Evolve 的长期开发历史以 `auto-evolve-mainline/main` 为准。OpenCode 大仓中的 `auto-evolve/` 仍是当前实际运行位置，因为它依赖 OpenCode 宿主的 Bun、Node 依赖和本地源码；但它不再承担干净云端主链的职责。
+以后本项目的长期开发历史以 `opencode-auto-evolve-mainline/main` 为准。这个主链不是只抽取 `auto-evolve/` 的子项目仓库，而是完整保留 OpenCode 源码形态、本机 OpenCode 修改和 Auto-Evolve 核心代码；同时把原始 OpenCode 上游提交祖先压缩成一条本地基线，并清除 runtime、数据集材料、答案和产物。
 
 修改核心流程时必须遵守：
 
-1. 开始前读取本文件、`README.md` 和主链仓库的 `MAINLINE.md`，确认当前主链状态。
-2. 可以在 OpenCode 宿主目录内开发和真实烟测，但验证通过后，必须把源码、配置模板、提示词、验证器、烟测和架构文档同步到本机主链仓库，形成清晰 commit，并推送 `origin/main`。
-3. 禁止再把整个 `opencode latest` 大仓当作 Auto-Evolve 主链推送；它混有 OpenCode 上游历史和本机运行数据，会产生数 GB Git 包。
-4. 主链禁止提交 `runtime-state`、runtime logs、benchmark 原始材料、PDF/视频/Office 数据、private answers、标准答案、真实任务 workspace/outputs、Cookie、API Key、认证文件、模型缓存和 Agent 生成产物。
-5. 新增数据集时，主链只保存适配器、spec 模板、验证脚本、提示词和不含真实答案的小型测试夹具；完整数据集继续放本机或独立数据盘。
-6. 主链是从原大仓按 `auto-evolve/` 路径抽取并清理后的历史，因此 commit hash 与原大仓不同是正常现象；不要按 hash 强行对齐，按文件内容和提交说明同步。
-7. 推送后必须用 `git ls-remote origin refs/heads/main` 核对远端 commit 与本地 `main` 一致，并确认主链工作区干净。
+1. 开始前读取本文件、`README.md` 和完整主链仓库的 `MAINLINE.md`，确认当前主链状态。
+2. 可以在 OpenCode 宿主目录内开发和真实烟测，但验证通过后，必须把 OpenCode 修改、Auto-Evolve 源码、配置模板、提示词、验证器、烟测和架构文档同步到本机主链仓库，形成清晰 commit，并推送 `origin/main`。
+3. 禁止把 `runtime-state`、runtime logs、benchmark 原始材料、PDF/视频/Office 数据、private answers、标准答案、真实任务 workspace/outputs、Cookie、API Key、认证文件、模型缓存和 Agent 生成产物提交到主链。
+4. 新增数据集时，主链只保存适配器、spec 模板、验证脚本、提示词和不含真实答案的小型测试夹具；完整数据集继续放本机或独立数据盘。
+5. 主链已经剔除了原始 OpenCode 上游祖先，因此 commit hash 与原宿主仓不同是正常现象；不要按 hash 强行对齐，按文件内容和提交说明同步。
+6. 推送后必须用 `git ls-remote origin refs/heads/main` 核对远端 commit 与本地 `main` 一致，并确认主链工作区干净。
 
 全局有多个角色，他们都是工作节点，只有空白agent节点无法看到答案任何相关内容，其他的任何节点都可以完全或者部分看到答案内容，因为专家经验区就是他们在写，只有空白agent是完全利用专家经验区进行任务，以此来考验专家经验区写的是不是没有过拟合以及泛化，整个系统的目的是产出一份泛化的（不过拟合任何案例）、完备的（可以让空白agent通过大量测试集）的专家经验区（skill）。
 

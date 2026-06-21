@@ -1301,12 +1301,12 @@ bun run auto-evolve/scripts/run-direct-chat-eval.ts `
   <其他 task-pack、split、skill 参数>
 ```
 
-## Auto-Evolve 独立开发主链（2026-06-21）
+## 完整项目独立开发主链（2026-06-21）
 
-- 本机独立仓库：`C:/Users/ZhuanZ/Desktop/opencode re/auto-evolve-mainline`
-- 云端私有仓库：`https://github.com/oooojsw/auto-evolve-mainline`
+- 本机独立仓库：`C:/Users/ZhuanZ/Desktop/opencode re/opencode-auto-evolve-mainline`
+- 云端私有仓库：`https://github.com/oooojsw/opencode-auto-evolve-mainline`
 - 正式分支：`main`
 
-该仓库由本机 OpenCode 大仓的 `auto-evolve/` 历史抽取而成，保留 Auto-Evolve 的提交顺序、作者、时间和说明。由于独立化时重写了路径并清除了数据，commit hash 与原大仓不同是正常现象。
+该仓库不是只抽取 `auto-evolve/` 的子项目仓库，而是完整项目主线：保留 OpenCode 源码形态、本机对 OpenCode 的修改、Auto-Evolve 核心系统和本地开发提交顺序。为了摆脱原始上游 `sst/opencode` 的超长历史，主链把最初克隆到本机的 OpenCode 源码树压缩成一条基线提交，然后重放本机开发提交；因此 commit hash 与原宿主仓不同是正常现象。
 
-主链只保存源码、配置模板、提示词、验证器、烟测和架构文档。禁止提交 `runtime-state`、运行日志、benchmark 原始材料、private answers、真实任务 workspace、模型缓存、Cookie、API Key 和 Agent 生成产物。Auto-Evolve 目前仍以 OpenCode 源码仓库作为运行宿主；独立主链负责长期开发历史和云端备份。
+主链只保存源码、配置模板、提示词、验证器、烟测、轻量 task spec/split 和架构文档。禁止提交 `runtime-state`、运行日志、benchmark 原始材料、PDF/视频/Office 数据、private answers、真实任务 workspace/outputs、模型缓存、Cookie、API Key、认证文件和 Agent 生成产物。实际运行和重型数据仍留在 `opencode latest` 宿主目录或独立数据盘；完整主链负责长期开发历史和云端备份。
