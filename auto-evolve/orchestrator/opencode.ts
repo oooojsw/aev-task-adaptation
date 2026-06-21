@@ -383,6 +383,13 @@ function hostAuthCandidates() {
   ].filter(Boolean))
 }
 
+function hostModelCacheCandidates() {
+  return uniqueFiles([
+    process.env.XDG_CACHE_HOME ? path.join(process.env.XDG_CACHE_HOME, "opencode", "models.json") : "",
+    path.join(os.homedir(), ".cache", "opencode", "models.json"),
+  ].filter(Boolean))
+}
+
 async function prepareIsolatedHostRuntime(cwd: string, runLabel: string): Promise<IsolatedHostRuntime> {
   const root = runtimePath(cwd, "opencode-isolated-env", runLabel)
   const home = path.join(root, "home")
@@ -400,11 +407,12 @@ async function prepareIsolatedHostRuntime(cwd: string, runLabel: string): Promis
     break
   }
 
-  // Copy host model cache so the isolated runtime can resolve models without
-  // fetching https://models.dev/api.json (which often fails with ECONNRESET).
-  const hostModelCache = path.join(os.homedir(), ".cache", "opencode", "models.json")
-  if (await pathExists(hostModelCache)) {
-    await copyFile(hostModelCache, path.join(opencodeCache, "models.json")).catch(() => undefined)
+  // Copy host model cache so the isolated runtime can resolve plan-backed
+  // providers such as alibaba-coding-plan-cn without touching host config.
+  for (const candidate of hostModelCacheCandidates()) {
+    if (!(await pathExists(candidate))) continue
+    await copyFile(candidate, path.join(opencodeCache, "models.json")).catch(() => undefined)
+    break
   }
 
   return {

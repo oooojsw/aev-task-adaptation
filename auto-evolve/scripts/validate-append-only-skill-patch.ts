@@ -2,6 +2,7 @@ import path from "node:path"
 import { readdir, readFile } from "node:fs/promises"
 
 type Hit = { file: string; reason: string }
+type Policy = "append_only" | "rewrite_allowed" | "immutable"
 
 async function walk(root: string, rel = ""): Promise<string[]> {
   const dir = path.join(root, rel)
@@ -23,19 +24,21 @@ function allowedNew(rel: string) {
   if (next.startsWith("patches/")) return true
   if (next.startsWith("casebook/")) return true
   if (next === "open_observations.md") return true
+  if (next === "meta.json") return true
+  if (next === "surface_contract.json") return true
   return false
 }
 
-function canMutate(rel: string) {
+function policyFor(rel: string): Policy {
   const next = rel.replace(/\\/g, "/")
-  if (next === "CORE.md") return true
-  if (next === "INDEX.md") return true
-  if (next.startsWith("casebook/")) return true
-  if (next.startsWith("patches/")) return true
-  if (next === "open_observations.md") return true
-  if (next === "meta.json") return true
-  if (next === "surface_contract.json") return false
-  return false
+  if (next === "CORE.md") return "append_only"
+  if (next === "INDEX.md") return "append_only"
+  if (next === "open_observations.md") return "append_only"
+  if (next.startsWith("patches/")) return "append_only"
+  if (next.startsWith("casebook/")) return "rewrite_allowed"
+  if (next === "meta.json") return "rewrite_allowed"
+  if (next === "surface_contract.json") return "rewrite_allowed"
+  return "immutable"
 }
 
 async function sameOrPrefix(base: string, draft: string, rel: string) {
@@ -64,14 +67,19 @@ async function main() {
       continue
     }
     const next = rel.replace(/\\/g, "/")
-    if (!canMutate(next)) {
+    const policy = policyFor(next)
+    if (policy === "immutable") {
       const a = await readFile(path.join(base, rel)).catch(() => Buffer.alloc(0))
       const b = await readFile(path.join(draft, rel)).catch(() => Buffer.alloc(0))
       if (!a.equals(b)) hits.push({ file: rel, reason: "non-mutable file changed" })
       continue
     }
-    const textLike = /\.(md|txt|json|jsonl|yaml|yml)$/i.test(rel)
-    if (textLike) {
+    if (policy === "append_only") {
+      const textLike = /\.(md|txt|json|jsonl|yaml|yml)$/i.test(rel)
+      if (!textLike) {
+        hits.push({ file: rel, reason: "append-only file is not text-like" })
+        continue
+      }
       const ok = await sameOrPrefix(base, draft, rel)
       if (!ok) hits.push({ file: rel, reason: "text file is not append-only" })
     }

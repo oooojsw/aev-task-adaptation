@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-eval_in_distribution-look-at-obj-in-light-keychain-none-desklamp-327-trial-t20190906-202601-548273-ga",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

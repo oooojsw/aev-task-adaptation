@@ -1300,3 +1300,13 @@ bun run auto-evolve/scripts/run-direct-chat-eval.ts `
   --global-concurrency 1 `
   <其他 task-pack、split、skill 参数>
 ```
+
+## Auto-Evolve 独立开发主链（2026-06-21）
+
+- 本机独立仓库：`C:/Users/ZhuanZ/Desktop/opencode re/auto-evolve-mainline`
+- 云端私有仓库：`https://github.com/oooojsw/auto-evolve-mainline`
+- 正式分支：`main`
+
+该仓库由本机 OpenCode 大仓的 `auto-evolve/` 历史抽取而成，保留 Auto-Evolve 的提交顺序、作者、时间和说明。由于独立化时重写了路径并清除了数据，commit hash 与原大仓不同是正常现象。
+
+主链只保存源码、配置模板、提示词、验证器、烟测和架构文档。禁止提交 `runtime-state`、运行日志、benchmark 原始材料、private answers、真实任务 workspace、模型缓存、Cookie、API Key 和 Agent 生成产物。Auto-Evolve 目前仍以 OpenCode 源码仓库作为运行宿主；独立主链负责长期开发历史和云端备份。

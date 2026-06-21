@@ -7,7 +7,7 @@ import { loadConfig } from "../schema"
 import { autoEvolvePath, ensureDirectory, pathExists, writeJsonFile } from "../fs"
 import { writeTaskArtifacts } from "../task-artifacts"
 import { loadLongTaskSpec } from "../long-task/spec"
-import { resolveLongTaskEditablePaths } from "../long-task/repository"
+import { isolateLongTaskRuntimePaths, resolveLongTaskEditablePaths } from "../long-task/repository"
 import { runValidationStage } from "../validation-engine/stage-runner"
 import type { LongTaskSpec, LongTaskWorkUnit } from "../long-task/contract"
 import { experienceWorkspacePathsFromRoot, resolveExperienceWorkspaceLayout } from "../experience-workspace"
@@ -324,11 +324,15 @@ async function prepareCleanSkillRoots(sourceRoots: string[], cleanRoot: string) 
 export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResult> {
   const config = await loadConfig(input.cwd)
   const loaded = await loadLongTaskSpec(input.specPath, { allowMissingInitialExpertContextPaths: true })
-  const spec = loaded.spec
-  const title = input.title ?? spec.title
+  const title = input.title ?? loaded.spec.title
   const runID = `blank-eval-${stamp(title)}`
   const root = input.runRoot ?? autoEvolvePath(input.cwd, "runtime-state", "blank-eval-runs")
   const runDir = path.join(root, runID)
+  const spec = isolateLongTaskRuntimePaths({
+    spec: loaded.spec,
+    sourceSpecPath: loaded.specPath,
+    runtimeRoot: path.join(runDir, "task-workspace"),
+  })
   const bundlePath = path.join(runDir, "blank_eval_bundle.json")
   const validatorRoot = path.join(runDir, "validators")
   const sessionDir = path.join(runDir, "session")

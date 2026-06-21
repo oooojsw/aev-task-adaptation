@@ -256,6 +256,88 @@ export function resolveLongTaskEditablePaths(spec: LongTaskSpec) {
   return filtered
 }
 
+function isTaskLocalRuntimePath(specDir: string, value: string) {
+  const relative = path.relative(specDir, path.resolve(value)).replace(/\\/g, "/")
+  return (
+    relative === "workspace" ||
+    relative.startsWith("workspace/") ||
+    relative === "expert-workspace" ||
+    relative.startsWith("expert-workspace/") ||
+    relative === "validation-expert-workspace" ||
+    relative.startsWith("validation-expert-workspace/")
+  )
+}
+
+function runtimeMirrorPath(specDir: string, runtimeRoot: string, value: string) {
+  const resolved = path.resolve(value)
+  if (!isTaskLocalRuntimePath(specDir, resolved)) return resolved
+  const relative = path.relative(specDir, resolved)
+  return path.join(runtimeRoot, relative)
+}
+
+function rewritePathRefsToRuntime(specDir: string, runtimeRoot: string, refs: LongTaskSpec["targetPaths"]) {
+  return refs?.map((item) => ({
+    ...item,
+    path: runtimeMirrorPath(specDir, runtimeRoot, item.path),
+  }))
+}
+
+function rewriteValidatorArgsToRuntime(specDir: string, runtimeRoot: string, args: string[] | undefined) {
+  return args?.map((arg) => {
+    if (!arg || arg.startsWith("-")) return arg
+    const candidate = path.isAbsolute(arg) ? arg : path.resolve(specDir, arg)
+    if (!isTaskLocalRuntimePath(specDir, candidate)) return arg
+    return runtimeMirrorPath(specDir, runtimeRoot, candidate)
+  })
+}
+
+function rewriteInitialGraphToRuntime(
+  specDir: string,
+  runtimeRoot: string,
+  graph: LongTaskSpec["initialGraph"],
+): LongTaskSpec["initialGraph"] {
+  if (!graph) return graph
+  return {
+    ...graph,
+    units: graph.units.map((unit) => ({
+      ...unit,
+      inputs: unit.inputs.map((item) => runtimeMirrorPath(specDir, runtimeRoot, item)),
+      expected_artifacts: unit.expected_artifacts.map((item) => runtimeMirrorPath(specDir, runtimeRoot, item)),
+    })),
+  }
+}
+
+export function isolateLongTaskRuntimePaths(input: { spec: LongTaskSpec; sourceSpecPath: string; runtimeRoot: string }) {
+  const specDir = path.dirname(path.resolve(input.sourceSpecPath))
+  const runtimeRoot = path.resolve(input.runtimeRoot)
+  const rewriteList = (items: string[] | undefined) =>
+    items?.map((item) => runtimeMirrorPath(specDir, runtimeRoot, item))
+  return {
+    ...input.spec,
+    targetPaths: rewritePathRefsToRuntime(specDir, runtimeRoot, input.spec.targetPaths),
+    editablePaths: rewriteList(input.spec.editablePaths),
+    preservePreseededEditablePaths: rewriteList(input.spec.preservePreseededEditablePaths),
+    formalPackageRoots: rewriteList(input.spec.formalPackageRoots),
+    validators: input.spec.validators.map((validator) =>
+      validator.type === "script"
+        ? {
+            ...validator,
+            args: rewriteValidatorArgsToRuntime(specDir, runtimeRoot, validator.args),
+          }
+        : validator.inputFiles?.candidatePath
+          ? {
+              ...validator,
+              inputFiles: {
+                ...validator.inputFiles,
+                candidatePath: runtimeMirrorPath(specDir, runtimeRoot, validator.inputFiles.candidatePath),
+              },
+            }
+          : validator,
+    ),
+    initialGraph: rewriteInitialGraphToRuntime(specDir, runtimeRoot, input.spec.initialGraph),
+  }
+}
+
 async function stageEditablePathsForFreshRun(run: LongTaskRunPaths, spec: LongTaskSpec) {
   await ensureDirectory(run.preexistingRoot)
 

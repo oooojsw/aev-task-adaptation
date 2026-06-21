@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-train-pick-heat-then-place-in-recep-bread-none-countertop-15-trial-t20190907-000245-89",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

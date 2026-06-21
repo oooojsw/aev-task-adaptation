@@ -44,7 +44,9 @@ function resolveLocalOcrSettings(config: DirectChatModelsConfig) {
   const umiExePath =
     config.ocrFallback?.umiExePath ||
     "E:/project/Umi-OCR_Paddle_v2.1.5/UmiOCR-data/plugins/win7_x64_PaddleOCR-json/PaddleOCR-json.exe"
-  return { helperScriptPath, pythonBin, umiExePath }
+  const cacheRoot = config.ocrFallback?.cacheRoot ? path.resolve(config.ocrFallback.cacheRoot) : undefined
+  const renderScriptPath = path.resolve(import.meta.dir, "..", "..", "scripts", "render-pdf-pages-for-direct-chat.py")
+  return { helperScriptPath, pythonBin, umiExePath, cacheRoot, renderScriptPath }
 }
 
 async function computeCacheKey(input: {
@@ -97,7 +99,7 @@ async function runOcrFallback(input: {
     pageHint,
     pageWindow,
   })
-  const cacheDir = path.join(input.cacheRoot, "ocr-cache")
+  const cacheDir = path.join(settings.cacheRoot || input.cacheRoot, "ocr-cache")
   const cachePath = path.join(cacheDir, `${key}.json`)
   if (await pathExists(cachePath)) {
     const cached = await readJsonFile<{ text: string; engine: string }>(cachePath)
@@ -151,6 +153,74 @@ async function runOcrFallback(input: {
     cacheHit: false,
     cachePath,
   }
+}
+
+async function renderPdfPagesForImageModel(input: {
+  caseID: string
+  material: DirectChatMaterial
+  assetPath: string
+  cacheRoot: string
+  modelsConfig: DirectChatModelsConfig
+}) {
+  const settings = resolveLocalOcrSettings(input.modelsConfig)
+  const pageHint = typeof input.material.metadata?.pageHint === "number" ? input.material.metadata.pageHint : undefined
+  const configuredPageWindow =
+    typeof input.material.metadata?.pageWindow === "number"
+      ? input.material.metadata.pageWindow
+      : typeof input.modelsConfig.ocrFallback?.pageWindow === "number"
+        ? input.modelsConfig.ocrFallback.pageWindow
+        : 1
+  const pageWindow = typeof pageHint === "number" ? Math.max(0, Math.floor(configuredPageWindow)) : undefined
+  const renderDpi = Math.max(96, Math.floor(input.modelsConfig.ocrFallback?.pdfRenderDpi ?? 200))
+  const key = await computeCacheKey({
+    engineID: `pdf-page-render-v1-dpi-${renderDpi}`,
+    assetPath: input.assetPath,
+    mimeType: "application/pdf",
+    materialID: input.material.id,
+    pageHint,
+    pageWindow,
+  })
+  const renderRoot = path.join(settings.cacheRoot || input.cacheRoot, "pdf-page-images", key)
+  const manifestPath = path.join(renderRoot, "manifest.json")
+  if (await pathExists(manifestPath)) {
+    const cached = await readJsonFile<{ pages: Array<{ page: number; path: string }> }>(manifestPath)
+    return { pages: cached.pages, cacheHit: true, manifestPath }
+  }
+
+  await ensureDirectory(renderRoot)
+  const args = [
+    settings.renderScriptPath,
+    "--input",
+    input.assetPath,
+    "--output-dir",
+    renderRoot,
+    "--dpi",
+    String(renderDpi),
+  ]
+  if (typeof pageHint === "number") {
+    args.push("--page-hint", String(pageHint))
+    if (typeof pageWindow === "number") args.push("--page-window", String(pageWindow))
+  }
+  const processResult = await runProcess(settings.pythonBin, args)
+  if (processResult.exitCode !== 0) {
+    throw new Error(
+      `PDF page rendering failed for ${input.caseID}/${input.material.id}: ${processResult.stderr || processResult.stdout || "unknown error"}`,
+    )
+  }
+  const rendered = JSON.parse(processResult.stdout.trim()) as { pages?: Array<{ page: number; path: string }> }
+  const pages = rendered.pages || []
+  if (!pages.length) throw new Error(`PDF page rendering returned no pages for ${input.caseID}/${input.material.id}`)
+  await writeJsonFile(manifestPath, {
+    schema: "direct-chat-pdf-page-images/v1",
+    caseID: input.caseID,
+    materialID: input.material.id,
+    sourcePath: input.assetPath,
+    pageHint,
+    pageWindow,
+    createdAt: new Date().toISOString(),
+    pages,
+  })
+  return { pages, cacheHit: false, manifestPath }
 }
 
 export async function prepareDirectChatMaterialsForModel(input: {
@@ -209,6 +279,50 @@ export async function prepareDirectChatMaterialsForModel(input: {
         action: "kept_native_asset",
         reason: imageSupported ? "target model supports native image input" : "target model supports certified native document input",
         outputMaterialID: material.id,
+      })
+      continue
+    }
+
+    if (
+      material.type === "document_asset" &&
+      path.extname(assetPath).toLowerCase() === ".pdf" &&
+      capabilities.imageInputMode === "openai-image-url"
+    ) {
+      const rendered = await renderPdfPagesForImageModel({
+        caseID: input.caseID,
+        material,
+        assetPath,
+        cacheRoot: input.caseDir,
+        modelsConfig: input.modelsConfig,
+      })
+      for (const page of rendered.pages) {
+        prepared.push({
+          id: `${material.id}__page_${page.page}`,
+          title: `${material.title} (Page ${page.page})`,
+          type: "image_asset",
+          content: `Rendered image of PDF page ${page.page}. Inspect the image directly for layout, labels, and numeric table values.`,
+          sourcePathInternal: page.path,
+          metadata: {
+            ...material.metadata,
+            pageHint: page.page,
+            imagePathInternal: page.path,
+            assetPathInternal: page.path,
+            mimeType: "image/png",
+            requiresModelFileCapability: false,
+            requiresModelImageCapability: true,
+          },
+        })
+      }
+      routes.push({
+        materialID: material.id,
+        title: material.title,
+        type: material.type,
+        action: "rendered_pdf_pages",
+        reason: `target model supports images but not native PDF input; rendered ${rendered.pages.length} hinted PDF page image(s)`,
+        engine: "pymupdf",
+        cacheHit: rendered.cacheHit,
+        cachePath: rendered.manifestPath,
+        outputMaterialID: rendered.pages.map((page) => `${material.id}__page_${page.page}`).join(","),
       })
       continue
     }

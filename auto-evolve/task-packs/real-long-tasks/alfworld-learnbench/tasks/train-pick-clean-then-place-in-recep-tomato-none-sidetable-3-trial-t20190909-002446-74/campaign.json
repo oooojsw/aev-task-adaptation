@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-train-pick-clean-then-place-in-recep-tomato-none-sidetable-3-trial-t20190909-002446-74",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

@@ -34,15 +34,56 @@ function parseLocalSources(instruction: string) {
 }
 
 function parseSourcePageHints(instruction: string) {
+  return parseSourceDocs(instruction).map((url) => {
+    const match = url.match(/[?&]page=(\d+)/i)
+    return match ? Number(match[1]) : undefined
+  })
+}
+
+function parseSourceDocs(instruction: string) {
   const block = instruction.match(/Source document URLs:\s*([\s\S]*?)(?:\n\nLocal source PDFs:|\n\n|$)/)?.[1] || ""
   return block
     .split(/\r?\n/g)
     .map((line) => line.replace(/^\s*-\s*/, "").trim())
     .filter(Boolean)
-    .map((url) => {
-      const match = url.match(/[?&]page=(\d+)/i)
-      return match ? Number(match[1]) : undefined
-    })
+}
+
+const MONTH_NUMBER: Record<string, string> = {
+  january: "01",
+  february: "02",
+  march: "03",
+  april: "04",
+  may: "05",
+  june: "06",
+  july: "07",
+  august: "08",
+  september: "09",
+  october: "10",
+  november: "11",
+  december: "12",
+}
+
+function sourceDocumentKeyFromURL(sourceDoc: string) {
+  const match = sourceDoc.toLowerCase().match(/\/([a-z]+)-(\d{4})-\d+(?:\?|$)/)
+  if (!match) return undefined
+  const month = MONTH_NUMBER[match[1]!]
+  return month ? `${match[2]}_${month}` : undefined
+}
+
+function sourceDocumentKeyFromPath(sourcePath: string) {
+  const stem = path.basename(sourcePath, path.extname(sourcePath)).toLowerCase()
+  return stem.match(/(?:treasury_bulletin_)?(\d{4})_(\d{2})/)?.slice(1, 3).join("_")
+}
+
+function alignOfficeQaSource(sourceDoc: string, localSources: string[], sourceDocCount: number, index: number) {
+  const sourceKey = sourceDocumentKeyFromURL(sourceDoc)
+  if (sourceKey) {
+    const matched = localSources.find((source) => sourceDocumentKeyFromPath(source) === sourceKey)
+    if (matched) return matched
+  }
+  if (localSources.length === 1) return localSources[0]
+  if (localSources.length === sourceDocCount) return localSources[index]
+  return undefined
 }
 
 function parseSplitIDs(raw: unknown) {
@@ -132,6 +173,174 @@ async function pdfAssetMaterial(input: { taskDir: string; source: string; source
     warning: "PDF material requires model-native file/PDF capability; no local extraction was performed.",
     omitted: undefined,
   }
+}
+
+function officeQaDocsRootCandidates(input?: string) {
+  return [
+    input,
+    process.env.OFFICEQA_DOCS_DIR,
+    "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus",
+    "E:/project/experiment/datasets/OfficeQA_corpus",
+    "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus/treasury_bulletins_parsed",
+    "E:/project/experiment/datasets/OfficeQA_corpus/treasury_bulletins_parsed",
+  ]
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => path.resolve(item))
+}
+
+async function locateOfficeQaParsedJson(input: { source: string; docsDir?: string }) {
+  const stem = path.basename(input.source, path.extname(input.source))
+  const jsonName = `${stem}.json`
+  for (const root of officeQaDocsRootCandidates(input.docsDir)) {
+    for (const candidate of [
+      path.join(root, "treasury_bulletins_parsed", "jsons", jsonName),
+      path.join(root, "jsons", jsonName),
+      path.join(path.dirname(root), "jsons", jsonName),
+    ]) {
+      if (await pathExists(candidate)) return candidate
+    }
+  }
+  return undefined
+}
+
+function stripHtmlToText(input: string) {
+  let text = input
+    .replace(/<\/tr>\s*<tr[^>]*>/gi, "\n")
+    .replace(/<\/t[dh]>\s*<t[dh][^>]*>/gi, " | ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+  const entities: Record<string, string> = {
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&#39;": "'",
+    "&nbsp;": " ",
+  }
+  for (const [from, to] of Object.entries(entities)) text = text.replaceAll(from, to)
+  return text
+    .split(/\r?\n/g)
+    .map((line) => line.replace(/[ \t]{2,}/g, " ").trim())
+    .filter(Boolean)
+    .join("\n")
+}
+
+function elementPageIDs(element: AnyRecord) {
+  const ids = new Set<number>()
+  const boxes = Array.isArray(element.bbox) ? element.bbox : []
+  for (const box of boxes) {
+    const pageID = Number((box as AnyRecord)?.page_id)
+    if (Number.isFinite(pageID)) ids.add(pageID)
+  }
+  return ids
+}
+
+async function renderOfficeQaParsedPage(input: { jsonPath: string; pageNumber: number; maxChars?: number }) {
+  const parsed = await readJsonFile<AnyRecord>(input.jsonPath)
+  const elements = Array.isArray(parsed?.document?.elements) ? parsed.document.elements : []
+  const sections: string[] = []
+  for (const element of elements) {
+    if (!element || typeof element !== "object") continue
+    if (!elementPageIDs(element as AnyRecord).has(input.pageNumber)) continue
+    const content = (element as AnyRecord).content
+    if (typeof content !== "string" || !content.trim() || content.trim().toLowerCase() === "none") continue
+    const text = stripHtmlToText(content)
+    if (text) sections.push(text)
+  }
+  const joined = sections.join("\n\n").trim()
+  const maxChars = input.maxChars ?? 24000
+  if (joined.length <= maxChars) return { text: joined, originalChars: joined.length, truncated: false }
+  return {
+    text: `${joined.slice(0, maxChars).trimEnd()}\n\n[... ${joined.length - maxChars} characters omitted from this official parsed page ...]`,
+    originalChars: joined.length,
+    truncated: true,
+  }
+}
+
+async function officeQaSkillOptOracleMaterials(input: {
+  taskDir: string
+  localSources: string[]
+  sourceDocs: string[]
+  docsDir?: string
+}) {
+  const materials: DirectChatCaseBundle["materials"] = []
+  const warnings: string[] = []
+  const omittedSources: string[] = []
+  const seen = new Set<string>()
+  let totalChars = 0
+  const maxTotalChars = 80000
+
+  for (let index = 0; index < input.sourceDocs.length; index += 1) {
+    const sourceDoc = input.sourceDocs[index]
+    const pageMatch = sourceDoc.match(/[?&]page=(\d+)/i)
+    const pageNumber = pageMatch ? Number(pageMatch[1]) : undefined
+    if (!pageNumber || !Number.isFinite(pageNumber)) {
+      warnings.push(`Source URL has no page hint: ${sourceDoc}`)
+      continue
+    }
+    const localSource = alignOfficeQaSource(sourceDoc, input.localSources, input.sourceDocs.length, index)
+    if (!localSource) {
+      omittedSources.push(sourceDoc)
+      warnings.push(`No local source file aligned to source URL: ${sourceDoc}`)
+      continue
+    }
+    const jsonPath = await locateOfficeQaParsedJson({
+      source: localSource.replace(/\.pdf$/i, ".json"),
+      docsDir: input.docsDir,
+    })
+    if (!jsonPath) {
+      omittedSources.push(`${localSource}#page=${pageNumber}`)
+      warnings.push(`Missing OfficeQA official parsed JSON for ${localSource}`)
+      continue
+    }
+    const key = `${jsonPath}#${pageNumber}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const renderedPage = await renderOfficeQaParsedPage({ jsonPath, pageNumber })
+    if (!renderedPage.text) {
+      omittedSources.push(`${localSource}#page=${pageNumber}`)
+      warnings.push(`Official parsed JSON had no text for ${path.basename(localSource)} page ${pageNumber}`)
+      continue
+    }
+    const block = [
+      `Official SkillOpt/OfficeQA oracle parsed page.`,
+      `Source file: ${path.basename(localSource).replace(/\.pdf$/i, ".txt")}`,
+      `Source URL: ${sourceDoc}`,
+      `Page: ${pageNumber}`,
+      ``,
+      renderedPage.text,
+    ].join("\n")
+    if (totalChars + block.length > maxTotalChars) {
+      omittedSources.push(`${localSource}#page=${pageNumber}`)
+      for (let remainingIndex = index + 1; remainingIndex < input.sourceDocs.length; remainingIndex += 1) {
+        omittedSources.push(input.sourceDocs[remainingIndex]!)
+      }
+      warnings.push(`Oracle parsed page context exceeded the ${maxTotalChars} character dataset publication limit`)
+      break
+    }
+    totalChars += block.length
+    materials.push({
+      id: `officeqa-oracle-page-${materials.length + 1}`,
+      title: `${path.basename(localSource)} page ${pageNumber} (official parsed text)`,
+      type: "markdown",
+      content: block,
+      sourcePathInternal: jsonPath,
+      metadata: {
+        sourceIndex: index,
+        pageHint: pageNumber,
+        extractionEngine: "skillopt-officeqa-official-parsed-json",
+        originalCharCount: renderedPage.originalChars,
+        truncatedAtExtraction: renderedPage.truncated,
+      },
+    })
+    if (renderedPage.truncated) {
+      warnings.push(
+        `Official parsed page ${path.basename(localSource)}#${pageNumber} was capped at 24000 characters from ${renderedPage.originalChars}`,
+      )
+    }
+  }
+
+  return { materials, warnings, omittedSources }
 }
 
 async function listTaskIDs(taskPackRoot: string) {
@@ -319,6 +528,8 @@ export async function buildOfficeQADirectChatDataset(input: {
   allowOmittedMaterials?: boolean
   extractPdfText?: boolean
   maxPdfCharsPerFile?: number
+  officeqaMaterialMode?: "native-pdf" | "skillopt-oracle-json"
+  officeqaDocsDir?: string
 }) {
   const taskPackRoot = path.resolve(input.taskPackRoot)
   const outDir = path.resolve(input.outDir)
@@ -345,9 +556,10 @@ export async function buildOfficeQADirectChatDataset(input: {
     const instruction = await readFile(instructionPath, "utf8")
     const spec = await readJsonFile<AnyRecord>(specPath)
     const localSources = parseLocalSources(instruction)
+    const sourceDocs = parseSourceDocs(instruction)
     const pageHints = parseSourcePageHints(instruction)
-    const expectedSources = localSources.map((source) => normalizeSlash(source))
-    const materials = [
+    const expectedSources = (sourceDocs.length ? sourceDocs : localSources).map((source) => normalizeSlash(source))
+    const materials: DirectChatCaseBundle["materials"] = [
       {
         id: "instruction",
         title: "OfficeQA task instruction",
@@ -358,17 +570,30 @@ export async function buildOfficeQADirectChatDataset(input: {
     ]
     const warnings: string[] = []
     const omittedSources: string[] = []
-    for (const source of localSources.filter((item) => item.toLowerCase().endsWith(".pdf"))) {
-      const sourceIndex = localSources.indexOf(source)
-      const extracted = await pdfAssetMaterial({
+    const materialMode = input.officeqaMaterialMode || "native-pdf"
+    if (materialMode === "skillopt-oracle-json") {
+      const oracle = await officeQaSkillOptOracleMaterials({
         taskDir,
-        source,
-        sourceIndex,
-        pageHint: pageHints[sourceIndex],
+        localSources,
+        sourceDocs,
+        docsDir: input.officeqaDocsDir,
       })
-      if (extracted.material) materials.push(extracted.material)
-      if (extracted.warning) warnings.push(extracted.warning)
-      if (extracted.omitted) omittedSources.push(extracted.omitted)
+      materials.push(...oracle.materials)
+      warnings.push(...oracle.warnings)
+      omittedSources.push(...oracle.omittedSources)
+    } else {
+      for (const source of localSources.filter((item) => item.toLowerCase().endsWith(".pdf"))) {
+        const sourceIndex = localSources.indexOf(source)
+        const extracted = await pdfAssetMaterial({
+          taskDir,
+          source,
+          sourceIndex,
+          pageHint: pageHints[sourceIndex],
+        })
+        if (extracted.material) materials.push(extracted.material)
+        if (extracted.warning) warnings.push(extracted.warning)
+        if (extracted.omitted) omittedSources.push(extracted.omitted)
+      }
     }
     const audit: DirectChatMaterialAudit = {
       caseID: id,
@@ -377,7 +602,10 @@ export async function buildOfficeQADirectChatDataset(input: {
       omittedSources: omittedSources.map((source) => normalizeSlash(source)),
       warnings,
       tokenEstimate: estimateTokens(materials.map((material) => material.content).join("\n")),
-      compressionPolicy: "instruction-plus-native-pdf-assets",
+      compressionPolicy:
+        materialMode === "skillopt-oracle-json"
+          ? "instruction-plus-skillopt-official-oracle-parsed-pages"
+          : "instruction-plus-native-pdf-assets",
     }
     if (audit.omittedSources.length && !input.allowOmittedMaterials) {
       throw new Error(

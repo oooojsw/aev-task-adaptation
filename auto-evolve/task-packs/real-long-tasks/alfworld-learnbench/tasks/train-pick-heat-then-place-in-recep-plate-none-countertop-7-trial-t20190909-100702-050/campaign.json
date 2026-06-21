@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-train-pick-heat-then-place-in-recep-plate-none-countertop-7-trial-t20190909-100702-050",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

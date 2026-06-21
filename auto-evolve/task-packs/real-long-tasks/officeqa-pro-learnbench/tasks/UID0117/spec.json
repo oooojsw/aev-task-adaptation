@@ -1,0 +1,156 @@
+{
+  "id": "officeqa-pro-UID0117",
+  "title": "officeqa-pro-UID0117",
+  "goal": "Solve one OfficeQA Pro grounded reasoning question. Read the Treasury Bulletin PDF material(s), perform the needed multi-step reasoning/calculation, and write only the final answer to workspace/answer.txt.",
+  "taskFamily": "officeqa-pro-learnbench",
+  "domainTags": [
+    "officeqa",
+    "pdf",
+    "grounded-reasoning",
+    "hard-validation"
+  ],
+  "materials": [
+    {
+      "path": "./instruction.md",
+      "label": "task instruction",
+      "role": "human-guidance"
+    },
+    {
+      "path": "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1972_03.pdf",
+      "label": "treasury_bulletin_1972_03.pdf",
+      "role": "source-artifact"
+    },
+    {
+      "path": "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1973_03.pdf",
+      "label": "treasury_bulletin_1973_03.pdf",
+      "role": "source-artifact"
+    },
+    {
+      "path": "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1974_03.pdf",
+      "label": "treasury_bulletin_1974_03.pdf",
+      "role": "source-artifact"
+    },
+    {
+      "path": "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1975_03.pdf",
+      "label": "treasury_bulletin_1975_03.pdf",
+      "role": "source-artifact"
+    },
+    {
+      "path": "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1976_03.pdf",
+      "label": "treasury_bulletin_1976_03.pdf",
+      "role": "source-artifact"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "./workspace/answer.txt",
+      "label": "final answer",
+      "role": "output"
+    },
+    {
+      "path": "./expert-workspace",
+      "label": "expert workspace",
+      "role": "experience-workspace"
+    }
+  ],
+  "editablePaths": [
+    "./workspace",
+    "./expert-workspace"
+  ],
+  "formalPackageRoots": [
+    "./expert-workspace"
+  ],
+  "validators": [
+    {
+      "id": "officeqa-answer-validate",
+      "type": "script",
+      "title": "OfficeQA answer validation",
+      "path": "../../../../../scripts/validate-officeqa-answer.py",
+      "runner": "python",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "args": [
+        "--answer-path",
+        "../../private-answers/UID0117/answer.txt",
+        "--candidate",
+        "./workspace/answer.txt",
+        "--reward",
+        "C:\\Users\\ZhuanZ\\Desktop\\experiment\\datasets\\OfficeQA_code\\reward.py",
+        "--tolerance",
+        "0.01"
+      ],
+      "timeoutMs": 120000
+    }
+  ],
+  "planning": {
+    "agent": "top"
+  },
+  "execution": {
+    "agent": "top"
+  },
+  "validation": {
+    "agent": "top"
+  },
+  "initialGraph": {
+    "planner_summary": "Read the provided Treasury Bulletin PDF(s), locate the relevant table/page, compute the requested value, and output the direct answer.",
+    "completion_validator_ids": [
+      "officeqa-answer-validate"
+    ],
+    "units": [
+      {
+        "id": "inspect-source-docs",
+        "title": "Inspect Source Documents",
+        "goal": "Open/read the provided PDF material(s), identify the exact table/page/values needed for the question, and write concise notes.",
+        "inputs": [
+          "./instruction.md",
+          "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1972_03.pdf",
+          "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1973_03.pdf",
+          "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1974_03.pdf",
+          "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1975_03.pdf",
+          "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1976_03.pdf"
+        ],
+        "depends_on": [],
+        "expected_artifacts": [
+          "./workspace/notes.md"
+        ],
+        "claim": "The source location and required values are identified.",
+        "check_plan": "Notes cite the relevant PDF(s), page/table context, and extracted values.",
+        "validator_ids": [],
+        "retry_budget": 2
+      },
+      {
+        "id": "compute-answer",
+        "title": "Compute Direct Answer",
+        "goal": "Perform the required reasoning or calculation and write only the final answer to workspace/answer.txt.",
+        "inputs": [
+          "./workspace/notes.md",
+          "./instruction.md",
+          "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1972_03.pdf",
+          "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1973_03.pdf",
+          "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1974_03.pdf",
+          "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1975_03.pdf",
+          "C:/Users/ZhuanZ/Desktop/experiment/datasets/OfficeQA_corpus_public/treasury_bulletin_pdfs/treasury_bulletin_1976_03.pdf"
+        ],
+        "depends_on": [
+          "inspect-source-docs"
+        ],
+        "expected_artifacts": [
+          "./workspace/answer.txt"
+        ],
+        "claim": "The direct answer is written with no explanation text.",
+        "check_plan": "Answer file contains only the final answer value.",
+        "validator_ids": [],
+        "retry_budget": 2
+      }
+    ]
+  },
+  "budgets": {
+    "maxAttemptsPerUnit": 3,
+    "maxTotalUnitAttempts": 6,
+    "maxGraphReplans": 1,
+    "maxValidatorCalls": 8,
+    "maxNoProgressCycles": 2,
+    "maxUnitsPerGraph": 4
+  }
+}

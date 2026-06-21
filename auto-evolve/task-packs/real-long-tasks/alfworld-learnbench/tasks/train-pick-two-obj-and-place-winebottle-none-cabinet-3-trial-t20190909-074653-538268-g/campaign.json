@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-train-pick-two-obj-and-place-winebottle-none-cabinet-3-trial-t20190909-074653-538268-g",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

@@ -136,7 +136,7 @@ Located at `experience/workspace/`. Contains Markdown expert knowledge files. Pe
 - `config.json` — Main config (paths, limits, defaults). `maxRetriesPerCase: 3`, `maxMaintenanceRoundsPerAttempt: 3`, `roundCaseLimit: 5`, `regressionSampleSize: 3`, `defaultMethod: "sequential-refine"`.
 - `permission-config.json` — `"open"` (no restrictions) or `"restricted"` (phase-based read/write boundaries). Default: `"open"`.
 - `judge-config.json` — Judge mode (`soft_only` or `soft_plus_hard`) and auto-run skill IDs. Default: `"soft_plus_hard"` with skills `exact-output`, `tool-failures`, `session-behavior`.
-- `model-config.json` — Per-phase model selection (bootstrap, solve, refine, verify, regression). Default model: `minimax-cn-coding-plan/MiniMax-M2.7`, rate limit: 14 RPM.
+- `model-config.json` — Per-phase model selection (bootstrap, solve, refine, verify, regression). Default model: `alibaba-coding-plan-cn/qwen3.6-plus`, rate limit: 14 RPM.
 
 ### OpenCode Integration
 

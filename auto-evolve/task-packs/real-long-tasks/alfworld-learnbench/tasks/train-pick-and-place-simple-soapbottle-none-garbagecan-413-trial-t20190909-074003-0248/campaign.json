@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-train-pick-and-place-simple-soapbottle-none-garbagecan-413-trial-t20190909-074003-0248",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

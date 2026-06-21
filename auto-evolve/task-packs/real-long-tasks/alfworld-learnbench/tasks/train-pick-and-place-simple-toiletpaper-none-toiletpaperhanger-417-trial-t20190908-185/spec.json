@@ -1,0 +1,124 @@
+{
+  "id": "alfworld-train-pick-and-place-simple-toiletpaper-none-toiletpaperhanger-417-trial-t20190908-185",
+  "title": "alfworld-train-pick-and-place-simple-toiletpaper-none-toiletpaperhanger-417-trial-t20190908-185",
+  "goal": "Solve one ALFWorld multi-step planning task.\nRead instruction.md and problem.json, infer the ordered environment actions, and write exactly one JSON file at workspace/plan.json.\nThe JSON schema must be: {\"actions\":[\"action 1\",\"action 2\", ...]}\nActions must use the TextWorld/ALFWorld natural command style, such as `go to ...`, `open ...`, `take ... from ...`, `put ... in/on ...`, `use ...`, `heat ...`, `cool ...`, `clean ...`, or `slice ...`.",
+  "taskFamily": "alfworld-learnbench",
+  "domainTags": [
+    "alfworld",
+    "embodied-planning",
+    "multi-step-actions",
+    "hard-validation"
+  ],
+  "materials": [
+    {
+      "path": "./instruction.md",
+      "label": "task instruction",
+      "role": "human-guidance"
+    },
+    {
+      "path": "./problem.json",
+      "label": "sanitized ALFWorld PDDL problem",
+      "role": "source-artifact"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "./workspace/plan.json",
+      "label": "action plan",
+      "role": "output"
+    },
+    {
+      "path": "./expert-workspace",
+      "label": "expert workspace",
+      "role": "experience-workspace"
+    }
+  ],
+  "editablePaths": [
+    "./workspace",
+    "./expert-workspace"
+  ],
+  "formalPackageRoots": [
+    "./expert-workspace"
+  ],
+  "validators": [
+    {
+      "id": "alfworld-plan-validate",
+      "type": "script",
+      "title": "ALFWorld action walkthrough validation",
+      "path": "../../../../../scripts/validate-alfworld-plan.py",
+      "runner": "python",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "args": [
+        "--answer",
+        "../../private-answers/train-pick-and-place-simple-toiletpaper-none-toiletpaperhanger-417-trial-t20190908-185/answer.json",
+        "--candidate",
+        "./workspace/plan.json"
+      ],
+      "timeoutMs": 60000
+    }
+  ],
+  "planning": {
+    "agent": "top"
+  },
+  "execution": {
+    "agent": "top"
+  },
+  "validation": {
+    "agent": "top"
+  },
+  "initialGraph": {
+    "planner_summary": "Interpret the ALFWorld goal and PDDL state, identify object/receptacle locations and required transformations, then write the ordered action plan.",
+    "completion_validator_ids": [
+      "alfworld-plan-validate"
+    ],
+    "units": [
+      {
+        "id": "inspect-state",
+        "title": "Inspect ALFWorld State",
+        "goal": "Read the task and PDDL problem. Identify the goal predicates, relevant object types, candidate objects/receptacles, initial agent location, and any required toggle/clean/heat/cool/slice/pick/place operations.",
+        "inputs": [
+          "./instruction.md",
+          "./problem.json"
+        ],
+        "depends_on": [],
+        "expected_artifacts": [
+          "./workspace/notes.md"
+        ],
+        "claim": "The task goal and relevant state facts are understood.",
+        "check_plan": "Notes list target object type, target receptacle/location if any, and required action families.",
+        "validator_ids": [],
+        "retry_budget": 2
+      },
+      {
+        "id": "write-action-plan",
+        "title": "Write Action Plan",
+        "goal": "Write workspace/plan.json with the ordered ALFWorld action commands needed to satisfy the task.",
+        "inputs": [
+          "./workspace/notes.md",
+          "./instruction.md",
+          "./problem.json"
+        ],
+        "depends_on": [
+          "inspect-state"
+        ],
+        "expected_artifacts": [
+          "./workspace/plan.json"
+        ],
+        "claim": "The plan JSON contains a complete ordered action sequence.",
+        "check_plan": "Ensure the JSON has an actions list and no explanatory text outside JSON.",
+        "validator_ids": [],
+        "retry_budget": 2
+      }
+    ]
+  },
+  "budgets": {
+    "maxAttemptsPerUnit": 3,
+    "maxTotalUnitAttempts": 6,
+    "maxGraphReplans": 1,
+    "maxValidatorCalls": 8,
+    "maxNoProgressCycles": 2,
+    "maxUnitsPerGraph": 4
+  }
+}

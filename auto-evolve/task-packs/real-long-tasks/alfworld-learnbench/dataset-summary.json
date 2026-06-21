@@ -1,0 +1,6 @@
+{
+  "sourceRoot": "C:\\Users\\ZhuanZ\\Desktop\\experiment\\datasets\\ALFWorld",
+  "trainSelected": 20,
+  "testSelected": 10,
+  "note": "Sanitized problem.json excludes walkthrough; private-answers contains hidden walkthrough for product validation."
+}

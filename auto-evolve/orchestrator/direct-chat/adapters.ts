@@ -26,6 +26,8 @@ export async function buildDirectChatDatasetWithAdapter(input: {
   allowOmittedMaterials?: boolean
   extractPdfText?: boolean
   maxPdfCharsPerFile?: number
+  officeqaMaterialMode?: "native-pdf" | "skillopt-oracle-json"
+  officeqaDocsDir?: string
 }) {
   const adapterID = resolveDirectChatAdapterID(input.taskPackRoot, input.adapterID || "auto")
   if (adapterID === "officeqa") {
@@ -38,6 +40,8 @@ export async function buildDirectChatDatasetWithAdapter(input: {
       allowOmittedMaterials: input.allowOmittedMaterials,
       extractPdfText: input.extractPdfText,
       maxPdfCharsPerFile: input.maxPdfCharsPerFile,
+      officeqaMaterialMode: input.officeqaMaterialMode,
+      officeqaDocsDir: input.officeqaDocsDir,
     })
   }
   return await buildGenericTaskPackDirectChatDataset({

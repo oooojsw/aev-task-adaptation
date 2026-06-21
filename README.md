@@ -1,141 +1,184 @@
-<p align="center">
-  <a href="https://opencode.ai">
-    <picture>
-      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
-      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OpenCode logo">
-    </picture>
-  </a>
-</p>
-<p align="center">The open source AI coding agent.</p>
-<p align="center">
-  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/opencode-ai"><img alt="npm" src="https://img.shields.io/npm/v/opencode-ai?style=flat-square" /></a>
-  <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
-</p>
+# OpenCode Auto-Evolve LongTask
 
-<p align="center">
-  <a href="README.md">English</a> |
-  <a href="README.zh.md">简体中文</a> |
-  <a href="README.zht.md">繁體中文</a> |
-  <a href="README.ko.md">한국어</a> |
-  <a href="README.de.md">Deutsch</a> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.fr.md">Français</a> |
-  <a href="README.it.md">Italiano</a> |
-  <a href="README.da.md">Dansk</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.pl.md">Polski</a> |
-  <a href="README.ru.md">Русский</a> |
-  <a href="README.bs.md">Bosanski</a> |
-  <a href="README.ar.md">العربية</a> |
-  <a href="README.no.md">Norsk</a> |
-  <a href="README.br.md">Português (Brasil)</a> |
-  <a href="README.th.md">ไทย</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.uk.md">Українська</a> |
-  <a href="README.bn.md">বাংলা</a> |
-  <a href="README.gr.md">Ελληνικά</a> |
-  <a href="README.vi.md">Tiếng Việt</a>
-</p>
+这是一个基于 OpenCode 改造出来的 Auto-Evolve 长程任务实验系统。它不是原版 OpenCode 的简单镜像，而是在 OpenCode 底座上加入了长程任务、自进化经验区、空白 Agent 闭卷验收、多数据集运行、断点续传、运行看板和验证器体系的一套实验工程。
 
-[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+本仓库的目标是验证一件事：
 
----
+> 能否让多个训练阶段的 Agent 从真实任务中提炼出可复用的专家经验，然后让一个完全没有历史记忆的空白 Agent 只依靠这份经验，在闭卷条件下完成同类任务。
 
-### Installation
+## 目录结构
 
-```bash
-# YOLO
-curl -fsSL https://opencode.ai/install | bash
-
-# Package managers
-npm i -g opencode-ai@latest        # or bun/pnpm/yarn
-scoop install opencode             # Windows
-choco install opencode             # Windows
-brew install anomalyco/tap/opencode # macOS and Linux (recommended, always up to date)
-brew install opencode              # macOS and Linux (official brew formula, updated less)
-sudo pacman -S opencode            # Arch Linux (Stable)
-paru -S opencode-bin               # Arch Linux (Latest from AUR)
-mise use -g opencode               # Any OS
-nix run nixpkgs#opencode           # or github:anomalyco/opencode for latest dev branch
+```text
+auto-evolve/        Auto-Evolve 长程任务系统核心代码
+packages/           OpenCode 底座源码及本项目需要的底层改造
+script/             项目级辅助脚本，例如源码导出脚本
+进度记录/           项目设计、迁移、验证链路、运行策略等长期记录
+进度报告/           任务运行、事故复盘、阶段性实验输出等报告
+README.opencode.md  原版 OpenCode README，作为底座参考保留
 ```
 
-> [!TIP]
-> Remove versions older than 0.1.x before installing.
+其中 `auto-evolve/` 是本项目最重要的目录。后续 Agent 如果接手这个项目，应优先阅读：
 
-### Desktop App (BETA)
-
-OpenCode is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/opencode/releases) or [opencode.ai/download](https://opencode.ai/download).
-
-| Platform              | Download                              |
-| --------------------- | ------------------------------------- |
-| macOS (Apple Silicon) | `opencode-desktop-darwin-aarch64.dmg` |
-| macOS (Intel)         | `opencode-desktop-darwin-x64.dmg`     |
-| Windows               | `opencode-desktop-windows-x64.exe`    |
-| Linux                 | `.deb`, `.rpm`, or AppImage           |
-
-```bash
-# macOS (Homebrew)
-brew install --cask opencode-desktop
-# Windows (Scoop)
-scoop bucket add extras; scoop install extras/opencode-desktop
+```text
+auto-evolve/README.md
 ```
 
-#### Installation Directory
+根目录的 `进度记录/` 和 `进度报告/` 已经从 `auto-evolve/` 下的历史记录合并到上层，方便在仓库首页附近统一查看。README 不再逐条列出这些记录文件，避免把项目首页写成杂乱索引。
 
-The install script respects the following priority order for the installation path:
+## 核心思想
 
-1. `$OPENCODE_INSTALL_DIR` - Custom installation directory
-2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
-3. `$HOME/bin` - Standard user binary directory (if it exists or can be created)
-4. `$HOME/.opencode/bin` - Default fallback
+Auto-Evolve 的核心不是“让模型直接把某一道题做出来”，而是构建一个闭环：
 
-```bash
-# Examples
-OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
-XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
+```text
+真实任务执行 -> 失败/成功轨迹 -> 经验区修订 -> 表面验证 -> 空白 Agent 闭卷验收 -> 产物验证
 ```
 
-### Agents
+关键原则：
 
-OpenCode includes two built-in agents you can switch between with the `Tab` key.
+- 训练阶段可以开卷，用来发现任务规律、失败原因和可迁移方法。
+- 最终证明必须依赖空白 Agent 闭卷验收。
+- 空白 Agent 只能看到原始材料和专家经验区，不能看到答案、历史轨迹、验证器私有输入或系统内部记忆。
+- 专家经验区不能硬编码具体答案，必须写成可复用的操作方法。
+- 验证器分为表面验证和产物验证，分别防止经验作弊和检查最终答案是否正确。
 
-- **build** - Default, full-access agent for development work
-- **plan** - Read-only agent for analysis and code exploration
-  - Denies file edits by default
-  - Asks permission before running bash commands
-  - Ideal for exploring unfamiliar codebases or planning changes
+## 主要模块
 
-Also included is a **general** subagent for complex searches and multistep tasks.
-This is used internally and can be invoked using `@general` in messages.
+### 长程任务执行
 
-Learn more about [agents](https://opencode.ai/docs/agents).
+位置：
 
-### Documentation
+```text
+auto-evolve/orchestrator/long-task/
+auto-evolve/orchestrator/long-task-campaign/
+```
 
-For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/docs).
+负责把复杂任务拆成多轮执行、失败分析、经验修订和断点续传。每个 campaign 会保存状态文件、轮次记录、工作记忆、路由控制和待验收专家经验包。
 
-### Contributing
+### 空白 Agent 验收
 
-If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
+位置：
 
-### Building on OpenCode
+```text
+auto-evolve/orchestrator/blank-eval/
+```
 
-If you are working on a project that's related to OpenCode and is using "opencode" as part of its name, for example "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in any way.
+负责创建无历史上下文的闭卷执行环境。它是系统判断专家经验是否真的有用的核心门槛。
 
-### FAQ
+### 验证器体系
 
-#### How is this different from Claude Code?
+相关位置：
 
-It's very similar to Claude Code in terms of capability. Here are the key differences:
+```text
+auto-evolve/orchestrator/validation-engine/
+auto-evolve/orchestrator/long-task/validators.ts
+auto-evolve/scripts/validate-*.py
+```
 
-- 100% open source
-- Not coupled to any provider. Although we recommend the models we provide through [OpenCode Zen](https://opencode.ai/zen), OpenCode can be used with Claude, OpenAI, Google, or even local models. As models evolve, the gaps between them will close and pricing will drop, so being provider-agnostic is important.
-- Out-of-the-box LSP support
-- A focus on TUI. OpenCode is built by neovim users and the creators of [terminal.shop](https://terminal.shop); we are going to push the limits of what's possible in the terminal.
-- A client/server architecture. This, for example, can allow OpenCode to run on your computer while you drive it remotely from a mobile app, meaning that the TUI frontend is just one of the possible clients.
+验证器大致分为：
 
----
+- Surface Validator：检查专家经验区是否泄露答案、是否满足布局和格式要求。
+- Product Validator：检查空白 Agent 或任务执行产物是否正确。
+- Soft Validator / Judge：用大模型按规则做主观评价或诊断。
+- Regression / Replay Validator：检查合并后的经验是否退化。
 
-**Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+### 运行看板和恢复
+
+相关位置：
+
+```text
+auto-evolve/scripts/update-run-dashboard.ts
+auto-evolve/scripts/run-benchmark-orchestrator.ts
+auto-evolve/orchestrator/run-health.ts
+```
+
+用于集中查看当前任务、判断假活、卡死、恢复中、已完成等状态。真实运行状态不要只看前端卡片，应结合统一看板、`campaign.json`、心跳和 owner PID 判断。
+
+### 数据集和任务包
+
+常见位置：
+
+```text
+auto-evolve/dataset/
+auto-evolve/task-packs/
+```
+
+项目已经接入或规划接入的任务类型包括 OfficeQA、SpreadsheetBench、SearchQA、DocVQA、ALFWorld 等。其中 OfficeQA / SpreadsheetBench / DocVQA / ALFWorld 更适合验证长程任务能力。
+
+## 常用命令
+
+进入项目根目录：
+
+```powershell
+cd "C:\Users\ZhuanZ\Desktop\opencode re\opencode latest"
+```
+
+安装依赖：
+
+```powershell
+bun install
+```
+
+查看 Auto-Evolve CLI：
+
+```powershell
+bun run auto-evolve/cli.ts --help
+```
+
+刷新运行看板：
+
+```powershell
+bun run auto-evolve/scripts/update-run-dashboard.ts
+Get-Content auto-evolve/runtime-state/run-dashboard/active-runs.md
+```
+
+导出项目源码到桌面：
+
+```powershell
+node script/export-project-source-to-desktop.mjs
+```
+
+导出前端源码到桌面：
+
+```powershell
+node script/export-frontend-source-to-desktop.mjs
+```
+
+停止并核查 Auto-Evolve session：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File script/stop-auto-evolve-sessions.ps1
+```
+
+## 运行原则
+
+1. 不要手工替任务补答案。
+2. 不要人工替空白 Agent 修最终产物。
+3. 优先修平台层：状态机、恢复逻辑、验证器、prompt、权限隔离、运行看板。
+4. 原始材料和私有答案必须隔离，不能暴露给空白 Agent。
+5. 长任务异常恢复依赖磁盘状态断点续传，不依赖恢复旧 OpenCode 对话 session。
+6. 运行时产物、缓存、私有数据和大文件不应进入 Git。
+
+## Git 与仓库说明
+
+这个仓库是清理后的公开/私有远端代码仓库版本，已经尽量排除了运行产物、缓存、私有答案、数据集大文件和历史垃圾文件。
+
+如果需要完整实验数据、运行产物或本机历史，需要在本机指定目录查看，不应直接同步到 GitHub。
+
+## 给后续 Agent 的接手顺序
+
+1. 先读根目录 `README.md`，确认这是 OpenCode + Auto-Evolve 的合并工程。
+2. 再读 `auto-evolve/README.md`，了解 Auto-Evolve 的完整架构和红线。
+3. 查看 `进度记录/`，理解最近的设计决策。
+4. 查看 `进度报告/`，理解最近的运行结果和事故复盘。
+5. 刷新运行看板，不要只相信前端 UI。
+6. 修改核心流程后，同步更新 README 或进度记录，避免知识只留在聊天里。
+
+## 原版 OpenCode
+
+原版 OpenCode README 已保存在：
+
+```text
+README.opencode.md
+```
+
+如果需要对照底座能力、安装说明或上游项目介绍，请查看该文件。

@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-eval_in_distribution-pick-and-place-simple-spraybottle-none-garbagecan-409-trial-t20190908-054742-818",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

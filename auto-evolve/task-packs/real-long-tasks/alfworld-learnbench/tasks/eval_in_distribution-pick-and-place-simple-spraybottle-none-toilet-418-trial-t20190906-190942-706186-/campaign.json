@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-eval_in_distribution-pick-and-place-simple-spraybottle-none-toilet-418-trial-t20190906-190942-706186-",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

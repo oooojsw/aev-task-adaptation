@@ -735,6 +735,58 @@ const DEFAULT_CONFIG_JSON = `{
   "judgeConfigFile": "judge-config.json",
   "permissionConfigFile": "permission-config.json",
   "monitorConfigFile": "monitor-config.json",
+  "concurrencyConfigFile": "concurrency-config.json",
+  "modelConfig": {
+    "version": 1,
+    "defaults": {
+      "model": "alibaba-coding-plan-cn/qwen3.6-plus"
+    },
+    "limits": {
+      "requestsPerMinute": 14
+    },
+    "phases": {
+      "bootstrap": {},
+      "solve": {},
+      "refine": {},
+      "verify": {},
+      "regression": {}
+    }
+  },
+  "judgeConfig": {
+    "version": 1,
+    "mode": "soft_plus_hard",
+    "autoRunSkillIDs": ["exact-output", "tool-failures", "session-behavior"]
+  },
+  "permissionConfig": {
+    "version": 1,
+    "mode": "open"
+  },
+  "monitorConfig": {
+    "version": 1,
+    "enabled": true,
+    "autoStart": true,
+    "hostname": "127.0.0.1",
+    "port": 4219,
+    "intervalSeconds": 2,
+    "defaultLimit": 50,
+    "openBrowserOnStart": true
+  },
+  "concurrencyConfig": {
+    "maxConcurrent": 15,
+    "perScopeMaxConcurrent": 5,
+    "maxQueueDepth": 60,
+    "acquireTimeoutMs": 3600000,
+    "minSpawnIntervalMs": 0
+  },
+  "stageConcurrency": {
+    "training": 5,
+    "merge": 1,
+    "hierarchicalMerge": 2,
+    "trainReplay": 3,
+    "testBlank": 3,
+    "testDirectChat": 4,
+    "baseline": 3
+  },
   "defaultMethod": "sequential-refine",
   "defaultPropagationMethod": "single-branch-baseline",
   "maxRetriesPerCase": 3,
@@ -772,7 +824,7 @@ Status: initial third-layer method
 const DEFAULT_MODEL_CONFIG_JSON = `{
   "version": 1,
   "defaults": {
-    "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+    "model": "alibaba-coding-plan-cn/qwen3.6-plus"
   },
   "limits": {
     "requestsPerMinute": 14

@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-train-pick-and-place-simple-statue-none-dresser-319-trial-t20190909-122754-357020-game",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

@@ -59,6 +59,8 @@ export async function callOpenAICompatibleChatCompletions(
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
+    const outputTokenParameter = model.outputTokenParameter || "max_tokens"
+    const outputTokenLimit = { [outputTokenParameter]: model.maxOutputTokens ?? 2048 }
     const response = await fetch(`${baseURL.replace(/\/+$/g, "")}/chat/completions`, {
       method: "POST",
       signal: controller.signal,
@@ -71,7 +73,8 @@ export async function callOpenAICompatibleChatCompletions(
         model: model.model,
         messages,
         temperature: model.temperature ?? 0,
-        max_tokens: model.maxOutputTokens ?? 2048,
+        ...(model.reasoningEffort ? { reasoning_effort: model.reasoningEffort } : {}),
+        ...outputTokenLimit,
       }),
     })
     const text = await response.text()
@@ -85,17 +88,27 @@ export async function callOpenAICompatibleChatCompletions(
       )
     }
     const json = JSON.parse(text)
-    const content = json?.choices?.[0]?.message?.content
+    const message = json?.choices?.[0]?.message
+    const content = typeof message?.content === "string" && message.content.trim() ? message.content : undefined
     if (typeof content !== "string" || !content.trim()) {
-      throw new DirectChatProviderError(`No assistant content returned by ${model.id}`, "parse", undefined, false)
+      const hadReasoning = typeof message?.reasoning_content === "string" && message.reasoning_content.trim()
+      throw new DirectChatProviderError(
+        `No assistant final content returned by ${model.id}${hadReasoning ? "; reasoning content was present but is never scored as an answer" : ""}`,
+        "parse",
+        undefined,
+        false,
+      )
     }
     return {
       content,
       usage: {
         inputTokens: json?.usage?.prompt_tokens,
         outputTokens: json?.usage?.completion_tokens,
+        reasoningTokens: json?.usage?.completion_tokens_details?.reasoning_tokens,
         totalTokens: json?.usage?.total_tokens,
       },
+      resolvedModel: typeof json?.model === "string" ? json.model : undefined,
+      finishReason: typeof json?.choices?.[0]?.finish_reason === "string" ? json.choices[0].finish_reason : undefined,
       raw: json,
     }
   } finally {

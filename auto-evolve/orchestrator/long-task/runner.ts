@@ -38,6 +38,7 @@ import {
   defaultArchiveRecord,
   defaultShadowMemoryRecord,
   initializeLongTaskRun,
+  isolateLongTaskRuntimePaths,
   longTaskPlanPaths,
   longTaskReplanPaths,
   longTaskRunPaths,
@@ -2259,19 +2260,24 @@ export async function runLongTask(input: {
     const { spec, specPath } = await loadLongTaskSpec(input.specPath)
     const runID = createLongTaskRunID(spec.title)
     runtimeScope = runtimeScope ?? longTaskRunRuntimeScope(runID)
+    const runtimeSpec = isolateLongTaskRuntimePaths({
+      spec,
+      sourceSpecPath: specPath,
+      runtimeRoot: path.join(longTaskRunPaths(longTaskPaths(input.cwd), runID).root, "task-workspace"),
+    })
     const progress = createInitialLongTaskProgressState(runID)
     const placeholderGraph = createLongTaskWorkGraph({
       plannerSummary: "Long-task run initialized before graph bootstrap.",
-      completionValidatorIDs: spec.disableCompletionValidators
+      completionValidatorIDs: runtimeSpec.disableCompletionValidators
         ? []
-        : spec.validators.filter((item) => item.required !== false).map((item) => item.id),
+        : runtimeSpec.validators.filter((item) => item.required !== false).map((item) => item.id),
       units: [],
       revision: 0,
     })
 
     const initialized = await initializeLongTaskRun({
       cwd: input.cwd,
-      spec,
+      spec: runtimeSpec,
       workGraph: placeholderGraph,
       progressState: progress,
     })
@@ -2284,16 +2290,16 @@ export async function runLongTask(input: {
       await input.onRuntimePulse?.()
     }
 
-    const graph = spec.initialGraph
+    const graph = runtimeSpec.initialGraph
       ? normalizePlanningGraph(
-          spec.initialGraph as unknown as Record<string, unknown>,
-          spec,
+          runtimeSpec.initialGraph as unknown as Record<string, unknown>,
+          runtimeSpec,
           "spec.initialGraph was invalid",
         )
       : await runPlanningSession({
           cwd: input.cwd,
           configPathCwd: input.cwd,
-          spec,
+          spec: runtimeSpec,
           specPath,
           run: initialized.run,
           phase: "plan",
@@ -2315,7 +2321,7 @@ export async function runLongTask(input: {
     return continueLongTaskLoop({
       cwd: input.cwd,
       configPathCwd: input.cwd,
-      spec,
+      spec: runtimeSpec,
       run: initialized.run,
       runtimeScope,
       onActivation: activateRun,

@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-train-pick-two-obj-and-place-cellphone-none-desk-312-trial-t20190908-122207-451470-gam",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

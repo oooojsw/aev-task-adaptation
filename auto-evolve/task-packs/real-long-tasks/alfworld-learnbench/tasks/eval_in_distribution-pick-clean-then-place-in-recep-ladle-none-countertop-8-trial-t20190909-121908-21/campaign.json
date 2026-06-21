@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-eval_in_distribution-pick-clean-then-place-in-recep-ladle-none-countertop-8-trial-t20190909-121908-21",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

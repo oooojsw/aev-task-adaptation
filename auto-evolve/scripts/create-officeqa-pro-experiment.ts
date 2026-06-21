@@ -18,11 +18,17 @@ const uidsFile = process.env.OFFICEQA_PRO_UIDS_FILE
 // directory, or copy any PDF. It only prints the planned actions and exits.
 // Recommended: keep this on whenever you are about to regenerate task specs.
 const dryRun = process.env.OFFICEQA_PRO_DRY_RUN === "1"
+const explicitSplitName =
+  typeof process.env.OFFICEQA_PRO_SPLIT_NAME === "string" && process.env.OFFICEQA_PRO_SPLIT_NAME.trim()
+    ? process.env.OFFICEQA_PRO_SPLIT_NAME.trim()
+    : null
 // MISSING_ONLY: when set, only UIDs whose task directory does not exist get
 // materialized. Already-materialized task directories are skipped entirely
 // (no spec.json rewrite, no answer.txt overwrite, no PDF re-copy). This is
 // the safe way to top up a true-training-set list against an existing pack.
 const missingOnly = process.env.OFFICEQA_PRO_MISSING_ONLY === "1"
+const materialMode = process.env.OFFICEQA_PRO_MATERIAL_MODE === "reference" ? "reference" : "copy"
+const writeSelectedSplits = process.env.OFFICEQA_PRO_WRITE_SELECTED_SPLITS !== "0"
 // PRESERVE_EXISTING: when set, existing task directory runtime artifacts
 // (workspace/, expert-workspace/, validation-expert-workspace/, materials/*.pdf)
 // are snapshotted to <outRoot>/.task-snapshots/<timestamp>/<UID>/ before any
@@ -282,9 +288,13 @@ async function writeTask(row: Row) {
   for (const sourceFile of sourceFiles) {
     const pdfName = pdfNameFromSourceFile(sourceFile)
     const src = path.join(corpusPdfRoot, pdfName)
-    const dst = path.join(materialsDir, pdfName)
-    await copyFile(src, dst)
-    copiedPdfs.push(`./materials/${pdfName}`)
+    if (materialMode === "copy") {
+      const dst = path.join(materialsDir, pdfName)
+      await copyFile(src, dst)
+      copiedPdfs.push(`./materials/${pdfName}`)
+    } else {
+      copiedPdfs.push(src.replace(/\\/g, "/"))
+    }
   }
 
   const instruction = [
@@ -449,13 +459,23 @@ async function main() {
   } else {
     rows = sortedByStableHash(allRows).slice(0, taskLimit)
   }
+  const { existsSync } = await import("node:fs")
+  const missingPdfFiles: string[] = []
+  for (const row of rows) {
+    for (const sourceFile of splitLines(row.source_files)) {
+      const pdfPath = path.join(corpusPdfRoot, pdfNameFromSourceFile(sourceFile))
+      if (!existsSync(pdfPath)) missingPdfFiles.push(`${row.uid}: ${pdfPath}`)
+    }
+  }
+  if (missingPdfFiles.length > 0) {
+    throw new Error(`Missing ${missingPdfFiles.length} OfficeQA source PDFs:\n${missingPdfFiles.join("\n")}`)
+  }
   const trainSelected = rows.slice(0, Math.min(trainLimit, rows.length))
   const testSelected = rows.slice(trainSelected.length, Math.min(trainSelected.length + testLimit, rows.length))
 
   if (dryRun) {
     // Dry-run: print the plan, do NOT touch the filesystem.
     // Probe existing task dirs so the user sees the actual skip count.
-    const { existsSync } = await import("node:fs")
     const existing = rows.filter((r) => existsSync(path.join(outRoot, "tasks", r.uid))).map((r) => r.uid)
     const wouldCreate = missingOnly ? rows.length - existing.length : rows.length
     console.log(
@@ -467,16 +487,21 @@ async function main() {
           csvPath,
           uidsFile: uidsFile ?? null,
           explicitUids: explicitUids?.length ?? null,
+          materialMode,
+          writeSelectedSplits,
           trainSelected,
           testSelected,
           wouldCreateTaskDirs: wouldCreate,
           wouldSkipExisting: missingOnly ? existing.length : 0,
           existingSkippedUIDs: missingOnly ? existing : [],
-          wouldWriteSplit: explicitUids
-            ? `train-${explicitUids.length}-skillopt.json`
-            : taskLimit === 5
-              ? "first-five.json"
-              : `first-${taskLimit}.json`,
+          missingPdfFiles,
+          wouldWriteSplit:
+            explicitSplitName ??
+            (explicitUids
+              ? `train-${explicitUids.length}-skillopt.json`
+              : taskLimit === 5
+                ? "first-five.json"
+                : `first-${taskLimit}.json`),
           wouldWriteSeedWorkspace: true,
           wouldWriteConfigs: true,
           wouldOverwriteExistingAnswerTxt: !preserveExisting,
@@ -522,17 +547,21 @@ async function main() {
   }
   const trainIDs = trainSelected.map((row) => row.uid)
   const testIDs = testSelected.map((row) => row.uid)
-  const splitName = explicitUids
-    ? `train-${explicitUids.length}-skillopt.json`
-    : taskLimit === 5
-      ? "first-five.json"
-      : `first-${taskLimit}.json`
+  const splitName =
+    explicitSplitName ??
+    (explicitUids
+      ? `train-${explicitUids.length}-skillopt.json`
+      : taskLimit === 5
+        ? "first-five.json"
+        : `first-${taskLimit}.json`)
   await writeFile(path.join(outRoot, "splits", splitName), JSON.stringify(ids, null, 2), "utf8")
-  await writeFile(path.join(outRoot, "splits", "train-selected.json"), JSON.stringify(trainIDs, null, 2), "utf8")
-  await writeFile(path.join(outRoot, "splits", "test-selected.json"), JSON.stringify(testIDs, null, 2), "utf8")
-  await writeFile(path.join(outRoot, "splits", "train-20.json"), JSON.stringify(trainIDs.slice(0, 20), null, 2), "utf8")
-  await writeFile(path.join(outRoot, "splits", "test-10.json"), JSON.stringify(testIDs.slice(0, 10), null, 2), "utf8")
-  if (taskLimit === 5) {
+  if (writeSelectedSplits) {
+    await writeFile(path.join(outRoot, "splits", "train-selected.json"), JSON.stringify(trainIDs, null, 2), "utf8")
+    await writeFile(path.join(outRoot, "splits", "test-selected.json"), JSON.stringify(testIDs, null, 2), "utf8")
+    await writeFile(path.join(outRoot, "splits", "train-20.json"), JSON.stringify(trainIDs.slice(0, 20), null, 2), "utf8")
+    await writeFile(path.join(outRoot, "splits", "test-10.json"), JSON.stringify(testIDs.slice(0, 10), null, 2), "utf8")
+  }
+  if (writeSelectedSplits && taskLimit === 5) {
     await writeFile(path.join(outRoot, "splits", "first-5.json"), JSON.stringify(ids, null, 2), "utf8")
   }
   await writeFile(
@@ -543,6 +572,8 @@ async function main() {
         sourceCsv: csvPath,
         uidsFile: uidsFile ?? null,
         splitFile: splitName,
+        materialMode,
+        writeSelectedSplits,
         trainSelected: trainIDs,
         testSelected: testIDs,
         campaignMaxRounds,

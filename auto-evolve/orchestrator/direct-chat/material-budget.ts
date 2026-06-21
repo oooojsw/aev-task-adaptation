@@ -1,90 +1,29 @@
 import { readFileSync } from "node:fs"
+import crypto from "node:crypto"
 import path from "node:path"
 import type { DirectChatMaterial, DirectChatModelConfig, DirectChatPromptAudit } from "./contract"
 import { isCertifiedDocumentAsset, resolveDirectChatProviderCapabilities } from "./providers/capabilities"
 
 export function estimateDirectChatTokens(text: string) {
-  return Math.ceil(text.length / 4)
+  let ascii = 0
+  let nonAscii = 0
+  for (const char of text) {
+    if (char.charCodeAt(0) <= 0x7f) ascii += 1
+    else nonAscii += 1
+  }
+  // Deliberately conservative. The previous chars/4 estimate under-counted
+  // real provider input by roughly 50% on OfficeQA prompts.
+  return Math.ceil(ascii / 3 + nonAscii / 1.2)
 }
 
-function takeApproxTokens(text: string, tokens: number) {
-  const maxChars = Math.max(0, tokens * 4)
-  if (text.length <= maxChars) return { text, truncated: false }
-  if (maxChars <= 200) return { text: text.slice(0, maxChars), truncated: true }
-  const head = Math.floor(maxChars * 0.65)
-  const tail = Math.max(100, maxChars - head - 120)
-  return {
-    text: `${text.slice(0, head)}\n\n[...TRUNCATED_TO_FIT_DIRECT_CHAT_CONTEXT...]\n\n${text.slice(-tail)}`,
-    truncated: true,
-  }
-}
-
-function splitPdfPages(content: string) {
-  const matches = [...content.matchAll(/^#{2,3}\s+Page\s+(\d+)\s*$/gim)]
-  if (!matches.length) return []
-  const pages: Array<{ page: number; text: string }> = []
-  for (let i = 0; i < matches.length; i += 1) {
-    const match = matches[i]!
-    const start = match.index ?? 0
-    const end = i + 1 < matches.length ? matches[i + 1]!.index ?? content.length : content.length
-    pages.push({
-      page: Number(match[1]),
-      text: content.slice(start, end).trim(),
-    })
-  }
-  return pages
-}
-
-function scorePage(page: { page: number; text: string }, material: DirectChatMaterial, question: string) {
-  let score = 0
-  const pageHint = material.metadata?.pageHint
-  if (typeof pageHint === "number") score += Math.max(0, 100 - Math.abs(page.page - pageHint) * 25)
-  const lower = page.text.toLowerCase()
-  const words = question
-    .toLowerCase()
-    .split(/[^a-z0-9]+/g)
-    .filter((word) => word.length >= 4)
-  for (const word of words) if (lower.includes(word)) score += 2
-  return score
-}
-
-function fitMaterialContent(material: DirectChatMaterial, budgetTokens: number, question: string) {
-  const originalTokens = estimateDirectChatTokens(material.content)
-  if (originalTokens <= budgetTokens) {
-    return { content: material.content.trim(), originalTokens, includedTokens: originalTokens, truncated: false }
-  }
-  const pages = splitPdfPages(material.content)
-  if (pages.length) {
-    const sortedPages = pages
-      .map((page) => ({ ...page, score: scorePage(page, material, question) }))
-      .sort((a, b) => b.score - a.score)
-    const selected: typeof sortedPages = []
-    let usedTokens = 0
-    for (const page of sortedPages) {
-      const pageTokens = estimateDirectChatTokens(page.text)
-      if (selected.length && usedTokens + pageTokens > budgetTokens) continue
-      selected.push(page)
-      usedTokens += pageTokens
-      if (usedTokens >= budgetTokens) break
-    }
-    selected.sort((a, b) => a.page - b.page)
-    const rendered = selected.map((page) => page.text).join("\n\n")
-    if (rendered.trim()) {
-      return {
-        content: rendered.trim(),
-        originalTokens,
-        includedTokens: estimateDirectChatTokens(rendered),
-        truncated: true,
-      }
-    }
-  }
-  const fitted = takeApproxTokens(material.content, budgetTokens)
-  return {
-    content: fitted.text.trim(),
-    originalTokens,
-    includedTokens: estimateDirectChatTokens(fitted.text),
-    truncated: fitted.truncated,
-  }
+function sanitizeMaterialForDirectChat(material: DirectChatMaterial) {
+  if (material.id !== "instruction") return material.content
+  return material.content
+    .replace(/^Write the final answer to workspace\/answer\.txt\.\s*$/gim, "")
+    .replace(/^The answer file must contain only the final answer value, with no explanation\.\s*$/gim, "")
+    .replace(/^For example,\s*write\s+`?[^`\r\n]+`?\s+rather than a sentence\.\s*$/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
 }
 
 function mimeFromPath(filePath: string) {
@@ -115,18 +54,38 @@ export function buildBudgetedPrompt(input: {
   question: string
   outputInstruction: string
   materials: DirectChatMaterial[]
+  encodeAssets?: boolean
+  skillAudit?: {
+    tier?: string
+    sourceOriginalTokens?: number
+    selectionTruncated?: boolean
+  }
 }) {
   const promptBudget = resolvePromptBudget(input.model)
   const systemOverheadTokens = 220
   const userOverheadTokens = estimateDirectChatTokens(input.question) + estimateDirectChatTokens(input.outputInstruction) + 220
-  const skillBudget = Math.min(input.model.skillBudgetTokens ?? 6000, Math.max(1000, Math.floor(promptBudget * 0.25)))
+  const skillBudget = input.model.skillBudgetTokens ?? promptBudget
   const skillOriginalTokens = estimateDirectChatTokens(input.skillBundle)
-  const fittedSkill = takeApproxTokens(input.skillBundle.trim(), skillBudget)
-  const includedSkillTokens = estimateDirectChatTokens(fittedSkill.text)
+  const includedSkillTokens = skillOriginalTokens
+  if (input.skillBundle.trim() && includedSkillTokens > skillBudget) {
+    throw new Error(
+      `Direct Chat skill publication exceeds model budget for ${input.model.id}: ${includedSkillTokens}/${skillBudget} estimated tokens. ` +
+        "Publish a smaller direct-chat-skill.md or increase the explicit model budget; automatic truncation is forbidden.",
+    )
+  }
   const materialBudget =
     input.model.materialBudgetTokens ??
     Math.max(1000, promptBudget - systemOverheadTokens - userOverheadTokens - includedSkillTokens)
-  const perMaterialBudget = Math.max(500, Math.floor(materialBudget / Math.max(1, input.materials.length)))
+  const totalMaterialTokens = input.materials.reduce(
+    (sum, material) => sum + estimateDirectChatTokens(sanitizeMaterialForDirectChat(material)),
+    0,
+  )
+  if (totalMaterialTokens > materialBudget) {
+    throw new Error(
+      `Direct Chat materials exceed model budget for ${input.model.id}/${input.caseID}: ${totalMaterialTokens}/${materialBudget} estimated tokens. ` +
+        "The dataset adapter must publish a smaller, auditable material bundle; prompt-layer truncation is forbidden.",
+    )
+  }
 
   const materialAudits: DirectChatPromptAudit["materials"] = []
   const warnings: string[] = []
@@ -140,7 +99,7 @@ export function buildBudgetedPrompt(input: {
         warnings.push(`Model does not declare image input support: ${material.id}`)
       } else if (imageInputMode !== "openai-image-url") {
         warnings.push(`Model ${input.model.id} declares unsupported image input mode ${imageInputMode}: ${material.id}`)
-      } else if (assetPath) {
+      } else if (assetPath && input.encodeAssets !== false) {
         assetParts.push({
           type: "image_url",
           image_url: { url: dataURL(assetPath, material.metadata?.mimeType) },
@@ -158,7 +117,7 @@ export function buildBudgetedPrompt(input: {
       } else if (fileInputMode === "none") {
         warnings.push(`Model does not declare file/PDF input support: ${material.id}`)
       } else if (fileInputMode !== "openai-file-data") {
-        if (fileInputMode === "siliconflow-image-url-pdf" && assetPath) {
+        if (fileInputMode === "siliconflow-image-url-pdf" && assetPath && input.encodeAssets !== false) {
           assetParts.push({
             type: "image_url",
             image_url: { url: dataURL(assetPath, material.metadata?.mimeType) },
@@ -166,7 +125,7 @@ export function buildBudgetedPrompt(input: {
         } else {
           warnings.push(`Model ${input.model.id} declares unsupported file input mode ${fileInputMode}: ${material.id}`)
         }
-      } else if (assetPath) {
+      } else if (assetPath && input.encodeAssets !== false) {
         assetParts.push({
           type: "file",
           file: {
@@ -176,35 +135,27 @@ export function buildBudgetedPrompt(input: {
         })
       }
     }
-    const isInstruction = material.id === "instruction"
-    const budget = isInstruction ? Math.max(perMaterialBudget, 1200) : perMaterialBudget
-    const fitted = fitMaterialContent(material, budget, input.question)
-    if (fitted.truncated) warnings.push(`Material truncated for prompt budget: ${material.id}`)
+    const content = sanitizeMaterialForDirectChat(material)
+    const materialTokens = estimateDirectChatTokens(content)
     materialAudits.push({
       id: material.id,
       title: material.title,
       type: material.type,
-      originalTokens: fitted.originalTokens,
-      includedTokens: fitted.includedTokens,
-      truncated: fitted.truncated,
+      originalTokens: materialTokens,
+      includedTokens: materialTokens,
+      truncated: false,
       pageHint: material.metadata?.pageHint,
       extractedPages: material.metadata?.extractedPages,
     })
-    return [`## ${material.id}: ${material.title}`, `Type: ${material.type}`, fitted.content].join("\n")
+    return [`## ${material.id}: ${material.title}`, `Type: ${material.type}`, content.trim()].join("\n")
   })
 
-  const system = [
-    "You are solving one benchmark question in a single chat response.",
-    "",
-    "The prompt has exactly three useful input sections:",
-    "1. <SKILL> is the expert guidance learned during training. Treat it as a method guide, not as task data.",
-    "2. <QUESTION> is the current test question. Answer this question only.",
-    "3. <MATERIALS> contains the source materials for this question. Some document materials may be OCR text extracted locally from the original PDF. Use these materials as the evidence source.",
-    "",
+  const commonSystemRules = [
     "Your job:",
-    "- Follow the skill to decide how to read the question and materials.",
     "- Find the specific requested values in the materials.",
     "- Do any required arithmetic yourself.",
+    "- Respect wording such as calendar year, fiscal year, month, quarter, total, average, nominal dollars, and percent; do not substitute a nearby table with a different time basis.",
+    "- For document questions with source page hints, prioritize evidence from the hinted page and immediately adjacent pages before using farther pages.",
     "- Return the final answer in the exact requested format.",
     "",
     "Output rule:",
@@ -214,23 +165,50 @@ export function buildBudgetedPrompt(input: {
     "- Do not put explanation, units, markdown, citations, or reasoning anywhere in the response.",
     "- If evidence is hard to read, still provide your best final answer in the required format; do not explain uncertainty.",
     "",
-    "Do not call tools. Do not claim that files are inaccessible. Do not mention this evaluation harness.",
-    "",
-    "<SKILL>",
-    fittedSkill.text.trim() || "(No skill is provided for this baseline run.)",
-    "</SKILL>",
-    "",
-    "DIRECT CHAT OVERRIDE AFTER SKILL:",
-    "- The skill may mention writing files such as workspace/answer.txt. In this Direct Chat run, there is no writable workspace.",
-    "- Convert any 'write answer.txt' instruction into: return the answer inside the <answer> tag.",
-    "- Never output scratch work, calculation logs, checklists, or explanation.",
-    "- If you already know the answer, stop immediately and return only <answer>FINAL_ANSWER_ONLY</answer>.",
-    "- Any response that is not exactly one <answer> tag is invalid.",
-  ].join("\n")
+    "Do not call tools. Do not write files. Do not claim that files are inaccessible. Do not mention this evaluation harness.",
+  ]
+  const skillText = input.skillBundle.trim()
+  const system = (skillText
+    ? [
+        "You are solving one benchmark question in a single chat response.",
+        "",
+        "The prompt has exactly three useful input sections:",
+        "1. <SKILL> is the expert guidance learned during training. Treat it as a method guide, not as task data.",
+        "2. <QUESTION> is the current test question. Answer this question only.",
+        "3. <MATERIALS> contains the source evidence for this question. Use it as the evidence source.",
+        "",
+        "Follow the skill to decide how to read the question and materials.",
+        ...commonSystemRules,
+        "",
+        "<SKILL>",
+        skillText,
+        "</SKILL>",
+        "",
+        "DIRECT CHAT OVERRIDE AFTER SKILL:",
+        "- The skill may mention writing output files. In this Direct Chat run, there is no writable workspace.",
+        "- Convert any file-writing instruction into: return the answer inside the <answer> tag.",
+        "- Ignore skill rules about Python scripts, OCR engines, PDF tools, shell commands, workspace files, tool-call recording, blank-eval, or sandbox setup.",
+        "- Use only the text and assets already present in <MATERIALS>; do not ask to inspect external files.",
+        "- Never output scratch work, calculation logs, checklists, or explanation.",
+        "- Any response that is not exactly one <answer> tag is invalid.",
+      ]
+    : [
+        "You are solving one benchmark question in a single chat response.",
+        "",
+        "Use only the current <QUESTION>, the supplied <MATERIALS>, and the <OUTPUT_INSTRUCTION>.",
+        "There is no external guidance, memory, workspace, or tool access.",
+        "",
+        ...commonSystemRules,
+        "",
+        "Use only the text and assets already present in <MATERIALS>; do not ask to inspect external files.",
+        "Never output scratch work, calculation logs, checklists, or explanation.",
+        "Any response that is not exactly one <answer> tag is invalid.",
+      ]
+  ).join("\n")
   const user = [
     "Use the sections below as follows:",
     "- <QUESTION>: the exact task to solve.",
-    "- <MATERIALS>: OCR/text/source content to inspect for evidence.",
+    "- <MATERIALS>: source evidence already prepared for this model. For OfficeQA SkillOpt mode, these are official parsed page texts from the referenced Treasury Bulletin pages.",
     "- <OUTPUT_INSTRUCTION>: the required final answer shape.",
     "",
     "<QUESTION>",
@@ -251,7 +229,11 @@ export function buildBudgetedPrompt(input: {
     "</OUTPUT_INSTRUCTION>",
   ].join("\n")
   const estimatedPromptTokens = estimateDirectChatTokens(system) + estimateDirectChatTokens(user)
-  if (estimatedPromptTokens > promptBudget) warnings.push(`Estimated prompt tokens exceed budget: ${estimatedPromptTokens}/${promptBudget}`)
+  if (estimatedPromptTokens > promptBudget) {
+    throw new Error(
+      `Estimated Direct Chat prompt exceeds model budget for ${input.model.id}/${input.caseID}: ${estimatedPromptTokens}/${promptBudget}.`,
+    )
+  }
   const audit: DirectChatPromptAudit = {
     schema: "direct-chat-prompt-audit/v1",
     caseID: input.caseID,
@@ -260,8 +242,13 @@ export function buildBudgetedPrompt(input: {
     estimatedPromptTokens,
     skill: {
       originalTokens: skillOriginalTokens,
+      sanitizedTokens: skillOriginalTokens,
       includedTokens: includedSkillTokens,
-      truncated: fittedSkill.truncated,
+      truncated: false,
+      selectionTruncated: Boolean(input.skillAudit?.selectionTruncated),
+      sourceOriginalTokens: input.skillAudit?.sourceOriginalTokens ?? skillOriginalTokens,
+      tier: input.skillAudit?.tier,
+      sha256: crypto.createHash("sha256").update(input.skillBundle).digest("hex"),
     },
     materials: materialAudits,
     warnings,

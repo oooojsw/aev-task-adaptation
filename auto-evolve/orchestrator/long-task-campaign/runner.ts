@@ -2330,13 +2330,35 @@ async function snapshotSeedTarget(seed: LongTaskCampaignSeedTarget, snapshotPath
   await writeExperienceWorkspaceSnapshot(snapshotPath, snapshot)
 }
 
-async function clearNonSeedEditablePaths(baseSpec: LongTaskSpec, seedTargets: LongTaskCampaignSeedTarget[]) {
-  const protectedTargets = new Set(seedTargets.map((item) => path.resolve(item.targetPath)))
-  for (const editablePath of baseSpec.editablePaths ?? []) {
+async function clearNonSeedEditablePaths(input: {
+  baseSpec: LongTaskSpec
+  baseSpecPath: string
+  seedTargets: LongTaskCampaignSeedTarget[]
+}) {
+  const protectedTargets = new Set(input.seedTargets.map((item) => path.resolve(item.targetPath)))
+  for (const editablePath of input.baseSpec.editablePaths ?? []) {
     const resolved = path.resolve(editablePath)
     if (protectedTargets.has(resolved)) continue
+    if (isBaseSpecLocalRuntimePath(input.baseSpecPath, resolved)) continue
     await resetGenericPath(resolved)
   }
+}
+
+function isBaseSpecLocalRuntimePath(baseSpecPath: string, value: string) {
+  const baseDir = path.dirname(path.resolve(baseSpecPath))
+  const relative = path.relative(baseDir, path.resolve(value)).replace(/\\/g, "/")
+  return (
+    relative === "workspace" ||
+    relative.startsWith("workspace/") ||
+    relative === "expert-workspace" ||
+    relative.startsWith("expert-workspace/") ||
+    relative === "validation-expert-workspace" ||
+    relative.startsWith("validation-expert-workspace/")
+  )
+}
+
+function campaignRuntimeSeedTargets(campaignSpec: LongTaskCampaignSpec) {
+  return campaignSpec.seedTargets.filter((seed) => !isBaseSpecLocalRuntimePath(campaignSpec.baseSpecPath, seed.targetPath))
 }
 
 function candidateManifestPaths(workspaceRoot: string) {
@@ -3241,9 +3263,14 @@ async function prepareCampaignRoundState(input: {
   campaignSpec: LongTaskCampaignSpec
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
 }) {
-  await clearNonSeedEditablePaths(input.baseSpec, input.campaignSpec.seedTargets)
-  const primarySeed = primaryExperienceWorkspaceSeedTarget(input.campaignSpec.seedTargets)
-  for (const seedTarget of input.campaignSpec.seedTargets) {
+  const runtimeSeedTargets = campaignRuntimeSeedTargets(input.campaignSpec)
+  await clearNonSeedEditablePaths({
+    baseSpec: input.baseSpec,
+    baseSpecPath: input.campaignSpec.baseSpecPath,
+    seedTargets: runtimeSeedTargets,
+  })
+  const primarySeed = primaryExperienceWorkspaceSeedTarget(runtimeSeedTargets)
+  for (const seedTarget of runtimeSeedTargets) {
     if (seedTarget.resetOnStart === false) continue
     if (
       primarySeed &&
@@ -4493,7 +4520,7 @@ export async function runLongTaskCampaign(input: {
           roundNumber,
           roundPaths,
           runResult,
-          seedTargets: campaignSpec.seedTargets,
+          seedTargets: campaignRuntimeSeedTargets(campaignSpec),
         })
         history.push(harvested.roundRecord)
         lastRoundSummaryPath = harvested.roundRecord.roundSummaryPath
@@ -5321,7 +5348,7 @@ export async function resumeLongTaskCampaign(input: {
           roundNumber,
           roundPaths,
           runResult,
-          seedTargets: campaignSpec.seedTargets,
+          seedTargets: campaignRuntimeSeedTargets(campaignSpec),
         })
         const existingRoundIndex = history.findIndex((record) => record.roundNumber === roundNumber)
         if (existingRoundIndex >= 0) {

@@ -1,4 +1,8 @@
 {
+  "skillInput": {
+    "mode": "full",
+    "headRatio": 0.65
+  },
   "models": {
     "siliconflow-deepseek-v32": {
       "provider": "siliconflow",
@@ -62,19 +66,110 @@
       "opencodeAuthProviderID": "siliconflow-cn",
       "model": "Qwen/Qwen3.6-35B-A3B",
       "temperature": 0,
-      "maxOutputTokens": 1024,
-      "contextWindowTokens": 262144,
-      "skillBudgetTokens": 12000,
+      "maxOutputTokens": 4096,
+      "contextWindowTokens": 65536,
+      "promptBudgetTokens": 61000,
+      "skillBudgetTokens": 40000,
       "materialBudgetTokens": 24000,
       "supportsFileInputs": false,
       "supportsImageInputs": true,
       "fileInputMode": "none",
       "imageInputMode": "openai-image-url",
       "requestBodyExtra": {
-        "enable_thinking": false
+        "enable_thinking": true,
+        "thinking_budget": 512
       },
       "timeoutMs": 180000,
       "concurrency": 2
+    },
+    "siliconflow-qwen3-5-35b-a3b": {
+      "provider": "siliconflow",
+      "transport": "openai-compatible",
+      "baseURL": "https://api.siliconflow.cn/v1",
+      "apiKeyEnv": "SILICONFLOW_API_KEY",
+      "opencodeAuthProviderID": "siliconflow-cn",
+      "model": "Qwen/Qwen3.5-35B-A3B",
+      "temperature": 0,
+      "maxOutputTokens": 4096,
+      "contextWindowTokens": 65536,
+      "promptBudgetTokens": 28000,
+      "skillBudgetTokens": 7000,
+      "materialBudgetTokens": 17000,
+      "supportsFileInputs": false,
+      "supportsImageInputs": true,
+      "fileInputMode": "none",
+      "imageInputMode": "openai-image-url",
+      "requestBodyExtra": {
+        "enable_thinking": true,
+        "thinking_budget": 512
+      },
+      "timeoutMs": 180000,
+      "concurrency": 2
+    },
+    "siliconflow-qwen3-5-4b": {
+      "provider": "siliconflow",
+      "transport": "openai-compatible",
+      "baseURL": "https://api.siliconflow.cn/v1",
+      "apiKeyEnv": "SILICONFLOW_API_KEY",
+      "opencodeAuthProviderID": "siliconflow-cn",
+      "model": "Qwen/Qwen3.5-4B",
+      "temperature": 0,
+      "maxOutputTokens": 128,
+      "contextWindowTokens": 262144,
+      "promptBudgetTokens": 250000,
+      "skillBudgetTokens": 120000,
+      "materialBudgetTokens": 100000,
+      "supportsFileInputs": false,
+      "supportsImageInputs": false,
+      "fileInputMode": "none",
+      "imageInputMode": "none",
+      "requestBodyExtra": {
+        "enable_thinking": false
+      },
+      "timeoutMs": 240000,
+      "concurrency": 2
+    },
+    "qwen-web-current": {
+      "provider": "qwen-web-browser",
+      "transport": "openai-compatible",
+      "baseURL": "http://127.0.0.1:8199/url/chat.qwen.ai/a3b/v1",
+      "apiKey": "local-web-browser",
+      "model": "qwen",
+      "temperature": 0,
+      "maxOutputTokens": 4096,
+      "contextWindowTokens": 65536,
+      "promptBudgetTokens": 48000,
+      "skillBudgetTokens": 8000,
+      "materialBudgetTokens": 32000,
+      "supportsFileInputs": false,
+      "supportsImageInputs": false,
+      "fileInputMode": "none",
+      "imageInputMode": "none",
+      "minIntervalMs": 30000,
+      "timeoutMs": 300000,
+      "concurrency": 1
+    },
+    "qwen-web-qwen3-6-35b-a3b-thinking": {
+      "provider": "qwen-web-browser",
+      "transport": "openai-compatible",
+      "baseURL": "http://127.0.0.1:8199/url/chat.qwen.ai/a3b/v1",
+      "apiKey": "local-web-browser",
+      "model": "qwen",
+      "temperature": 0,
+      "maxOutputTokens": 4096,
+      "contextWindowTokens": 65536,
+      "promptBudgetTokens": 48000,
+      "skillBudgetTokens": 8000,
+      "materialBudgetTokens": 32000,
+      "supportsFileInputs": false,
+      "supportsImageInputs": false,
+      "fileInputMode": "none",
+      "imageInputMode": "none",
+      "expectedWebModel": "qwen3.6-35b-a3b",
+      "expectedThinkingMode": "Thinking",
+      "minIntervalMs": 30000,
+      "timeoutMs": 300000,
+      "concurrency": 1
     },
     "dashscope-qwen-plus": {
       "provider": "dashscope",
@@ -110,6 +205,25 @@
       "timeoutMs": 120000,
       "concurrency": 2
     },
+    "codex-proxy-gpt-5-4-mini": {
+      "provider": "codex-local-proxy",
+      "transport": "openai-compatible",
+      "baseURL": "http://127.0.0.1:8318/v1",
+      "apiKey": "dummy",
+      "model": "gpt-5.4-mini",
+      "temperature": 0,
+      "maxOutputTokens": 4096,
+      "contextWindowTokens": 128000,
+      "promptBudgetTokens": 120000,
+      "skillBudgetTokens": 50000,
+      "materialBudgetTokens": 65000,
+      "supportsFileInputs": false,
+      "supportsImageInputs": false,
+      "fileInputMode": "none",
+      "imageInputMode": "none",
+      "timeoutMs": 300000,
+      "concurrency": 3
+    },
     "mock-smoke": {
       "provider": "mock",
       "transport": "mock",
@@ -129,11 +243,25 @@
     "maxAttempts": 3,
     "backoffMs": 3000
   },
+  "transientRecovery": {
+    "enabled": true,
+    "maxRounds": 2,
+    "delayMs": 30000,
+    "categories": [
+      "network",
+      "timeout",
+      "rate_limit",
+      "provider_5xx"
+    ]
+  },
   "ocrFallback": {
     "enabled": true,
     "mode": "local-umi",
     "pythonBin": "python",
     "helperScriptPath": "C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/auto-evolve/scripts/direct-chat-local-ocr.py",
-    "umiExePath": "E:/project/Umi-OCR_Paddle_v2.1.5/UmiOCR-data/plugins/win7_x64_PaddleOCR-json/PaddleOCR-json.exe"
+    "umiExePath": "E:/project/Umi-OCR_Paddle_v2.1.5/UmiOCR-data/plugins/win7_x64_PaddleOCR-json/PaddleOCR-json.exe",
+    "cacheRoot": "C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/auto-evolve/runtime-state/direct-chat-ocr-cache",
+    "pageWindow": 0,
+    "pdfRenderDpi": 240
   }
 }

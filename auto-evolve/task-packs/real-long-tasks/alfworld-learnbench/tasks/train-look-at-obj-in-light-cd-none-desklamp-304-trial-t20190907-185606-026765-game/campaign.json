@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-train-look-at-obj-in-light-cd-none-desklamp-304-trial-t20190907-185606-026765-game",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

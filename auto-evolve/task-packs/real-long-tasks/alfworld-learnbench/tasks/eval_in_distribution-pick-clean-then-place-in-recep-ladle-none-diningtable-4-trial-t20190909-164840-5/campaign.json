@@ -1,0 +1,15 @@
+{
+  "title": "alfworld-campaign-eval_in_distribution-pick-clean-then-place-in-recep-ladle-none-diningtable-4-trial-t20190909-164840-5",
+  "taskFamily": "alfworld-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 3,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ]
+}

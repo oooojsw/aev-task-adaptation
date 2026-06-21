@@ -1,0 +1,22 @@
+{
+  "title": "officeqa-pro-campaign-UID0222",
+  "taskFamily": "officeqa-pro-learnbench",
+  "mode": "graph_iterative",
+  "baseSpecPath": "./spec.json",
+  "maxRounds": 4,
+  "seedTargets": [
+    {
+      "targetPath": "./expert-workspace",
+      "seedPath": "../../seed-expert-workspace",
+      "kind": "experience_workspace",
+      "resetOnStart": true
+    }
+  ],
+  "surfaceGeneralization": {
+    "enabled": true,
+    "validatorPath": "../../../../../scripts/validate-officeqa-experience-surface.py",
+    "configPath": "../../configs/surface-generalization.json",
+    "blocking": false,
+    "timeoutMs": 60000
+  }
+}
