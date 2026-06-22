@@ -339,6 +339,27 @@ async function runScriptValidator(input: {
     })
   const successExitCodes = input.contract.successExitCodes ?? [0]
   const passedFromExit = !timedOut && successExitCodes.includes(exitCode)
+  const passed = readBooleanField(parsed, "passed", "ok", "success") ?? passedFromExit
+  const parsedSummary = readStringField(parsed, "summary", "message", "result_summary")
+  const summary = parsedSummary
+    ? parsedSummary
+    : timedOut
+      ? `${input.contract.title} timed out after ${timeoutMs} ms.`
+      : passedFromExit
+        ? `${input.contract.title} passed.`
+        : `${input.contract.title} failed with exit code ${exitCode}.`
+  const failureText = [summary, normalizedStderr, stdout].join("\n").toLowerCase()
+  const failureKind = passed
+    ? undefined
+    : timedOut ||
+        (!parsed && !passedFromExit) ||
+        failureText.includes("validator crashed") ||
+        failureText.includes("validator runtime bootstrap failed") ||
+        failureText.includes("usage:") ||
+        failureText.includes("unrecognized arguments") ||
+        failureText.includes("expected one argument")
+      ? ("validator_infrastructure" as const)
+      : ("product_failure" as const)
 
   return {
     id: `validator-${randomUUID().slice(0, 8)}`,
@@ -348,15 +369,10 @@ async function runScriptValidator(input: {
     validatorID: input.contract.id,
     validatorType: "script",
     createdAt: nowISO(),
-    passed: readBooleanField(parsed, "passed", "ok", "success") ?? passedFromExit,
+    passed,
     blocking: readBooleanField(parsed, "blocking", "is_blocking") ?? input.contract.blocking === true,
-    summary: readStringField(parsed, "summary", "message", "result_summary")
-      ? (readStringField(parsed, "summary", "message", "result_summary") as string)
-      : timedOut
-        ? `${input.contract.title} timed out after ${timeoutMs} ms.`
-        : passedFromExit
-          ? `${input.contract.title} passed.`
-          : `${input.contract.title} failed with exit code ${exitCode}.`,
+    failureKind,
+    summary,
     details:
       readDetailsField(parsed).length > 0
         ? readDetailsField(parsed)

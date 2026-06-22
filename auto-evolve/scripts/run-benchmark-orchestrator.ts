@@ -14,13 +14,14 @@ import {
 import { runCoordinatorPhase3Validate } from "../orchestrator/multi-instance/validator"
 import { saveCoordinatorState } from "../orchestrator/multi-instance/repository"
 import { runBlankEval } from "../orchestrator/blank-eval/runner"
-import { pathExists } from "../orchestrator/fs"
+import { pathExists, readJsonFile } from "../orchestrator/fs"
 import { readCampaignHealth, writeRunDashboard } from "../orchestrator/run-health"
 import { buildDirectChatDatasetWithAdapter } from "../orchestrator/direct-chat/adapters"
 import { buildSkillBundle } from "../orchestrator/direct-chat/skill-bundler"
 import { runDirectChatEvaluation } from "../orchestrator/direct-chat/runner"
 import type { DirectChatModelsConfig } from "../orchestrator/direct-chat/contract"
 import { loadConfig } from "../orchestrator/schema"
+import { readAdaptiveModelRuntime } from "../orchestrator/adaptive-concurrency"
 
 type OrchestratorMode = "campaign-only" | "full-pipeline"
 type EvalRunner = "blank-opencode" | "direct-chat"
@@ -60,6 +61,15 @@ type BenchmarkConfig = {
   testTaskIDs?: string[]
   outDir: string
   concurrency: number
+  adaptiveConcurrency?: {
+    enabled: boolean
+    model: string
+    requestedTaskConcurrency: number
+    effectiveTaskConcurrency: number
+    safeOpenCodeConcurrency?: number
+    safeRequestSpacingMs?: number
+    source: "probe-state" | "profile-initial" | "disabled"
+  }
   stageConcurrency: {
     training: number
     merge: number
@@ -126,6 +136,7 @@ type BenchmarkConfig = {
   continueAfterTrainReplayFailure: boolean
   trainLimit?: number
   testLimit?: number
+  campaignRounds?: number
   validateRounds: number
   repairAttempts: number
 }
@@ -326,7 +337,7 @@ async function campaigns(taskPackRoot: string, ids: string[]) {
     if (!(await pathExists(file))) continue
     const raw = await readFile(file, "utf8").catch(() => "")
     if (!raw.trim()) continue
-    const row = JSON.parse(raw) as Record<string, unknown>
+    const row = JSON.parse(raw.replace(/^\uFEFF/, "")) as Record<string, unknown>
     const hit = ids.find((id) => path.resolve(String(row.baseSpecPath ?? "")) === path.resolve(baseSpecPath(taskPackRoot, id)))
     if (!hit) continue
     const cdir = path.join(runtimeCampaignRoot, entry.name)
@@ -495,14 +506,15 @@ async function persistState(stateFile: string, scorecardFile: string, state: Ben
 async function runOneCampaign(config: BenchmarkConfig, pick: { id: string; spec: string; campaign?: string }) {
   const logDir = path.join(config.outDir, "train-queue-logs")
   await mkdir(logDir, { recursive: true })
+  const specPath = await campaignSpecPathForRun(config, pick)
   const args = pick.campaign
-    ? ["run", "cli.ts", "resume-long-task-campaign", "--campaign", pick.campaign, "--spec", pick.spec]
+    ? ["run", "cli.ts", "resume-long-task-campaign", "--campaign", pick.campaign, "--spec", specPath]
     : [
         "run",
         "cli.ts",
         "run-long-task-campaign",
         "--spec",
-        pick.spec,
+        specPath,
         ...(config.resumeRunning ? [] : ["--force-new"]),
       ]
   const child = Bun.spawn([process.execPath, ...args], {
@@ -531,6 +543,42 @@ async function runOneCampaign(config: BenchmarkConfig, pick: { id: string; spec:
   } satisfies TrainQueueResult
 }
 
+async function campaignSpecPathForRun(config: BenchmarkConfig, pick: { id: string; spec: string }) {
+  if (!config.campaignRounds) return pick.spec
+  const sourceSpecPath = path.resolve(pick.spec)
+  const sourceDir = path.dirname(sourceSpecPath)
+  const raw = JSON.parse(await readFile(sourceSpecPath, "utf8").then((text) => text.replace(/^\uFEFF/, ""))) as Record<
+    string,
+    unknown
+  >
+  const resolveFromSource = (value: unknown) => {
+    if (typeof value !== "string" || value.trim().length === 0) return value
+    return path.isAbsolute(value) ? value : path.resolve(sourceDir, value)
+  }
+  const seedTargets = Array.isArray(raw.seedTargets)
+    ? raw.seedTargets.map((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return item
+        const seed = item as Record<string, unknown>
+        return {
+          ...seed,
+          targetPath: resolveFromSource(seed.targetPath),
+          seedPath: resolveFromSource(seed.seedPath),
+        }
+      })
+    : raw.seedTargets
+  const override = {
+    ...raw,
+    baseSpecPath: resolveFromSource(raw.baseSpecPath),
+    seedTargets,
+    maxRounds: config.campaignRounds,
+  }
+  const overrideDir = path.join(config.outDir, "campaign-spec-overrides")
+  await mkdir(overrideDir, { recursive: true })
+  const overridePath = path.join(overrideDir, `${pick.id}.campaign.json`)
+  await writeFile(overridePath, `${JSON.stringify(override, null, 2)}\n`, "utf8")
+  return overridePath
+}
+
 async function queueTrain(
   config: BenchmarkConfig,
   todo: Array<{ id: string; spec: string; campaign?: string }>,
@@ -543,6 +591,25 @@ async function queueTrain(
   let next = 0
   const active = new Set<Promise<void>>()
   const activeIDs = new Map<string, string>()
+  let lastEffectiveCapacity = config.stageConcurrency.training
+
+  const currentTrainingCapacity = async () => {
+    const adaptive = config.adaptiveConcurrency
+    if (!adaptive?.enabled || !adaptive.model) return config.stageConcurrency.training
+    const runtime = await readAdaptiveModelRuntime(repoRoot, adaptive.model)
+    if (!runtime) return adaptive.effectiveTaskConcurrency
+    if (
+      runtime.safeTaskConcurrency <= 0 ||
+      runtime.lastFailureClass === "auth_error" ||
+      runtime.lastFailureClass === "model_unavailable"
+    ) {
+      throw new Error(
+        `Adaptive concurrency blocked training for ${adaptive.model}: ${runtime.lastFailureClass ?? "no safe concurrency"}.`,
+      )
+    }
+    if (runtime.cooldownUntil && Date.parse(runtime.cooldownUntil) > Date.now()) return 0
+    return Math.max(1, Math.min(adaptive.requestedTaskConcurrency, runtime.safeTaskConcurrency))
+  }
 
   const mark = async (id: string, patch: Partial<BenchmarkState["trainResults"][number]>) => {
     const row = state.trainResults.find((item) => item.id === id)
@@ -612,11 +679,23 @@ async function queueTrain(
 
   while (next < todo.length || active.size > 0) {
     await enqueueRecoveriesFromHealth()
-    while (next < todo.length && active.size < config.stageConcurrency.training) {
+    const effectiveCapacity = await currentTrainingCapacity()
+    if (effectiveCapacity !== lastEffectiveCapacity) {
+      lastEffectiveCapacity = effectiveCapacity
+      config.adaptiveConcurrency!.effectiveTaskConcurrency = effectiveCapacity
+      config.stageConcurrency.training = effectiveCapacity
+      config.concurrency = effectiveCapacity
+      await persistState(stateFile, scorecardFile, state)
+    }
+    while (next < todo.length && active.size < effectiveCapacity) {
       await start(todo[next]!)
       next += 1
     }
-    if (active.size > 0) await Promise.race([Promise.race(active), sleep(TRAIN_WATCHDOG_INTERVAL_MS)])
+    if (active.size > 0) {
+      await Promise.race([Promise.race(active), sleep(TRAIN_WATCHDOG_INTERVAL_MS)])
+    } else if (next < todo.length && effectiveCapacity === 0) {
+      await sleep(Math.min(5000, TRAIN_WATCHDOG_INTERVAL_MS))
+    }
     await writeJson(path.join(config.outDir, "train-queue-results.json"), rows)
     await persistState(stateFile, scorecardFile, state)
   }
@@ -661,11 +740,33 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
     }
     const hit = ok.get(inst.id)
     const trainRow = state.trainResults.find((item) => item.id === inst.id)
+    const trainCampaignState = trainRow?.campaignDir
+      ? await readFile(path.join(trainRow.campaignDir, "campaign.json"), "utf8")
+          .then((raw) => JSON.parse(raw.replace(/^\uFEFF/, "")) as Record<string, unknown>)
+          .catch(() => undefined)
+      : undefined
+    const infrastructureFailure = trainCampaignState?.lastGateFailureKind === "infrastructure_failure"
+    const pendingSkillPath =
+      infrastructureFailure
+        ? undefined
+        : hit?.pending ??
+          (trainRow?.campaignDir
+            ? path.join(trainRow.campaignDir, "pending-expert-package", "current")
+            : undefined)
     inst.status = hit ? "passed" : coordinatorStatusFromTrain(trainRow?.status ?? "failed")
     inst.finishedAt = nowISO()
     inst.campaignDir = hit?.cdir ?? trainRow?.campaignDir
-    inst.harvestedSkillPath = hit?.pending
-    inst.errorMessage = hit ? undefined : `training did not reach verified_success: ${trainRow?.status ?? "unknown"}`
+    inst.harvestedSkillPath = pendingSkillPath && (await pathExists(pendingSkillPath)) ? pendingSkillPath : undefined
+    inst.errorMessage = hit
+      ? undefined
+      : [
+          `training did not reach verified_success: ${trainRow?.status ?? "unknown"}`,
+          infrastructureFailure
+            ? "Validator infrastructure failed; the pending skill is quarantined and excluded from merge."
+            : inst.harvestedSkillPath
+            ? "The pending expert package is retained as negative evidence for hierarchical merge."
+            : "No pending expert package was available; merge receives diagnostic metadata only.",
+        ].join(" ")
   }
   await saveCoordinatorState(stateRun)
 
@@ -1236,6 +1337,81 @@ function parsePositiveIntOption(args: string[], names: string[], fallback: numbe
   return fallback
 }
 
+async function resolveAdaptiveTrainingConcurrency(input: {
+  args: string[]
+  requested: number
+  projectConfig: Awaited<ReturnType<typeof loadConfig>>
+}) {
+  const rawConfigPath = path.join(autoRoot, "config.json")
+  const rawConfig = (await readJsonFile<Record<string, any>>(rawConfigPath).catch(() => ({}))) as Record<string, any>
+  const adaptive = rawConfig.adaptiveConcurrency
+  const enabled =
+    !hasFlag(input.args, "--no-adaptive-concurrency") &&
+    (hasFlag(input.args, "--adaptive-concurrency") || adaptive?.enabled === true)
+  const model =
+    getOption(input.args, "--adaptive-model")?.trim() ||
+    input.projectConfig.modelConfig.defaults.model ||
+    input.projectConfig.defaultModel ||
+    ""
+  if (!enabled || !model) {
+    return {
+      effective: input.requested,
+      audit: {
+        enabled: false,
+        model,
+        requestedTaskConcurrency: input.requested,
+        effectiveTaskConcurrency: input.requested,
+        source: "disabled" as const,
+      },
+    }
+  }
+
+  const statePath = path.join(autoRoot, "runtime-state", "model-concurrency", "state.json")
+  const state = await readJsonFile<Record<string, any>>(statePath).catch(() => undefined)
+  const entry = state?.models?.[model]
+  if (entry && typeof entry === "object") {
+    const safeTask = typeof entry.safeTaskConcurrency === "number" ? Math.floor(entry.safeTaskConcurrency) : undefined
+    if (safeTask === 0) {
+      throw new Error(`Adaptive concurrency blocks ${model}: the last probe found no safe task concurrency.`)
+    }
+    if (safeTask && safeTask > 0) {
+      const effective = Math.min(input.requested, safeTask)
+      return {
+        effective,
+        audit: {
+          enabled: true,
+          model,
+          requestedTaskConcurrency: input.requested,
+          effectiveTaskConcurrency: effective,
+          safeOpenCodeConcurrency:
+            typeof entry.safeOpenCodeConcurrency === "number" ? entry.safeOpenCodeConcurrency : undefined,
+          safeRequestSpacingMs:
+            typeof entry.safeRequestSpacingMs === "number" ? entry.safeRequestSpacingMs : undefined,
+          source: "probe-state" as const,
+        },
+      }
+    }
+  }
+
+  const profileName = adaptive?.modelBindings?.[model] || adaptive?.defaultProfile
+  const profile = profileName ? adaptive?.profiles?.[profileName] : undefined
+  const initial =
+    typeof profile?.initialTaskConcurrency === "number" && profile.initialTaskConcurrency > 0
+      ? Math.floor(profile.initialTaskConcurrency)
+      : 1
+  const effective = Math.min(input.requested, initial)
+  return {
+    effective,
+    audit: {
+      enabled: true,
+      model,
+      requestedTaskConcurrency: input.requested,
+      effectiveTaskConcurrency: effective,
+      source: "profile-initial" as const,
+    },
+  }
+}
+
 async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
   const projectConfig = await loadConfig(repoRoot)
   const taskPackRoot = resolveMaybeRelative(getOption(args, "--task-pack-root"))
@@ -1286,6 +1462,13 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
     ),
     baseline: parsePositiveIntOption(args, ["--baseline-concurrency"], projectConfig.stageConcurrency.baseline),
   }
+  const requestedTrainingConcurrency = stageConcurrency.training
+  const adaptiveTraining = await resolveAdaptiveTrainingConcurrency({
+    args,
+    requested: requestedTrainingConcurrency,
+    projectConfig,
+  })
+  stageConcurrency.training = adaptiveTraining.effective
   const concurrency = stageConcurrency.training
   const validateRounds = Math.max(1, Number.parseInt(getOption(args, "--validate-rounds") ?? "1", 10))
   const repairAttempts = Math.max(0, Number.parseInt(getOption(args, "--repair-attempts") ?? "3", 10))
@@ -1389,6 +1572,11 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
   }
   const trainLimitRaw = getOption(args, "--train-limit")
   const testLimitRaw = getOption(args, "--test-limit")
+  const campaignRoundsRaw = getOption(args, "--campaign-rounds") ?? getOption(args, "--rounds")
+  const campaignRounds = campaignRoundsRaw ? Math.max(1, Number.parseInt(campaignRoundsRaw, 10)) : undefined
+  if (campaignRoundsRaw && (!Number.isFinite(campaignRounds) || campaignRounds <= 0)) {
+    throw new Error("Invalid --campaign-rounds/--rounds value. Use a positive integer.")
+  }
   const runMerge = !hasFlag(args, "--skip-merge") && modeOpt !== "campaign-only"
   const runTrainReplay = !hasFlag(args, "--skip-train-replay") && modeOpt !== "campaign-only"
   const runTest = !hasFlag(args, "--skip-test") && modeOpt !== "campaign-only"
@@ -1405,6 +1593,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       testTaskIDs,
       outDir,
       concurrency,
+      adaptiveConcurrency: adaptiveTraining.audit,
       stageConcurrency,
       mode: modeOpt,
       stopAfter,
@@ -1426,6 +1615,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       continueAfterTrainReplayFailure,
       trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
       testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
+      campaignRounds,
       validateRounds,
       repairAttempts,
     }
@@ -1440,6 +1630,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       testTaskIDs,
       outDir,
       concurrency,
+      adaptiveConcurrency: adaptiveTraining.audit,
       stageConcurrency,
       mode: modeOpt,
       stopAfter,
@@ -1461,6 +1652,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       continueAfterTrainReplayFailure,
       trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
       testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
+      campaignRounds,
       validateRounds,
       repairAttempts,
     }
@@ -1475,6 +1667,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       testTaskIDs,
       outDir,
       concurrency,
+      adaptiveConcurrency: adaptiveTraining.audit,
       stageConcurrency,
       mode: modeOpt,
       stopAfter,
@@ -1496,6 +1689,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       continueAfterTrainReplayFailure,
       trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
       testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
+      campaignRounds,
       validateRounds,
       repairAttempts,
     }
@@ -1512,6 +1706,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
     testTaskIDs,
     outDir,
     concurrency,
+    adaptiveConcurrency: adaptiveTraining.audit,
     stageConcurrency,
     mode: modeOpt,
     stopAfter,
@@ -1533,6 +1728,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
     continueAfterTrainReplayFailure,
     trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
     testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
+    campaignRounds,
     validateRounds,
     repairAttempts,
   }

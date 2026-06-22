@@ -15,6 +15,7 @@ import { mkdir, readFile, rm, rename, stat, writeFile } from "node:fs/promises"
 import { setTimeout as sleepMs } from "node:timers/promises"
 import { randomBytes } from "node:crypto"
 import { ensureDirectory, pathExists, runtimePath } from "./fs"
+import { readAdaptiveModelRuntime } from "./adaptive-concurrency"
 
 export interface OpenCodeGateConfig {
   /** Maximum number of OpenCode child processes that may run simultaneously. */
@@ -27,6 +28,8 @@ export interface OpenCodeGateConfig {
   acquireTimeoutMs: number
   /** Optional minimum delay between consecutive grants. */
   minSpawnIntervalMs?: number
+  /** Optional provider/model-specific caps loaded from adaptive concurrency state. */
+  modelLimits?: Record<string, { maxConcurrent: number; minSpawnIntervalMs?: number; cooldownUntil?: string }>
 }
 
 export interface OpenCodeGateStatus {
@@ -69,6 +72,7 @@ interface ActiveSlot {
   id: string
   caller: string
   scope: string
+  model?: string
   ownerPid: number
   acquiredAt: string
   acquiredAtMs: number
@@ -78,6 +82,7 @@ interface QueueSlot {
   id: string
   caller: string
   scope: string
+  model?: string
   ownerPid: number
   enqueuedAt: string
   enqueuedAtMs: number
@@ -88,6 +93,7 @@ interface GateState {
   updatedAt: string
   active: ActiveSlot[]
   queue: QueueSlot[]
+  lastGrantedAtByModel: Record<string, number>
 }
 
 const DEFAULT_CONFIG: OpenCodeGateConfig = {
@@ -96,6 +102,7 @@ const DEFAULT_CONFIG: OpenCodeGateConfig = {
   maxQueueDepth: 60,
   acquireTimeoutMs: 60 * 60 * 1000,
   minSpawnIntervalMs: 0,
+  modelLimits: {},
 }
 
 const LOCK_STALE_MS = 30_000
@@ -110,6 +117,7 @@ let _instance: OpenCodeGate | undefined
 export class OpenCodeGate {
   private metrics = { totalAcquired: 0, totalRejected: 0, totalTimedOut: 0 }
   private config: OpenCodeGateConfig
+  private adaptiveCache = new Map<string, { checkedAt: number; limit?: { maxConcurrent: number; minSpawnIntervalMs?: number; cooldownUntil?: string } }>()
 
   private constructor(config: OpenCodeGateConfig) {
     this.config = config
@@ -134,14 +142,16 @@ export class OpenCodeGate {
     _instance = undefined
   }
 
-  async acquire(meta: { caller: string; scope: string; root: string }): Promise<Permit> {
+  async acquire(meta: { caller: string; scope: string; root: string; model?: string }): Promise<Permit> {
     const start = Date.now()
     const scope = normalizeScope(meta.scope)
+    const model = normalizeModel(meta.model)
     const stateRoot = resolveStateRoot(meta.root)
     const request: QueueSlot = {
       id: randomID(),
       caller: meta.caller,
       scope,
+      model,
       ownerPid: process.pid,
       enqueuedAt: new Date().toISOString(),
       enqueuedAtMs: Date.now(),
@@ -154,6 +164,10 @@ export class OpenCodeGate {
         throw new GateTimeoutError(this.config.acquireTimeoutMs)
       }
 
+      const adaptiveLimit = model ? await this.readDynamicModelLimit(meta.root, model) : undefined
+      const effectiveConfig: OpenCodeGateConfig = adaptiveLimit
+        ? { ...this.config, modelLimits: { ...(this.config.modelLimits ?? {}), [model!]: adaptiveLimit } }
+        : this.config
       const result = await withGateLock(stateRoot, async () => {
         const state = await readState(stateRoot)
         const cleaned = cleanupState(state, this.config.acquireTimeoutMs)
@@ -168,17 +182,19 @@ export class OpenCodeGate {
             updatedAt: new Date().toISOString(),
             active: cleaned.active,
             queue: queue.filter((item) => item.id !== request.id),
+            lastGrantedAtByModel: cleaned.lastGrantedAtByModel,
           })
           throw new GateBusyError(queue.length - 1, this.config.maxQueueDepth)
         }
 
-        const grant = selectGrant(queue, cleaned.active, this.config)
+        const grant = selectGrant(queue, cleaned.active, cleaned.lastGrantedAtByModel, effectiveConfig)
         if (!grant || grant.id !== request.id) {
           await writeState(stateRoot, {
             version: STATE_VERSION,
             updatedAt: new Date().toISOString(),
             active: cleaned.active,
             queue,
+            lastGrantedAtByModel: cleaned.lastGrantedAtByModel,
           })
           return { granted: false as const }
         }
@@ -192,12 +208,16 @@ export class OpenCodeGate {
               id: request.id,
               caller: request.caller,
               scope: request.scope,
+              model: request.model,
               ownerPid: request.ownerPid,
               acquiredAt: new Date().toISOString(),
               acquiredAtMs: Date.now(),
             },
           ],
           queue: queue.filter((item) => item.id !== request.id),
+          lastGrantedAtByModel: request.model
+            ? { ...cleaned.lastGrantedAtByModel, [request.model]: Date.now() }
+            : cleaned.lastGrantedAtByModel,
         }
         await writeState(stateRoot, next)
         return { granted: true as const, id: request.id, caller: request.caller, acquiredAt: new Date() }
@@ -219,7 +239,22 @@ export class OpenCodeGate {
     }
   }
 
-  async run<T>(meta: { caller: string; scope: string; root: string }, fn: () => Promise<T>): Promise<T> {
+  private async readDynamicModelLimit(root: string, model: string) {
+    const cached = this.adaptiveCache.get(model)
+    if (cached && Date.now() - cached.checkedAt < 1000) return cached.limit
+    const runtime = await readAdaptiveModelRuntime(root, model).catch(() => undefined)
+    const limit = runtime
+      ? {
+          maxConcurrent: runtime.safeOpenCodeConcurrency,
+          minSpawnIntervalMs: runtime.safeRequestSpacingMs,
+          cooldownUntil: runtime.cooldownUntil ?? undefined,
+        }
+      : this.config.modelLimits?.[model]
+    this.adaptiveCache.set(model, { checkedAt: Date.now(), limit })
+    return limit
+  }
+
+  async run<T>(meta: { caller: string; scope: string; root: string; model?: string }, fn: () => Promise<T>): Promise<T> {
     const permit = await this.acquire(meta)
     try {
       return await fn()
@@ -247,6 +282,7 @@ export class OpenCodeGate {
         updatedAt: new Date().toISOString(),
         active: state.active.filter((item) => item.id !== id),
         queue: state.queue,
+        lastGrantedAtByModel: state.lastGrantedAtByModel,
       }
       await writeState(stateRoot, next)
     })
@@ -268,22 +304,52 @@ function normalizeScope(scope: string) {
   return scope.trim().toLowerCase().replace(/[^a-z0-9._:-]+/g, "-").replace(/^-+|-+$/g, "") || "default"
 }
 
+function normalizeModel(model: string | undefined) {
+  const value = model?.trim().toLowerCase()
+  return value || undefined
+}
+
 function waitDelay(minSpawnIntervalMs: number | undefined, elapsed: number) {
   if (!minSpawnIntervalMs) return LOCK_POLL_MS
   if (elapsed < minSpawnIntervalMs) return Math.max(LOCK_POLL_MS, minSpawnIntervalMs - elapsed)
   return LOCK_POLL_MS
 }
 
-function selectGrant(queue: QueueSlot[], active: ActiveSlot[], config: OpenCodeGateConfig) {
+function selectGrant(
+  queue: QueueSlot[],
+  active: ActiveSlot[],
+  lastGrantedAtByModel: Record<string, number>,
+  config: OpenCodeGateConfig,
+) {
   const activeByScope = countByScope(active)
+  const activeByModel = countByModel(active)
   const activeTotal = active.length
   if (activeTotal >= config.maxConcurrent) return undefined
   for (const item of queue) {
     const scopeCount = activeByScope.get(item.scope) ?? 0
     if (scopeCount >= config.perScopeMaxConcurrent) continue
+    if (item.model) {
+      const modelLimit = config.modelLimits?.[item.model]
+      if (modelLimit) {
+        if (modelLimit.cooldownUntil && Date.parse(modelLimit.cooldownUntil) > Date.now()) continue
+        const modelCount = activeByModel.get(item.model) ?? 0
+        if (modelCount >= modelLimit.maxConcurrent) continue
+        const lastGrant = lastGrantedAtByModel[item.model] ?? 0
+        if (modelLimit.minSpawnIntervalMs && Date.now() - lastGrant < modelLimit.minSpawnIntervalMs) continue
+      }
+    }
     return item
   }
   return undefined
+}
+
+function countByModel(active: ActiveSlot[]) {
+  const map = new Map<string, number>()
+  for (const item of active) {
+    if (!item.model) continue
+    map.set(item.model, (map.get(item.model) ?? 0) + 1)
+  }
+  return map
 }
 
 function countByScope(active: ActiveSlot[]) {
@@ -304,6 +370,7 @@ function cleanupState(state: GateState, acquireTimeoutMs: number) {
   return {
     active: state.active.filter((item) => isAlive(item.ownerPid) && now - item.acquiredAtMs < acquireTimeoutMs * 2),
     queue: state.queue.filter((item) => isAlive(item.ownerPid) && now - item.enqueuedAtMs < acquireTimeoutMs),
+    lastGrantedAtByModel: state.lastGrantedAtByModel,
   }
 }
 
@@ -320,7 +387,7 @@ function isAlive(pid: number) {
 async function readState(stateRoot: string): Promise<GateState> {
   const target = path.join(stateRoot, "state.json")
   if (!(await pathExists(target))) {
-    return { version: STATE_VERSION, updatedAt: new Date().toISOString(), active: [], queue: [] }
+    return { version: STATE_VERSION, updatedAt: new Date().toISOString(), active: [], queue: [], lastGrantedAtByModel: {} }
   }
   try {
     const raw = JSON.parse(await readFile(target, "utf8")) as Partial<GateState>
@@ -329,9 +396,13 @@ async function readState(stateRoot: string): Promise<GateState> {
       updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString(),
       active: Array.isArray(raw.active) ? raw.active.filter(isActiveSlot) : [],
       queue: Array.isArray(raw.queue) ? raw.queue.filter(isQueueSlot) : [],
+      lastGrantedAtByModel:
+        raw.lastGrantedAtByModel && typeof raw.lastGrantedAtByModel === "object"
+          ? (raw.lastGrantedAtByModel as Record<string, number>)
+          : {},
     }
   } catch {
-    return { version: STATE_VERSION, updatedAt: new Date().toISOString(), active: [], queue: [] }
+    return { version: STATE_VERSION, updatedAt: new Date().toISOString(), active: [], queue: [], lastGrantedAtByModel: {} }
   }
 }
 

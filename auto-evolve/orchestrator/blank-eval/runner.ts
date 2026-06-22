@@ -495,15 +495,28 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
 
     const required = validators.filter((item) => spec.validators.find((v) => v.id === item.validatorID)?.required !== false)
     const passed = required.every((item) => item.passed)
+    const sessionInfrastructureFailure =
+      (task.result.exitCode ?? 0) !== 0 || (task.result as { timedOut?: boolean }).timedOut === true
+    const validatorInfrastructureFailure = required.some(
+      (item) => !item.passed && item.failureKind === "validator_infrastructure",
+    )
+    const failureKind = passed
+      ? undefined
+      : sessionInfrastructureFailure || validatorInfrastructureFailure
+        ? ("validator_infrastructure" as const)
+        : ("product_failure" as const)
     const summary = passed
       ? "Blank eval passed."
-      : short(required.filter((item) => !item.passed).map((item) => item.summary).join(" | "))
+      : sessionInfrastructureFailure
+        ? short(`Blank agent session infrastructure failed with exit code ${task.result.exitCode}. ${task.result.stderr ?? ""}`)
+        : short(required.filter((item) => !item.passed).map((item) => item.summary).join(" | "))
     const result = {
       schema: "blank-eval-result/v1",
       runID,
       sourceID: input.sourceID,
       mode: input.mode ?? "deployment",
       passed,
+      failureKind,
       summary,
       validatorResults: validators,
       validationStageResultPath: validationStage.resultPath,
@@ -517,6 +530,7 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       runID,
       status: passed ? "passed" : "failed",
       passed,
+      failureKind,
       specPath: loaded.specPath,
       skillRoots,
       resultPath,
@@ -530,6 +544,7 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       runID,
       runDir,
       passed,
+      failureKind,
       summary,
       validatorResults: validators,
       sessionExecutionReportPath: artifacts.sessionExecutionReportPath,

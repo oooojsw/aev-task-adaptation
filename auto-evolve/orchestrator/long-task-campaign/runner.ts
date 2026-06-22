@@ -629,6 +629,13 @@ export async function determineCampaignRecoveryDecision(input: {
   state: LongTaskCampaignState
   history: LongTaskCampaignRoundRecord[]
 }) {
+  if (
+    input.state.lastGateFailureKind === "infrastructure_failure" &&
+    input.state.recovery?.action === "harvest_round_run" &&
+    input.state.recovery.runID
+  ) {
+    return input.state.recovery
+  }
   const activeRound = Math.max(1, input.state.currentRound || 1)
   const latestRoundRecord = [...input.history]
     .filter((record) => record.roundNumber === activeRound)
@@ -2519,6 +2526,7 @@ function blankEvalValidatorResult(input: {
   runID?: string
   unitID?: string
   passed: boolean
+  failureKind?: LongTaskValidatorResult["failureKind"]
   summary: string
   details: string[]
   evidenceRefs: string[]
@@ -2534,6 +2542,7 @@ function blankEvalValidatorResult(input: {
     createdAt: nowISO(),
     passed: input.passed,
     blocking: true,
+    failureKind: input.failureKind,
     summary: input.summary,
     details: input.details,
     evidenceRefs: input.evidenceRefs,
@@ -2753,6 +2762,7 @@ function finalizeRoundRecordWithAcceptance(input: {
   roundRecord: LongTaskCampaignRoundRecord
   finalAcceptance?: {
     passed: boolean
+    failureKind?: "product_failure" | "infrastructure_failure"
     summary: string
     validatorResults: Array<{
       validatorID: string
@@ -2775,11 +2785,20 @@ function finalizeRoundRecordWithAcceptance(input: {
   const failedValidatorIDs = input.finalAcceptance.validatorResults
     .filter((item) => !item.passed)
     .map((item) => item.validatorID)
+  const infrastructureFailure = input.finalAcceptance.failureKind === "infrastructure_failure"
   return {
     ...input.roundRecord,
     summary: input.finalAcceptance.summary,
-    roundClosure: input.finalAcceptance.passed ? "closed_success" : "closed_repairable",
-    gateFailureKind: input.finalAcceptance.passed ? undefined : "final_acceptance_failed",
+    roundClosure: input.finalAcceptance.passed
+      ? "closed_success"
+      : infrastructureFailure
+        ? "closed_infra_failure"
+        : "closed_repairable",
+    gateFailureKind: input.finalAcceptance.passed
+      ? undefined
+      : infrastructureFailure
+        ? "infrastructure_failure"
+        : "final_acceptance_failed",
     gateFailureSummary: input.finalAcceptance.passed ? undefined : input.finalAcceptance.summary,
     finalAcceptanceSignal: {
       executed: true,
@@ -4082,9 +4101,10 @@ async function runCampaignFinalAcceptance(input: {
       }
     } else if (!validatorPartitions.productValidators.length) {
       validatorResults.push(
-        blankEvalValidatorResult({
-          passed: false,
-          summary:
+          blankEvalValidatorResult({
+            passed: false,
+            failureKind: "validator_infrastructure",
+            summary:
             "Blank-agent acceptance is not configured: no product validators were found for the blank agent output.",
           details: [
             "Each campaign round must validate the skill by running a clean blank agent and checking its product.",
@@ -4117,6 +4137,7 @@ async function runCampaignFinalAcceptance(input: {
         validatorResults.push(
           blankEvalValidatorResult({
             passed: blankEval.passed,
+            failureKind: blankEval.failureKind,
             summary: blankEval.passed
               ? "Blank-agent acceptance passed: the current skill taught a clean agent to produce a valid product."
               : `Blank-agent acceptance failed: ${blankEval.summary}`,
@@ -4139,6 +4160,7 @@ async function runCampaignFinalAcceptance(input: {
         validatorResults.push(
           blankEvalValidatorResult({
             passed: false,
+            failureKind: "validator_infrastructure",
             summary: `Blank-agent acceptance crashed before completion: ${message}`,
             details: [message],
             evidenceRefs: [bundlePath, validationPackageRoot],
@@ -4158,6 +4180,13 @@ async function runCampaignFinalAcceptance(input: {
   }
 
   const passed = validatorResults.every((result) => result.passed)
+  const failureKind = passed
+    ? undefined
+    : validatorResults.some(
+          (result) => !result.passed && result.failureKind === "validator_infrastructure",
+        )
+      ? ("infrastructure_failure" as const)
+      : ("product_failure" as const)
   const summary = passed
     ? "Campaign final acceptance passed: surface checks and blank-agent product validation both passed."
     : validatorResults
@@ -4170,6 +4199,7 @@ async function runCampaignFinalAcceptance(input: {
     roundNumber: input.roundNumber,
     runID: input.sourceRunID,
     passed,
+    failureKind,
     summary,
     validatorResults,
     bundlePath,
@@ -4949,7 +4979,8 @@ export async function runLongTaskCampaign(input: {
           })
           await writeLongTaskCampaignRoutingControl(campaignPaths, routingAfterAcceptance)
           finalAcceptanceFeedbackPath = acceptancePassResultPath
-          if (!finalAcceptance.passed) {
+          const acceptanceInfrastructureFailure = finalAcceptance.failureKind === "infrastructure_failure"
+          if (!finalAcceptance.passed && !acceptanceInfrastructureFailure) {
             await runBlankAgentAcceptanceDiagnosisWorker({
               cwd: input.cwd,
               campaignSpec,
@@ -4976,7 +5007,7 @@ export async function runLongTaskCampaign(input: {
               onPulse: pulseCampaignRound,
             })
           }
-          if (finalAcceptance.passed) break
+          if (finalAcceptance.passed || acceptanceInfrastructureFailure) break
         }
 
         const finalizedRoundRecord = finalizeRoundRecordWithAcceptance({
@@ -5005,20 +5036,27 @@ export async function runLongTaskCampaign(input: {
           }),
         )
 
+        const acceptanceInfrastructureFailure = finalAcceptance?.failureKind === "infrastructure_failure"
         const nextStatus =
-          finalAcceptance?.passed === true
+          acceptanceInfrastructureFailure
+            ? "failed"
+            : finalAcceptance?.passed === true
             ? "verified_success"
             : roundNumber >= campaignSpec.maxRounds
               ? "round_limit_reached"
               : "running"
         const lastRoundClosure =
-          finalAcceptance?.passed === true
+          acceptanceInfrastructureFailure
+            ? "closed_infra_failure"
+            : finalAcceptance?.passed === true
             ? "closed_success"
             : finalAcceptance
               ? "closed_repairable"
               : (finalizedRoundRecord.roundClosure ?? "closed_blocked")
         const lastGateFailureKind =
-          finalAcceptance && !finalAcceptance.passed
+          acceptanceInfrastructureFailure
+            ? "infrastructure_failure"
+            : finalAcceptance && !finalAcceptance.passed
             ? "final_acceptance_failed"
             : finalizedRoundRecord.gateFailureKind
         const lastGateFailureSummary =
@@ -5043,10 +5081,27 @@ export async function runLongTaskCampaign(input: {
           lastRoundClosure,
           lastGateFailureKind,
           lastGateFailureSummary,
+          recovery: acceptanceInfrastructureFailure
+            ? {
+                action: "harvest_round_run",
+                roundNumber,
+                runID: runResult.runID,
+                reason: `Round ${roundID(roundNumber)} stopped at final acceptance because validator infrastructure failed. Resume only after the platform fix; reuse the completed inner run instead of starting a new learning round.`,
+                detectedAt: nowISO(),
+              }
+            : undefined,
         }
         await writeLongTaskCampaignState(campaignPaths, state)
 
         if (nextStatus === "verified_success") {
+          return toCampaignRunResult({
+            campaignID,
+            campaignPaths,
+            state,
+            roundsCompleted: roundNumber,
+          })
+        }
+        if (nextStatus === "failed" && acceptanceInfrastructureFailure) {
           return toCampaignRunResult({
             campaignID,
             campaignPaths,
@@ -5759,7 +5814,8 @@ export async function resumeLongTaskCampaign(input: {
           })
           await writeLongTaskCampaignRoutingControl(campaignPaths, routingAfterAcceptance)
           finalAcceptanceFeedbackPath = acceptancePassResultPath
-          if (!finalAcceptance.passed) {
+          const acceptanceInfrastructureFailure = finalAcceptance.failureKind === "infrastructure_failure"
+          if (!finalAcceptance.passed && !acceptanceInfrastructureFailure) {
             await runBlankAgentAcceptanceDiagnosisWorker({
               cwd: input.cwd,
               campaignSpec,
@@ -5786,7 +5842,7 @@ export async function resumeLongTaskCampaign(input: {
               onPulse: pulseCampaignRound,
             })
           }
-          if (finalAcceptance.passed) break
+          if (finalAcceptance.passed || acceptanceInfrastructureFailure) break
         }
 
         const finalizedRoundRecord = finalizeRoundRecordWithAcceptance({
@@ -5815,20 +5871,27 @@ export async function resumeLongTaskCampaign(input: {
           }),
         )
 
+        const acceptanceInfrastructureFailure = finalAcceptance?.failureKind === "infrastructure_failure"
         const nextStatus =
-          finalAcceptance?.passed === true
+          acceptanceInfrastructureFailure
+            ? "failed"
+            : finalAcceptance?.passed === true
             ? "verified_success"
             : roundNumber >= campaignSpec.maxRounds
               ? "round_limit_reached"
               : "running"
         const lastRoundClosure =
-          finalAcceptance?.passed === true
+          acceptanceInfrastructureFailure
+            ? "closed_infra_failure"
+            : finalAcceptance?.passed === true
             ? "closed_success"
             : finalAcceptance
               ? "closed_repairable"
               : (finalizedRoundRecord.roundClosure ?? "closed_blocked")
         const lastGateFailureKind =
-          finalAcceptance && !finalAcceptance.passed
+          acceptanceInfrastructureFailure
+            ? "infrastructure_failure"
+            : finalAcceptance && !finalAcceptance.passed
             ? "final_acceptance_failed"
             : finalizedRoundRecord.gateFailureKind
         const lastGateFailureSummary =
@@ -5853,10 +5916,27 @@ export async function resumeLongTaskCampaign(input: {
           lastRoundClosure,
           lastGateFailureKind,
           lastGateFailureSummary,
+          recovery: acceptanceInfrastructureFailure
+            ? {
+                action: "harvest_round_run",
+                roundNumber,
+                runID: runResult.runID,
+                reason: `Round ${roundID(roundNumber)} stopped at final acceptance because validator infrastructure failed. Resume only after the platform fix; reuse the completed inner run instead of starting a new learning round.`,
+                detectedAt: nowISO(),
+              }
+            : undefined,
         }
         await writeLongTaskCampaignState(campaignPaths, state)
 
         if (nextStatus === "verified_success") {
+          return toCampaignRunResult({
+            campaignID: input.campaignID,
+            campaignPaths,
+            state,
+            roundsCompleted: roundNumber,
+          })
+        }
+        if (nextStatus === "failed" && acceptanceInfrastructureFailure) {
           return toCampaignRunResult({
             campaignID: input.campaignID,
             campaignPaths,

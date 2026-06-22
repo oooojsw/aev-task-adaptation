@@ -18,6 +18,7 @@ import {
 } from "./fs"
 import { runManagedProcess } from "./managed-process"
 import { OpenCodeGate } from "./opencode-gate"
+import { recordAdaptiveModelOutcome } from "./adaptive-concurrency"
 import {
   resolveTaskArtifactKind,
   taskArtifactPaths,
@@ -145,6 +146,8 @@ export interface OpencodeTaskInput {
   concurrencyScope?: string
   injectPlatformSafetyRules?: boolean
   isolateHostRuntime?: boolean
+  /** Disable only for the dedicated concurrency probe, which writes its own authoritative state. */
+  recordAdaptiveConcurrency?: boolean
   onSpawn?: () => Promise<void> | void
   onPulse?: () => Promise<void> | void
   live?: TaskArtifactInput & {
@@ -1153,6 +1156,7 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
     caller: input.title,
     scope: input.concurrencyScope ?? input.runtimeScope ?? input.title,
     root: input.cwd,
+    model: selectedModel,
   })
 
   try {
@@ -1208,6 +1212,34 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
     result = {
       ...result,
       stderr: `${infrastructureNotes.join("\n")}\n\n${result.stderr}`.trim(),
+    }
+  }
+
+  if (input.recordAdaptiveConcurrency !== false && selectedModel) {
+    try {
+      const adaptive = await recordAdaptiveModelOutcome({
+        cwd: input.cwd,
+        model: selectedModel,
+        exitCode: result.exitCode,
+        text: [result.stderr, result.stdout, result.responseText].filter(Boolean).join("\n"),
+        source: input.title,
+      })
+      if (adaptive) {
+        const gateConfig = OpenCodeGate.instance().getStatus().config
+        OpenCodeGate.configure({
+          modelLimits: {
+            ...(gateConfig.modelLimits ?? {}),
+            [selectedModel.trim().toLowerCase()]: {
+              maxConcurrent: adaptive.safeOpenCodeConcurrency,
+              minSpawnIntervalMs: adaptive.safeRequestSpacingMs,
+              cooldownUntil: adaptive.cooldownUntil ?? undefined,
+            },
+          },
+        })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`Adaptive concurrency outcome update failed: ${message}`)
     }
   }
 

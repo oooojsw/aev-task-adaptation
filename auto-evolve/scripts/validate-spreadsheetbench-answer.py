@@ -3,10 +3,12 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 from typing import Any
 
 from openpyxl import load_workbook
+from openpyxl.utils.cell import range_boundaries
 
 
 def parse_args() -> argparse.Namespace:
@@ -14,8 +16,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("input_json", nargs="?", default=None)
     parser.add_argument("--answer", required=True)
     parser.add_argument("--candidate", required=True)
-    parser.add_argument("--sheet", required=True)
-    parser.add_argument("--range", dest="cell_range", required=True)
+    parser.add_argument("--sheet", default=None)
+    parser.add_argument("--range", dest="cell_range", default=None)
     return parser.parse_args()
 
 
@@ -106,35 +108,147 @@ def norm(v: Any) -> Any:
     return s
 
 
+def clean_sheet_name(value: str | None) -> str:
+    return str(value or "").strip().strip("'").strip('"')
+
+
+def clean_cell_ref(value: str | None) -> str:
+    return str(value or "").strip().replace("\uff1a", ":").strip("'").strip('"')
+
+
+def normalize_cell_range(value: str, max_row: int) -> str:
+    cleaned = clean_cell_ref(value)
+    # Some SpreadsheetBench labels use BD2:308 to mean BD2:BD308.
+    cleaned = re.sub(r"^([A-Za-z]+)(\d+):(\d+)$", r"\1\2:\1\3", cleaned)
+    min_col, min_row, max_col, max_row_bound = range_boundaries(cleaned)
+    if min_row is None:
+        min_row = 1
+    if max_row_bound is None:
+        max_row_bound = max_row
+    return f"{min_col},{min_row},{max_col},{max_row_bound}"
+
+
+def parse_sheet_list(value: str) -> list[str]:
+    raw = clean_sheet_name(value)
+    if not raw:
+        return []
+    return [clean_sheet_name(part) for part in raw.split(",") if clean_sheet_name(part)]
+
+
 def split_sheet_range(sheet_name: str, cell_range: str) -> tuple[str, str]:
-    rng = cell_range.strip()
+    rng = str(cell_range or "").strip()
     if "!" in rng:
         left, right = rng.split("!", 1)
-        left = left.strip().strip("'").strip('"')
-        return left or sheet_name, right.strip()
-    return sheet_name, rng
+        return clean_sheet_name(left) or sheet_name, clean_cell_ref(right)
+    return sheet_name, clean_cell_ref(rng)
 
 
-def read_expected(answer_path: str, sheet_name: str, cell_range: str) -> list[list[Any]]:
-    sheet_name, cell_range = split_sheet_range(sheet_name, cell_range)
-    wb = load_workbook(answer_path, data_only=True, read_only=True)
-    if sheet_name not in wb.sheetnames:
-        raise RuntimeError(f"answer sheet not found: {sheet_name}")
-    ws = wb[sheet_name]
-    rows = []
-    for row in ws[cell_range]:
-        rows.append([norm(cell.value) for cell in row])
-    return rows
+def split_reference_segments(default_sheet: str, cell_range: str) -> list[tuple[str, str]]:
+    """SpreadsheetBench sometimes stores comma-separated refs across sheets."""
+    segments: list[tuple[str, str]] = []
+    current_sheet = default_sheet
+    for raw_part in [item.strip() for item in str(cell_range or "").split(",") if item.strip()]:
+        current_sheet, current_range = split_sheet_range(current_sheet, raw_part)
+        segments.append((current_sheet, current_range))
+    return segments
 
 
-def read_candidate(candidate_path: str) -> list[list[Any]]:
-    with open(candidate_path, "r", encoding="utf-8") as f:
+def resolve_workbook_sheet(sheet_name: str, sheetnames: list[str]) -> str:
+    if sheet_name in sheetnames:
+        return sheet_name
+    stripped = sheet_name.strip()
+    for actual in sheetnames:
+        if actual.strip() == stripped:
+            return actual
+    folded = " ".join(stripped.lower().replace("，", ",").split())
+    for actual in sheetnames:
+        actual_folded = " ".join(actual.strip().lower().replace("，", ",").split())
+        if actual_folded == folded:
+            return actual
+        if actual_folded.startswith(folded + ","):
+            return actual
+    raise RuntimeError(f"answer sheet not found: {sheet_name}")
+
+
+def load_candidate_object(candidate_path: str) -> dict:
+    with open(candidate_path, "r", encoding="utf-8-sig") as f:
         raw = json.load(f)
     if not isinstance(raw, dict):
         raise RuntimeError("candidate json must be an object")
-    values = raw.get("values")
+    return raw
+
+
+def resolve_expected_location(
+    answer_path: str,
+    sheet_name: str | None,
+    cell_range: str | None,
+    candidate: dict,
+) -> tuple[str, str]:
+    candidate_sheet = candidate.get("answer_sheet")
+    candidate_range = candidate.get("answer_position")
+    resolved_range = str(cell_range or candidate_range or "").strip()
+    resolved_sheet = clean_sheet_name(sheet_name)
+    if resolved_range:
+        resolved_sheet, resolved_range = split_sheet_range(resolved_sheet, resolved_range)
+    if not resolved_sheet and isinstance(candidate_sheet, str):
+        resolved_sheet = clean_sheet_name(candidate_sheet)
+    if not resolved_range:
+        raise RuntimeError("answer range is missing; provide --range or candidate answer_position")
+    wb = load_workbook(answer_path, data_only=True, read_only=True)
+    try:
+        sheetnames = list(wb.sheetnames)
+    finally:
+        wb.close()
+    if not resolved_sheet:
+        if len(sheetnames) == 1:
+            resolved_sheet = sheetnames[0]
+        else:
+            raise RuntimeError("answer sheet is missing; provide --sheet or candidate answer_sheet")
+    return resolved_sheet, resolved_range
+
+
+def read_expected(answer_path: str, sheet_name: str, cell_range: str) -> list[list[Any]]:
+    wb = load_workbook(answer_path, data_only=True, read_only=True)
+    rows: list[list[Any]] = []
+    for segment_sheet, segment_range in split_reference_segments(sheet_name, cell_range):
+        target_sheets: list[str]
+        try:
+            target_sheets = [resolve_workbook_sheet(segment_sheet, list(wb.sheetnames))]
+        except RuntimeError:
+            sheet_list = parse_sheet_list(segment_sheet)
+            if len(sheet_list) <= 1:
+                raise
+            target_sheets = [resolve_workbook_sheet(item, list(wb.sheetnames)) for item in sheet_list]
+        for actual_sheet in target_sheets:
+            ws = wb[actual_sheet]
+            min_col, min_row, max_col, max_row = [int(v) for v in normalize_cell_range(segment_range, ws.max_row).split(",")]
+            for row in ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col):
+                rows.append([norm(cell.value) for cell in row])
+    wb.close()
+    return rows
+
+
+def candidate_values_payload(candidate: dict) -> Any:
+    for key in ["values", "matrix", "data", "answer", "value", "result"]:
+        if key in candidate:
+            return candidate.get(key)
+    raise RuntimeError("candidate json must contain values/matrix/data/answer/value/result")
+
+
+def read_candidate(candidate: dict, expected: list[list[Any]]) -> list[list[Any]]:
+    values = candidate_values_payload(candidate)
+    expected_rows = len(expected)
+    expected_cols = len(expected[0]) if expected and expected[0] else 0
     if not isinstance(values, list):
-        raise RuntimeError("candidate json must contain values: list[list]")
+        if expected_rows == 1 and expected_cols == 1:
+            return [[norm(values)]]
+        raise RuntimeError("candidate scalar value is only accepted for a 1x1 expected range")
+    if values and all(not isinstance(row, list) for row in values):
+        if expected_rows == 1:
+            return [[norm(v) for v in values]]
+        if expected_cols == 1 and len(values) == expected_rows:
+            return [[norm(v)] for v in values]
+        raise RuntimeError("candidate flat list is ambiguous; use values: list[list]")
     out: list[list[Any]] = []
     for row in values:
         if not isinstance(row, list):
@@ -175,14 +289,16 @@ def main() -> int:
             }
             print(json.dumps(result, ensure_ascii=False))
             return 0
-        expected = read_expected(answer_path, args.sheet, args.cell_range)
-        got = read_candidate(candidate_path)
+        candidate = load_candidate_object(candidate_path)
+        sheet_name, cell_range = resolve_expected_location(answer_path, args.sheet, args.cell_range, candidate)
+        expected = read_expected(answer_path, sheet_name, cell_range)
+        got = read_candidate(candidate, expected)
         passed, diffs = compare_rows(expected, got)
         result = {
             "passed": passed,
             "blocking": True,
             "summary": "Spreadsheet answer matched." if passed else "Spreadsheet answer mismatch.",
-            "details": diffs if diffs else [f"matched sheet={args.sheet} range={args.cell_range}"],
+            "details": diffs if diffs else [f"matched sheet={sheet_name} range={cell_range}"],
         }
         print(json.dumps(result, ensure_ascii=False))
         return 0

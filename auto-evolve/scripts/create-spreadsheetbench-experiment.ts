@@ -8,7 +8,7 @@ type DatasetRow = {
   spreadsheet_path: string
   instruction_type?: string
   answer_position: string
-  answer_sheet: string
+  answer_sheet?: string | null
   data_position?: string
 }
 
@@ -17,9 +17,15 @@ const sourceRoot = process.env.SPREADSHEETBENCH_ROOT
   ? path.resolve(process.env.SPREADSHEETBENCH_ROOT)
   : path.resolve("C:/Users/ZhuanZ/Desktop/experiment/SpreadsheetBench/all_data_912_v0.1")
 const outRoot = path.join(cwd, "auto-evolve", "task-packs", "real-long-tasks", "spreadsheetbench-learnbench")
-const trainLimit = Number.parseInt(process.env.SPREADSHEETBENCH_TRAIN_LIMIT ?? "40", 10)
-const testLimit = Number.parseInt(process.env.SPREADSHEETBENCH_TEST_LIMIT ?? "10", 10)
+const trainLimitEnv = process.env.SPREADSHEETBENCH_TRAIN_LIMIT
+const testLimitEnv = process.env.SPREADSHEETBENCH_TEST_LIMIT
+const trainLimit = Number.parseInt(trainLimitEnv ?? "40", 10)
+const testLimit = Number.parseInt(testLimitEnv ?? "10", 10)
 const splitRatio = Number.parseFloat(process.env.SPREADSHEETBENCH_SPLIT_RATIO ?? "0.8")
+const splitMode = (process.env.SPREADSHEETBENCH_SPLIT_MODE ?? "stable-hash").trim().toLowerCase()
+const skillOptSplitRoot = process.env.SPREADSHEETBENCH_SKILLOPT_SPLIT_ROOT
+  ? path.resolve(process.env.SPREADSHEETBENCH_SKILLOPT_SPLIT_ROOT)
+  : path.resolve("C:/Users/ZhuanZ/Desktop/SkillOpt/data/spreadsheetbench_id_split")
 
 function hash01(input: string) {
   const h = createHash("sha256").update(input).digest("hex").slice(0, 12)
@@ -38,7 +44,42 @@ function sortedByStableHash(rows: DatasetRow[]) {
     .map((x) => ({ ...x.row, id: x.id }))
 }
 
+type SkillOptSplitItem = {
+  id: string
+  spreadsheet_path?: string
+  instruction_type?: string
+}
+
+async function readSkillOptSplitIDs(split: "train" | "val" | "test") {
+  const splitPath = path.join(skillOptSplitRoot, split, "items.json")
+  const items = JSON.parse(await readFile(splitPath, "utf8")) as SkillOptSplitItem[]
+  return items.map((item) => normID(item.id))
+}
+
+function rowsByIDs(rowsByID: Map<string, DatasetRow & { id: string }>, ids: string[], splitName: string) {
+  const missing = ids.filter((id) => !rowsByID.has(id))
+  if (missing.length > 0) {
+    throw new Error(
+      `SpreadsheetBench SkillOpt ${splitName} split has ${missing.length} IDs missing from sourceRoot dataset.json: ${missing
+        .slice(0, 20)
+        .join(", ")}`,
+    )
+  }
+  return ids.map((id) => rowsByID.get(id)!)
+}
+
 function buildSpec(row: DatasetRow & { id: string }) {
+  const validatorArgs = [
+    "--answer",
+    `../../private-answers/${row.id}/answer.xlsx`,
+    "--candidate",
+    "./workspace/answer.json",
+    ...(typeof row.answer_sheet === "string" && row.answer_sheet.trim()
+      ? ["--sheet", row.answer_sheet.trim()]
+      : []),
+    "--range",
+    row.answer_position,
+  ]
   return {
     id: `spreadsheetbench-${row.id}`,
     title: `spreadsheetbench-${row.id}`,
@@ -71,16 +112,7 @@ function buildSpec(row: DatasetRow & { id: string }) {
         placement: "completion_only",
         required: true,
         blocking: true,
-        args: [
-          "--answer",
-          `../../private-answers/${row.id}/answer.xlsx`,
-          "--candidate",
-          "./workspace/answer.json",
-          "--sheet",
-          row.answer_sheet,
-          "--range",
-          row.answer_position,
-        ],
+        args: validatorArgs,
         timeoutMs: 120000,
       },
     ],
@@ -171,11 +203,33 @@ async function main() {
   const datasetPath = path.join(sourceRoot, "dataset.json")
   const raw = JSON.parse(await readFile(datasetPath, "utf8")) as DatasetRow[]
   const rows = sortedByStableHash(raw)
-  const cut = Math.floor(rows.length * splitRatio)
-  const trainAll = rows.slice(0, cut)
-  const testAll = rows.slice(cut)
-  const trainSelected = trainAll.slice(0, Math.max(1, Math.min(trainLimit, trainAll.length)))
-  const testSelected = testAll.slice(0, Math.max(1, Math.min(testLimit, testAll.length)))
+  let trainAll: (DatasetRow & { id: string })[]
+  let valAll: (DatasetRow & { id: string })[] = []
+  let testAll: (DatasetRow & { id: string })[]
+  let trainSelected: (DatasetRow & { id: string })[]
+  let valSelected: (DatasetRow & { id: string })[] = []
+  let testSelected: (DatasetRow & { id: string })[]
+
+  if (splitMode === "skillopt") {
+    const rowsByID = new Map(rows.map((row) => [normID(row.id), { ...row, id: normID(row.id) }]))
+    const trainIDs = await readSkillOptSplitIDs("train")
+    const valIDs = await readSkillOptSplitIDs("val")
+    const testIDs = await readSkillOptSplitIDs("test")
+    trainAll = rowsByIDs(rowsByID, trainIDs, "train")
+    valAll = rowsByIDs(rowsByID, valIDs, "val")
+    testAll = rowsByIDs(rowsByID, testIDs, "test")
+    const trainLimitValue = trainLimitEnv ? trainLimit : trainAll.length
+    const testLimitValue = testLimitEnv ? testLimit : testAll.length
+    trainSelected = trainAll.slice(0, Math.max(1, Math.min(trainLimitValue, trainAll.length)))
+    valSelected = valAll
+    testSelected = testAll.slice(0, Math.max(1, Math.min(testLimitValue, testAll.length)))
+  } else {
+    const cut = Math.floor(rows.length * splitRatio)
+    trainAll = rows.slice(0, cut)
+    testAll = rows.slice(cut)
+    trainSelected = trainAll.slice(0, Math.max(1, Math.min(trainLimit, trainAll.length)))
+    testSelected = testAll.slice(0, Math.max(1, Math.min(testLimit, testAll.length)))
+  }
 
   await mkdir(path.join(outRoot, "splits"), { recursive: true })
   await mkdir(path.join(outRoot, "tasks"), { recursive: true })
@@ -196,25 +250,58 @@ async function main() {
     "utf8",
   )
 
-  for (const row of [...trainSelected, ...testSelected]) {
+  const rowsToMaterialize = new Map<string, DatasetRow & { id: string }>()
+  for (const row of splitMode === "skillopt" ? [...trainAll, ...valAll, ...testAll] : [...trainSelected, ...testSelected]) {
+    rowsToMaterialize.set(row.id, row)
+  }
+  for (const row of rowsToMaterialize.values()) {
     await ensureTask(row)
   }
 
   await writeFile(path.join(outRoot, "splits", "train-all.json"), JSON.stringify(trainAll.map((x) => x.id), null, 2), "utf8")
+  if (splitMode === "skillopt") {
+    await writeFile(
+      path.join(outRoot, "splits", "train-skillopt-official.json"),
+      JSON.stringify(trainAll.map((x) => x.id), null, 2),
+      "utf8",
+    )
+    await writeFile(
+      path.join(outRoot, "splits", "val-skillopt-official.json"),
+      JSON.stringify(valAll.map((x) => x.id), null, 2),
+      "utf8",
+    )
+    await writeFile(
+      path.join(outRoot, "splits", "test-skillopt-official.json"),
+      JSON.stringify(testAll.map((x) => x.id), null, 2),
+      "utf8",
+    )
+  }
   await writeFile(path.join(outRoot, "splits", "test-all.json"), JSON.stringify(testAll.map((x) => x.id), null, 2), "utf8")
   await writeFile(path.join(outRoot, "splits", "train-selected.json"), JSON.stringify(trainSelected.map((x) => x.id), null, 2), "utf8")
+  if (splitMode === "skillopt") {
+    await writeFile(
+      path.join(outRoot, "splits", "val-selected.json"),
+      JSON.stringify(valSelected.map((x) => x.id), null, 2),
+      "utf8",
+    )
+  }
   await writeFile(path.join(outRoot, "splits", "test-selected.json"), JSON.stringify(testSelected.map((x) => x.id), null, 2), "utf8")
   await writeFile(
     path.join(outRoot, "dataset-summary.json"),
     JSON.stringify(
       {
         sourceRoot,
+        splitMode,
+        skillOptSplitRoot: splitMode === "skillopt" ? skillOptSplitRoot : undefined,
         datasetSize: rows.length,
         splitRatio,
         trainAll: trainAll.length,
+        valAll: valAll.length,
         testAll: testAll.length,
         trainSelected: trainSelected.length,
+        valSelected: valSelected.length,
         testSelected: testSelected.length,
+        materializedTasks: rowsToMaterialize.size,
       },
       null,
       2,
@@ -225,11 +312,15 @@ async function main() {
     JSON.stringify(
       {
         outRoot,
+        splitMode,
         datasetSize: rows.length,
         trainAll: trainAll.length,
+        valAll: valAll.length,
         testAll: testAll.length,
         trainSelected: trainSelected.length,
+        valSelected: valSelected.length,
         testSelected: testSelected.length,
+        materializedTasks: rowsToMaterialize.size,
       },
       null,
       2,

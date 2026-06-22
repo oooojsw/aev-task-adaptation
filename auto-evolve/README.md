@@ -351,11 +351,22 @@ SpreadsheetBench 跑到训练回测结束：
 ```powershell
 bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
   --task-pack-root auto-evolve/task-packs/real-long-tasks/spreadsheetbench-learnbench `
-  --train-split auto-evolve/task-packs/real-long-tasks/spreadsheetbench-learnbench/splits/train-selected.json `
-  --test-split auto-evolve/task-packs/real-long-tasks/spreadsheetbench-learnbench/splits/test-selected.json `
+  --train-split auto-evolve/task-packs/real-long-tasks/spreadsheetbench-learnbench/splits/train-skillopt-official.json `
+  --test-split auto-evolve/task-packs/real-long-tasks/spreadsheetbench-learnbench/splits/test-skillopt-official.json `
   --concurrency 5 `
   --stop-after train-replay
 ```
+
+SpreadsheetBench 当前标准数据集口径是 SkillOpt 官方 split，不再使用旧的 `all_data_912` 前 40 条 selected 子集。生成/刷新任务包时使用：
+
+```powershell
+$env:SPREADSHEETBENCH_SPLIT_MODE = "skillopt"
+Remove-Item Env:\SPREADSHEETBENCH_TRAIN_LIMIT -ErrorAction SilentlyContinue
+Remove-Item Env:\SPREADSHEETBENCH_TEST_LIMIT -ErrorAction SilentlyContinue
+bun run auto-evolve/scripts/create-spreadsheetbench-experiment.ts
+```
+
+该模式会物化官方 `train=80 / val=40 / test=280` 共 400 条任务，并写出 `train-skillopt-official.json`、`val-skillopt-official.json`、`test-skillopt-official.json`。`train-selected.json`、`val-selected.json`、`test-selected.json` 在该模式下也等同官方 split。
 
 单个 ALFWorld 任务，只跑 campaign、不合并：
 
@@ -550,6 +561,58 @@ $env:AUTO_EVOLVE_OPENCODE_SOFT_DEADLINE_MS = "7200000"
 $env:AUTO_EVOLVE_OPENCODE_HARD_TIMEOUT_MS = "10800000"
 ```
 
+## 模型并发 Smoke 探测
+
+新增 `scripts/probe-model-concurrency.ts`，使用真实隔离 OpenCode session 探测某个 provider/model 的可用并发，而不是只做 HTTP ping。正式 probe 状态会同时约束通用 benchmark 的任务并发和 OpenCodeGate 的按模型子 session 并发。
+
+```powershell
+bun run auto-evolve/scripts/probe-model-concurrency.ts `
+  --model alibaba-coding-plan-cn/qwen3.7-plus `
+  --min 1 `
+  --max 3 `
+  --rounds 2
+```
+
+总控配置位于 `config.json` 的 `adaptiveConcurrency`。探测结果写入：
+
+```text
+runtime-state/model-concurrency/state.json
+runtime-state/model-concurrency/report.md
+runtime-state/model-concurrency/probes/<timestamp>-<model>.json
+```
+
+支持 `--dry-run` 验证状态机，不会调用模型；dry-run 写 `state-dry-run.json`，不会污染正式 `state.json`。真实探测按并发等级逐级运行，遇到 `rate_limit`、`provider_busy`、`timeout`、认证错误或模型不可用会停止上探并给出退避建议。
+
+2026-06-22 对 `alibaba-coding-plan-cn/qwen3.7-plus` 的单轮真实 smoke 已确认并发 1 和并发 2 均通过。当前保守建议是：
+
+```text
+safeOpenCodeConcurrency = 2
+safeTaskConcurrency = 1
+safeRequestSpacingMs = 20000
+```
+
+该结果只证明短 session 的并发 2 可用，不等于长程 campaign 可以直接按任务并发 2 运行。因此当前自动折算为任务并发 1。通用 benchmark 请求 `--concurrency 5` 时会记录 requested=5、effective=1；可用 `--no-adaptive-concurrency` 显式关闭保护。
+
+`loadConfig()` 会读取正式 `state.json` 并给 OpenCodeGate 注入按模型限制：当前 Qwen3.7 Plus 同时最多 2 个 OpenCode session，新 session 最小间隔 20 秒。探测脚本会在本进程临时放宽目标模型上限，因此仍能继续向更高级别上探。较低上限的成功复测不会覆盖历史已验证的更高安全并发，只有真实失败会降级。
+
+在线 AIMD 也已接入所有真实 `runOpencodeTask()`：
+
+- 正常返回只代表 provider 传输成功；即使后续任务 validator 判错，也不会错误降低并发。
+- `429/rate_limit` 会将 OpenCode/任务窗口乘性降低、请求间隔翻倍并进入冷却。
+- `provider_busy/timeout` 会减一窗口、增加请求间隔并短暂冷却。
+- `auth_error/model_unavailable` 会把窗口置零并阻断外层补位。
+- 每累计 `successesToIncrease` 个传输成功，OpenCode 窗口加一；达到 3 后任务窗口可从 1 增到 2。
+- 外层 benchmark 在每次补位前重新读取 state；冷却时不启动新 campaign，窗口降低时等待现有任务自然结束。
+- OpenCodeGate 对已排队请求每秒刷新共享模型状态，确保其他进程发生 429 后，旧进程也能及时看到新窗口和 cooldown。
+
+在线变化审计日志：
+
+```text
+runtime-state/model-concurrency/online-events.jsonl
+```
+
+当前 benchmark 不会在 probe TTL 过期时自动调用探测脚本；有正式 state 时直接使用，没有 state 时从 profile 的初始任务并发 1 开始，并由在线 AIMD 继续调整。
+
 注意：
 
 - soft deadline 不是运行中给 agent 追加消息，而是在 session 启动 prompt 中预置自我收敛规则。
@@ -589,6 +652,19 @@ Current safeguards:
 - `orchestrator/multi-instance/validator.ts` rewrites script validator `--candidate` to the generated stage-local target path when building blank-eval specs.
 - `--answer`, `--answer-path`, and `--expected` script arguments are resolved against the source task root when they are relative paths.
 - `scripts/validate-officeqa-answer.py`, `scripts/validate-spreadsheetbench-answer.py`, and `scripts/validate-alfworld-plan.py` now load the validator payload and prefer `targetPaths` / `expectedArtifacts` for candidate resolution.
+- 2026-06-23 SpreadsheetBench validator fix: many official SpreadsheetBench rows have `answer_sheet=null` and only provide `answer_position`. The task generator must not emit `--sheet null`; the spreadsheet hard validator now accepts missing `--sheet`, infers the sheet from `Sheet!Range`, candidate `answer_sheet`, or a single-sheet answer workbook, reads candidate JSON with `utf-8-sig`, and supports single-cell / rectangular / comma-separated ranges. It also supports comma-separated cross-sheet references like `'Sheet1!'A1:A50,'Sheet2!'A1:E20`, strips dirty quotes around sheet/range fragments, tolerates answer workbook sheet names with accidental leading/trailing spaces, normalizes full-width colons such as `G12：J15`, handles full-column ranges such as `A:G`, and repairs missing end columns such as `BD2:308` -> `BD2:BD308`. Candidate JSON remains strict by default but accepts unambiguous common forms: scalar `value/answer/result` for 1x1 ranges, flat lists for single-row or single-column ranges, and `values/matrix/data` for matrix outputs. Local zero-quota smoke now covers all official `train=80 / val=40 / test=280` items with `failures=0`. Any pre-fix run that failed with `argument --sheet: expected one argument` or range parsing errors is an infrastructure failure, not model failure.
+
+### Validator infrastructure circuit breaker (2026-06-23)
+
+Campaign final acceptance now distinguishes `product_failure` from `validator_infrastructure` in code rather than asking Lead/diagnosis agents to infer it from prose.
+
+- Ordinary answer mismatches remain `product_failure`: the diagnosis workers and Lead may improve the skill and continue to another round.
+- Validator timeout/bootstrap failure, non-JSON abnormal exit, argparse/usage failure, missing required argument, or explicit `Validator crashed` becomes `validator_infrastructure`.
+- A blank-agent process that exits non-zero or times out is also infrastructure failure.
+- When pass-01 hits validator infrastructure failure, the campaign skips pass-02, skips the blank-acceptance diagnosis worker, does not feed the failure to Lead, records `closed_infra_failure / infrastructure_failure`, and stops as terminal `failed` instead of consuming another round.
+- The stopped state keeps a same-round `harvest_round_run` recovery marker. A deliberate resume after the platform is fixed reuses the completed inner run instead of starting a new learning round.
+- The benchmark orchestrator treats this `failed` state as terminal and does not auto-requeue it. Pending skills from infrastructure-failed campaigns are quarantined and excluded from hierarchical merge, even when failed skills are otherwise configured as negative evidence.
+- Zero-quota regression command: `bun run auto-evolve/scripts/smoke-validator-infrastructure-circuit-breaker.ts`.
 
 Do not interpret a replay/test failure as a model failure until checking the validator read path. If the blank agent wrote the correct stage-local answer but the validator reports a different predicted value, inspect `validator_input.json`, `targetPaths`, and the script `--candidate` argument first.
 
@@ -654,6 +730,8 @@ Important semantics:
 
 - Successful skills are positive method evidence.
 - Failed / round-limit skills can be included as negative evidence or diagnostics, but must not be promoted as proven solution paths.
+- The benchmark orchestrator now harvests an existing `pending-expert-package/current` from failed or round-limited campaigns when hierarchical merge includes failures. If that package is absent, the instance is explicitly downgraded to metadata-only diagnostics instead of silently pretending its skill was merged.
+- 2026-06-22: SpreadsheetBench official SkillOpt train run was switched from Alibaba Qwen3.7 Plus to `minimax-cn-coding-plan/MiniMax-M2.7` because the Alibaba coding-plan token expired during training. MiniMax uses a dedicated adaptive profile with requested train concurrency 5. The bottom OpenCode gate starts from the last safe value and can now climb from 3 toward max 5 through AIMD after repeated successful calls; online backoff still applies on timeout/rate-limit/auth failures.
 - Level-1 local replay tests only the cases that were originally successful inside that group.
 - If a formerly successful case fails after group merge, the system may run one repair pass to restore the missed method.
 - Repair policy is path-aware: `CORE.md` / `INDEX.md` are append-only; `casebook/*.md` can be rewritten; `meta.json` and `surface_contract.json` can be regenerated.
@@ -993,8 +1071,10 @@ runtime-state/blank-eval-runs/<runID>/task-workspace/expert-workspace
 Auto-Evolve 默认 OpenCode 模型已从 MiniMax 切换到：
 
 ```text
-alibaba-coding-plan-cn/qwen3.6-plus
+alibaba-coding-plan-cn/qwen3.7-plus
 ```
+
+2026-06-22 起，新的 Auto-Evolve/OpenCode 隔离 session 使用 Qwen3.7 Plus；旧 runtime session 保留其启动时的模型，不会被中途切换。
 
 这个切换现在可以直接在项目总配置里改：
 

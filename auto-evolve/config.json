@@ -29,7 +29,7 @@
   "modelConfig": {
     "version": 1,
     "defaults": {
-      "model": "alibaba-coding-plan-cn/qwen3.6-plus"
+      "model": "minimax-cn-coding-plan/MiniMax-M2.7"
     },
     "limits": {
       "requestsPerMinute": 14
@@ -76,6 +76,69 @@
     "testBlank": 3,
     "testDirectChat": 4,
     "baseline": 3
+  },
+  "adaptiveConcurrency": {
+    "enabled": true,
+    "defaultProfile": "conservative",
+    "modelBindings": {
+      "alibaba-coding-plan-cn/qwen3.7-plus": "alibaba-low-concurrency",
+      "alibaba-coding-plan-cn/qwen3.7-max": "alibaba-low-concurrency",
+      "minimax-cn-coding-plan/MiniMax-M2.7": "minimax-balanced"
+    },
+    "profiles": {
+      "minimax-balanced": {
+        "initialTaskConcurrency": 5,
+        "initialOpenCodeConcurrency": 4,
+        "minTaskConcurrency": 1,
+        "maxTaskConcurrency": 5,
+        "minOpenCodeConcurrency": 1,
+        "maxOpenCodeConcurrency": 4,
+        "initialRequestSpacingMs": 15000,
+        "minRequestSpacingMs": 10000,
+        "maxRequestSpacingMs": 90000,
+        "probeBeforeRun": true,
+        "onlineAdjust": true,
+        "strategy": "aimd",
+        "successesToIncrease": 4,
+        "additiveIncrease": 1,
+        "rateLimitDecreaseFactor": 0.5,
+        "timeoutDecrease": 1,
+        "cooldownAfterRateLimitMs": 900000,
+        "cooldownAfterProviderBusyMs": 300000,
+        "cooldownAfterTimeoutMs": 180000,
+        "maxProbeConcurrency": 5,
+        "probeRoundsPerLevel": 1,
+        "probePrompt": "smoke-json",
+        "probeTimeoutMs": 180000,
+        "reuseProbeResultTtlMs": 86400000
+      },
+      "alibaba-low-concurrency": {
+        "initialTaskConcurrency": 1,
+        "initialOpenCodeConcurrency": 1,
+        "minTaskConcurrency": 1,
+        "maxTaskConcurrency": 2,
+        "minOpenCodeConcurrency": 1,
+        "maxOpenCodeConcurrency": 3,
+        "initialRequestSpacingMs": 20000,
+        "minRequestSpacingMs": 10000,
+        "maxRequestSpacingMs": 90000,
+        "probeBeforeRun": true,
+        "onlineAdjust": true,
+        "strategy": "aimd",
+        "successesToIncrease": 3,
+        "additiveIncrease": 1,
+        "rateLimitDecreaseFactor": 0.5,
+        "timeoutDecrease": 1,
+        "cooldownAfterRateLimitMs": 900000,
+        "cooldownAfterProviderBusyMs": 300000,
+        "cooldownAfterTimeoutMs": 180000,
+        "maxProbeConcurrency": 3,
+        "probeRoundsPerLevel": 2,
+        "probePrompt": "smoke-json",
+        "probeTimeoutMs": 120000,
+        "reuseProbeResultTtlMs": 86400000
+      }
+    }
   },
   "directChatConfig": {
     "defaultRunMode": "skill-full",

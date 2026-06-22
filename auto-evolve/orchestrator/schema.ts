@@ -219,7 +219,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   concurrencyConfigFile: "concurrency-config.json",
   directChatConfigFile: "direct-chat-models.example.json",
   defaultAgent: undefined,
-  defaultModel: "alibaba-coding-plan-cn/qwen3.6-plus",
+  defaultModel: "minimax-cn-coding-plan/MiniMax-M2.7",
   defaultVariant: undefined,
   defaultMethod: "sequential-refine",
   defaultPropagationMethod: "single-branch-baseline",
@@ -231,7 +231,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
   modelConfig: {
     version: 1,
     defaults: {
-      model: "alibaba-coding-plan-cn/qwen3.6-plus",
+      model: "minimax-cn-coding-plan/MiniMax-M2.7",
       agent: undefined,
       variant: undefined,
     },
@@ -753,6 +753,36 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
     )
   }
   directChatConfig = normalizeDirectChatConfig(raw.directChatConfig, directChatConfig)
+  const adaptiveConcurrency =
+    raw.adaptiveConcurrency && typeof raw.adaptiveConcurrency === "object"
+      ? (raw.adaptiveConcurrency as Record<string, unknown>)
+      : undefined
+  const adaptiveEnabled = adaptiveConcurrency?.enabled === true
+  const modelLimits: Record<string, { maxConcurrent: number; minSpawnIntervalMs?: number; cooldownUntil?: string }> = {}
+  if (adaptiveEnabled) {
+    const adaptiveStatePath = autoEvolvePath(cwd, "runtime-state", "model-concurrency", "state.json")
+    if (await pathExists(adaptiveStatePath)) {
+      const adaptiveState = await readJsonFile<Record<string, unknown>>(adaptiveStatePath).catch(() => undefined)
+      const models = adaptiveState?.models
+      if (models && typeof models === "object") {
+        for (const [modelID, value] of Object.entries(models as Record<string, unknown>)) {
+          if (!value || typeof value !== "object") continue
+          const entry = value as Record<string, unknown>
+          const maxConcurrent =
+            typeof entry.safeOpenCodeConcurrency === "number" && entry.safeOpenCodeConcurrency > 0
+              ? Math.floor(entry.safeOpenCodeConcurrency)
+              : undefined
+          if (!maxConcurrent) continue
+          const minSpawnIntervalMs =
+            typeof entry.safeRequestSpacingMs === "number" && entry.safeRequestSpacingMs > 0
+              ? Math.floor(entry.safeRequestSpacingMs)
+              : undefined
+          const cooldownUntil = typeof entry.cooldownUntil === "string" ? entry.cooldownUntil : undefined
+          modelLimits[modelID.trim().toLowerCase()] = { maxConcurrent, minSpawnIntervalMs, cooldownUntil }
+        }
+      }
+    }
+  }
   // Apply the loaded concurrency limits to the global gate. This is the only
   // place loadConfig has side-effects on a singleton — it's intentional so
   // that any code path that calls loadConfig (CLI commands, smoke tests,
@@ -763,6 +793,7 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
     maxQueueDepth: concurrencyConfig.maxQueueDepth,
     acquireTimeoutMs: concurrencyConfig.acquireTimeoutMs,
     minSpawnIntervalMs: concurrencyConfig.minSpawnIntervalMs,
+    modelLimits,
   })
   const config: AutoEvolveConfig = {
     version: typeof raw.version === "number" ? raw.version : DEFAULT_CONFIG.version,
