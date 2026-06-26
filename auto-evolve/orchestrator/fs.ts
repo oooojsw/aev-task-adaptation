@@ -105,6 +105,10 @@ function looksLikePathKey(key: string) {
   )
 }
 
+function looksLikeWindowsAbsolutePath(value: string) {
+  return /(^|[\s"'`])[A-Za-z]:[\\/]/.test(value)
+}
+
 function hasControlChars(value: string) {
   return /[\r\n\t]/.test(value)
 }
@@ -112,7 +116,7 @@ function hasControlChars(value: string) {
 function assertNoSuspiciousPathControls(value: unknown, source: string, keyPath: string[] = []) {
   if (typeof value === "string") {
     const key = keyPath[keyPath.length - 1] ?? ""
-    const pathish = looksLikePathKey(key) || /[A-Za-z]:[\s\S]/.test(value) || value.includes("\\") || value.includes("/")
+    const pathish = looksLikePathKey(key) || looksLikeWindowsAbsolutePath(value)
     if (pathish && hasControlChars(value)) {
       throw new Error(
         `Cannot read ${normalizeSlash(source)}: suspicious control character in path-like field ${keyPath.join(".")}. ` +
