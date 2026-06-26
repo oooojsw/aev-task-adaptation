@@ -245,15 +245,30 @@ function classifyWorkspaceAsset(relativePath: string): ExperienceWorkspaceAssetK
   return "data"
 }
 
-async function collectWorkspaceFiles(root: string, current = root): Promise<string[]> {
+const WORKSPACE_FILE_SCAN_MAX_DEPTH = 6
+const WORKSPACE_FILE_SCAN_SKIP_DIRS = new Set([
+  ".git",
+  ".opencode",
+  "node_modules",
+  "__pycache__",
+  ".cache",
+  "cache",
+  "tmp",
+  "temp",
+])
+
+async function collectWorkspaceFiles(root: string, current = root, depth = 0): Promise<string[]> {
   if (!(await pathExists(current))) return []
+  if (depth > WORKSPACE_FILE_SCAN_MAX_DEPTH) return []
   const entries = await readdir(current, { withFileTypes: true })
   const results: string[] = []
 
   for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue
     const absolute = path.join(current, entry.name)
     if (entry.isDirectory()) {
-      results.push(...(await collectWorkspaceFiles(root, absolute)))
+      if (WORKSPACE_FILE_SCAN_SKIP_DIRS.has(entry.name)) continue
+      results.push(...(await collectWorkspaceFiles(root, absolute, depth + 1)))
       continue
     }
     if (!entry.isFile()) continue
