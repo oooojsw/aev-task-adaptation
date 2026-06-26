@@ -19,6 +19,7 @@ export interface ValidationStageRunResult {
   summary: string
   validatorResults: LongTaskValidatorResult[]
   resultPath: string
+  privateViewPaths: string[]
   trainingViewPaths: string[]
   sanitizedViewPaths: string[]
   scoreOnlyViewPaths: string[]
@@ -65,6 +66,7 @@ export async function runValidationStage(input: {
     targets: input.targets,
   })
   const validatorResults: LongTaskValidatorResult[] = []
+  const privateViewPaths: string[] = []
   const trainingViewPaths: string[] = []
   const sanitizedViewPaths: string[] = []
   const scoreOnlyViewPaths: string[] = []
@@ -87,9 +89,11 @@ export async function runValidationStage(input: {
       onPulse: input.onPulse,
     })
     validatorResults.push(result)
+    const privateView = await existingViewPath(validatorDir, "private")
     const training = await existingViewPath(validatorDir, "training")
     const sanitized = await existingViewPath(validatorDir, "sanitized")
     const scoreOnly = await existingViewPath(validatorDir, "score_only")
+    if (privateView) privateViewPaths.push(privateView)
     if (training) trainingViewPaths.push(training)
     if (sanitized) sanitizedViewPaths.push(sanitized)
     if (scoreOnly) scoreOnlyViewPaths.push(scoreOnly)
@@ -119,6 +123,7 @@ export async function runValidationStage(input: {
     summary,
     validatorResults,
     resultPath,
+    privateViewPaths,
     trainingViewPaths,
     sanitizedViewPaths,
     scoreOnlyViewPaths,

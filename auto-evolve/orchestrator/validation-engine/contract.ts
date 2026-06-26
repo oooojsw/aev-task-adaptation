@@ -30,6 +30,43 @@ export type ValidationAnswerAccess = "none" | "private_oracle" | "full_training"
 
 export type ValidationResultViewKind = "private" | "training" | "sanitized" | "score_only"
 
+/**
+ * Validation result views semantics:
+ *
+ * - `private` (result.private.json):
+ *     Full open-book oracle/diagnostic view for non-Blank working nodes.
+ *     Readable by: executor, worker, lead, reviewer, merger, repair_agent, audit.
+ *     NOT readable by: blank_agent, dashboard, memory.
+ *     Contains: full validator payload, raw output, evidence refs, exact private answer paths.
+ *
+ * - `training` (result.training.json):
+ *     Lightweight training view for non-Blank working nodes.
+ *     Readable by: same audiences as `private` (above).
+ *     Contains: numeric literals preserved for open-book learning/repair.
+ *     Redacted: private answer paths → `<PRIVATE_ANSWER_PATH>`.
+ *     NOT redacted (object-key level): answer/ground/private field names.
+ *
+ * - `sanitized` (result.sanitized.json):
+ *     Public monitoring view.
+ *     Readable by: dashboard, memory, and the same non-Blank audiences.
+ *     Strongly redacted: answer/ground/private fields, raw output, stdout/stderr.
+ *
+ * - `score_only` (result.score_only.json):
+ *     Statistical view.
+ *     Readable by: dashboard, memory, and the same non-Blank audiences.
+ *     Contains: passed/score/blocking only.
+ *
+ * - `blank_agent`:
+ *     NOT allowed to read any validation result view.
+ *     NOT allowed to read private-answers, ground-truth, answer-key, or hidden validator files.
+ *
+ * Core principle:
+ *   Non-Blank nodes can see the oracle so they can do open-book learning and repair.
+ *   Red-team / Surface / Generalization validators prevent answer/cheat/case-specific literal /
+ *     private path / validator-only truth from entering the pending expert package or merged skill.
+ *   Blue-team / Blank Eval proves the final skill can guide a blank agent to complete the task.
+ */
+
 export interface ValidationModuleDescriptor {
   id: string
   title: string

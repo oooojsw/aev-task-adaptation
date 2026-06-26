@@ -12,6 +12,7 @@ const PRIVATE_PATH_PATTERN =
 const ANSWER_LITERAL_PATTERN = /([-+]?\d[\d,]*(?:\.\d+)?%?)/g
 
 function redactText(input: string, mode: "training" | "sanitized") {
+  // Always redact private answer paths in any non-private view.
   let text = input.replace(PRIVATE_PATH_PATTERN, "<PRIVATE_ANSWER_PATH>")
   if (mode === "training") {
     return text
@@ -28,13 +29,20 @@ function redactValue(value: unknown, mode: "training" | "sanitized"): unknown {
     const out: Record<string, unknown> = {}
     for (const [key, raw] of Object.entries(value)) {
       const lower = key.toLowerCase()
+
+      // sanitized strips raw / stdout / stderr entirely.
       if (mode === "sanitized" && (lower.includes("stdout") || lower.includes("stderr") || lower.includes("raw"))) {
         continue
       }
-      if (lower.includes("answer") || lower.includes("ground") || lower.includes("private")) {
-        out[key] = mode === "training" ? "<REDACTED_SENSITIVE_FIELD>" : "<REDACTED>"
+
+      // sanitized strongly redacts answer/ground/private field values.
+      if (mode === "sanitized" && (lower.includes("answer") || lower.includes("ground") || lower.includes("private"))) {
+        out[key] = "<REDACTED>"
         continue
       }
+
+      // training preserves answer/ground/private field VALUES (open-book oracle).
+      // Private paths inside string values are still redacted by redactText().
       out[key] = redactValue(raw, mode)
     }
     return out

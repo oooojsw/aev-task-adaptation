@@ -123,10 +123,17 @@ async function readWindowsProcessIdentity(pid: number): Promise<WindowsProcessId
     "  [PSCustomObject]@{ CommandLine = $cmd; CreationTick = $ticks } | ConvertTo-Json -Compress",
     "}",
   ].join("; ")
-  const child = spawn("powershell", ["-NoProfile", "-Command", script], {
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "ignore"],
-  })
+  let child: ReturnType<typeof spawn>
+  try {
+    child = spawn("powershell", ["-NoProfile", "-Command", script], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+  } catch {
+    // Windows can transiently refuse process creation under memory/process pressure.
+    // Treat identity as unreadable instead of crashing the supervisor/watchdog.
+    return undefined
+  }
   let stdout = ""
   child.stdout?.setEncoding("utf8")
   child.stdout?.on("data", (chunk) => {

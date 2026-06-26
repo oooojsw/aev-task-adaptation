@@ -300,6 +300,42 @@ try {
 }
 assert(blockedBlankAgent, "blank_agent must not be allowed to read validation result views")
 
+// Non-Blank audiences must be allowed to read `private` (open-book oracle).
+const NON_BLANK_AUDIENCES = [
+  "executor",
+  "worker",
+  "lead",
+  "reviewer",
+  "merger",
+  "repair_agent",
+  "audit",
+] as const
+for (const audience of NON_BLANK_AUDIENCES) {
+  assertAudienceCanReadValidationView(audience, "private")
+}
+
+// Dashboard and memory must NOT be allowed to read `private`.
+for (const audience of ["dashboard", "memory"] as const) {
+  let blocked = false
+  try {
+    assertAudienceCanReadValidationView(audience, "private")
+  } catch {
+    blocked = true
+  }
+  assert(blocked, `${audience} must not be allowed to read private validation views`)
+}
+
+// blank_agent must not be allowed to read ANY view (private/training/sanitized/score_only).
+for (const view of ["private", "training", "sanitized", "score_only"] as const) {
+  let blocked = false
+  try {
+    assertAudienceCanReadValidationView("blank_agent", view)
+  } catch {
+    blocked = true
+  }
+  assert(blocked, `blank_agent must not be allowed to read '${view}'`)
+}
+
 console.log(
   JSON.stringify(
     {

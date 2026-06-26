@@ -97,6 +97,8 @@ export function buildCampaignWorkerPrompt(input: {
   reviewerSuggestionPath?: string
   blankAgentEvidenceBundlePath?: string
   blankAgentEvidenceReadPaths?: string[]
+  /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank workers. */
+  expertOracleReadPaths?: string[]
 }) {
   return [
     "You are a campaign worker agent inside a multi-round long-task learning campaign.",
@@ -126,6 +128,9 @@ export function buildCampaignWorkerPrompt(input: {
       ...(input.blankAgentEvidenceBundlePath
         ? [`blank_agent_evidence_bundle: ${input.blankAgentEvidenceBundlePath}`]
         : []),
+      ...(input.expertOracleReadPaths && input.expertOracleReadPaths.length > 0
+        ? [`expert_oracle_paths: ${input.expertOracleReadPaths.join(", ")}`]
+        : []),
     ]),
     "",
     "Worker rules:",
@@ -148,8 +153,11 @@ export function buildCampaignWorkerPrompt(input: {
     "- If compact evidence lists workspace text files, open the exact files only when their contents are needed.",
     "- Do not infer blank-agent behavior only from validator summaries when execution evidence exists.",
     "- Treat pathRefs as complete paths even if surrounding previews are truncated.",
-    "- Never request or rely on result.private.json, private-answers, ground-truth, answer-key, or hidden validator files.",
-    "- Translate internal evidence into safe generalized package guidance. Do not copy hidden answers, case-specific numeric targets, or validator-only truth into the pending package.",
+    "- You may inspect expert_oracle_paths, result.private.json, private-answers, ground-truth, answer-key, or hidden validator files ONLY when they are explicitly listed in your readable paths for this non-blank worker role.",
+    "- These private/oracle files are for open-book diagnosis and repair only.",
+    "- Never expose private/oracle files to blank_agent.",
+    "- Never copy hidden answers, case-specific numeric targets, ground-truth literals, private paths, or validator-only truth into the pending expert package.",
+    "- Translate private/oracle evidence into generalized source-location, derivation, filling, verification, and self-check guidance.",
     ...roleSpecificRules(input.role),
     "",
     "Return JSON only, with this shape:",
@@ -185,6 +193,8 @@ export function buildCampaignLeadPrompt(input: {
   repairChecklist?: string[]
   blankAgentEvidenceBundlePath?: string
   blankAgentEvidenceReadPaths?: string[]
+  /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank lead. */
+  expertOracleReadPaths?: string[]
 }) {
   return [
     "You are the campaign lead for a multi-round long-task learning campaign.",
@@ -229,6 +239,9 @@ export function buildCampaignLeadPrompt(input: {
         : []),
       ...(input.blankAgentEvidenceBundlePath
         ? [`blank_agent_evidence_bundle: ${input.blankAgentEvidenceBundlePath}`]
+        : []),
+      ...(input.expertOracleReadPaths && input.expertOracleReadPaths.length > 0
+        ? [`expert_oracle_paths: ${input.expertOracleReadPaths.join(", ")}`]
         : []),
     ]),
     "",
@@ -285,6 +298,8 @@ export function buildCampaignLeadPrompt(input: {
     "- Do not copy tentative runtime-stall narratives into routing_control.blockedBy as hard blockers unless supported by hard evidence in run trace.",
     "- Do not put round-specific command directives into the package if they belong in routing control instead.",
     "- If a worker suggestion includes memory_advice, treat it as rescue guidance for durable lessons that might otherwise stay trapped in unit-local memory.",
+    "- You may use expert_oracle_paths / private validation views (result.private.json, private-answers, ground-truth, answer-key) as open-book evidence, but their contents MUST be transformed into generalized executable guidance before entering the package.",
+    "- Never bake private answer values, hidden answer-key content, or exact oracle literals into the pending expert package, tree notes, or routing control.",
     "- Do not leak hidden validator answers or protected reference-only truth.",
     "",
     "Return JSON only, with this shape:",
@@ -314,6 +329,8 @@ export function buildCampaignReviewerPrompt(input: {
   acceptanceExperiencePath?: string
   blankAgentEvidenceBundlePath?: string
   blankAgentEvidenceReadPaths?: string[]
+  /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank reviewer. */
+  expertOracleReadPaths?: string[]
 }) {
   return [
     "You are the round reviewer for a multi-round long-task learning campaign.",
@@ -336,6 +353,9 @@ export function buildCampaignReviewerPrompt(input: {
       ...(input.blankAgentEvidenceBundlePath
         ? [`blank_agent_evidence_bundle: ${input.blankAgentEvidenceBundlePath}`]
         : []),
+      ...(input.expertOracleReadPaths && input.expertOracleReadPaths.length > 0
+        ? [`expert_oracle_paths: ${input.expertOracleReadPaths.join(", ")}`]
+        : []),
     ]),
     "",
     "Reviewer rules:",
@@ -354,6 +374,7 @@ export function buildCampaignReviewerPrompt(input: {
     "- Mark not ready if surface_contract.json is not pure machine-readable JSON in the platform schema.",
     "- Do not treat heartbeat wording alone as decisive failure evidence; require hard run-trace evidence before concluding a true orchestrator stall.",
     "- If it is not ready, explain the reasons in abstract diagnostic language.",
+    "- You may inspect expert_oracle_paths / private validation views (result.private.json, private-answers, ground-truth, answer-key) as open-book evidence when they are explicitly listed in your readable paths. Use them to verify that the package teaches how to derive answers from provided materials, not to embed oracle literals.",
     "- Do not leak hidden validator answers or protected reference-only truth.",
     "",
     "Return JSON only, with this shape:",

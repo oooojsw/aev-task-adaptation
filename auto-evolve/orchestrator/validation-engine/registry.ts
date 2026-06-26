@@ -1,5 +1,5 @@
 import type { LongTaskValidatorContract } from "../long-task/contract"
-import type { ValidationStage, ValidationTargetKind } from "./contract"
+import type { ValidationAudience, ValidationStage, ValidationTargetKind } from "./contract"
 
 function inferredStage(validator: LongTaskValidatorContract): ValidationStage {
   if (validator.validation?.stage) return validator.validation.stage
@@ -47,4 +47,35 @@ export function describeValidationModules(validators: LongTaskValidatorContract[
     answerAccess: validator.validation?.answerAccess,
     allowedAudiences: validator.validation?.allowedAudiences ?? [],
   }))
+}
+
+/**
+ * Reject validator profiles that grant `blank_agent` access to validation result views.
+ *
+ * `blank_agent` is closed-book: it must never read result.private.json, result.training.json,
+ * result.sanitized.json, or any oracle/private answer evidence. Profiles that list it
+ * in `allowedAudiences` are misconfigured and must fail fast at load time.
+ */
+export function assertNoBlankAgentAudience(
+  validator: LongTaskValidatorContract,
+  audiences?: ValidationAudience[],
+) {
+  const list = audiences ?? validator.validation?.allowedAudiences ?? []
+  if (list.includes("blank_agent")) {
+    throw new Error(
+      `Validator '${validator.id}' has allowedAudiences containing 'blank_agent'. ` +
+        `blank_agent cannot read any validation result view. ` +
+        `Remove 'blank_agent' from allowedAudiences; use audit / dashboard / memory for monitoring instead.`,
+    )
+  }
+}
+
+export function assertNoBlankAgentAudienceInList(
+  validators: LongTaskValidatorContract[],
+  audiencesList?: Array<ValidationAudience[] | undefined>,
+) {
+  for (let i = 0; i < validators.length; i += 1) {
+    const audiences = audiencesList?.[i] ?? validators[i].validation?.allowedAudiences
+    assertNoBlankAgentAudience(validators[i], audiences)
+  }
 }

@@ -148,6 +148,83 @@ def load_case_rows(run_dir: Path, summary: dict[str, Any]) -> list[dict[str, Any
     return rows
 
 
+def case_dir_for_result(run_dir: Path, result: dict[str, Any]) -> Path | None:
+    raw_response = result.get("rawResponsePath")
+    if raw_response:
+        try:
+            path = Path(str(raw_response))
+            if path.exists():
+                return path.parent
+        except (TypeError, ValueError, OSError):
+            pass
+    model_id = str(result.get("modelID", ""))
+    case_id = str(result.get("caseID", ""))
+    if model_id and case_id:
+        candidate = run_dir / "results" / model_id / case_id
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def prompt_audit_fields(run_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
+    case_dir = case_dir_for_result(run_dir, result)
+    if not case_dir:
+        return {
+            "reasoningTokens": "",
+            "estimatedPromptTokens": "",
+            "promptBudgetTokens": "",
+            "skillTokens": "",
+            "materialTokens": "",
+            "materialCount": "",
+            "skillTruncated": "",
+            "materialTruncated": "",
+            "usageSource": "provider" if isinstance(result.get("usage"), dict) else "missing",
+            "costUSD": "",
+            "promptAuditPath": "",
+        }
+    audit_path = case_dir / "prompt-audit.json"
+    audit, error = try_read_json(audit_path)
+    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    if error:
+        return {
+            "reasoningTokens": usage.get("reasoningTokens", ""),
+            "estimatedPromptTokens": "",
+            "promptBudgetTokens": "",
+            "skillTokens": "",
+            "materialTokens": "",
+            "materialCount": "",
+            "skillTruncated": "",
+            "materialTruncated": "",
+            "usageSource": "provider" if usage else "missing",
+            "costUSD": "",
+            "promptAuditPath": normalize_path(audit_path),
+        }
+    skill = audit.get("skill") if isinstance(audit.get("skill"), dict) else {}
+    materials = audit.get("materials") if isinstance(audit.get("materials"), list) else []
+    material_tokens = 0
+    material_truncated = 0
+    for item in materials:
+        if not isinstance(item, dict):
+            continue
+        material_tokens += safe_int(item.get("includedTokens"), 0)
+        if item.get("truncated"):
+            material_truncated += 1
+    usage_source = "provider" if usage else "estimate" if audit.get("estimatedPromptTokens") else "missing"
+    return {
+        "reasoningTokens": usage.get("reasoningTokens", ""),
+        "estimatedPromptTokens": audit.get("estimatedPromptTokens", ""),
+        "promptBudgetTokens": audit.get("promptBudgetTokens", ""),
+        "skillTokens": skill.get("includedTokens", ""),
+        "materialTokens": material_tokens,
+        "materialCount": len(materials),
+        "skillTruncated": bool(skill.get("truncated")),
+        "materialTruncated": material_truncated,
+        "usageSource": usage_source,
+        "costUSD": "",
+        "promptAuditPath": normalize_path(audit_path),
+    }
+
+
 def summary_items(summary: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(summary.get("summary"), list):
         return [dict(item) for item in summary["summary"] if isinstance(item, dict)]
@@ -236,10 +313,17 @@ def scan_runs(runs_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any
         validity = summary.get("validity") if isinstance(summary.get("validity"), dict) else {}
         validity_status = str(validity.get("status") or "legacy-unverified")
         validity_reasons = validity.get("reasons") if isinstance(validity.get("reasons"), list) else []
+        for row in raw_cases:
+            row.update(prompt_audit_fields(run_dir, row))
 
         for item in summary_items(summary):
             model_id = str(item.get("modelID", ""))
             model_cases = [row for row in raw_cases if not model_id or str(row.get("modelID", "")) == model_id]
+            token_input = sum(safe_int((row.get("usage") or {}).get("inputTokens") if isinstance(row.get("usage"), dict) else row.get("inputTokens"), 0) for row in model_cases)
+            token_output = sum(safe_int((row.get("usage") or {}).get("outputTokens") if isinstance(row.get("usage"), dict) else row.get("outputTokens"), 0) for row in model_cases)
+            token_reasoning = sum(safe_int(row.get("reasoningTokens"), 0) for row in model_cases)
+            token_total = sum(safe_int((row.get("usage") or {}).get("totalTokens") if isinstance(row.get("usage"), dict) else row.get("totalTokens"), 0) for row in model_cases)
+            token_estimated_prompt = sum(safe_int(row.get("estimatedPromptTokens"), 0) for row in model_cases)
             total = safe_int(item.get("total", len(model_cases)), len(model_cases))
             categories = Counter(str(row.get("errorCategory") or ("none" if row.get("passed") else "unknown")) for row in model_cases)
             skill_modes = sorted({str(row.get("skillMode", "")) for row in model_cases if row.get("skillMode")})
@@ -271,6 +355,13 @@ def scan_runs(runs_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any
                     "failed": safe_int(item.get("failed", total - safe_int(item.get("passed", 0)))),
                     "passRate": safe_float(item.get("passRate", item.get("accuracy", 0))),
                     "avgLatencyMs": item.get("avgLatencyMs", ""),
+                    "inputTokens": token_input or "",
+                    "outputTokens": token_output or "",
+                    "reasoningTokens": token_reasoning or "",
+                    "totalTokens": token_total or "",
+                    "estimatedPromptTokens": token_estimated_prompt or "",
+                    "costUSD": "",
+                    "priceStatus": "missing",
                     "infrastructureFailures": infra_count,
                     "validationFailures": categories.get("validation", 0),
                     "parseFailures": categories.get("parse", 0) + categories.get("answer_extraction", 0),
@@ -308,12 +399,23 @@ def scan_runs(runs_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any
                     "latencyMs": result.get("latencyMs", ""),
                     "inputTokens": usage.get("inputTokens", ""),
                     "outputTokens": usage.get("outputTokens", ""),
+                    "reasoningTokens": result.get("reasoningTokens", ""),
                     "totalTokens": usage.get("totalTokens", ""),
+                    "estimatedPromptTokens": result.get("estimatedPromptTokens", ""),
+                    "promptBudgetTokens": result.get("promptBudgetTokens", ""),
+                    "skillTokens": result.get("skillTokens", ""),
+                    "materialTokens": result.get("materialTokens", ""),
+                    "materialCount": result.get("materialCount", ""),
+                    "skillTruncated": result.get("skillTruncated", ""),
+                    "materialTruncated": result.get("materialTruncated", ""),
+                    "usageSource": result.get("usageSource", ""),
+                    "costUSD": result.get("costUSD", ""),
                     "error": str(result.get("error", ""))[:1000],
                     "datasetHash": hash_cache.get(dataset_path, ""),
                     "skillHash": result.get("skillHash") or ("NO_SKILL" if result.get("skillMode") == "no-skill" else hash_cache.get(skill_path, "")),
                     "responsePath": normalize_path(result.get("rawResponsePath", "")),
                     "validatorPath": normalize_path(result.get("validatorResultPath", "")),
+                    "promptAuditPath": result.get("promptAuditPath", ""),
                     "runPath": normalize_path(run_dir),
                     "validityStatus": validity_status,
                 }
@@ -538,7 +640,8 @@ def build_workbook(
     run_headers = [
         "runID", "completedAt", "runType", "status", "validityStatus", "validityReasons",
         "modelID", "provider", "skillMode", "skillTier", "total", "passed",
-        "failed", "passRate", "avgLatencyMs", "infrastructureFailures", "validationFailures", "parseFailures",
+        "failed", "passRate", "avgLatencyMs", "inputTokens", "outputTokens", "reasoningTokens", "totalTokens",
+        "estimatedPromptTokens", "costUSD", "priceStatus", "infrastructureFailures", "validationFailures", "parseFailures",
         "errorCategories", "datasetBundle", "datasetHash", "skillBundle", "skillHash", "globalConcurrency",
         "caseSelectionCount", "schema", "reportWarnings", "runPath", "summaryPath",
     ]
@@ -546,8 +649,10 @@ def build_workbook(
 
     case_headers = [
         "runID", "completedAt", "runType", "validityStatus", "caseID", "modelID", "provider", "skillMode", "skillTier", "passed", "score",
-        "answer", "errorCategory", "attempts", "latencyMs", "inputTokens", "outputTokens", "totalTokens", "error",
-        "datasetHash", "skillHash", "responsePath", "validatorPath", "runPath",
+        "answer", "errorCategory", "attempts", "latencyMs", "inputTokens", "outputTokens", "reasoningTokens", "totalTokens",
+        "estimatedPromptTokens", "promptBudgetTokens", "skillTokens", "materialTokens", "materialCount", "skillTruncated",
+        "materialTruncated", "usageSource", "costUSD", "error", "datasetHash", "skillHash", "responsePath", "validatorPath",
+        "promptAuditPath", "runPath",
     ]
     add_partitioned_sheets(
         wb,

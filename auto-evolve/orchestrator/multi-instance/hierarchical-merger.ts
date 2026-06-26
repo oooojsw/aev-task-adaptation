@@ -313,7 +313,6 @@ async function runMergeGroup(input: {
   const readPaths = [
     manifestPath,
     ...input.items.map((item) => item.skillPath).filter((item): item is string => !!item),
-    ...input.items.map((item) => item.sourceTaskRoot),
   ]
   const result = await runOpencodeTask({
     cwd: input.cwd,
@@ -472,8 +471,6 @@ async function runOneShotRepair(input: {
     permissionReadPaths: [
       manifestPath,
       input.group.outputDir,
-      input.item.sourceTaskRoot,
-      input.failedRunDir,
       ...(input.item.skillPath ? [input.item.skillPath] : []),
     ],
     permissionEditPaths: [draft],

@@ -183,6 +183,19 @@ async function existing(items: string[]) {
   return out
 }
 
+function isSandboxExcludedPath(item: string, sandboxRoot: string): boolean {
+  const resolved = path.resolve(item)
+  const resolvedRoot = path.resolve(sandboxRoot)
+  const relative = path.relative(resolvedRoot, resolved)
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return false
+  const firstSegment = relative.split(path.sep)[0]
+  return ["preexisting", "validators", "internal", ".runtime"].includes(firstSegment)
+}
+
+function filterSandboxExcludedPaths(items: string[], sandboxRoot: string): string[] {
+  return items.filter((item) => !isSandboxExcludedPath(item, sandboxRoot))
+}
+
 async function entrypoints(roots: string[]) {
   const out: string[] = []
   for (const root of unique(roots)) {
@@ -516,7 +529,6 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
     const cFiles = capFiles(spec)
     const edits = unique([...resolveLongTaskEditablePaths(spec), ...(spec.targetPaths ?? []).map((item) => item.path)])
     const reads = unique([
-      sandboxRoot,
       bundlePath,
       ...skillRoots,
       ...entries,
@@ -526,6 +538,7 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       ...cFiles,
       ...edits,
     ])
+    const permissionReads = filterSandboxExcludedPaths(reads, sandboxRoot)
     const norm = new Map<string, string>()
     for (const item of reads) {
       const got = await winpath(item)
@@ -580,7 +593,7 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
           referencePaths: reads.map(fix),
           attachedFiles: cFiles.map(fix),
           promptInlineFiles: sandboxGuides.map(fix),
-          permissionReadPaths: reads.map(fix),
+          permissionReadPaths: permissionReads.map(fix),
           permissionEditPaths: edits.map(fix),
           allowShell: false,
           model: selection.model,

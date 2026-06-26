@@ -584,5 +584,17 @@ export async function runLongTaskValidator(input: {
   onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const engineResult = await runLongTaskValidatorViaValidationEngine(input)
-  return engineResult.result
+  const viewPaths = engineResult.viewPaths ?? {}
+  // Merge oracle view paths (private + training) into evidenceRefs so that
+  // downstream expert-oracle collectors (collectExpertOracleReadPaths) can
+  // discover result.private.json / result.training.json paths. Without this,
+  // the oracle channel stays empty and non-Blank workers never see the
+  // open-book evidence they're entitled to.
+  const oracleViewRefs = [viewPaths.private, viewPaths.training].filter(
+    (item): item is string => typeof item === "string" && item.length > 0,
+  )
+  return {
+    ...engineResult.result,
+    evidenceRefs: [...(engineResult.result.evidenceRefs ?? []), ...oracleViewRefs],
+  }
 }
