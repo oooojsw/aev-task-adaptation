@@ -380,6 +380,38 @@ export interface LongTaskCampaignDispatchTicketDocument {
   tickets: LongTaskCampaignDispatchTicket[]
 }
 
+export type LongTaskCampaignHistoryPolicy =
+  | "resume-current-generation"
+  | "fresh-non-verified"
+  | "fresh-all"
+  | "resume-explicit-only"
+  | "audit-only"
+
+export interface LongTaskCampaignRunLineage {
+  benchmarkRunID: string
+  generationID: string
+  taskID: string
+  attemptID: string
+  historyPolicy: LongTaskCampaignHistoryPolicy
+  taskPackRoot?: string
+  trainSplitHash?: string
+  testSplitHash?: string
+  specHash?: string
+  modelRequested?: string
+  modelResolved?: string
+  validatorProfileHash?: string
+}
+
+export interface LongTaskCampaignReuseState {
+  allowed: boolean
+  scope: "current-generation-only" | "explicit-only" | "audit-only"
+  tainted: boolean
+  superseded: boolean
+  reason?: string
+  supersededBy?: string
+  taintReason?: string
+}
+
 export interface LongTaskCampaignState {
   id: string
   title: string
@@ -393,6 +425,7 @@ export interface LongTaskCampaignState {
   updatedAt: string
   ownerPID?: number
   ownerCommandHint?: string
+  ownerCreationTick?: string
   heartbeatAt?: string
   notes?: string
   lastRunID?: string
@@ -404,6 +437,8 @@ export interface LongTaskCampaignState {
   lastRoundClosure?: LongTaskRoundClosure
   lastGateFailureKind?: LongTaskCampaignRoundRecord["gateFailureKind"]
   lastGateFailureSummary?: string
+  runLineage?: LongTaskCampaignRunLineage
+  reuse?: LongTaskCampaignReuseState
   recovery?: LongTaskCampaignRecoveryDecision
 }
 

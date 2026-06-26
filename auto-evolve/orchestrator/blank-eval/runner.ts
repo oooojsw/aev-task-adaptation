@@ -44,6 +44,83 @@ function unique(items: string[]) {
   return Array.from(new Set(items.filter((item) => item.trim().length > 0)))
 }
 
+function safeName(input: string, fallback: string) {
+  return (
+    input
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 96) || fallback
+  )
+}
+
+function resolveFromSpecDir(specPath: string, value: string) {
+  return path.isAbsolute(value) ? path.resolve(value) : path.resolve(path.dirname(specPath), value)
+}
+
+async function copyNoLinks(source: string, target: string) {
+  const info = await lstat(source)
+  if (info.isSymbolicLink()) {
+    throw new Error(`Blank Eval sandbox refuses symlink/junction input: ${source}`)
+  }
+  if (info.isDirectory()) {
+    await ensureDirectory(target)
+    const entries = await readdir(source, { withFileTypes: true })
+    for (const entry of entries) {
+      if (entry.name === ".git" || entry.name === ".opencode" || entry.name === "node_modules") continue
+      const childSource = path.join(source, entry.name)
+      const childTarget = path.join(target, entry.name)
+      await copyNoLinks(childSource, childTarget)
+    }
+    return
+  }
+  if (!info.isFile()) {
+    throw new Error(`Blank Eval sandbox can only copy files/directories: ${source}`)
+  }
+  await ensureDirectory(path.dirname(target))
+  await cp(source, target, { force: true })
+}
+
+async function copySandboxInput(input: {
+  source: string
+  targetRoot: string
+  index: number
+  specPath: string
+  required: boolean
+}) {
+  const source = resolveFromSpecDir(input.specPath, input.source)
+  if (!(await pathExists(source))) {
+    if (input.required) throw new Error(`Blank Eval required input missing before sandbox copy: ${source}`)
+    return undefined
+  }
+  const name = `${String(input.index + 1).padStart(2, "0")}-${safeName(path.basename(source), "input")}`
+  const target = path.join(input.targetRoot, name)
+  await copyNoLinks(source, target)
+  return target
+}
+
+async function copyPathRefsToSandbox(
+  refs: { path: string; label?: string; role?: string }[] | undefined,
+  targetRoot: string,
+  specPath: string,
+  required: boolean,
+) {
+  const out: { path: string; label?: string; role?: string }[] = []
+  for (const [index, ref] of (refs ?? []).entries()) {
+    const copied = await copySandboxInput({ source: ref.path, targetRoot, index, specPath, required })
+    if (copied) out.push({ ...ref, path: copied })
+  }
+  return out
+}
+
+async function copyStringPathsToSandbox(paths: string[], targetRoot: string, specPath: string, required: boolean) {
+  const out: string[] = []
+  for (const [index, item] of unique(paths).entries()) {
+    const copied = await copySandboxInput({ source: item, targetRoot, index, specPath, required })
+    if (copied) out.push(copied)
+  }
+  return unique(out)
+}
+
 function refs(refs: { path: string; label?: string; role?: string }[]) {
   if (!refs.length) return "- none"
   return refs
@@ -80,6 +157,10 @@ function capFiles(spec: LongTaskSpec) {
   return unique((spec.capabilities ?? []).flatMap((item) => item.attachedFiles ?? []))
 }
 
+function resolvedPathKey(specPath: string, value: string) {
+  return path.resolve(resolveFromSpecDir(specPath, value)).toLowerCase()
+}
+
 function guidance(spec: LongTaskSpec, specPath: string) {
   const dir = path.dirname(specPath)
   const names = new Set(["human-guidance.md", "instruction.md"])
@@ -114,9 +195,14 @@ async function entrypoints(roots: string[]) {
 
 async function reset(root: string, spec: LongTaskSpec) {
   const raw = [...(spec.editablePaths ?? []), ...(spec.targetPaths ?? []).map((item) => item.path)]
+  const resetRoot = path.resolve(root)
   const dirs = unique(raw.map((item) => path.resolve(item))).sort((a, b) => a.length - b.length)
   const targets: string[] = []
   for (const dir of dirs) {
+    const relative = path.relative(resetRoot, dir)
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error(`Blank Eval reset refused path outside sandbox: ${dir}`)
+    }
     if (targets.some((item) => dir === item || dir.startsWith(item + path.sep))) continue
     targets.push(dir)
   }
@@ -208,6 +294,10 @@ function prompt(input: {
     "",
     "Required output targets:",
     refs(input.spec.targetPaths ?? []),
+    "",
+    "Output isolation rule:",
+    "- The required output targets above are the only authoritative output locations for this evaluation.",
+    "- Do not write to similarly named workspaces near the original task pack unless that exact path is listed above.",
     "",
     "Editable paths:",
     bullet(resolveLongTaskEditablePaths(input.spec)),
@@ -328,34 +418,79 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
   const runID = `blank-eval-${stamp(title)}`
   const root = input.runRoot ?? autoEvolvePath(input.cwd, "runtime-state", "blank-eval-runs")
   const runDir = path.join(root, runID)
-  const spec = isolateLongTaskRuntimePaths({
+  const sandboxRoot = path.join(runDir, "sandbox")
+  const sandboxMaterialsRoot = path.join(sandboxRoot, "materials")
+  const sandboxGuidanceRoot = path.join(sandboxRoot, "guidance")
+  const sandboxCapabilityRoot = path.join(sandboxRoot, "capabilities")
+  const sandboxWorkspaceRoot = path.join(sandboxRoot, "workspace")
+  const baseRuntimeSpec = isolateLongTaskRuntimePaths({
     spec: loaded.spec,
     sourceSpecPath: loaded.specPath,
-    runtimeRoot: path.join(runDir, "task-workspace"),
+    runtimeRoot: sandboxRoot,
   })
-  const bundlePath = path.join(runDir, "blank_eval_bundle.json")
+  const bundlePath = path.join(sandboxRoot, "bundle.json")
   const validatorRoot = path.join(runDir, "validators")
   const sessionDir = path.join(runDir, "session")
-  const cleanSkillRoot = path.join(runDir, "clean-skill-roots")
+  const cleanSkillRoot = path.join(sandboxRoot, "skill")
   const resultPath = path.join(runDir, "blank_eval_result.json")
   const scope = input.runtimeScope ?? `blank-eval:${runID}`
 
   try {
     await ensureDirectory(runDir)
+    await ensureDirectory(sandboxRoot)
+    await ensureDirectory(sandboxMaterialsRoot)
+    await ensureDirectory(sandboxGuidanceRoot)
+    await ensureDirectory(sandboxCapabilityRoot)
+    await ensureDirectory(sandboxWorkspaceRoot)
     await ensureDirectory(validatorRoot)
 
     const sourceSkillRoots = unique(input.skillRoots.map((item) => path.resolve(item)))
     const skillRoots = await prepareCleanSkillRoots(sourceSkillRoots, cleanSkillRoot)
+    const sandboxMaterials = await copyPathRefsToSandbox(baseRuntimeSpec.materials, sandboxMaterialsRoot, loaded.specPath, true)
+    const sandboxGuides = await copyStringPathsToSandbox(
+      [...(input.promptInlinePaths ?? []), ...guidance(loaded.spec, loaded.specPath)],
+      sandboxGuidanceRoot,
+      loaded.specPath,
+      false,
+    )
+    const capabilityRefSources = capRefs(baseRuntimeSpec)
+    const capabilityFileSources = capFiles(baseRuntimeSpec)
+    const sandboxCapabilityRefs = await copyStringPathsToSandbox(capabilityRefSources, sandboxCapabilityRoot, loaded.specPath, false)
+    const sandboxCapabilityFiles = await copyStringPathsToSandbox(capabilityFileSources, sandboxCapabilityRoot, loaded.specPath, false)
+    const capabilityRefMap = new Map<string, string>()
+    for (const [index, source] of capabilityRefSources.entries()) {
+      const copied = sandboxCapabilityRefs[index]
+      if (copied) capabilityRefMap.set(resolvedPathKey(loaded.specPath, source), copied)
+    }
+    const capabilityFileMap = new Map<string, string>()
+    for (const [index, source] of capabilityFileSources.entries()) {
+      const copied = sandboxCapabilityFiles[index]
+      if (copied) capabilityFileMap.set(resolvedPathKey(loaded.specPath, source), copied)
+    }
+    const spec: LongTaskSpec = {
+      ...baseRuntimeSpec,
+      materials: sandboxMaterials,
+      capabilities: baseRuntimeSpec.capabilities?.map((item) => ({
+        ...item,
+        referencePaths: item.referencePaths
+          ?.map((ref) => capabilityRefMap.get(resolvedPathKey(loaded.specPath, ref)))
+          .filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0),
+        attachedFiles: item.attachedFiles
+          ?.map((ref) => capabilityFileMap.get(resolvedPathKey(loaded.specPath, ref)))
+          .filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0),
+      })),
+    }
     const entries = await entrypoints(skillRoots)
-    const guides = await existing([...(input.promptInlinePaths ?? []), ...guidance(spec, loaded.specPath)])
     const cRefs = capRefs(spec)
     const cFiles = capFiles(spec)
     const edits = unique([...resolveLongTaskEditablePaths(spec), ...(spec.targetPaths ?? []).map((item) => item.path)])
     const reads = unique([
+      sandboxRoot,
+      bundlePath,
       ...skillRoots,
       ...entries,
       ...spec.materials.map((item) => item.path),
-      ...guides,
+      ...sandboxGuides,
       ...cRefs,
       ...cFiles,
       ...edits,
@@ -367,20 +502,19 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
     }
     const fix = (item: string) => norm.get(item) ?? item
 
-    if (input.resetEditablePaths !== false) await reset(runDir, spec)
+    if (input.resetEditablePaths !== false) await reset(sandboxRoot, spec)
 
     await writeJsonFile(bundlePath, {
       schema: "blank-eval/v1",
       runID,
       sourceID: input.sourceID,
       mode: input.mode ?? "deployment",
-      specPath: loaded.specPath,
-      sourceSkillRoots,
       skillRoots,
       skillEntryPoints: entries,
       materials: spec.materials,
       targetPaths: spec.targetPaths ?? [],
       editablePaths: edits,
+      sandboxRoot,
       createdAt: nowISO(),
       forbiddenRuntimeInputs: [
         "campaign-working-memory.json",
@@ -396,20 +530,11 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
     })
 
     const selection = resolveModelSelection(config, "solve", spec.execution)
-    const abort = new AbortController()
-    const poll = (async () => {
-      while (!abort.signal.aborted) {
-        await sleep(10_000)
-        if (abort.signal.aborted) break
-        const clean = await cleanupRuntimeProcessScope(scope)
-        if (clean.killedCount > 0) abort.abort()
-      }
-    })()
-
     const task = await (async () => {
       try {
         return await runOpencodeTask({
           cwd: input.cwd,
+          workDir: sandboxRoot,
           config,
           title: `Blank Eval ${title}`,
           prompt: prompt({
@@ -418,14 +543,15 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
             entries: entries.map(fix),
             bundlePath: fix(bundlePath),
             mode: input.mode ?? "deployment",
-            inline: guides.map(fix),
+            inline: sandboxGuides.map(fix),
             unicode: norm.size > 0,
           }),
           referencePaths: reads.map(fix),
           attachedFiles: cFiles.map(fix),
-          promptInlineFiles: guides.map(fix),
+          promptInlineFiles: sandboxGuides.map(fix),
           permissionReadPaths: reads.map(fix),
           permissionEditPaths: edits.map(fix),
+          allowShell: false,
           model: selection.model,
           agent: selection.agent,
           variant: selection.variant,
@@ -438,11 +564,11 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
             taskKind: "blank_eval",
             methodID: spec.reversePropagation?.recipeID,
           },
-          signal: abort.signal,
         })
       } finally {
-        abort.abort()
-        await poll.catch(() => undefined)
+        // Do not call cleanupRuntimeProcessScope while the blank agent is running.
+        // runOpencodeTask registers its own OpenCode child process in this scope;
+        // cleanupRuntimeProcessScope is a destructive terminator, not a liveness probe.
       }
     })()
 

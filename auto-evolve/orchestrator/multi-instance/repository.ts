@@ -11,10 +11,10 @@
  */
 
 import path from "node:path"
-import { rename, writeFile, readFile } from "node:fs/promises"
-import { randomBytes } from "node:crypto"
+import { readFile } from "node:fs/promises"
 import { ensureDirectory, pathExists } from "../fs"
 import type { CoordinatorState } from "./contract"
+import { writeJsonAtomic } from "../atomic-write"
 
 export function coordinatorStatePath(runRoot: string) {
   return path.join(runRoot, "coordinator-state.json")
@@ -58,9 +58,7 @@ async function writeStateOnce(state: CoordinatorState) {
   state.updatedAt = new Date().toISOString()
   const target = coordinatorStatePath(state.runRoot)
   await ensureDirectory(state.runRoot)
-  const tmp = `${target}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`
-  await writeFile(tmp, JSON.stringify(state, null, 2), "utf8")
-  await rename(tmp, target)
+  await writeJsonAtomic(target, state, { attempts: 8, baseDelayMs: 80, maxDelayMs: 2000 })
 }
 
 export async function loadCoordinatorState(runRoot: string): Promise<CoordinatorState> {

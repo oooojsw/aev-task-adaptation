@@ -451,16 +451,25 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
   return units
 }
 
-function fallbackLongTaskGraph(spec: LongTaskSpec, reason: string) {
-  const requiredValidatorIDs = spec.disableCompletionValidators
-    ? []
-    : spec.validators.filter((item) => item.required !== false).map((item) => item.id)
-  const unitValidatorIDs = spec.validators
+export function requiredWorkUnitValidatorIDs(spec: LongTaskSpec) {
+  return spec.validators
     .filter((item) => item.required !== false && item.placement !== "completion_only")
     .map((item) => item.id)
+}
+
+export function requiredCompletionValidatorIDs(spec: LongTaskSpec) {
+  if (spec.disableCompletionValidators) return []
+  return spec.validators
+    .filter((item) => item.required !== false && item.placement === "completion_only")
+    .map((item) => item.id)
+}
+
+function fallbackLongTaskGraph(spec: LongTaskSpec, reason: string) {
+  const completionValidatorIDs = requiredCompletionValidatorIDs(spec)
+  const unitValidatorIDs = requiredWorkUnitValidatorIDs(spec)
   return createLongTaskWorkGraph({
     plannerSummary: `Fallback graph used: ${reason}`,
-    completionValidatorIDs: requiredValidatorIDs,
+    completionValidatorIDs,
     units: [
       buildLongTaskWorkUnit({
         id: "complete-task",
@@ -470,7 +479,7 @@ function fallbackLongTaskGraph(spec: LongTaskSpec, reason: string) {
         dependsOn: [],
         expectedArtifacts: (spec.targetPaths ?? []).map((item) => item.path),
         claim: "The main long-task goal is completed and validator-ready.",
-        checkPlan: "Run all required validators against the current task outputs.",
+        checkPlan: "Run all required work-unit validators against the current task outputs.",
         validatorIDs: unitValidatorIDs,
         retryBudget: spec.budgets?.maxAttemptsPerUnit ?? DEFAULT_LONG_TASK_BUDGETS.maxAttemptsPerUnit,
       }),
@@ -489,9 +498,7 @@ function normalizePlanningGraph(raw: Record<string, unknown> | undefined, spec: 
       typeof raw.planner_summary === "string" && raw.planner_summary.trim() ? raw.planner_summary.trim() : undefined,
     completionValidatorIDs: hasExplicitCompletionValidatorIDs
       ? completionValidatorIDs
-      : spec.disableCompletionValidators
-        ? []
-        : spec.validators.filter((item) => item.required !== false).map((item) => item.id),
+      : requiredCompletionValidatorIDs(spec),
     units,
   })
 }
@@ -1181,7 +1188,10 @@ async function runPlanningSession(input: {
     referencePaths: [input.specPath, ...planningContextPaths, ...capabilityPaths],
     attachedFiles: capabilityFiles,
     permissionReadPaths: [input.specPath, ...planningContextPaths, ...capabilityPaths],
-    permissionEditPaths: [],
+    // The planner/replanner is explicitly instructed to write graph_draft.json
+    // under draftPaths.root; without this edit grant restricted mode can block
+    // the draft and force a lower-quality response-text fallback graph.
+    permissionEditPaths: [draftPaths.root],
     model: selection.model,
     agent: selection.agent,
     variant: selection.variant,
@@ -1411,6 +1421,23 @@ async function executeWorkUnit(input: {
 
   for (const validator of validatorContracts) {
     const validatorDir = path.join(attemptPaths.validatorsRoot, validator.id)
+
+    // Pulse before validator to ensure heartbeat is fresh
+    await input.onPulse?.()
+
+    // Mark validator as active in progress state
+    progressMid = {
+      ...progressMid,
+      activeValidator: {
+        unitID: activeUnit.id,
+        validatorID: validator.id,
+        attempt,
+        startedAt: nowISO(),
+        validatorDir,
+      },
+    }
+    await writeLongTaskProgressState(input.run, progressMid)
+
     const result = await runLongTaskValidator({
       cwd: input.cwd,
       config,
@@ -1423,6 +1450,7 @@ async function executeWorkUnit(input: {
       bundlePath: attemptPaths.inputBundlePath,
       runtimeScope: input.runtimeScope,
       onActivation: input.onActivation,
+      onPulse: input.onPulse,
       payload: {
         runID: progressBefore.runID,
         unitID: activeUnit.id,
@@ -1437,10 +1465,16 @@ async function executeWorkUnit(input: {
         bundlePath: attemptPaths.inputBundlePath,
       },
     })
+
+    // Pulse after validator to ensure heartbeat is updated
+    await input.onPulse?.()
+
+    // Clear activeValidator and increment counter
     validatorResults.push(result)
     await appendValidatorResult(input.run, result)
     progressMid = {
       ...progressMid,
+      activeValidator: undefined,
       validatorCalls: progressMid.validatorCalls + 1,
     }
     await writeLongTaskProgressState(input.run, progressMid)
@@ -2347,6 +2381,7 @@ export async function resumeLongTask(input: {
     ...currentProgress,
     ownerPID: undefined,
     ownerCommandHint: undefined,
+    ownerCreationTick: undefined,
   })
   const activateRun = onceActivationCallback(async () => {
     await updateLongTaskProgressStatus(resolved.run, "running")

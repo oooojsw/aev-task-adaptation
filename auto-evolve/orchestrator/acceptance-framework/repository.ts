@@ -1,6 +1,7 @@
 import path from "node:path"
 import type { AutoEvolveConfig } from "../schema"
 import { autoEvolvePath, ensureDirectory, readJsonFile, readTextFile, writeJsonFile, writeTextFile } from "../fs"
+import { appendJsonlIfMissingLocked, ensureJsonlFileLocked, readJsonlFile } from "../jsonl"
 import type { AcceptanceRecord } from "./contract"
 
 export interface AcceptanceFrameworkPaths {
@@ -17,19 +18,8 @@ function sanitizeSegment(input: string) {
   return input.replace(/[^a-zA-Z0-9._-]+/g, "_")
 }
 
-async function appendJsonl<T>(target: string, value: T) {
-  await ensureDirectory(path.dirname(target))
-  const existing = await readTextFile(target).catch(() => "")
-  await writeTextFile(target, existing + JSON.stringify(value) + "\n")
-}
-
 async function readJsonl<T>(target: string): Promise<T[]> {
-  const raw = await readTextFile(target).catch(() => "")
-  return raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as T)
+  return readJsonlFile<T>(target)
 }
 
 function stripRecordTimestamps<T extends { createdAt?: string; updatedAt?: string }>(value: T) {
@@ -62,9 +52,7 @@ export function acceptanceFrameworkPaths(
 export async function ensureAcceptanceFrameworkLayout(paths: AcceptanceFrameworkPaths) {
   await ensureDirectory(paths.root)
   await ensureDirectory(paths.recordsRoot)
-  if (!(await readTextFile(paths.indexPath).catch(() => ""))) {
-    await writeTextFile(paths.indexPath, "")
-  }
+  await ensureJsonlFileLocked(paths.indexPath)
 }
 
 function recordPath(paths: AcceptanceFrameworkPaths, record: AcceptanceRecord) {
@@ -100,10 +88,11 @@ export async function writeAcceptanceRecord(
   }
   const record = existing && sameLogicalRecord(existing, draft) ? { ...draft, updatedAt: existing.updatedAt } : draft
   await writeJsonFile(target, record)
-  const existingIndexed = await findIndexedRecordByID<AcceptanceRecord>(paths.indexPath, record.id)
-  if (!existingIndexed || !sameLogicalRecord(existingIndexed, record)) {
-    await appendJsonl(paths.indexPath, record)
-  }
+  await appendJsonlIfMissingLocked<AcceptanceRecord>(
+    paths.indexPath,
+    record,
+    (existing, next) => existing.id === next.id && sameLogicalRecord(existing, next),
+  )
   if (mirrorPath) {
     await writeJsonFile(mirrorPath, record)
   }

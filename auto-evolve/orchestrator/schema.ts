@@ -4,6 +4,7 @@ import { loadDatasetSplit } from "./dataset-split"
 import { experienceWorkspacePaths, resolveExperienceWorkspaceLayout, validateExperienceWorkspaceLayout } from "./experience-workspace"
 import { OpenCodeGate } from "./opencode-gate"
 import type { DirectChatModelsConfig } from "./direct-chat/contract"
+import type { LongTaskCampaignHistoryPolicy } from "./long-task-campaign/contract"
 
 export type CompareMode = "text_exact" | "text_contains" | "json_exact"
 export type ModelPhase = "bootstrap" | "solve" | "refine" | "verify" | "regression"
@@ -84,6 +85,29 @@ export interface LoadedStageConcurrencyConfig {
   baseline: number
 }
 
+export type BenchmarkResumeMode = "fresh-non-verified" | "safe-non-terminal" | "manual-explicit-only"
+
+export interface LoadedHistoryConfig {
+  /** Benchmark history reuse policy used when the CLI does not pass --history-policy. */
+  policy: LongTaskCampaignHistoryPolicy
+  /** Queue control used by the benchmark orchestrator when resuming an existing out dir. */
+  resumeMode: BenchmarkResumeMode
+  /** Permit old campaigns without run lineage to be auto-resumed. Keep false for formal runs. */
+  allowLegacyAutoResume: boolean
+  /** Keep verified_success tasks when starting a fresh non-verified generation. */
+  keepVerified: boolean
+  /** Require runID/generationID/taskID/attemptID lineage for automatic resume. */
+  requireLineageForAutoResume: boolean
+  /** Task ids that should stay visible in the state file but must not be scheduled. */
+  excludedTaskIDs: string[]
+  /** Retry failed campaigns only when their latest failure is classified as infrastructure. */
+  retryInfraFailed: boolean
+  /** Retry failed campaigns whose latest failure is a real product/answer failure. */
+  retryProductFailed: boolean
+  /** Safety cap for fresh attempts per task within one benchmark ledger. */
+  maxAttemptsPerTask: number
+}
+
 export interface LoadedDirectChatConfig extends DirectChatModelsConfig {
   /** Models selected when a Direct Chat command does not provide --models. */
   defaultModelIDs: string[]
@@ -147,6 +171,7 @@ export interface AutoEvolveConfig {
   concurrencyConfigPath: string
   concurrencyConfig: LoadedConcurrencyConfig
   stageConcurrency: LoadedStageConcurrencyConfig
+  historyConfig: LoadedHistoryConfig
   directChatConfigFile: string
   directChatConfigPath: string
   directChatConfig: LoadedDirectChatConfig
@@ -282,6 +307,17 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
     testBlank: 3,
     testDirectChat: 4,
     baseline: 3,
+  },
+  historyConfig: {
+    policy: "fresh-non-verified",
+    resumeMode: "safe-non-terminal",
+    allowLegacyAutoResume: false,
+    keepVerified: true,
+    requireLineageForAutoResume: true,
+    excludedTaskIDs: [],
+    retryInfraFailed: true,
+    retryProductFailed: false,
+    maxAttemptsPerTask: 2,
   },
   directChatConfigPath: "",
   directChatConfig: {
@@ -522,6 +558,61 @@ function normalizeStageConcurrencyConfig(
   }
 }
 
+function normalizeHistoryPolicy(input: unknown, fallback: LongTaskCampaignHistoryPolicy): LongTaskCampaignHistoryPolicy {
+  return input === "resume-current-generation" ||
+    input === "fresh-non-verified" ||
+    input === "fresh-all" ||
+    input === "resume-explicit-only" ||
+    input === "audit-only"
+    ? input
+    : fallback
+}
+
+function normalizeBenchmarkResumeMode(input: unknown, fallback: BenchmarkResumeMode): BenchmarkResumeMode {
+  return input === "fresh-non-verified" || input === "safe-non-terminal" || input === "manual-explicit-only"
+    ? input
+    : fallback
+}
+
+function normalizeStringList(input: unknown, fallback: string[] = []) {
+  if (Array.isArray(input)) {
+    return input
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  if (typeof input === "string") {
+    return input
+      .split(/[,\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  return [...fallback]
+}
+
+function normalizeHistoryConfig(
+  raw: unknown,
+  fallback: LoadedHistoryConfig = DEFAULT_CONFIG.historyConfig,
+): LoadedHistoryConfig {
+  if (!isObject(raw)) return { ...fallback }
+  return {
+    policy: normalizeHistoryPolicy(raw.policy, fallback.policy),
+    resumeMode: normalizeBenchmarkResumeMode(raw.resumeMode, fallback.resumeMode),
+    allowLegacyAutoResume:
+      typeof raw.allowLegacyAutoResume === "boolean" ? raw.allowLegacyAutoResume : fallback.allowLegacyAutoResume,
+    keepVerified: typeof raw.keepVerified === "boolean" ? raw.keepVerified : fallback.keepVerified,
+    requireLineageForAutoResume:
+      typeof raw.requireLineageForAutoResume === "boolean"
+        ? raw.requireLineageForAutoResume
+        : fallback.requireLineageForAutoResume,
+    excludedTaskIDs: normalizeStringList(raw.excludedTaskIDs, fallback.excludedTaskIDs),
+    retryInfraFailed: typeof raw.retryInfraFailed === "boolean" ? raw.retryInfraFailed : fallback.retryInfraFailed,
+    retryProductFailed:
+      typeof raw.retryProductFailed === "boolean" ? raw.retryProductFailed : fallback.retryProductFailed,
+    maxAttemptsPerTask: positiveIntegerField(raw, "maxAttemptsPerTask", fallback.maxAttemptsPerTask),
+  }
+}
+
 function normalizeDirectChatConfig(
   raw: unknown,
   fallback: LoadedDirectChatConfig = DEFAULT_CONFIG.directChatConfig,
@@ -745,6 +836,7 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
   }
   concurrencyConfig = normalizeConcurrencyConfig(raw.concurrencyConfig, concurrencyConfig)
   const stageConcurrency = normalizeStageConcurrencyConfig(raw.stageConcurrency)
+  const historyConfig = normalizeHistoryConfig(raw.historyConfig)
   let directChatConfig = normalizeDirectChatConfig(undefined)
   if (await pathExists(directChatConfigPath)) {
     directChatConfig = normalizeDirectChatConfig(
@@ -890,6 +982,7 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
     concurrencyConfigPath,
     concurrencyConfig,
     stageConcurrency,
+    historyConfig,
     directChatConfigFile,
     directChatConfigPath,
     directChatConfig,

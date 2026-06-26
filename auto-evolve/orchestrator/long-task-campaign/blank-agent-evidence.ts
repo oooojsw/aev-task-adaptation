@@ -1,6 +1,7 @@
 import path from "node:path"
 import { mkdir, readdir, stat, readFile, writeFile, access } from "node:fs/promises"
 import { constants } from "node:fs"
+import { appendJsonlLocked } from "../jsonl"
 import type { LongTaskSpec } from "../long-task/contract"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -611,19 +612,13 @@ export async function writeBlankAgentEvidenceBundle(input: WriteBlankAgentEviden
   await writeFile(path.join(latestDir, "latest.json"), JSON.stringify(bundle, null, 2) + "\n", "utf8")
 
   const indexPath = path.join(latestDir, "index.jsonl")
-  const indexEntry = JSON.stringify({
+  await appendJsonlLocked(indexPath, {
     createdAt: now,
     roundNumber: input.roundNumber,
     passID: input.passID,
     passed: input.finalAcceptance.passed,
     bundlePath: normalizeSlashes(bundlePath),
-  }) + "\n"
-  try {
-    const existing = (await readFile(indexPath, "utf8")).toString()
-    await writeFile(indexPath, existing + indexEntry, "utf8")
-  } catch {
-    await writeFile(indexPath, indexEntry, "utf8")
-  }
+  })
 
   return { bundle, bundlePath: normalizeSlashes(bundlePath) }
 }

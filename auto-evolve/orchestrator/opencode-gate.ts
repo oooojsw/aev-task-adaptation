@@ -16,6 +16,13 @@ import { setTimeout as sleepMs } from "node:timers/promises"
 import { randomBytes } from "node:crypto"
 import { ensureDirectory, pathExists, runtimePath } from "./fs"
 import { readAdaptiveModelRuntime } from "./adaptive-concurrency"
+import { writeJsonAtomic } from "./atomic-write"
+import {
+  identifyProcessOwner,
+  optionalProcessOwnerHints,
+  readCurrentProcessCreationTick,
+  strongProcessOwnerHints,
+} from "./process-identity"
 
 export interface OpenCodeGateConfig {
   /** Maximum number of OpenCode child processes that may run simultaneously. */
@@ -74,6 +81,8 @@ interface ActiveSlot {
   scope: string
   model?: string
   ownerPid: number
+  ownerCommandHint?: string
+  ownerCreationTick?: string
   acquiredAt: string
   acquiredAtMs: number
 }
@@ -84,6 +93,8 @@ interface QueueSlot {
   scope: string
   model?: string
   ownerPid: number
+  ownerCommandHint?: string
+  ownerCreationTick?: string
   enqueuedAt: string
   enqueuedAtMs: number
 }
@@ -147,12 +158,15 @@ export class OpenCodeGate {
     const scope = normalizeScope(meta.scope)
     const model = normalizeModel(meta.model)
     const stateRoot = resolveStateRoot(meta.root)
+    const ownerCreationTick = await readCurrentProcessCreationTick()
     const request: QueueSlot = {
       id: randomID(),
       caller: meta.caller,
       scope,
       model,
       ownerPid: process.pid,
+      ownerCommandHint: buildOwnerCommandHint(),
+      ownerCreationTick,
       enqueuedAt: new Date().toISOString(),
       enqueuedAtMs: Date.now(),
     }
@@ -170,7 +184,7 @@ export class OpenCodeGate {
         : this.config
       const result = await withGateLock(stateRoot, async () => {
         const state = await readState(stateRoot)
-        const cleaned = cleanupState(state, this.config.acquireTimeoutMs)
+        const cleaned = await cleanupState(state, this.config.acquireTimeoutMs)
         const alreadyQueued = cleaned.queue.some((item) => item.id === request.id)
         if (!alreadyQueued && cleaned.queue.length >= this.config.maxQueueDepth) {
           throw new GateBusyError(cleaned.queue.length, this.config.maxQueueDepth)
@@ -210,6 +224,8 @@ export class OpenCodeGate {
               scope: request.scope,
               model: request.model,
               ownerPid: request.ownerPid,
+              ownerCommandHint: request.ownerCommandHint,
+              ownerCreationTick: request.ownerCreationTick,
               acquiredAt: new Date().toISOString(),
               acquiredAtMs: Date.now(),
             },
@@ -365,23 +381,45 @@ function ensureQueued(queue: QueueSlot[], request: QueueSlot) {
   return [...queue, request]
 }
 
-function cleanupState(state: GateState, acquireTimeoutMs: number) {
-  const now = Date.now()
-  return {
-    active: state.active.filter((item) => isAlive(item.ownerPid) && now - item.acquiredAtMs < acquireTimeoutMs * 2),
-    queue: state.queue.filter((item) => isAlive(item.ownerPid) && now - item.enqueuedAtMs < acquireTimeoutMs),
-    lastGrantedAtByModel: state.lastGrantedAtByModel,
-  }
+function buildOwnerCommandHint() {
+  return process.argv.join(" ")
 }
 
-function isAlive(pid: number) {
-  if (!Number.isFinite(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
+function gateRequiredOwnerHints(item: ActiveSlot | QueueSlot) {
+  return strongProcessOwnerHints([item.ownerCommandHint])
+}
+
+function gateOptionalOwnerHints(item: ActiveSlot | QueueSlot) {
+  return [
+    ...optionalProcessOwnerHints([item.ownerCommandHint]),
+    ...[item.scope, item.model, item.caller].filter((value): value is string => !!value && value.trim().length > 0),
+  ]
+}
+
+async function shouldKeepGateOwner(item: ActiveSlot | QueueSlot, timeoutMs: number, referenceAt: string, referenceAtMs: number) {
+  const now = Date.now()
+  if (now - referenceAtMs >= timeoutMs) return false
+  const identity = await identifyProcessOwner({
+    pid: item.ownerPid,
+    requiredAnyCommandHints: gateRequiredOwnerHints(item),
+    optionalCommandHints: gateOptionalOwnerHints(item),
+    expectedCreationTick: item.ownerCreationTick,
+    updatedAt: referenceAt,
+    staleAfterMs: timeoutMs,
+  })
+  return identity.ownership === "owned" || identity.ownership === "unknown_owner"
+}
+
+async function cleanupState(state: GateState, acquireTimeoutMs: number) {
+  const active: ActiveSlot[] = []
+  const queue: QueueSlot[] = []
+  for (const item of state.active) {
+    if (await shouldKeepGateOwner(item, acquireTimeoutMs * 2, item.acquiredAt, item.acquiredAtMs)) active.push(item)
   }
+  for (const item of state.queue) {
+    if (await shouldKeepGateOwner(item, acquireTimeoutMs, item.enqueuedAt, item.enqueuedAtMs)) queue.push(item)
+  }
+  return { active, queue, lastGrantedAtByModel: state.lastGrantedAtByModel }
 }
 
 async function readState(stateRoot: string): Promise<GateState> {
@@ -409,10 +447,7 @@ async function readState(stateRoot: string): Promise<GateState> {
 async function writeState(stateRoot: string, state: GateState) {
   await ensureDirectory(stateRoot)
   const target = path.join(stateRoot, "state.json")
-  const tmp = `${target}.tmp-${process.pid}-${randomID()}`
-  await writeFile(tmp, JSON.stringify(state, null, 2), "utf8")
-  await rm(target, { force: true }).catch(() => undefined)
-  await rename(tmp, target)
+  await writeJsonAtomic(target, state, { attempts: 10, baseDelayMs: 100, maxDelayMs: 2000 })
 }
 
 function isActiveSlot(input: unknown): input is ActiveSlot {
@@ -471,7 +506,16 @@ async function isStaleLock(lockRoot: string, owner: string) {
   try {
     const raw = await readOwnerWithRetry(owner)
     if (!raw) return await isExpiredWithoutOwner(lockRoot)
-    if (typeof raw.pid === "number" && !isAlive(raw.pid)) return true
+    if (typeof raw.pid === "number") {
+      const identity = await identifyProcessOwner({
+        pid: raw.pid,
+        commandHints: [],
+        updatedAt: typeof raw.at === "string" ? raw.at : undefined,
+        staleAfterMs: LOCK_STALE_MS,
+      })
+      if (!identity.alive) return true
+      if (identity.ownership === "wrong_owner") return true
+    }
     if (typeof raw.at === "string") {
       const time = Date.parse(raw.at)
       if (Number.isFinite(time) && Date.now() - time > LOCK_STALE_MS) return true

@@ -9,6 +9,7 @@ import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
 import type { ToolFailure } from "./evaluator"
 import {
   ensureDirectory,
+  autoEvolvePath,
   isPathWithinTruthRoot,
   pathExists,
   runtimePath,
@@ -19,6 +20,7 @@ import {
 import { runManagedProcess } from "./managed-process"
 import { OpenCodeGate } from "./opencode-gate"
 import { recordAdaptiveModelOutcome } from "./adaptive-concurrency"
+import { recordOpencodeResourceUsage } from "./resource-audit/recorder"
 import {
   resolveTaskArtifactKind,
   taskArtifactPaths,
@@ -112,6 +114,7 @@ export interface OpencodeRunResult {
   events: OpencodeEvent[]
   responseText: string
   toolFailures: ToolFailure[]
+  modelResolution?: OpencodeModelResolution
 }
 
 export interface OpencodeTaskRun {
@@ -125,11 +128,29 @@ export interface OpencodeTaskRun {
   promptInlineFiles: string[]
   permissionReadPaths: string[]
   permissionEditPaths: string[]
+  selectedModelResolution?: OpencodeModelResolution
   result: OpencodeRunResult
 }
 
+export interface OpencodeModelResolution {
+  requestedModel: string
+  providerID: string
+  modelID: string
+  providerSource: "runtime-config" | "isolated-model-cache"
+  providerName?: string
+  modelName?: string
+  modelResolvedID?: string
+  configPath?: string
+  cachePath?: string
+}
+
 export interface OpencodeTaskInput {
+  /** Repository root used to find dependencies, runtime config, and local OpenCode binary. */
   cwd: string
+  /** Directory exposed to OpenCode as its task working directory (`opencode run --dir`). */
+  workDir?: string
+  /** Whether this task may use shell. Defaults to existing platform behavior when omitted. */
+  allowShell?: boolean
   config: AutoEvolveConfig
   title: string
   prompt: string
@@ -377,20 +398,173 @@ function minimalProviderConfig(input: Record<string, unknown>, model: string | u
   return result
 }
 
-function hostAuthCandidates() {
-  return uniqueFiles([
-    process.env.XDG_DATA_HOME ? path.join(process.env.XDG_DATA_HOME, "opencode", "auth.json") : "",
-    path.join(os.homedir(), ".local", "share", "opencode", "auth.json"),
-    process.env.APPDATA ? path.join(process.env.APPDATA, "opencode", "auth.json") : "",
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "opencode", "auth.json") : "",
-  ].filter(Boolean))
+function sanitizeHostConfigForAutoEvolve(input: Record<string, unknown>) {
+  const result: Record<string, unknown> = {}
+  for (const key of ["provider", "disabled_providers", "model", "small_model"] as const) {
+    if (input[key] !== undefined) result[key] = input[key]
+  }
+  return result
 }
 
-function hostModelCacheCandidates() {
+function privateOpenCodeProfileRoot(cwd: string) {
+  const override = process.env.AUTO_EVOLVE_OPENCODE_PRIVATE_PROFILE_ROOT?.trim()
+  return override ? path.resolve(override) : autoEvolvePath(cwd, ".opencode-private")
+}
+
+function privateOpenCodeConfigCandidates(cwd: string) {
+  const root = privateOpenCodeProfileRoot(cwd)
   return uniqueFiles([
-    process.env.XDG_CACHE_HOME ? path.join(process.env.XDG_CACHE_HOME, "opencode", "models.json") : "",
-    path.join(os.homedir(), ".cache", "opencode", "models.json"),
-  ].filter(Boolean))
+    path.join(root, "config", "opencode", "opencode.json"),
+    path.join(root, "opencode.json"),
+  ])
+}
+
+function privateOpenCodeAgentsCandidates(cwd: string) {
+  const root = privateOpenCodeProfileRoot(cwd)
+  return uniqueFiles([
+    path.join(root, "config", "opencode", "AGENTS.md"),
+    path.join(root, "AGENTS.md"),
+  ])
+}
+
+function privateAuthCandidates(cwd: string) {
+  const root = privateOpenCodeProfileRoot(cwd)
+  return uniqueFiles([
+    path.join(root, "data", "opencode", "auth.json"),
+    path.join(root, "auth.json"),
+  ])
+}
+
+function privateModelCacheCandidates(cwd: string) {
+  const root = privateOpenCodeProfileRoot(cwd)
+  return uniqueFiles([
+    path.join(root, "cache", "opencode", "models.json"),
+    path.join(root, "models.json"),
+  ])
+}
+
+function splitModelID(model: string | undefined) {
+  const trimmed = model?.trim()
+  if (!trimmed) return undefined
+  const slash = trimmed.indexOf("/")
+  if (slash <= 0 || slash === trimmed.length - 1) {
+    throw new Error(`OpenCode model must use provider/model format, got: ${trimmed}`)
+  }
+  return {
+    requestedModel: trimmed,
+    providerID: trimmed.slice(0, slash),
+    modelID: trimmed.slice(slash + 1),
+  }
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
+}
+
+async function readJsonObject(filePath: string) {
+  try {
+    const parsed = JSON.parse((await readFile(filePath, "utf8")).replace(/^\uFEFF/, ""))
+    return objectRecord(parsed)
+  } catch {
+    return undefined
+  }
+}
+
+function providerModelEntry(provider: Record<string, unknown>, modelID: string) {
+  const models = objectRecord(provider.models)
+  if (!models) return undefined
+  return objectRecord(models[modelID])
+}
+
+async function findProviderInModelCache(cwd: string, providerID: string, modelID: string) {
+  for (const cachePath of privateModelCacheCandidates(cwd)) {
+    if (!(await pathExists(cachePath))) continue
+    const cache = await readJsonObject(cachePath)
+    const provider = cache ? objectRecord(cache[providerID]) : undefined
+    if (!provider) continue
+    if (!providerModelEntry(provider, modelID)) continue
+    return { cachePath, provider }
+  }
+  return undefined
+}
+
+async function materializeProviderFromModelCache(input: {
+  cwd: string
+  baseConfig: Record<string, unknown>
+  model: string | undefined
+}) {
+  const parsed = splitModelID(input.model)
+  if (!parsed) return input.baseConfig
+  const providers = objectRecord(input.baseConfig.provider) ?? {}
+  if (objectRecord(providers[parsed.providerID])) return input.baseConfig
+
+  const cached = await findProviderInModelCache(input.cwd, parsed.providerID, parsed.modelID)
+  if (!cached) return input.baseConfig
+  return {
+    ...input.baseConfig,
+    provider: {
+      ...providers,
+      [parsed.providerID]: cached.provider,
+    },
+  }
+}
+
+async function resolveOpencodeModelOrThrow(input: {
+  model: string | undefined
+  overrideConfigDir: string
+  isolatedRoot?: string
+}): Promise<OpencodeModelResolution | undefined> {
+  const parsed = splitModelID(input.model)
+  if (!parsed) return undefined
+
+  const configPath = path.join(input.overrideConfigDir, "opencode.json")
+  const config = await readJsonObject(configPath)
+  const configProvider = config ? objectRecord(objectRecord(config.provider)?.[parsed.providerID]) : undefined
+  const configModel = configProvider ? providerModelEntry(configProvider, parsed.modelID) : undefined
+  if (configProvider && configModel) {
+    return {
+      ...parsed,
+      providerSource: "runtime-config",
+      providerName: typeof configProvider.name === "string" ? configProvider.name : undefined,
+      modelName: typeof configModel.name === "string" ? configModel.name : undefined,
+      modelResolvedID: typeof configModel.id === "string" ? configModel.id : undefined,
+      configPath,
+    }
+  }
+
+  const isolatedCachePath = input.isolatedRoot
+    ? path.join(input.isolatedRoot, "cache", "opencode", "models.json")
+    : undefined
+  if (isolatedCachePath && (await pathExists(isolatedCachePath))) {
+    const cache = await readJsonObject(isolatedCachePath)
+    const provider = cache ? objectRecord(cache[parsed.providerID]) : undefined
+    const modelEntry = provider ? providerModelEntry(provider, parsed.modelID) : undefined
+    if (provider && modelEntry) {
+      return {
+        ...parsed,
+        providerSource: "isolated-model-cache",
+        providerName: typeof provider.name === "string" ? provider.name : undefined,
+        modelName: typeof modelEntry.name === "string" ? modelEntry.name : undefined,
+        modelResolvedID: typeof modelEntry.id === "string" ? modelEntry.id : undefined,
+        configPath,
+        cachePath: isolatedCachePath,
+      }
+    }
+  }
+
+  const providerKeys = config ? Object.keys(objectRecord(config.provider) ?? {}).join(", ") : "(config unreadable)"
+  throw new Error(
+    [
+      `Requested OpenCode model is not resolvable: ${parsed.requestedModel}`,
+      `Provider: ${parsed.providerID}`,
+      `Model: ${parsed.modelID}`,
+      `Runtime config: ${configPath}`,
+      `Runtime config providers: ${providerKeys || "(none)"}`,
+      `Private OpenCode profile root: ${privateOpenCodeProfileRoot(process.cwd())}`,
+      "Run auto-evolve/scripts/import-opencode-private-profile.ts once to snapshot provider/auth/model cache.",
+      "Refusing to start because OpenCode may silently fall back to another model.",
+    ].join("\n"),
+  )
 }
 
 async function prepareIsolatedHostRuntime(cwd: string, runLabel: string): Promise<IsolatedHostRuntime> {
@@ -404,15 +578,15 @@ async function prepareIsolatedHostRuntime(cwd: string, runLabel: string): Promis
   const opencodeCache = path.join(xdgCache, "opencode")
   await Promise.all([home, xdgConfig, xdgData, xdgCache, xdgState, opencodeData, opencodeCache].map((dir) => ensureDirectory(dir)))
 
-  for (const candidate of hostAuthCandidates()) {
+  for (const candidate of privateAuthCandidates(cwd)) {
     if (!(await pathExists(candidate))) continue
     await copyFile(candidate, path.join(opencodeData, "auth.json")).catch(() => undefined)
     break
   }
 
-  // Copy host model cache so the isolated runtime can resolve plan-backed
-  // providers such as alibaba-coding-plan-cn without touching host config.
-  for (const candidate of hostModelCacheCandidates()) {
+  // Copy the auto-evolve private model cache so isolated sessions resolve
+  // plan-backed providers without touching the user's live OpenCode config.
+  for (const candidate of privateModelCacheCandidates(cwd)) {
     if (!(await pathExists(candidate))) continue
     await copyFile(candidate, path.join(opencodeCache, "models.json")).catch(() => undefined)
     break
@@ -499,7 +673,7 @@ async function ensureOverrideConfig(
   cwd: string,
   model: string | undefined,
   permissionConfig: LoadedPermissionConfig,
-  permissions: { readPaths: string[]; editPaths: string[] },
+  permissions: { readPaths: string[]; editPaths: string[]; allowShell?: boolean },
   runLabel: string,
   injectPlatformSafetyRules = true,
   isolateHostRuntime = false,
@@ -528,34 +702,23 @@ async function ensureOverrideConfig(
     "- Do not launch Word, Excel, Explorer, or any desktop GUI.",
     "- Do not use `Start-Process`, `Invoke-Item`, file association opens, `explorer.exe`, `WINWORD`, `EXCEL`, or equivalent GUI-launch paths.",
   ].join("\n")
-  const systemConfigDirCandidates = [
-    process.env.XDG_CONFIG_HOME ? path.join(process.env.XDG_CONFIG_HOME, "opencode") : "",
-    path.join(os.homedir(), ".config", "opencode"),
-  ].filter(Boolean)
-  const systemConfigDir =
-    (
-      await Promise.all(
-        systemConfigDirCandidates.map(async (candidate) => ((await pathExists(candidate)) ? candidate : "")),
-      )
-    ).find(Boolean) || ""
-
   let systemBaseConfig: Record<string, unknown> = {}
-  if (systemConfigDir) {
-    const systemConfigPath = path.join(systemConfigDir, "opencode.json")
+  for (const systemConfigPath of privateOpenCodeConfigCandidates(cwd)) {
     if (await pathExists(systemConfigPath)) {
       try {
         const parsed = JSON.parse(await readFile(systemConfigPath, "utf8"))
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          systemBaseConfig = parsed as Record<string, unknown>
+          systemBaseConfig = sanitizeHostConfigForAutoEvolve(parsed as Record<string, unknown>)
+          break
         }
       } catch {}
     }
   }
+  systemBaseConfig = await materializeProviderFromModelCache({ cwd, baseConfig: systemBaseConfig, model })
 
   const runtimeAgentsMd = (() => {
-    if (!injectPlatformSafetyRules || !systemConfigDir) return runtimeAgentsFallback
-    const systemAgentsPath = path.join(systemConfigDir, "AGENTS.md")
-    return systemAgentsPath
+    if (!injectPlatformSafetyRules) return runtimeAgentsFallback
+    return privateOpenCodeAgentsCandidates(cwd).find((candidate) => candidate.endsWith(".md")) ?? runtimeAgentsFallback
   })()
 
   let agentsContent = runtimeAgentsFallback
@@ -570,9 +733,9 @@ async function ensureOverrideConfig(
   }
 
   const override: Record<string, unknown> = {
-    // Always pass the full system config. Isolated runtime already handles
-    // sandboxing via separate HOME/XDG dirs + restricted permissions.
-    // Stripping to minimalProviderConfig breaks model resolution (ECONNRESET on models.dev).
+    // Only inherit model/provider material from the host config.
+    // Host MCP/plugin/skill/agent config can spawn unrelated background servers
+    // and must not leak into auto-evolve training sessions.
     ...systemBaseConfig,
     $schema: "https://opencode.ai/config.json",
     ...(model
@@ -591,9 +754,8 @@ async function ensureOverrideConfig(
         : await makeOverridePermissions(cwd, {
             readPaths: permissions.readPaths,
             editPaths: permissions.editPaths,
-            // Allow shell when we have explicit read paths (blank agent, workers with capabilities).
-            // Deny shell only when truly open (no restrictions).
-            allowShell: permissions.readPaths.length > 0 || isolateHostRuntime,
+            // Existing sessions allow shell with explicit read paths unless a caller opts out.
+            allowShell: permissions.allowShell ?? (permissions.readPaths.length > 0 || isolateHostRuntime),
           }),
   }
   await ensureDirectory(dir)
@@ -602,7 +764,7 @@ async function ensureOverrideConfig(
   return dir
 }
 
-async function ensureRuntimeEnvironment(_cwd: string, _runLabel: string) {
+async function ensureRuntimeEnvironment(cwd: string, _runLabel: string) {
   const env: Record<string, string> = {
     OPENCODE_DISABLE_PROJECT_CONFIG: "1",
   }
@@ -640,9 +802,9 @@ async function ensureRuntimeEnvironment(_cwd: string, _runLabel: string) {
   // If a valid models.json cache exists, disable the fetch of models.dev/api.json.
   // This makes OpenCode resilient to VPN drops — it reads from cache instead of
   // from the network, which is unreachable from China without VPN.
-  const cachePath = path.join(os.homedir(), ".cache", "opencode", "models.json")
   try {
-    if (await pathExists(cachePath)) {
+    const cachePath = privateModelCacheCandidates(cwd)[0]
+    if (cachePath && (await pathExists(cachePath))) {
       const raw = await readFile(cachePath, "utf8")
       const trimmed = raw.trim()
       if (trimmed.length > 0 && trimmed.startsWith("{")) {
@@ -886,6 +1048,7 @@ async function writeLiveTask(input: {
     promptInlineFiles: input.task.promptInlineFiles ?? [],
     permissionReadPaths: input.reads,
     permissionEditPaths: input.edits,
+    resourceUsagePath: paths.resourceUsagePath,
   })
 }
 
@@ -908,6 +1071,7 @@ async function runOpencodeTaskOnce(
     {
       readPaths: permissionReadPaths,
       editPaths: permissionEditPaths,
+      allowShell: input.allowShell,
     },
     runLabel,
     input.injectPlatformSafetyRules !== false,
@@ -920,7 +1084,8 @@ async function runOpencodeTaskOnce(
   }
 
   const opencodeCmd = await resolveOpencodeCommand(input.cwd)
-  const dirArg = process.platform === "win32" ? input.cwd.replace(/\\/g, "/") : input.cwd
+  const taskWorkDir = path.resolve(input.workDir ?? input.cwd)
+  const dirArg = process.platform === "win32" ? taskWorkDir.replace(/\\/g, "/") : taskWorkDir
   const args = [opencodeCmd, "run", "--pure", "--format", "json", "--dir", dirArg, "--title", input.title]
 
   const runtimeAgent = normalizeAgentForRuntime(selectedAgent)
@@ -1000,8 +1165,6 @@ async function runOpencodeTaskOnce(
     }, 200)
   }
 
-  await flush()
-
   let cleanupDone = false
   const cleanupRuntime = async () => {
     if (cleanupDone) return
@@ -1013,8 +1176,18 @@ async function runOpencodeTaskOnce(
     })
   }
 
+  let modelResolution: OpencodeModelResolution | undefined
   let managed: Awaited<ReturnType<typeof runManagedProcess>> | undefined
   try {
+    modelResolution = await resolveOpencodeModelOrThrow({
+      model: selectedModel,
+      overrideConfigDir,
+      isolatedRoot: isolatedRuntime?.root,
+    })
+    if (modelResolution) {
+      await writeJsonFile(path.join(overrideConfigDir, "model-resolution.json"), modelResolution)
+    }
+    await flush()
     started = true
     managed = await runManagedProcess({
       title: input.title,
@@ -1115,6 +1288,7 @@ async function runOpencodeTaskOnce(
     events,
     responseText: collectResponseText(events),
     toolFailures: collectToolFailures(events),
+    modelResolution,
   } satisfies OpencodeRunResult
 }
 
@@ -1243,7 +1417,7 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
     }
   }
 
-  return {
+  const taskRun = {
     title: effectiveInput.title,
     prompt: effectiveInput.prompt,
     selectedModel,
@@ -1254,8 +1428,17 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
     promptInlineFiles,
     permissionReadPaths,
     permissionEditPaths,
+    selectedModelResolution: result.modelResolution,
     result,
-  }
+  } satisfies OpencodeTaskRun
+
+  await recordOpencodeResourceUsage({
+    cwd: input.cwd,
+    taskRun,
+    taskInput: effectiveInput,
+  })
+
+  return taskRun
 }
 
 async function resolveOpencodeCommand(cwd: string) {

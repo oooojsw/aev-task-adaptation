@@ -8,12 +8,14 @@ import type {
   DirectChatCaseResult,
   DirectChatModelConfig,
   DirectChatModelsConfig,
+  DirectChatPromptAudit,
   DirectChatRunConfig,
 } from "./contract"
 import { readDirectChatDatasetBundle } from "./dataset-bundler"
 import { DirectChatProviderError, classifyDirectChatError, retryDirectChatCall, type DirectChatMessage } from "./provider-client"
 import { buildBudgetedPrompt, estimateDirectChatTokens } from "./material-budget"
 import { prepareDirectChatMaterialsForModel } from "./ocr-fallback"
+import { recordDirectChatResourceUsage } from "../resource-audit/recorder"
 
 function sha256(input: string) {
   return crypto.createHash("sha256").update(input).digest("hex")
@@ -525,6 +527,7 @@ async function runOneCase(input: {
   sourceOriginalTokens?: number
   selectionTruncated?: boolean
   outDir: string
+  cwd: string
   modelsConfig: DirectChatModelsConfig
 }) {
   const modelResultID = input.skillMode === "no-skill" ? `${input.model.id}__no-skill` : input.model.id
@@ -532,6 +535,21 @@ async function runOneCase(input: {
   await ensureDirectory(caseDir)
 
   const started = Date.now()
+  let promptAudit: DirectChatPromptAudit | undefined
+  let promptAuditPath: string | undefined
+  let providerResponsePath: string | undefined
+  const writeResultAndUsage = async (result: DirectChatCaseResult) => {
+    await writeJsonFile(path.join(caseDir, "result.json"), result)
+    await recordDirectChatResourceUsage({
+      cwd: input.cwd,
+      outDir: input.outDir,
+      caseDir,
+      result,
+      promptAudit,
+      promptAuditPath,
+      providerResponsePath,
+    })
+  }
   try {
     const prepared = await prepareDirectChatMaterialsForModel({
       caseID: input.testCase.caseID,
@@ -554,13 +572,15 @@ async function runOneCase(input: {
       },
     })
     const messages = prompt.messages as DirectChatMessage[]
+    promptAudit = prompt.audit
     await assertPromptDoesNotLeak(input.testCase, messages)
     await writeTextFile(
       path.join(caseDir, "prompt.system.txt"),
       typeof messages[0].content === "string" ? messages[0].content : JSON.stringify(messages[0].content, null, 2),
     )
     await writeTextFile(path.join(caseDir, "prompt.user.txt"), typeof messages[1].content === "string" ? messages[1].content : JSON.stringify(messages[1].content, null, 2))
-    await writeJsonFile(path.join(caseDir, "prompt-audit.json"), prompt.audit)
+    promptAuditPath = path.join(caseDir, "prompt-audit.json")
+    await writeJsonFile(promptAuditPath, prompt.audit)
     const requestAuditPath = path.join(caseDir, "request-audit.json")
     await writeJsonFile(requestAuditPath, {
       schema: "direct-chat-request-audit/v1",
@@ -587,8 +607,8 @@ async function runOneCase(input: {
     })
     const responsePath = path.join(caseDir, "response.txt")
     await writeTextFile(responsePath, callResult.content)
-    const responseAuditPath = path.join(caseDir, "provider-response.json")
-    await writeJsonFile(responseAuditPath, {
+    providerResponsePath = path.join(caseDir, "provider-response.json")
+    await writeJsonFile(providerResponsePath, {
       schema: "direct-chat-provider-response/v1",
       resolvedModel: callResult.resolvedModel || null,
       finishReason: callResult.finishReason || null,
@@ -615,7 +635,7 @@ async function runOneCase(input: {
         usage: callResult.usage,
         resolvedModel: callResult.resolvedModel,
         finishReason: callResult.finishReason,
-        responseAuditPath,
+        responseAuditPath: providerResponsePath,
         requestAuditPath,
         outputBudgetExceeded,
         latencyMs: Date.now() - started,
@@ -626,7 +646,7 @@ async function runOneCase(input: {
         skillTier: input.skillTier,
         skillHash: input.skillMode === "no-skill" ? "NO_SKILL" : sha256(input.skillBundle),
       }
-      await writeJsonFile(path.join(caseDir, "result.json"), result)
+      await writeResultAndUsage(result)
       return result
     }
     await writeTextFile(answerPath, answer)
@@ -644,7 +664,7 @@ async function runOneCase(input: {
       usage: callResult.usage,
       resolvedModel: callResult.resolvedModel,
       finishReason: callResult.finishReason,
-      responseAuditPath,
+      responseAuditPath: providerResponsePath,
       requestAuditPath,
       outputBudgetExceeded,
       latencyMs: Date.now() - started,
@@ -655,7 +675,7 @@ async function runOneCase(input: {
       skillTier: input.skillTier,
       skillHash: input.skillMode === "no-skill" ? "NO_SKILL" : sha256(input.skillBundle),
     }
-    await writeJsonFile(path.join(caseDir, "result.json"), result)
+    await writeResultAndUsage(result)
     return result
   } catch (error) {
     const result: DirectChatCaseResult = {
@@ -675,7 +695,7 @@ async function runOneCase(input: {
       skillTier: input.skillTier,
       skillHash: input.skillMode === "no-skill" ? "NO_SKILL" : sha256(input.skillBundle),
     }
-    await writeJsonFile(path.join(caseDir, "result.json"), result)
+    await writeResultAndUsage(result)
     return result
   }
 }
@@ -773,6 +793,7 @@ async function updateMasterReport(outDir: string) {
 
 export async function runDirectChatEvaluation(config: DirectChatRunConfig) {
   const outDir = path.resolve(config.outDir)
+  const cwd = path.resolve(import.meta.dir, "..", "..", "..")
   await ensureDirectory(outDir)
   const skillBundle = await readFile(config.skillBundlePath, "utf8")
   const datasetBundleText = await readFile(config.datasetBundlePath, "utf8")
@@ -904,6 +925,7 @@ export async function runDirectChatEvaluation(config: DirectChatRunConfig) {
               sourceOriginalTokens: execution.variant.sourceOriginalTokens,
               selectionTruncated: execution.variant.selectionTruncated,
               outDir,
+              cwd,
               modelsConfig: config.models,
             })
           } finally {

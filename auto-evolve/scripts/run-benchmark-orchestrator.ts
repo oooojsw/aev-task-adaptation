@@ -14,14 +14,29 @@ import {
 import { runCoordinatorPhase3Validate } from "../orchestrator/multi-instance/validator"
 import { saveCoordinatorState } from "../orchestrator/multi-instance/repository"
 import { runBlankEval } from "../orchestrator/blank-eval/runner"
-import { pathExists, readJsonFile } from "../orchestrator/fs"
-import { readCampaignHealth, writeRunDashboard } from "../orchestrator/run-health"
+import { pathExists, readJsonFile, writeJsonFile } from "../orchestrator/fs"
+import { readCampaignHealth, writeRunDashboard, type CampaignHealth } from "../orchestrator/run-health"
 import { buildDirectChatDatasetWithAdapter } from "../orchestrator/direct-chat/adapters"
 import { buildSkillBundle } from "../orchestrator/direct-chat/skill-bundler"
 import { runDirectChatEvaluation } from "../orchestrator/direct-chat/runner"
 import type { DirectChatModelsConfig } from "../orchestrator/direct-chat/contract"
-import { loadConfig } from "../orchestrator/schema"
+import { loadConfig, type BenchmarkResumeMode } from "../orchestrator/schema"
 import { readAdaptiveModelRuntime } from "../orchestrator/adaptive-concurrency"
+import {
+  buildHistoryContext,
+  hashFileIfExists,
+  initializeBenchmarkHistory,
+  isCampaignAuthorizedForContext,
+  lineageForAttempt,
+  nextAttemptID,
+  normalizeHistoryPolicy,
+  readBenchmarkHistory,
+  registerCampaignAttempt,
+  updateCampaignAttemptStatus,
+  type BenchmarkHistoryContext,
+  type BenchmarkHistoryTaskEntry,
+} from "../orchestrator/history-manager"
+import type { LongTaskCampaignHistoryPolicy } from "../orchestrator/long-task-campaign/contract"
 
 type OrchestratorMode = "campaign-only" | "full-pipeline"
 type EvalRunner = "blank-opencode" | "direct-chat"
@@ -34,6 +49,10 @@ type CampaignRow = {
   updated: string
   heartbeatAt: string
   ownerPID?: number
+  ownerCommandHint?: string
+  ownerCreationTick?: string
+  baseSpecPath?: string
+  attemptID?: string
 }
 
 type TrainQueueResult = {
@@ -44,6 +63,31 @@ type TrainQueueResult = {
   pending: string
   verified: boolean
 }
+
+type TrainPick = {
+  id: string
+  spec: string
+  attemptID: string
+  campaign?: string
+  mode: "start_new" | "resume_recovery" | "takeover_recovery"
+}
+
+type WatchPick = {
+  id: string
+  spec: string
+  campaignID: string
+  campaignDir: string
+  attemptID?: string
+  lastHealth?: CampaignHealth
+}
+
+type CampaignSchedulingDecision =
+  | { kind: "verified"; row: CampaignRow }
+  | { kind: "watch_live"; row: CampaignRow; health: CampaignHealth }
+  | { kind: "resume_recovery"; row: CampaignRow; health?: CampaignHealth; reason: string }
+  | { kind: "takeover_recovery"; row: CampaignRow; health?: CampaignHealth; reason: string }
+  | { kind: "start_new"; reason: string }
+  | { kind: "terminal_skip"; row: CampaignRow; reason: string }
 
 type BaselineRow = {
   id: string
@@ -132,6 +176,13 @@ type BenchmarkConfig = {
   testConcurrency: number
   /** Dedicated cap for no-skill baseline blank-agent validation. */
   baselineConcurrency: number
+  historyPolicy: LongTaskCampaignHistoryPolicy
+  resumeMode: BenchmarkResumeMode
+  excludedTaskIDs: string[]
+  retryInfraFailed: boolean
+  retryProductFailed: boolean
+  maxAttemptsPerTask: number
+  historyContext?: BenchmarkHistoryContext
   /** Keep moving to held-out test after replay/repair still has failures. */
   continueAfterTrainReplayFailure: boolean
   trainLimit?: number
@@ -150,6 +201,7 @@ type BenchmarkSummary = {
   status:
     | "dry_run"
     | "campaign_only_complete"
+    | "training_still_running"
     | "training_incomplete"
     | "merge_complete"
     | "train_replay_failed"
@@ -250,47 +302,40 @@ function score(row: CampaignRow) {
   return Date.parse(row.updated || "") || 0
 }
 
-const staleBootstrapGraceMs = (() => {
-  const value = Number.parseInt(process.env.AUTO_EVOLVE_STALE_BOOTSTRAP_GRACE_MS ?? "", 10)
-  if (Number.isFinite(value) && value > 0) return value
-  return 60 * 60 * 1000
-})()
+async function classifyCampaignForScheduling(
+  config: BenchmarkConfig,
+  id: string,
+  latest: CampaignRow | undefined,
+  ledgerEntry?: BenchmarkHistoryTaskEntry,
+): Promise<CampaignSchedulingDecision> {
+  if (!latest) return { kind: "start_new", reason: "no existing campaign" }
 
-const staleOwnerTimeoutMs = (() => {
-  const value = Number.parseInt(process.env.AUTO_EVOLVE_STALE_OWNER_TIMEOUT_MS ?? "", 10)
-  if (Number.isFinite(value) && value > 0) return value
-  return 2 * 60 * 60 * 1000
-})()
-
-function parseTimestampMs(value: unknown) {
-  if (typeof value !== "string" || value.trim().length === 0) return undefined
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? parsed : undefined
-}
-
-function isPidAlive(pid: number) {
-  if (!Number.isFinite(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
+  if (latest.status === "verified_success" && (await pathExists(latest.pending))) {
+    return { kind: "verified", row: latest }
   }
-}
 
-function isFreshEnough(row: CampaignRow) {
-  const referenceMs = parseTimestampMs(row.heartbeatAt) ?? parseTimestampMs(row.updated)
-  if (typeof referenceMs !== "number") return false
-  const ageMs = Date.now() - referenceMs
-  const threshold = row.status === "bootstrapping" ? staleBootstrapGraceMs : staleOwnerTimeoutMs
-  return ageMs <= threshold
-}
+  if (isTerminalTrainStatus(latest.status)) {
+    if (latest.status === "failed") {
+      const retry = await shouldRetryFailedCampaign(config, latest, ledgerEntry?.attempts.length ?? 0)
+      if (retry) return { kind: "start_new", reason: "retryable failed campaign" }
+    }
+    return { kind: "terminal_skip", row: latest, reason: latest.status }
+  }
 
-function shouldResumeCampaign(row: CampaignRow) {
-  if (row.status === "recovery_pending") return true
-  if (row.status !== "running" && row.status !== "bootstrapping") return false
-  if (typeof row.ownerPID === "number" && isPidAlive(row.ownerPID)) return true
-  return isFreshEnough(row)
+  const health = await readCampaignHealth(latest.cdir)
+  if (!health) return { kind: "resume_recovery", row: latest, reason: "campaign health unreadable" }
+
+  if (health.suggestedAction === "takeover") {
+    return { kind: "takeover_recovery", row: latest, health, reason: health.reason }
+  }
+  if (health.suggestedAction === "resume") {
+    return { kind: "resume_recovery", row: latest, health, reason: health.reason }
+  }
+  if (health.suggestedAction === "watch") {
+    return { kind: "watch_live", row: latest, health }
+  }
+
+  return { kind: "start_new", reason: `unhandled campaign health: ${health.health}` }
 }
 
 async function readIDs(file: string) {
@@ -306,9 +351,18 @@ function parseIDList(value: string | undefined) {
   return ids.length > 0 ? ids : undefined
 }
 
+function parseBooleanOption(args: string[], name: string, fallback: boolean) {
+  const raw = getOption(args, name)
+  if (raw === undefined) return fallback
+  const normalized = raw.trim().toLowerCase()
+  if (["1", "true", "yes", "on"].includes(normalized)) return true
+  if (["0", "false", "no", "off"].includes(normalized)) return false
+  return fallback
+}
+
 async function writeJson(file: string, value: unknown) {
   await mkdir(path.dirname(file), { recursive: true })
-  await writeFile(file, JSON.stringify(value, null, 2), "utf8")
+  await writeJsonFile(file, value)
 }
 
 async function readState(file: string) {
@@ -328,7 +382,7 @@ function baseSpecPath(taskPackRoot: string, id: string) {
   return path.join(taskPackRoot, "tasks", id, "spec.json")
 }
 
-async function campaigns(taskPackRoot: string, ids: string[]) {
+async function campaigns(taskPackRoot: string, ids: string[], historyContext?: BenchmarkHistoryContext) {
   const got = new Map<string, CampaignRow[]>()
   const entries = await readdir(runtimeCampaignRoot, { withFileTypes: true }).catch(() => [])
   for (const entry of entries) {
@@ -340,6 +394,7 @@ async function campaigns(taskPackRoot: string, ids: string[]) {
     const row = JSON.parse(raw.replace(/^\uFEFF/, "")) as Record<string, unknown>
     const hit = ids.find((id) => path.resolve(String(row.baseSpecPath ?? "")) === path.resolve(baseSpecPath(taskPackRoot, id)))
     if (!hit) continue
+    if (historyContext && !isCampaignAuthorizedForContext(row as any, historyContext, hit)) continue
     const cdir = path.join(runtimeCampaignRoot, entry.name)
     const pending = path.join(cdir, "pending-expert-package", "current")
     const rec: CampaignRow = {
@@ -350,6 +405,16 @@ async function campaigns(taskPackRoot: string, ids: string[]) {
       updated: String(row.updatedAt ?? row.createdAt ?? ""),
       heartbeatAt: String(row.heartbeatAt ?? ""),
       ownerPID: typeof row.ownerPID === "number" ? row.ownerPID : undefined,
+      ownerCommandHint: typeof row.ownerCommandHint === "string" ? row.ownerCommandHint : undefined,
+      ownerCreationTick: typeof row.ownerCreationTick === "string" ? row.ownerCreationTick : undefined,
+      baseSpecPath: typeof row.baseSpecPath === "string" ? row.baseSpecPath : undefined,
+      attemptID:
+        row.runLineage &&
+        typeof row.runLineage === "object" &&
+        !Array.isArray(row.runLineage) &&
+        typeof (row.runLineage as Record<string, unknown>).attemptID === "string"
+          ? String((row.runLineage as Record<string, unknown>).attemptID)
+          : undefined,
     }
     got.set(hit, [...(got.get(hit) ?? []), rec])
   }
@@ -357,8 +422,8 @@ async function campaigns(taskPackRoot: string, ids: string[]) {
   return got
 }
 
-async function verified(taskPackRoot: string, ids: string[], map?: Map<string, CampaignRow[]>) {
-  const src = map ?? (await campaigns(taskPackRoot, ids))
+async function verified(taskPackRoot: string, ids: string[], map?: Map<string, CampaignRow[]>, historyContext?: BenchmarkHistoryContext) {
+  const src = map ?? (await campaigns(taskPackRoot, ids, historyContext))
   const got = new Map<string, CampaignRow>()
   for (const id of ids) {
     for (const row of src.get(id) ?? []) {
@@ -372,8 +437,9 @@ async function verified(taskPackRoot: string, ids: string[], map?: Map<string, C
 }
 
 async function syncLatestTrainTerminals(config: BenchmarkConfig, state: BenchmarkState, ids: string[]) {
-  const map = await campaigns(config.taskPackRoot, ids)
+  const map = await campaigns(config.taskPackRoot, ids, config.historyContext)
   for (const id of ids) {
+    if (config.excludedTaskIDs.includes(id)) continue
     const rowState = state.trainResults.find((item) => item.id === id)
     if (!rowState || rowState.status === "verified_success") continue
     const latest = map.get(id)?.[0]
@@ -391,22 +457,104 @@ async function syncLatestTrainTerminals(config: BenchmarkConfig, state: Benchmar
   }
 }
 
-async function planTrain(config: BenchmarkConfig, ids: string[]) {
-  const map = await campaigns(config.taskPackRoot, ids)
-  const ok = config.reuseVerified ? await verified(config.taskPackRoot, ids, map) : new Map<string, CampaignRow>()
-  const todo: Array<{ id: string; spec: string; campaign?: string }> = []
+async function reconcileHistoryFromCampaignMap(
+  config: BenchmarkConfig,
+  ids: string[],
+  map: Map<string, CampaignRow[]>,
+) {
+  if (!config.historyContext) return
   for (const id of ids) {
+    const latest = map.get(id)?.[0]
+    if (!latest) continue
+    const status =
+      latest.status === "verified_success" && (await pathExists(latest.pending))
+        ? "verified_success"
+        : latest.status === "recovery_pending"
+          ? "recovery_pending"
+          : isTerminalTrainStatus(latest.status)
+            ? "terminal"
+            : "running"
+    await updateCampaignAttemptStatus({
+      outDir: config.outDir,
+      taskID: id,
+      campaignID: path.basename(latest.cdir),
+      status,
+      reason: latest.status,
+    })
+  }
+}
+
+async function planTrain(config: BenchmarkConfig, ids: string[]) {
+  let history = config.historyContext ? await readBenchmarkHistory(config.historyContext.outDir) : undefined
+  const map = await campaigns(config.taskPackRoot, ids, config.historyContext)
+  await reconcileHistoryFromCampaignMap(config, ids, map)
+  history = config.historyContext ? await readBenchmarkHistory(config.historyContext.outDir) : undefined
+  const ok = config.reuseVerified ? await verified(config.taskPackRoot, ids, map, config.historyContext) : new Map<string, CampaignRow>()
+  const excluded = new Set(config.excludedTaskIDs)
+  if (config.reuseVerified && history) {
+    for (const id of ids) {
+      if (ok.has(id)) continue
+      const ledgerRow = history.tasks[id]
+      if (ledgerRow?.status !== "verified_success" || !ledgerRow.activeCampaignDir) continue
+      const pending = path.join(ledgerRow.activeCampaignDir, "pending-expert-package", "current")
+      if (!(await pathExists(pending))) continue
+      ok.set(id, {
+        id,
+        status: "verified_success",
+        cdir: ledgerRow.activeCampaignDir,
+        pending,
+        updated: ledgerRow.updatedAt,
+        heartbeatAt: "",
+        attemptID: ledgerRow.activeAttemptID,
+      })
+    }
+  }
+  const todo: TrainPick[] = []
+  const watch: WatchPick[] = []
+  for (const id of ids) {
+    if (excluded.has(id)) continue
     if (ok.has(id)) continue
     const latest = map.get(id)?.[0]
-    if (latest && isTerminalTrainStatus(latest.status)) continue
-    const live = config.resumeRunning && latest && shouldResumeCampaign(latest)
+    const ledgerEntry = history?.tasks[id]
+    const decision = config.resumeRunning
+      ? await classifyCampaignForScheduling(config, id, latest, ledgerEntry)
+      : latest && latest.status === "verified_success" && (await pathExists(latest.pending))
+        ? ({ kind: "verified", row: latest } satisfies CampaignSchedulingDecision)
+        : ({ kind: "start_new", reason: "resume disabled" } satisfies CampaignSchedulingDecision)
+    if (decision.kind === "verified") {
+      ok.set(id, decision.row)
+      continue
+    }
+    if (decision.kind === "terminal_skip") continue
+    if (decision.kind === "watch_live") {
+      watch.push({
+        id,
+        spec: campaignSpecPath(config.taskPackRoot, id),
+        campaignID: path.basename(decision.row.cdir),
+        campaignDir: decision.row.cdir,
+        attemptID: decision.row.attemptID ?? ledgerEntry?.activeAttemptID,
+        lastHealth: decision.health,
+      })
+      continue
+    }
+    if (decision.kind === "resume_recovery" || decision.kind === "takeover_recovery") {
+      todo.push({
+        id,
+        spec: campaignSpecPath(config.taskPackRoot, id),
+        attemptID: decision.row.attemptID ?? ledgerEntry?.activeAttemptID ?? nextAttemptID(ledgerEntry),
+        campaign: path.basename(decision.row.cdir),
+        mode: decision.kind,
+      })
+      continue
+    }
     todo.push({
       id,
       spec: campaignSpecPath(config.taskPackRoot, id),
-      campaign: live ? path.basename(latest.cdir) : undefined,
+      attemptID: nextAttemptID(ledgerEntry),
+      mode: "start_new",
     })
   }
-  return { ok, todo }
+  return { ok, todo, watch }
 }
 
 function summarizeQueueResults(rows: TrainQueueResult[]) {
@@ -426,8 +574,72 @@ function isTerminalTrainStatus(status: string) {
     status === "failed" ||
     status === "blocked_failure" ||
     status === "stagnation_failure" ||
-    status === "aborted"
+    status === "aborted" ||
+    status === "excluded_for_now"
   )
+}
+
+function hasUnfinishedTrainWork(state: BenchmarkState) {
+  return state.trainResults.some((row) => row.status !== "verified_success" && !isTerminalTrainStatus(row.status))
+}
+
+type CampaignFailureClass = "infra" | "product" | "unknown"
+
+async function readTextIfExists(file: string, maxChars = 4000) {
+  if (!(await pathExists(file))) return ""
+  try {
+    return (await readFile(file, "utf8")).replace(/^\uFEFF/, "").slice(0, maxChars)
+  } catch {
+    return ""
+  }
+}
+
+async function classifyCampaignFailure(campaignDir: string | undefined): Promise<CampaignFailureClass> {
+  if (!campaignDir) return "unknown"
+  const snippets: string[] = [await readTextIfExists(path.join(campaignDir, "campaign.json"))]
+  const roundsRoot = path.join(campaignDir, "rounds")
+  try {
+    const rounds = (await readdir(roundsRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("round-"))
+      .map((entry) => entry.name)
+      .sort()
+      .slice(-3)
+    for (const round of rounds) {
+      const root = path.join(roundsRoot, round)
+      snippets.push(await readTextIfExists(path.join(root, "round-summary.md")))
+      snippets.push(await readTextIfExists(path.join(root, "final-acceptance", "result.json")))
+    }
+  } catch {
+    // Best-effort classification only; keep unknown if the campaign is incomplete.
+  }
+  const text = snippets.join("\n").toLowerCase()
+  if (
+    /opencodegate acquire timed out|infrastructure_failure|execution_blocked|validator infrastructure|spawn|eperm|owner pid|stale|stuck|process crash|aborted unexpectedly/.test(
+      text,
+    ) ||
+    /validator crashed|validator runtime bootstrap failed|no such file or directory:.*private-answers|missing.*private-answers/.test(
+      text,
+    ) ||
+    /candidate file not found|missing candidate:/.test(
+      text,
+    )
+  ) {
+    return "infra"
+  }
+  if (/blank-agent acceptance failed|spreadsheet answer mismatch|answer mismatch|product_failure|final_acceptance_failed/.test(text)) {
+    return "product"
+  }
+  return "unknown"
+}
+
+async function shouldRetryFailedCampaign(config: BenchmarkConfig, latest: CampaignRow, attemptsCount: number) {
+  if (config.resumeMode === "manual-explicit-only") return false
+  if (attemptsCount >= config.maxAttemptsPerTask) return false
+  if (config.resumeMode === "fresh-non-verified" && config.retryProductFailed) return true
+  const failureClass = await classifyCampaignFailure(latest.cdir)
+  if (failureClass === "infra") return config.retryInfraFailed
+  if (failureClass === "product") return config.retryProductFailed
+  return config.resumeMode === "fresh-non-verified" && (config.retryInfraFailed || config.retryProductFailed)
 }
 
 function coordinatorStatusFromTrain(status: string) {
@@ -503,44 +715,79 @@ async function persistState(stateFile: string, scorecardFile: string, state: Ben
   })
 }
 
-async function runOneCampaign(config: BenchmarkConfig, pick: { id: string; spec: string; campaign?: string }) {
+async function runOneCampaign(config: BenchmarkConfig, pick: TrainPick) {
   const logDir = path.join(config.outDir, "train-queue-logs")
   await mkdir(logDir, { recursive: true })
-  const specPath = await campaignSpecPathForRun(config, pick)
-  const args = pick.campaign
-    ? ["run", "cli.ts", "resume-long-task-campaign", "--campaign", pick.campaign, "--spec", specPath]
-    : [
-        "run",
-        "cli.ts",
-        "run-long-task-campaign",
-        "--spec",
-        specPath,
-        ...(config.resumeRunning ? [] : ["--force-new"]),
-      ]
-  const child = Bun.spawn([process.execPath, ...args], {
-    cwd: autoRoot,
-    env: { ...process.env },
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  await writeFile(path.join(logDir, `${pick.id}.stdout.log`), stdout, "utf8")
-  await writeFile(path.join(logDir, `${pick.id}.stderr.log`), stderr, "utf8")
-  const map = await campaigns(config.taskPackRoot, [pick.id])
-  const ok = await verified(config.taskPackRoot, [pick.id], map)
-  const hit = ok.get(pick.id) ?? map.get(pick.id)?.[0]
-  return {
-    id: pick.id,
-    code,
-    status: hit?.status ?? "unknown",
-    campaignDir: hit?.cdir ?? "",
-    pending: hit?.pending ?? "",
-    verified: hit ? hit.status === "verified_success" && (await pathExists(hit.pending)) : false,
-  } satisfies TrainQueueResult
+  try {
+    const specPath = await campaignSpecPathForRun(config, pick)
+    const specHash = await hashFileIfExists(specPath)
+    const historyPayload =
+      config.historyContext && pick.attemptID
+        ? JSON.stringify({
+            context: config.historyContext,
+            taskID: pick.id,
+            attemptID: pick.attemptID,
+            specHash,
+          })
+        : undefined
+    const args = pick.campaign
+      ? ["run", "cli.ts", "resume-long-task-campaign", "--campaign", pick.campaign, "--spec", specPath]
+      : [
+          "run",
+          "cli.ts",
+          "run-long-task-campaign",
+          "--spec",
+          specPath,
+          ...(config.resumeRunning ? [] : ["--force-new"]),
+        ]
+    const child = Bun.spawn([process.execPath, ...args], {
+      cwd: autoRoot,
+      env: historyPayload ? { ...process.env, AUTO_EVOLVE_HISTORY_SCOPE: historyPayload } : { ...process.env },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ])
+    await writeFile(path.join(logDir, `${pick.id}.stdout.log`), stdout, "utf8")
+    await writeFile(path.join(logDir, `${pick.id}.stderr.log`), stderr, "utf8")
+    const map = await campaigns(config.taskPackRoot, [pick.id], config.historyContext)
+    const ok = await verified(config.taskPackRoot, [pick.id], map, config.historyContext)
+    const hit = ok.get(pick.id) ?? map.get(pick.id)?.[0]
+    const health = hit?.cdir ? await readCampaignHealth(hit.cdir) : undefined
+    if (!ok.has(pick.id) && health?.suggestedAction === "watch") {
+      return {
+        id: pick.id,
+        code,
+        status: "watch_live",
+        campaignDir: hit?.cdir ?? "",
+        pending: hit?.pending ?? "",
+        verified: false,
+      } satisfies TrainQueueResult
+    }
+    return {
+      id: pick.id,
+      code,
+      status: hit?.status ?? "unknown",
+      campaignDir: hit?.cdir ?? "",
+      pending: hit?.pending ?? "",
+      verified: hit ? hit.status === "verified_success" && (await pathExists(hit.pending)) : false,
+    } satisfies TrainQueueResult
+  } catch (error) {
+    const message = error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error)
+    await writeFile(path.join(logDir, `${pick.id}.stdout.log`), "", "utf8").catch(() => undefined)
+    await writeFile(path.join(logDir, `${pick.id}.stderr.log`), message, "utf8").catch(() => undefined)
+    return {
+      id: pick.id,
+      code: -1,
+      status: "unknown",
+      campaignDir: "",
+      pending: "",
+      verified: false,
+    } satisfies TrainQueueResult
+  }
 }
 
 async function campaignSpecPathForRun(config: BenchmarkConfig, pick: { id: string; spec: string }) {
@@ -581,7 +828,8 @@ async function campaignSpecPathForRun(config: BenchmarkConfig, pick: { id: strin
 
 async function queueTrain(
   config: BenchmarkConfig,
-  todo: Array<{ id: string; spec: string; campaign?: string }>,
+  todo: TrainPick[],
+  watchSeed: WatchPick[],
   state: BenchmarkState,
   stateFile: string,
   scorecardFile: string,
@@ -591,6 +839,7 @@ async function queueTrain(
   let next = 0
   const active = new Set<Promise<void>>()
   const activeIDs = new Map<string, string>()
+  const watch = new Map<string, WatchPick>(watchSeed.map((item) => [item.id, item]))
   let lastEffectiveCapacity = config.stageConcurrency.training
 
   const currentTrainingCapacity = async () => {
@@ -598,11 +847,7 @@ async function queueTrain(
     if (!adaptive?.enabled || !adaptive.model) return config.stageConcurrency.training
     const runtime = await readAdaptiveModelRuntime(repoRoot, adaptive.model)
     if (!runtime) return adaptive.effectiveTaskConcurrency
-    if (
-      runtime.safeTaskConcurrency <= 0 ||
-      runtime.lastFailureClass === "auth_error" ||
-      runtime.lastFailureClass === "model_unavailable"
-    ) {
+    if (runtime.safeTaskConcurrency <= 0) {
       throw new Error(
         `Adaptive concurrency blocked training for ${adaptive.model}: ${runtime.lastFailureClass ?? "no safe concurrency"}.`,
       )
@@ -617,8 +862,94 @@ async function queueTrain(
     Object.assign(row, patch, { updatedAt: nowISO() })
     await persistState(stateFile, scorecardFile, state)
   }
+  const excluded = new Set(config.excludedTaskIDs)
 
-  async function start(pick: { id: string; spec: string; campaign?: string }) {
+  async function enqueueRecoveryPick(input: {
+    id: string
+    spec: string
+    campaignID: string
+    campaignDir: string
+    attemptID?: string
+    mode: "resume_recovery" | "takeover_recovery"
+    status?: string
+  }) {
+    const attempts = recoveries.get(input.id) ?? 0
+    if (attempts >= 3) return false
+    recoveries.set(input.id, attempts + 1)
+    todo.push({
+      id: input.id,
+      spec: input.spec,
+      attemptID: input.attemptID ?? nextAttemptID((await readBenchmarkHistory(config.outDir))?.tasks[input.id]),
+      campaign: input.campaignID,
+      mode: input.mode,
+    })
+    await updateCampaignAttemptStatus({
+      outDir: config.outDir,
+      taskID: input.id,
+      campaignID: input.campaignID,
+      status: input.status === "recovery_pending" ? "recovery_pending" : "running",
+      reason: input.mode,
+    })
+    await mark(input.id, { status: "recovery_pending", campaignDir: input.campaignDir })
+    return true
+  }
+
+  async function pollWatchedCampaigns() {
+    for (const [id, watched] of Array.from(watch.entries())) {
+      const health = await readCampaignHealth(watched.campaignDir)
+      if (!health) {
+        watch.delete(id)
+        await enqueueRecoveryPick({ ...watched, mode: "resume_recovery", status: "recovery_pending" })
+        continue
+      }
+      if (health.suggestedAction === "resume" || health.suggestedAction === "takeover") {
+        watch.delete(id)
+        await enqueueRecoveryPick({
+          ...watched,
+          mode: health.suggestedAction === "takeover" ? "takeover_recovery" : "resume_recovery",
+          status: health.health,
+        })
+        continue
+      }
+      if (health.health === "completed") {
+        watch.delete(id)
+        const map = await campaigns(config.taskPackRoot, [id], config.historyContext)
+        const ok = await verified(config.taskPackRoot, [id], map, config.historyContext)
+        const hit = ok.get(id) ?? map.get(id)?.[0]
+        if (hit?.status === "verified_success" && (await pathExists(hit.pending))) {
+          rows.push({ id, code: 0, status: "verified_success", campaignDir: hit.cdir, pending: hit.pending, verified: true })
+          await mark(id, { status: "verified_success", campaignDir: hit.cdir })
+          await updateCampaignAttemptStatus({
+            outDir: config.outDir,
+            taskID: id,
+            campaignID: path.basename(hit.cdir),
+            status: "verified_success",
+          })
+        } else if (hit && isTerminalTrainStatus(hit.status)) {
+          rows.push({ id, code: 0, status: hit.status, campaignDir: hit.cdir, pending: hit.pending, verified: false })
+          await mark(id, { status: hit.status, campaignDir: hit.cdir })
+          await updateCampaignAttemptStatus({
+            outDir: config.outDir,
+            taskID: id,
+            campaignID: path.basename(hit.cdir),
+            status: "terminal",
+            reason: hit.status,
+          })
+        } else {
+          await enqueueRecoveryPick({ ...watched, mode: "resume_recovery", status: "recovery_pending" })
+        }
+        continue
+      }
+      watched.lastHealth = health
+      await mark(id, { status: "running", campaignDir: watched.campaignDir })
+    }
+  }
+
+  async function start(pick: TrainPick) {
+    if (excluded.has(pick.id)) {
+      await mark(pick.id, { status: "excluded_for_now" })
+      return
+    }
     const activeToken = `${Date.now()}:${Math.random().toString(36).slice(2)}`
     activeIDs.set(pick.id, activeToken)
     await mark(pick.id, { status: "running" })
@@ -626,7 +957,55 @@ async function queueTrain(
       .then(async (row) => {
         rows.push(row)
         await mark(row.id, { status: row.status, campaignDir: row.campaignDir })
+        if (row.status === "watch_live" && row.campaignDir) {
+          watch.set(row.id, {
+            id: row.id,
+            spec: campaignSpecPath(config.taskPackRoot, row.id),
+            campaignID: path.basename(row.campaignDir),
+            campaignDir: row.campaignDir,
+          })
+          await mark(row.id, { status: "running", campaignDir: row.campaignDir })
+          return
+        }
+        if (row.verified) {
+          await updateCampaignAttemptStatus({
+            outDir: config.outDir,
+            taskID: row.id,
+            campaignID: row.campaignDir ? path.basename(row.campaignDir) : undefined,
+            status: "verified_success",
+          })
+        } else if (row.campaignDir) {
+          const historyStatus =
+            row.status === "recovery_pending"
+              ? "recovery_pending"
+              : isTerminalTrainStatus(row.status)
+                ? "terminal"
+                : "running"
+          await updateCampaignAttemptStatus({
+            outDir: config.outDir,
+            taskID: row.id,
+            campaignID: path.basename(row.campaignDir),
+            status: historyStatus,
+            reason: row.status,
+          })
+        }
         if (row.verified) return
+        if (!row.campaignDir && row.code !== 0) {
+          const attempts = recoveries.get(row.id) ?? 0
+          if (attempts >= config.maxAttemptsPerTask) {
+            await mark(row.id, { status: "unknown" })
+            return
+          }
+          recoveries.set(row.id, attempts + 1)
+          todo.push({
+            id: row.id,
+            spec: campaignSpecPath(config.taskPackRoot, row.id),
+            attemptID: nextAttemptID((await readBenchmarkHistory(config.outDir))?.tasks[row.id]),
+            mode: "start_new",
+          })
+          await mark(row.id, { status: "queued" })
+          return
+        }
         if (row.status !== "recovery_pending" || !row.campaignDir) return
         const attempts = recoveries.get(row.id) ?? 0
         if (attempts >= 2) return
@@ -634,7 +1013,9 @@ async function queueTrain(
         todo.push({
           id: row.id,
           spec: campaignSpecPath(config.taskPackRoot, row.id),
+          attemptID: nextAttemptID((await readBenchmarkHistory(config.outDir))?.tasks[row.id]),
           campaign: path.basename(row.campaignDir),
+          mode: "resume_recovery",
         })
       })
       .finally(() => {
@@ -646,8 +1027,9 @@ async function queueTrain(
 
   const queuedRecoveryKeys = new Set<string>()
   async function enqueueRecoveriesFromHealth() {
-    const map = await campaigns(config.taskPackRoot, state.trainIDs)
+    const map = await campaigns(config.taskPackRoot, state.trainIDs, config.historyContext)
     for (const id of state.trainIDs) {
+      if (excluded.has(id)) continue
       const rowState = state.trainResults.find((item) => item.id === id)
       if (!rowState || rowState.status === "verified_success") continue
       const latest = map.get(id)?.[0]
@@ -668,7 +1050,16 @@ async function queueTrain(
       todo.push({
         id,
         spec: campaignSpecPath(config.taskPackRoot, id),
+        attemptID: latest.attemptID ?? nextAttemptID((await readBenchmarkHistory(config.outDir))?.tasks[id]),
         campaign: path.basename(latest.cdir),
+        mode: health.suggestedAction === "takeover" ? "takeover_recovery" : "resume_recovery",
+      })
+      await updateCampaignAttemptStatus({
+        outDir: config.outDir,
+        taskID: id,
+        campaignID: path.basename(latest.cdir),
+        status: latest.status === "recovery_pending" ? "recovery_pending" : "running",
+        reason: health.health,
       })
       await mark(id, {
         status: latest.status === "recovery_pending" ? "recovery_pending" : "running",
@@ -677,8 +1068,10 @@ async function queueTrain(
     }
   }
 
-  while (next < todo.length || active.size > 0) {
+  while (true) {
+    await pollWatchedCampaigns()
     await enqueueRecoveriesFromHealth()
+    await reconcileHistoryFromCampaignMap(config, state.trainIDs, await campaigns(config.taskPackRoot, state.trainIDs, config.historyContext))
     const effectiveCapacity = await currentTrainingCapacity()
     if (effectiveCapacity !== lastEffectiveCapacity) {
       lastEffectiveCapacity = effectiveCapacity
@@ -693,11 +1086,18 @@ async function queueTrain(
     }
     if (active.size > 0) {
       await Promise.race([Promise.race(active), sleep(TRAIN_WATCHDOG_INTERVAL_MS)])
+    } else if (watch.size > 0) {
+      await sleep(TRAIN_WATCHDOG_INTERVAL_MS)
     } else if (next < todo.length && effectiveCapacity === 0) {
       await sleep(Math.min(5000, TRAIN_WATCHDOG_INTERVAL_MS))
     }
+    await pollWatchedCampaigns()
     await writeJson(path.join(config.outDir, "train-queue-results.json"), rows)
     await persistState(stateFile, scorecardFile, state)
+    if (next >= todo.length && active.size === 0 && watch.size === 0) {
+      await enqueueRecoveriesFromHealth()
+      if (next >= todo.length && watch.size === 0) break
+    }
   }
   return rows
 }
@@ -1066,9 +1466,40 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
   const stateFile = path.join(config.outDir, "orchestrator-state.json")
   const scorecardFile = path.join(config.outDir, "scorecard.md")
   await mkdir(config.outDir, { recursive: true })
+  const previousState = await readState(stateFile)
+  const trustedVerified =
+    config.historyPolicy === "fresh-non-verified"
+      ? (previousState?.trainResults ?? [])
+          .filter((row) => row.status === "verified_success" && row.campaignDir)
+          .map((row) => ({ id: row.id, campaignDir: row.campaignDir! }))
+      : []
+
+  const trainSplitHash = await hashFileIfExists(config.trainSplit)
+  const testSplitHash = await hashFileIfExists(config.testSplit)
+  const historyManifest = await initializeBenchmarkHistory({
+    outDir: config.outDir,
+    runID: path.basename(config.outDir),
+    taskIDs: trainIDs,
+    historyPolicy: config.historyPolicy,
+    taskPackRoot: config.taskPackRoot,
+    trainSplitHash,
+    testSplitHash,
+    modelRequested: config.adaptiveConcurrency?.model,
+    modelResolved: config.adaptiveConcurrency?.model,
+    trustedVerified,
+  })
+  config.historyContext = buildHistoryContext({
+    outDir: config.outDir,
+    manifest: historyManifest,
+    taskPackRoot: config.taskPackRoot,
+    trainSplitHash,
+    testSplitHash,
+    modelRequested: config.adaptiveConcurrency?.model,
+    modelResolved: config.adaptiveConcurrency?.model,
+  })
 
   const state =
-    (await readState(stateFile)) ??
+    previousState ??
     ({
       runID: path.basename(config.outDir),
       phase: "plan",
@@ -1087,6 +1518,30 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
       return previous ?? { id, status: "queued" }
     })
   }
+  const excluded = new Set(config.excludedTaskIDs)
+  for (const row of state.trainResults) {
+    if (excluded.has(row.id)) {
+      row.status = "excluded_for_now"
+      delete row.campaignDir
+      row.updatedAt = nowISO()
+      continue
+    }
+    const ledgerRow = historyManifest.tasks[row.id]
+    if (!ledgerRow) continue
+    if (ledgerRow.status === "verified_success" && ledgerRow.activeCampaignDir) {
+      row.status = "verified_success"
+      row.campaignDir = ledgerRow.activeCampaignDir
+      row.updatedAt = nowISO()
+      continue
+    }
+    if (config.historyPolicy === "fresh-all" || config.historyPolicy === "fresh-non-verified") {
+      row.status = "queued"
+      delete row.campaignDir
+      row.updatedAt = nowISO()
+    }
+  }
+  await persistState(stateFile, scorecardFile, state)
+  await syncLatestTrainTerminals(config, state, trainIDs)
   await persistState(stateFile, scorecardFile, state)
 
   await writeJson(path.join(config.outDir, "benchmark-plan.json"), {
@@ -1099,6 +1554,7 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
   await writeJson(path.join(config.outDir, "train-plan.json"), {
     alreadyVerified: Array.from(before.ok.keys()),
     todo: before.todo,
+    watch: before.watch,
   })
   for (const row of state.trainResults) {
     const verifiedRow = before.ok.get(row.id)
@@ -1130,11 +1586,33 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
   state.phase = "training"
   await persistState(stateFile, scorecardFile, state)
   if (before.todo.length > 0) {
-    const queueRows = await queueTrain(config, before.todo, state, stateFile, scorecardFile)
+    const queueRows = await queueTrain(config, before.todo, before.watch, state, stateFile, scorecardFile)
+    await writeJson(path.join(config.outDir, "train-queue-summary.json"), summarizeQueueResults(queueRows))
+  } else if (before.watch.length > 0) {
+    const queueRows = await queueTrain(config, before.todo, before.watch, state, stateFile, scorecardFile)
     await writeJson(path.join(config.outDir, "train-queue-summary.json"), summarizeQueueResults(queueRows))
   }
 
-  const ok = await verified(config.taskPackRoot, trainIDs)
+  const ok = await verified(config.taskPackRoot, trainIDs, undefined, config.historyContext)
+  const historyAfterTraining = config.historyContext ? await readBenchmarkHistory(config.historyContext.outDir) : undefined
+  if (historyAfterTraining) {
+    for (const id of trainIDs) {
+      if (ok.has(id)) continue
+      const ledgerRow = historyAfterTraining.tasks[id]
+      if (ledgerRow?.status !== "verified_success" || !ledgerRow.activeCampaignDir) continue
+      const pending = path.join(ledgerRow.activeCampaignDir, "pending-expert-package", "current")
+      if (!(await pathExists(pending))) continue
+      ok.set(id, {
+        id,
+        status: "verified_success",
+        cdir: ledgerRow.activeCampaignDir,
+        pending,
+        updated: ledgerRow.updatedAt,
+        heartbeatAt: "",
+        attemptID: ledgerRow.activeAttemptID,
+      })
+    }
+  }
   for (const row of state.trainResults) {
     const hit = ok.get(row.id)
     if (hit) {
@@ -1148,6 +1626,19 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
   await persistState(stateFile, scorecardFile, state)
 
   if (config.mode === "campaign-only") {
+    if (hasUnfinishedTrainWork(state)) {
+      const report: BenchmarkSummary = {
+        config,
+        trainIDs,
+        testIDs,
+        trainVerified: ok.size,
+        trainTotal: trainIDs.length,
+        status: "training_still_running",
+      }
+      state.phase = "training"
+      await persistState(stateFile, scorecardFile, state)
+      return report
+    }
     const report: BenchmarkSummary = {
       config,
       trainIDs,
@@ -1165,6 +1656,19 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
   }
 
   if (!config.runMerge || shouldStopAfter(config, "training")) {
+    if (hasUnfinishedTrainWork(state)) {
+      const report: BenchmarkSummary = {
+        config,
+        trainIDs,
+        testIDs,
+        trainVerified: ok.size,
+        trainTotal: trainIDs.length,
+        status: "training_still_running",
+      }
+      state.phase = "training"
+      await persistState(stateFile, scorecardFile, state)
+      return report
+    }
     const report: BenchmarkSummary = {
       config,
       trainIDs,
@@ -1475,6 +1979,35 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
   const replayConcurrency = stageConcurrency.trainReplay
   const testConcurrency = stageConcurrency.testBlank
   const baselineConcurrency = stageConcurrency.baseline
+  const historyPolicy = normalizeHistoryPolicy(getOption(args, "--history-policy"), projectConfig.historyConfig.policy)
+  const resumeMode = parseChoice<BenchmarkResumeMode>({
+    raw: getOption(args, "--resume-mode"),
+    fallback: projectConfig.historyConfig.resumeMode,
+    aliases: {
+      fresh_non_verified: "fresh-non-verified",
+      safe_non_terminal: "safe-non-terminal",
+      safe: "safe-non-terminal",
+      manual_explicit_only: "manual-explicit-only",
+      manual: "manual-explicit-only",
+    },
+    optionName: "--resume-mode",
+    expected: "fresh-non-verified, safe-non-terminal, or manual-explicit-only",
+  })
+  const excludedTaskIDs =
+    parseIDList(getOption(args, "--exclude-task-ids")) ??
+    parseIDList(getOption(args, "--exclude-task-id")) ??
+    projectConfig.historyConfig.excludedTaskIDs
+  const retryInfraFailed = parseBooleanOption(args, "--retry-infra-failed", projectConfig.historyConfig.retryInfraFailed)
+  const retryProductFailed = parseBooleanOption(
+    args,
+    "--retry-product-failed",
+    projectConfig.historyConfig.retryProductFailed,
+  )
+  const maxAttemptsPerTask = parsePositiveIntOption(
+    args,
+    ["--max-attempts-per-task"],
+    projectConfig.historyConfig.maxAttemptsPerTask,
+  )
   const continueAfterTrainingIncomplete =
     hasFlag(args, "--continue-after-training-incomplete") || hasFlag(args, "--continue-after-round-limit")
   const continueAfterTrainReplayFailure =
@@ -1612,6 +2145,12 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       replayConcurrency,
       testConcurrency,
       baselineConcurrency,
+      historyPolicy,
+      resumeMode,
+      excludedTaskIDs,
+      retryInfraFailed,
+      retryProductFailed,
+      maxAttemptsPerTask,
       continueAfterTrainReplayFailure,
       trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
       testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
@@ -1649,6 +2188,12 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       replayConcurrency,
       testConcurrency,
       baselineConcurrency,
+      historyPolicy,
+      resumeMode,
+      excludedTaskIDs,
+      retryInfraFailed,
+      retryProductFailed,
+      maxAttemptsPerTask,
       continueAfterTrainReplayFailure,
       trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
       testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
@@ -1686,6 +2231,12 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       replayConcurrency,
       testConcurrency,
       baselineConcurrency,
+      historyPolicy,
+      resumeMode,
+      excludedTaskIDs,
+      retryInfraFailed,
+      retryProductFailed,
+      maxAttemptsPerTask,
       continueAfterTrainReplayFailure,
       trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
       testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
@@ -1725,6 +2276,12 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
     replayConcurrency,
     testConcurrency,
     baselineConcurrency,
+    historyPolicy,
+    resumeMode,
+    excludedTaskIDs,
+    retryInfraFailed,
+    retryProductFailed,
+    maxAttemptsPerTask,
     continueAfterTrainReplayFailure,
     trainLimit: trainLimitRaw ? Math.max(1, Number.parseInt(trainLimitRaw, 10)) : undefined,
     testLimit: testLimitRaw ? Math.max(1, Number.parseInt(testLimitRaw, 10)) : undefined,
@@ -1740,6 +2297,6 @@ async function main() {
   console.log(JSON.stringify(report, null, 2))
 }
 
-if (import.meta.main) {
+if (import.meta.main && !process.execArgv.includes("--check")) {
   await main()
 }

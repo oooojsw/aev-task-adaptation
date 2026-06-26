@@ -1,9 +1,12 @@
 import path from "node:path"
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, stat } from "node:fs/promises"
 import { existsSync } from "node:fs"
+import { identifyProcessOwner, optionalProcessOwnerHints, strongProcessOwnerHints } from "./process-identity"
+import { writeFileAtomic, writeJsonAtomic } from "./atomic-write"
 
 export type RunHealthKind =
   | "completed"
+  | "starting"
   | "healthy_running"
   | "long_running"
   | "recovery_pending"
@@ -21,6 +24,7 @@ export type CampaignHealth = {
   currentRound?: number
   maxRounds?: number
   ownerPID?: number
+  ownerCreationTick?: string
   ownerAlive: boolean
   heartbeatAt?: string
   updatedAt?: string
@@ -51,6 +55,7 @@ const DONE_STATUSES = new Set([
 const DEFAULT_STALE_OWNER_MS = 45 * 60 * 1000
 const DEFAULT_LONG_RUNNING_MS = 2 * 60 * 60 * 1000
 const DEFAULT_NO_ARTIFACT_GROWTH_MS = 45 * 60 * 1000
+const DEFAULT_BOOTSTRAP_NO_OWNER_GRACE_MS = 2 * 60 * 1000
 
 function numberEnv(name: string, fallback: number) {
   const value = Number.parseInt(process.env[name] ?? "", 10)
@@ -62,6 +67,10 @@ export function defaultRunHealthPolicy() {
     staleOwnerMs: numberEnv("AUTO_EVOLVE_STALE_OWNER_MS", DEFAULT_STALE_OWNER_MS),
     longRunningMs: numberEnv("AUTO_EVOLVE_LONG_RUNNING_MS", DEFAULT_LONG_RUNNING_MS),
     noArtifactGrowthMs: numberEnv("AUTO_EVOLVE_NO_ARTIFACT_GROWTH_MS", DEFAULT_NO_ARTIFACT_GROWTH_MS),
+    bootstrapNoOwnerGraceMs: numberEnv(
+      "AUTO_EVOLVE_BOOTSTRAP_NO_OWNER_GRACE_MS",
+      DEFAULT_BOOTSTRAP_NO_OWNER_GRACE_MS,
+    ),
   }
 }
 
@@ -69,16 +78,6 @@ function parseMs(value: unknown) {
   if (typeof value !== "string" || value.trim().length === 0) return undefined
   const ms = Date.parse(value)
   return Number.isFinite(ms) ? ms : undefined
-}
-
-export function isPidAlive(pid: unknown) {
-  if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
 }
 
 function taskIDFromCampaignID(campaignID: string) {
@@ -128,9 +127,32 @@ export async function readCampaignHealth(campaignDir: string, nowMs = Date.now()
   const heartbeatMs = parseMs(state.heartbeatAt) ?? parseMs(state.updatedAt)
   const ageSeconds = typeof heartbeatMs === "number" ? Math.max(0, Math.round((nowMs - heartbeatMs) / 1000)) : undefined
   const ownerPID = typeof state.ownerPID === "number" ? state.ownerPID : undefined
-  const ownerAlive = isPidAlive(ownerPID)
+  const ownerCommandHint = typeof state.ownerCommandHint === "string" ? state.ownerCommandHint : undefined
+  const ownerCreationTick = typeof state.ownerCreationTick === "string" ? state.ownerCreationTick : undefined
   const policy = defaultRunHealthPolicy()
   const status = String(state.status ?? "unknown")
+  const taskID = taskIDFromCampaignID(campaignID)
+  const baseSpecPath = typeof state.baseSpecPath === "string" ? state.baseSpecPath : undefined
+  const ownerIdentity = await identifyProcessOwner({
+    pid: ownerPID,
+    requiredAnyCommandHints: strongProcessOwnerHints([
+      ownerCommandHint,
+      campaignID,
+      path.basename(campaignDir),
+      baseSpecPath,
+      baseSpecPath ? path.basename(baseSpecPath) : undefined,
+    ]),
+    optionalCommandHints: [
+      ...optionalProcessOwnerHints([ownerCommandHint]),
+      "run-long-task-campaign",
+      "resume-long-task-campaign",
+    ],
+    expectedCreationTick: ownerCreationTick,
+    heartbeatAt: typeof state.heartbeatAt === "string" ? state.heartbeatAt : undefined,
+    updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : undefined,
+    staleAfterMs: policy.staleOwnerMs,
+  })
+  const ownerAlive = ownerIdentity.alive && (ownerIdentity.ownership === "owned" || ownerIdentity.ownership === "unknown_owner")
   const heartbeatStaleForArtifactCheck =
     typeof heartbeatMs === "number" && nowMs - heartbeatMs > Math.min(policy.staleOwnerMs, policy.noArtifactGrowthMs)
   const needsArtifactCheck = status === "recovery_pending" || (LIVE_STATUSES.has(status) && heartbeatStaleForArtifactCheck)
@@ -151,6 +173,10 @@ export async function readCampaignHealth(campaignDir: string, nowMs = Date.now()
   } else if (!LIVE_STATUSES.has(status)) {
     health = "idle"
     reason = `Campaign status is ${status}.`
+  } else if (ownerPID && ownerIdentity.ownership === "wrong_owner") {
+    health = "stale_running"
+    reason = `Campaign status is ${status}, but owner PID ${ownerPID} appears to belong to another process.`
+    suggestedAction = "resume"
   } else if (ownerPID && !ownerAlive) {
     health = "stale_running"
     reason = `Campaign status is ${status}, but owner PID ${ownerPID} is not alive.`
@@ -172,27 +198,28 @@ export async function readCampaignHealth(campaignDir: string, nowMs = Date.now()
       suggestedAction = "watch"
     }
   } else {
-    const heartbeatStale = typeof heartbeatMs === "number" && nowMs - heartbeatMs > policy.staleOwnerMs
-    if (heartbeatStale) {
-      health = "stale_running"
-      reason = "Campaign has no owner PID and heartbeat is stale."
-      suggestedAction = "resume"
-    } else {
-      health = "healthy_running"
-      reason = "Campaign has no owner PID yet, but heartbeat is still fresh."
+    const ageMs = typeof heartbeatMs === "number" ? nowMs - heartbeatMs : Number.POSITIVE_INFINITY
+    if (status === "bootstrapping" && ageMs <= policy.bootstrapNoOwnerGraceMs) {
+      health = "starting"
+      reason = "Campaign is bootstrapping without owner PID within the short startup grace."
       suggestedAction = "watch"
+    } else {
+      health = "stale_running"
+      reason = `Campaign status is ${status}, but no owner PID is recorded.`
+      suggestedAction = "resume"
     }
   }
 
   return {
     campaignID,
     campaignDir,
-    taskID: taskIDFromCampaignID(campaignID),
+    taskID,
     status,
     health,
     currentRound: typeof state.currentRound === "number" ? state.currentRound : undefined,
     maxRounds: typeof state.maxRounds === "number" ? state.maxRounds : undefined,
     ownerPID,
+    ownerCreationTick,
     ownerAlive,
     heartbeatAt: typeof state.heartbeatAt === "string" ? state.heartbeatAt : undefined,
     updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : undefined,
@@ -247,7 +274,11 @@ export async function writeRunDashboard(input: {
     counts,
   }
   await mkdir(input.dashboardRoot, { recursive: true })
-  await writeFile(path.join(input.dashboardRoot, "active-runs.json"), `${JSON.stringify(summary, null, 2)}\n`, "utf8")
+  await writeJsonAtomic(path.join(input.dashboardRoot, "active-runs.json"), summary, {
+    attempts: 8,
+    baseDelayMs: 80,
+    maxDelayMs: 2000,
+  })
 
   const active = campaigns.filter((row) => row.health !== "completed" && row.health !== "idle")
   const lines = [
@@ -293,6 +324,10 @@ export async function writeRunDashboard(input: {
     "",
   ].filter((line): line is string => typeof line === "string")
 
-  await writeFile(path.join(input.dashboardRoot, "active-runs.md"), `${lines.join("\n")}\n`, "utf8")
+  await writeFileAtomic(path.join(input.dashboardRoot, "active-runs.md"), `${lines.join("\n")}\n`, {
+    attempts: 8,
+    baseDelayMs: 80,
+    maxDelayMs: 2000,
+  })
   return summary
 }

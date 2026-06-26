@@ -83,9 +83,35 @@ IGNORE_PATTERNS = [
     # Specific historical rerun/resume helpers tied to old OfficeQA IDs.
     "scripts/resume-uid0120-uid0223-rounds20.ts",
     "scripts/run-uid0120-uid0223-rerun.ts",
-    # Keep these real reusable configs even though they match broad config rules.
-    "!scripts/formal-config.json",
-    "!scripts/formal-surface-generalization.json",
+    # One-off operations / recovery scripts tied to old experiment states.
+    "scripts/resume-*.ts",
+    "scripts/finish-*.ts",
+    "scripts/patch-*.ts",
+    "scripts/monitor-*.ps1",
+    "scripts/start-queued-*.ts",
+    "scripts/audit-monitor-*.ps1",
+    # Offline analysis flattening helpers, not core runtime architecture.
+    "scripts/build-compact-analysis.*",
+    "scripts/flatten-round-docs.ps1",
+    "scripts/merge-flat-docs.ps1",
+    # Local config snapshots with machine-specific paths / old literal guards.
+    "scripts/formal-config.json",
+    "scripts/formal-surface-generalization.json",
+    # Local machine operations / one-off workspace checks.
+    "scripts/run-workspace-validation.ts",
+    "scripts/archive-*.ps1",
+    "scripts/auto-evolve/config.json",
+    "scripts/*try4*.ps1",
+    # Dataset download / browser proof capture utilities, not core runtime.
+    "scripts/download-*.py",
+    "scripts/capture-qwen-web-proof.mjs",
+    # Legacy dataset-specific launchers superseded by run-benchmark-orchestrator.
+    "scripts/run-officeqa-pro-*.ts",
+    "scripts/run-spreadsheetbench-*.ts",
+    "scripts/run-audit-point-*.ts",
+    # Dataset materialization scripts are useful operationally, but noisy for
+    # a pure architecture export.
+    "scripts/create-*.ts",
 ]
 
 
@@ -119,7 +145,9 @@ def should_keep(rel: str, ignore_patterns: list[str]) -> bool:
     if matches_ignore(rel, ignore_patterns):
         return False
     base = os.path.basename(rel)
-    if base in INCLUDE_FILES:
+    # Root files only. Do not export every nested README.md from task data or
+    # generated expert workspaces just because the basename matches.
+    if rel in INCLUDE_FILES:
         return True
     top = rel.split("/", 1)[0]
     if top not in INCLUDE_DIRS:

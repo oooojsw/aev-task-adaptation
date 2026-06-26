@@ -34,6 +34,7 @@ tsconfig.tsbuildinfo
 
 # Auto-evolve runtime artifacts
 auto-evolve/.runtime/
+auto-evolve/.opencode-private/
 auto-evolve/runs/
 auto-evolve/knowledge/
 auto-evolve/runtime-state/

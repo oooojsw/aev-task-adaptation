@@ -1,6 +1,7 @@
 import path from "node:path"
 import type { AutoEvolveConfig } from "../schema"
-import { autoEvolvePath, ensureDirectory, readTextFile, writeJsonFile, writeTextFile } from "../fs"
+import { autoEvolvePath, ensureDirectory, writeJsonFile } from "../fs"
+import { appendJsonlLocked, ensureJsonlFileLocked } from "../jsonl"
 import type { ExperienceTransactionRecord } from "./contract"
 
 export interface ExperienceTransactionPaths {
@@ -15,12 +16,6 @@ function nowISO() {
 
 function pad(value: number) {
   return String(value).padStart(2, "0")
-}
-
-async function appendJsonl<T>(target: string, value: T) {
-  await ensureDirectory(path.dirname(target))
-  const existing = await readTextFile(target).catch(() => "")
-  await writeTextFile(target, existing + JSON.stringify(value) + "\n")
 }
 
 export function experienceTransactionPaths(
@@ -40,9 +35,7 @@ export function experienceTransactionPaths(
 export async function ensureExperienceTransactionLayout(paths: ExperienceTransactionPaths) {
   await ensureDirectory(paths.root)
   await ensureDirectory(paths.recordsRoot)
-  if (!(await readTextFile(paths.indexPath).catch(() => ""))) {
-    await writeTextFile(paths.indexPath, "")
-  }
+  await ensureJsonlFileLocked(paths.indexPath)
 }
 
 function recordPath(
@@ -73,7 +66,7 @@ export async function writeExperienceTransactionRecord(
   }
   const target = recordPath(paths, record)
   await writeJsonFile(target, record)
-  await appendJsonl(paths.indexPath, record)
+  await appendJsonlLocked(paths.indexPath, record)
   if (mirrorPath) {
     await writeJsonFile(mirrorPath, record)
   }

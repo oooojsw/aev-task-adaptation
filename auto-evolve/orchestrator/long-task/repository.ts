@@ -11,6 +11,8 @@ import {
   writeJsonFile,
   writeTextFile,
 } from "../fs"
+import { appendJsonlIfMissingLocked, appendJsonlLocked, ensureJsonlFileLocked, readJsonlFile } from "../jsonl"
+import { readCurrentProcessCreationTick } from "../process-identity"
 import type {
   LongTaskArchiveRecord,
   LongTaskCandidatePackage,
@@ -86,10 +88,7 @@ function nowISO() {
 }
 
 function detectOwnerCommandHint() {
-  const argv = process.argv.map((item) => item.toLowerCase())
-  if (argv.some((item) => item.includes("run-long-task-campaign"))) return "run-long-task-campaign"
-  if (argv.some((item) => item.includes("run-long-task"))) return "run-long-task"
-  return undefined
+  return process.argv.join(" ")
 }
 
 function slugify(input: string) {
@@ -109,25 +108,11 @@ export function createLongTaskRunID(title: string) {
 }
 
 async function ensureJsonlFile(target: string) {
-  if (await pathExists(target)) return
-  await writeTextFile(target, "")
-}
-
-async function appendJsonl<T>(target: string, value: T) {
-  await ensureDirectory(path.dirname(target))
-  const line = JSON.stringify(value) + "\n"
-  const existing = (await pathExists(target)) ? await readTextFile(target) : ""
-  await writeTextFile(target, existing + line)
+  await ensureJsonlFileLocked(target)
 }
 
 async function readJsonl<T>(target: string): Promise<T[]> {
-  if (!(await pathExists(target))) return []
-  const raw = await readTextFile(target)
-  return raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as T)
+  return readJsonlFile<T>(target)
 }
 
 function stripRecordTimestamps<T extends { createdAt?: string; updatedAt?: string }>(value: T) {
@@ -257,7 +242,8 @@ export function resolveLongTaskEditablePaths(spec: LongTaskSpec) {
 }
 
 function isTaskLocalRuntimePath(specDir: string, value: string) {
-  const relative = path.relative(specDir, path.resolve(value)).replace(/\\/g, "/")
+  const resolved = path.isAbsolute(value) ? path.resolve(value) : path.resolve(specDir, value)
+  const relative = path.relative(specDir, resolved).replace(/\\/g, "/")
   return (
     relative === "workspace" ||
     relative.startsWith("workspace/") ||
@@ -269,7 +255,7 @@ function isTaskLocalRuntimePath(specDir: string, value: string) {
 }
 
 function runtimeMirrorPath(specDir: string, runtimeRoot: string, value: string) {
-  const resolved = path.resolve(value)
+  const resolved = path.isAbsolute(value) ? path.resolve(value) : path.resolve(specDir, value)
   if (!isTaskLocalRuntimePath(specDir, resolved)) return resolved
   const relative = path.relative(specDir, resolved)
   return path.join(runtimeRoot, relative)
@@ -426,7 +412,7 @@ export async function initializeLongTaskRun(input: {
 
   await writeJsonFile(run.taskPath, input.spec)
   await writeJsonFile(run.workGraphPath, input.workGraph)
-  await writeJsonFile(run.progressStatePath, input.progressState)
+  await writeLongTaskProgressState(run, input.progressState)
   await ensureJsonlFile(run.claimsPath)
   await ensureJsonlFile(run.validatorResultsPath)
   await ensureJsonlFile(run.failurePacketsPath)
@@ -500,10 +486,12 @@ export async function readLongTaskProgressState(run: LongTaskRunPaths) {
 
 export async function writeLongTaskProgressState(run: LongTaskRunPaths, progress: LongTaskProgressState) {
   const heartbeatAt = nowISO()
+  const ownerCreationTick = progress.ownerCreationTick ?? (await readCurrentProcessCreationTick())
   await writeJsonFile(run.progressStatePath, {
     ...progress,
     ownerPID: progress.ownerPID ?? process.pid,
     ownerCommandHint: progress.ownerCommandHint ?? detectOwnerCommandHint(),
+    ownerCreationTick,
     heartbeatAt,
     updatedAt: heartbeatAt,
   })
@@ -519,31 +507,31 @@ export async function writeLongTaskFinalizationState(run: LongTaskRunPaths, stat
 }
 
 export async function appendVerificationClaim(run: LongTaskRunPaths, claim: LongTaskVerificationClaim) {
-  await appendJsonl(run.claimsPath, claim)
+  await appendJsonlLocked(run.claimsPath, claim)
 }
 
 export async function appendValidatorResult(run: LongTaskRunPaths, result: LongTaskValidatorResult) {
-  await appendJsonl(run.validatorResultsPath, result)
+  await appendJsonlLocked(run.validatorResultsPath, result)
 }
 
 export async function appendFailurePacket(run: LongTaskRunPaths, packet: LongTaskFailurePacket) {
-  await appendJsonl(run.failurePacketsPath, packet)
+  await appendJsonlLocked(run.failurePacketsPath, packet)
 }
 
 export async function appendScratchUnit(run: LongTaskRunPaths, unit: LongTaskScratchUnit) {
-  await appendJsonl(run.scratchUnitsPath, unit)
+  await appendJsonlLocked(run.scratchUnitsPath, unit)
 }
 
 export async function appendLearningUnit(run: LongTaskRunPaths, unit: LongTaskLearningUnit) {
-  await appendJsonl(run.learningUnitsPath, unit)
+  await appendJsonlLocked(run.learningUnitsPath, unit)
 }
 
 export async function appendRetryLesson(run: LongTaskRunPaths, lesson: LongTaskRetryLesson) {
-  await appendJsonl(run.retryLessonsPath, lesson)
+  await appendJsonlLocked(run.retryLessonsPath, lesson)
 }
 
 export async function appendRetryJournalEntry(run: LongTaskRunPaths, entry: LongTaskRetryJournalEntry) {
-  await appendJsonl(run.retryJournalPath, entry)
+  await appendJsonlLocked(run.retryJournalPath, entry)
 }
 
 export async function readVerificationClaims(run: LongTaskRunPaths) {
@@ -940,7 +928,7 @@ export async function appendArchiveRecord(paths: LongTaskPaths, record: LongTask
   const indexPath = path.join(paths.archiveRoot, "index.jsonl")
   const existing = await findJsonlRecordByID<LongTaskArchiveRecord>(indexPath, record.id)
   if (existing) return existing
-  await appendJsonl(indexPath, record)
+  await appendJsonlIfMissingLocked<LongTaskArchiveRecord>(indexPath, record, (item, next) => item.id === next.id)
   return record
 }
 
@@ -948,7 +936,7 @@ export async function appendShadowMemoryRecord(paths: LongTaskPaths, record: Lon
   const indexPath = path.join(paths.shadowMemoryRoot, "index.jsonl")
   const existing = await findJsonlRecordByID<LongTaskShadowMemoryRecord>(indexPath, record.id)
   if (existing) return existing
-  await appendJsonl(indexPath, record)
+  await appendJsonlIfMissingLocked<LongTaskShadowMemoryRecord>(indexPath, record, (item, next) => item.id === next.id)
   return record
 }
 
@@ -983,10 +971,11 @@ export async function writeLongTaskCandidatePackage(
     existing && sameLogicalRecord(existing, draft) ? { ...draft, updatedAt: existing.updatedAt } : draft
   await ensureDirectory(candidateDir(paths, candidate.id))
   await writeJsonFile(target, candidate)
-  const existingIndexed = await findJsonlRecordByID<LongTaskCandidatePackage>(indexPath, candidate.id)
-  if (!existingIndexed || !sameLogicalRecord(existingIndexed, candidate)) {
-    await appendJsonl(indexPath, candidate)
-  }
+  await appendJsonlIfMissingLocked<LongTaskCandidatePackage>(
+    indexPath,
+    candidate,
+    (existingIndexed, next) => existingIndexed.id === next.id && sameLogicalRecord(existingIndexed, next),
+  )
   return {
     candidate,
     path: target,

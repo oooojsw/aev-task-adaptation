@@ -1,3 +1,72 @@
+## 断点续传主线红线（2026-06-26）
+
+用户说“继续训练 / 断点续传 / 续传 / 重启外层 orchestrator / 恢复训练”时，默认含义是续传已有最高进度 benchmark run，而不是新建一个新的 `--out` 目录。
+
+执行前必须先枚举：
+
+```text
+auto-evolve/runtime-state/benchmark-runs
+```
+
+并按同一 label / task-pack / split 对历史 run 做对比，至少查看：
+
+- `orchestrator-state.json` 里的 `verified_success` 数量。
+- `queued`、`running`、`recovery_pending`、`failed` 数量。
+- `task-ledger.json` 的血统与 generation。
+- `scorecard.md` 和最后更新时间。
+
+只有确认用户明确要求“新实验 / 从零开始 / fresh-all / 新建 run / 不继承旧进度”时，才允许创建新的 `--out`。否则必须使用已有最高进度 run 目录作为唯一训练主线。
+
+大白话：如果旧 run 已经是 `27/80`，就不能因为修了代码或重启 orchestrator 又开一个 `6/80` 的新 run。修复后的代码应该接到旧账本上继续跑；新 run 只会重复烧模型额度、污染实验血统，并让后续接手 AI 误判真实进度。
+
+## Benchmark 训练 Supervisor 调度红线（2026-06-26）
+
+`scripts/run-benchmark-orchestrator.ts` 的训练阶段不是单一 todo 队列，而是小型 supervisor，必须同时管理：
+
+- `todo`：需要启动、恢复或接管的任务。
+- `active`：当前外层自己启动并正在等待的子进程。
+- `watch`：已经由别的进程健康运行、外层只负责观察的 campaign。
+
+健康运行中的 campaign 不能进入 todo 调 `resume-long-task-campaign`。否则 resume 发现同 campaign 已 live 会秒退，外层会误以为这个训练项已处理，导致 `todo/active` 清空后提前结束训练阶段。现在调度规则是：
+
+- `healthy_running` / `long_running` / 短启动宽限内的 `bootstrapping` 进入 `watch`。
+- `recovery_pending` / `stale_running` 进入 `resume_recovery`。
+- `stuck_running` 进入 `takeover_recovery`。
+- 无 campaign 才 `start_new`。
+- 训练阶段退出必须同时满足 `todo` 已耗尽、`active` 为空、`watch` 为空。
+
+`run-health` 也同步收紧：无 ownerPID 的 `running` 不再算 healthy，直接按 stale/resume 处理；无 ownerPID 的 `bootstrapping` 只给默认 2 分钟启动宽限。
+
+回归烟测：
+
+```powershell
+bun run auto-evolve/scripts/smoke-benchmark-supervisor.ts
+```
+
+## Blank Eval 物理闭卷沙盒红线（2026-06-26）
+
+Blank Eval 现在必须按“物理闭卷考试”运行，而不是只靠提示词或元数据声明不能看答案。每次空白 agent 验收都会在 `runtime-state/blank-eval-runs/<run>/sandbox/` 下构建独立考场：
+
+- `sandbox/materials/`：只复制该题允许读取的原始材料。
+- `sandbox/skill/`：只复制去掉隐藏缓存、`.opencode`、`node_modules`、软链接/junction 的 clean skill。
+- `sandbox/workspace/`：唯一可写输出区。
+- `sandbox/bundle.json`：只记录 sandbox 内路径，不记录原始 spec、private answers、旧 campaign、worker、validator 输入等路径。
+
+实现要点：`runOpencodeTask` 新增 `workDir` 和 `allowShell`，因此 repo 根目录仍可用于加载本地 OpenCode 源码和依赖，但传给 `opencode run --dir` 的任务目录必须是 sandbox 根目录。Blank Eval 默认 `allowShell: false`；如果以后确实需要 shell，必须先实现只能在 sandbox 内执行、并防 symlink/junction 逃逸的安全 wrapper，不能直接打开普通 shell。
+
+清考场也必须 fail closed：Blank Eval 的 reset 只能备份、删除、重建 `sandbox/` 内的 `editablePaths/targetPaths`。如果 spec 写了绝对路径或 `../` 逃逸路径，系统必须在启动模型前报错停止，不能帮它清理宿主机上的真实文件。
+
+## PID Owner 强身份判断补丁（2026-06-26）
+
+Windows 会复用 PID，所以 Auto-Evolve 不能只看“这个 PID 活着”或“命令行里出现 run-long-task-campaign”。现在 `process-identity.ts` 提供统一的 owner hint 分类：
+
+- `strongProcessOwnerHints(...)`：只保留可证明具体任务归属的强上下文，例如完整命令、campaignID、campaign 目录名、baseSpecPath、runID。
+- `optionalProcessOwnerHints(...)`：只放旧状态里残留的泛用命令名，例如 `run-long-task-campaign`、`resume-long-task-campaign`、`run-long-task`。
+
+run-health、benchmark 外层恢复、OpenCodeGate、campaign takeover 都必须使用这组 helper。泛用 hint 不能进入 `requiredAnyCommandHints`，否则旧状态可能把别的 campaign 进程误认成当前任务，造成看板假健康、断点续传不启动或错误 takeover。
+
+补充规则：campaign runner 内部也不能只看旧 `ownerCommandHint`。恢复、自愈和 takeover 必须带上 campaignID、campaign 目录名、baseSpecPath 或 runID 这类强上下文。`unknown_owner` 只能在心跳新鲜时短暂观察，不能长期阻止 stale recovery；更不能作为 `terminateProcessTree(...)` 的依据。只有 `ownership === "owned"` 才允许杀进程。
+
 这是一份为你和未来接手此项目的所有 AI 智能体量身定制的 **最高指导纲领（CRITICAL_ARCHITECTURE_MEMO.md）**。
 
 我融合了系统底层的数学约束哲学、多智能体社会学架构、极度严苛的物理隔离防线（包含 06-04 与 06-05 的所有底层修复纪实），以及一份**可落地的“接手操作指南”**。
@@ -1343,6 +1412,86 @@ python auto-evolve/scripts/smoke-direct-chat-master-report.py
 
 独立入口支持 `--resume-existing`：同一输出目录恢复时，已有 `result.json` 的题目不会重跑；整批补齐后仍会自动处理其中的临时基础设施失败。统一 benchmark 的 Direct Chat 测试默认开启该断点续跑能力。
 
+### Resource / Cost Audit 资源成本账本
+
+Auto-Evolve 现在开始把模型调用资源消耗写成统一账本，目标是支持论文里的 token / cost / cost-per-point 统计。
+
+OpenCode 长程训练侧会在每个子会话 stage 目录旁边写：
+
+```text
+resource-usage.json
+```
+
+它从 OpenCode JSON events 的 `step_finish.part.tokens` 和 `step_finish.part.cost` 抽取输入、输出、reasoning、total token 与原始 cost。这个记录由 `orchestrator/opencode.ts -> runOpencodeTask()` 统一落账，所以 executor、lead、reviewer、blank eval、merge repair 等 OpenCode 子会话都会自动覆盖。
+
+Direct Chat 测试侧也会在每题目录旁边写：
+
+```text
+resource-usage.json
+```
+
+它同时保留两类信息：供应商真实返回的 `usage`，以及 `prompt-audit.json` 里的估算 prompt token、skill token、material token。二者不能互相替代，论文分析时都要保留。
+
+全局汇总脚本：
+
+```powershell
+bun run auto-evolve/scripts/update-resource-cost-report.ts
+```
+
+默认扫描：
+
+```text
+auto-evolve/.runtime
+```
+
+也可以指定根目录：
+
+```powershell
+bun run auto-evolve/scripts/update-resource-cost-report.ts --root auto-evolve/runtime-state --out-dir auto-evolve/runtime-state/resource-audit
+```
+
+如果要把账单和某一次 benchmark 训练绑定起来，传入该次运行目录：
+
+```powershell
+bun run auto-evolve/scripts/update-resource-cost-report.ts `
+  --root auto-evolve/runtime-state `
+  --benchmark-out auto-evolve/runtime-state/benchmark-runs/<run-id> `
+  --out-dir auto-evolve/runtime-state/resource-audit
+```
+
+输出：
+
+```text
+aggregate-summary.json
+aggregate-summary.md
+usage-records.csv
+aggregate-by-group.csv
+task-summary.json
+task-summary.md
+task-summary.csv
+round-summary.csv
+task-role-summary.csv
+```
+
+其中：
+
+- `usage-records.csv` 是最细流水账：一次 OpenCode 子会话或一次 Direct Chat case 一行。
+- `aggregate-by-group.csv` 按模型、供应商、阶段、角色聚合。
+- `task-summary.*` 按单个长程任务聚合，能看每个 case 总共花了多少 token、跑了几轮、是否通过、失败摘要是什么。
+- `round-summary.csv` 按任务轮次聚合，用来看第几轮最烧 token。
+- `task-role-summary.csv` 按任务和角色聚合，用来看 executor、lead、blank eval、repair、merge 等各自成本。
+
+传入 `--benchmark-out` 时，还会在该 benchmark 目录旁边写一份随运行携带的任务账单：
+
+```text
+resource-task-summary.json
+resource-task-summary.md
+resource-task-summary.csv
+resource-round-summary.csv
+```
+
+注意：当前版本做 token/raw cost 账本、Direct Chat prompt 构成统计、任务级/轮次级/角色级聚合。模型美元价格未知时不会乱算 USD；价格表、Excel 美化表和论文级 cost-per-point 表会在后续阶段基于这份账本继续做。
+
 ### 本机 Qwen 网页桥接
 
 本机另有一个真实浏览器驱动的 Qwen 网页桥接：
@@ -1381,6 +1530,25 @@ bun run auto-evolve/scripts/run-direct-chat-eval.ts `
   <其他 task-pack、split、skill 参数>
 ```
 
+### OpenCode 训练模型解析与防 fallback
+
+Auto-Evolve 的 OpenCode 子会话不能只相信 `model-config.json` 或 `run.json` 里的“请求模型名”。每个 session 启动前现在会做模型解析校验：
+
+- 目标模型必须是 `provider/model` 格式。
+- 先检查本次临时 `opencode.json` 的 provider/model 是否存在。
+- 如果临时配置缺 provider，会从本机 OpenCode `models.json` 缓存把对应 provider 物化进临时配置。
+- 再检查隔离 runtime 的 `cache/opencode/models.json` 与宿主 `~/.cache/opencode/models.json`。
+- 三处都解析不到目标模型时，直接拒绝启动，避免 OpenCode 静默 fallback 到宿主默认模型。
+- 每个完成的 run 会在 `run.json` 里写入 `modelResolution`，临时运行目录会写入 `model-resolution.json`，用于区分“请求模型”和“解析到的模型定义”。
+
+如果用户在 UI 中看到的模型名与 `modelResolution.requestedModel` 不一致，不要继续跑正式实验；应先检查 provider 代理层是否把同名模型映射或 fallback 到了别的真实模型。
+
+回归烟测：
+
+```powershell
+bun run auto-evolve/scripts/smoke-opencode-model-resolution.ts
+```
+
 ## 完整项目独立开发主链（2026-06-21）
 
 - 本机独立仓库：`C:/Users/ZhuanZ/Desktop/opencode re/opencode-auto-evolve-mainline`
@@ -1390,3 +1558,298 @@ bun run auto-evolve/scripts/run-direct-chat-eval.ts `
 该仓库不是只抽取 `auto-evolve/` 的子项目仓库，而是完整项目主线：保留 OpenCode 源码形态、本机对 OpenCode 的修改、Auto-Evolve 核心系统和本地开发提交顺序。为了摆脱原始上游 `sst/opencode` 的超长历史，主链把最初克隆到本机的 OpenCode 源码树压缩成一条基线提交，然后重放本机开发提交；因此 commit hash 与原宿主仓不同是正常现象。
 
 主链只保存源码、配置模板、提示词、验证器、烟测、轻量 task spec/split 和架构文档。禁止提交 `runtime-state`、运行日志、benchmark 原始材料、PDF/视频/Office 数据、private answers、真实任务 workspace/outputs、模型缓存、Cookie、API Key、认证文件和 Agent 生成产物。实际运行和重型数据仍留在 `opencode latest` 宿主目录或独立数据盘；完整主链负责长期开发历史和云端备份。
+
+## Benchmark 历史血统锁与防污染重跑（2026-06-23）
+
+训练任务的历史不能再只靠“目录里有没有旧 campaign”来判断能不能续传。现在通用批跑脚本会在每个 benchmark 输出目录下维护一份户口本：
+
+```text
+<out>/task-ledger.json
+```
+
+这份文件记录本次 benchmark 的：
+
+- `runID`：本次批跑身份。
+- `currentGenerationID`：当前训练代际。
+- `historyPolicy`：本次允许怎么复用历史。
+- 每个 task 的 `attemptID`、`campaignID`、`campaignDir`、`specHash`、状态和失败原因。
+
+核心原则是：只有 `task-ledger.json` 授权的 campaign 才能被本次批跑自动续传。磁盘上残留的旧 campaign、旧 running 状态、旧 recovery 状态，如果没有匹配当前 `runID + generationID + taskID + attemptID`，都会被外层批跑视为“不属于本次实验”，不会被自动捞起来继续跑。
+
+### 可选历史策略
+
+通用入口 `auto-evolve/scripts/run-benchmark-orchestrator.ts` 新增：
+
+```powershell
+--history-policy <policy>
+```
+
+如果命令行没有传 `--history-policy`，则读取总控配置：
+
+```json
+{
+  "historyConfig": {
+    "policy": "fresh-non-verified",
+    "allowLegacyAutoResume": false,
+    "keepVerified": true,
+    "requireLineageForAutoResume": true
+  }
+}
+```
+
+也就是说，正式批跑不需要每次手写历史策略；总控默认就是“保留成功项，其他进入新代际重跑”。命令行参数只用于临时覆盖。
+
+当前支持：
+
+- `resume-current-generation`：默认策略。只续传当前户口本里的当前代际任务。
+- `fresh-non-verified`：保留已经 `verified_success` 且产物仍存在的任务；其他未成功、失败、假活、污染过的任务全部进入新代际重新跑。
+- `fresh-all`：全部进入新代际重跑，不复用任何旧成功项。
+- `resume-explicit-only`：不给外层自动捞旧任务；只允许显式指定 campaign 的人工恢复链路。
+- `audit-only`：只用于盘点，不应启动新训练。
+
+SpreadsheetBench 这类重新跑非成功任务的推荐方式是：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --task-pack-root auto-evolve/task-packs/real-long-tasks/spreadsheetbench-learnbench `
+  --train-split auto-evolve/task-packs/real-long-tasks/spreadsheetbench-learnbench/splits/train-skillopt-official.json `
+  --out auto-evolve/runtime-state/benchmark-runs/<run-dir> `
+  --history-policy fresh-non-verified `
+  <其他训练/合并/回撤参数>
+```
+
+这样做的含义是：之前已经闭卷验收成功的 skill 可以保留，其他所有失败、假活、错误模型、错误平台、污染过的历史都不再续传，而是作为新 attempt 重新开始。
+
+### CLI 断点续传的边界
+
+`run-long-task-campaign` / `resume-long-task-campaign` 现在可以通过环境变量接收外层传入的历史作用域：
+
+```text
+AUTO_EVOLVE_HISTORY_SCOPE
+```
+
+外层批跑会自动传入这个变量，普通使用者不需要手写。它的作用是把单个 campaign 绑定到本次 benchmark 的 `task-ledger.json`，避免旧目录被误续传。
+
+保留一个兼容开关：
+
+```powershell
+$env:AUTO_EVOLVE_ALLOW_LEGACY_CAMPAIGN_RESUME = "1"
+```
+
+只有确实要兼容非常旧的无户口 campaign 自动续传时才使用。正式实验默认不要开。
+
+### 回归烟测
+
+历史管理基础烟测：
+
+```powershell
+bun run auto-evolve/scripts/smoke-benchmark-history-manager.ts
+```
+
+这个烟测会确认：
+
+- 没有血统信息的旧 campaign 不会被新批跑自动复用。
+- 同一 `runID/generationID/taskID/attemptID` 的 campaign 可以被授权续传。
+- `fresh-non-verified` 会进入新代际，同时保留明确可信的 `verified_success` 项。
+
+### 失败恢复总控
+
+`auto-evolve/config.json` 的 `historyConfig` 现在也控制失败任务的自动恢复方式：
+
+```json
+{
+  "historyConfig": {
+    "policy": "fresh-non-verified",
+    "resumeMode": "safe-non-terminal",
+    "allowLegacyAutoResume": false,
+    "keepVerified": true,
+    "requireLineageForAutoResume": true,
+    "excludedTaskIDs": [],
+    "retryInfraFailed": true,
+    "retryProductFailed": false,
+    "maxAttemptsPerTask": 2
+  }
+}
+```
+
+- `resumeMode`：推荐 `safe-non-terminal`。系统只自动恢复非终态任务和基础设施类失败，不再默认把已经失败的答案任务反复重跑。
+- `excludedTaskIDs`：临时跳过某些任务。跳过项会写成 `excluded_for_now`，不会被外层补位逻辑误启动。
+- `retryInfraFailed`：进程崩溃、假活、锁、spawn、平台超时这类基础设施失败可以自动重跑。
+- `retryProductFailed`：答案/产物确实做错的失败默认不自动重跑，除非用户明确打开。
+- `maxAttemptsPerTask`：单个任务最多自动尝试次数，防止无限烧额度。
+
+命令行仍可以临时覆盖总控：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts `
+  --resume-mode safe-non-terminal `
+  --exclude-task-ids 398-14,10747,56274 `
+  --retry-infra-failed true `
+  --retry-product-failed false `
+  --max-attempts-per-task 2
+```
+
+大白话：以后“断点续传”不是见到失败就继续旧脏历史，而是先查户口本，再看失败类型。系统故障可以救，真实做错默认先记失败，避免反复浪费额度。
+
+## OpenCode 私有配置隔离
+
+从 2026-06-25 起，auto-evolve 训练侧 OpenCode 会话默认不再读取本机实时 OpenCode 配置。
+
+训练专用配置快照位置：
+
+```text
+auto-evolve/.opencode-private/
+```
+
+这个目录包含：
+
+- `config/opencode/opencode.json`：只保留 provider/model 相关配置。
+- `data/opencode/auth.json`：训练专用 auth key 快照。
+- `cache/opencode/models.json`：训练专用模型列表缓存。
+- `config/opencode/AGENTS.md`：最小训练专用说明，不复制本机 OpenCode AGENTS。
+
+刷新快照时运行：
+
+```powershell
+cd "C:\Users\ZhuanZ\Desktop\opencode re\opencode latest"
+bun run auto-evolve/scripts/import-opencode-private-profile.ts
+```
+
+红线：
+
+- 运行时只能读 `.opencode-private` 或 `AUTO_EVOLVE_OPENCODE_PRIVATE_PROFILE_ROOT` 指向的目录。
+- 不能再从 `C:\Users\ZhuanZ\.config\opencode`、`.local/share/opencode`、AppData OpenCode 目录或桌面版 OpenCode 实时读配置。
+- `.opencode-private` 已被 gitignore，里面可能有 API key，禁止提交。
+
+大白话：本机 OpenCode 是用户日常使用的客户端；auto-evolve 是训练机器。两边以后只允许通过“手动导入快照”同步一次，不允许运行时互相渗透。
+
+## Blank Eval 进程清理红线
+
+2026-06-25 修复了一个严重问题：Blank Eval 曾在运行中启动 10 秒轮询并调用 `cleanupRuntimeProcessScope(scope)`。这个函数不是健康检查，而是破坏性清理，会终止同一 `runtimeScope` 下登记的进程树。由于 `runOpencodeTask` 正好会把空白 agent 的 OpenCode 子进程注册到同一个 scope，这会导致 Blank Eval 自己杀掉自己。
+
+症状包括：
+
+- `Blank agent session infrastructure failed`
+- `candidate file not found`
+- `silent/no signal`
+- 空白 agent 未写出 `workspace/answer.json`
+- final acceptance 被误判为基础设施失败
+
+当前规则：
+
+- Blank Eval 运行中禁止调用 `cleanupRuntimeProcessScope(scope)`。
+- 只允许在 `finally` 阶段做 scope cleanup。
+- 如果未来要清理逃逸子进程，必须新增安全接口，例如 `excludePids` 或 `orphans_only`，不能复用全量 cleanup 当 poll/probe。
+
+## Windows 状态写入与进程身份底座
+
+2026-06-25 继续修复了两个基础设施级风险：
+
+- `OpenCodeGate` 原来写 `state.json` 时会先写 tmp，再删除旧 state，再 rename。Windows 高并发或杀软扫描时如果 rename 被 EPERM/EBUSY 卡住，旧 state 已经被删掉，gate 会短暂失忆。
+- `run-health`、benchmark 外层补位和 gate 清理原来主要靠 `process.kill(pid, 0)` 判断 PID 是否活着。Windows 会复用 PID，只看 PID 容易把“别人正在用的同一个 PID”误当成自己的旧 owner。
+
+当前底座：
+
+- `orchestrator/atomic-write.ts`
+  - 统一提供 `writeFileAtomic` / `writeJsonAtomic`。
+  - 规则是同目录临时文件 + rename + EPERM/EBUSY/EACCES 退避重试。
+  - 禁止状态文件再写“先删旧文件再 rename”或“失败后直接覆盖目标文件”的逻辑。
+- `orchestrator/process-identity.ts`
+  - 统一提供 `identifyProcessOwner(...)`。
+  - 判断时同时看 PID、Windows commandLine、owner hint、ownerCreationTick、heartbeat/updatedAt 新鲜度。
+  - `run-long-task-campaign` / `resume-long-task-campaign` / scope / model / caller 只能作为 optional hint，不能单独证明归属。
+  - 真正确认 owner 必须依赖完整 `ownerCommandHint`、campaignID/baseSpecPath/目录名等强 hint，或 Windows 进程创建时间 `ownerCreationTick` 匹配。
+  - `owned` 才是明确属于我们；`wrong_owner` 要当作 stale；`unknown_owner` 只在心跳仍新鲜时保守观察。
+
+已接入位置：
+
+- `fs.writeJsonFile(...)` 统一走 `writeJsonAtomic(...)`。
+- `OpenCodeGate` 的 `state.json` 走 `writeJsonAtomic(...)`，gate active/queue 清理走 `identifyProcessOwner(...)`。
+- `runtime-process-registry` 的 `active-processes.json` 走 `writeFileAtomic(...)`，不再失败后直接覆盖。
+- `run-health` 和 `run-benchmark-orchestrator` 不再裸用 PID 判活，改为进程身份识别。
+- `campaign.json`、`progress_state.json`、`OpenCodeGate` active/queue slot 会记录 `ownerCreationTick`，防止 Windows PID 复用或并发任务命令相似导致假 healthy、拒绝续传、错误 takeover 或误杀。
+- `multi-instance/repository.ts` 的 `coordinator-state.json` 也走统一原子写。
+
+烟测：
+
+```powershell
+bun run auto-evolve/scripts/smoke-atomic-write.ts
+bun run auto-evolve/scripts/smoke-process-identity.ts
+bun run auto-evolve/scripts/smoke-concurrency-regression.ts
+bun run auto-evolve/scripts/smoke-run-health-takeover.ts
+```
+
+大白话：以后状态文件写入是“换新文件”而不是“先撕掉旧账本再赌新账本写成功”；进程判断是“看是不是我们的人”而不是“这个 PID 号码有没有人占着”。
+
+## JSONL 账本追加锁
+
+2026-06-26 修复了另一类 Windows/多进程高并发账本风险：很多模块原来追加 `index.jsonl`、history、claims、validator-results、failure-packets、learning/scratch/retry lessons 时，会先读取完整文件，再写回 `existing + newLine`。多个进程同时写时，后写的人可能基于旧内容覆盖前写的人，导致验收记录、失败证据或学习记录“凭空消失”。
+
+当前底座：
+
+- `orchestrator/jsonl.ts`
+  - `appendJsonlLocked(...)`：同一个 JSONL 文件追加一行时，先拿文件级锁，再 append。
+  - `appendJsonlLinesLocked(...)`：同一个 JSONL 文件追加多行时，先拿文件级锁，再一次性 append。
+  - `appendJsonlIfMissingLocked(...)`：需要按 id/逻辑记录去重时，查重和追加必须在同一把锁里完成。
+  - `withJsonlLock(...)`：少数必须整文件 rewrite 的 JSONL，也必须在这把锁内读、改、原子写回。
+  - `ensureJsonlFileLocked(...)` / `readJsonlFile(...)`：统一创建和读取 JSONL。
+
+已接入位置：
+
+- `acceptance-framework/repository.ts`
+- `experience-transaction/repository.ts`
+- `maintenance-gateway/repository.ts`
+- `maintenance-gateway/short-task.ts`
+- `long-task/repository.ts`
+- `long-task-campaign/repository.ts`
+- `long-task-campaign/runner.ts`
+- `long-task-campaign/blank-agent-evidence.ts`
+
+强制规则：
+
+- 禁止新增 `existing + JSON.stringify(...)` 再写回目标 JSONL 的逻辑。
+- 禁止把“先查 index 是否存在，再 append”拆成无锁的两步；这会在并发时重复或丢账。
+- 禁止对 JSONL 做无锁整文件 rewrite；例如 campaign `history.jsonl` 修改某一轮记录时，必须先拿 `withJsonlLock(...)`。
+- 普通文本聚合日志可以继续用 `appendFile`，但 JSONL 状态账本必须走 `orchestrator/jsonl.ts`。
+
+烟测：
+
+```powershell
+bun run auto-evolve/scripts/smoke-jsonl-append-lock.ts
+```
+
+大白话：JSONL 账本现在像排队盖章，一个人写完下一个人再写；不是所有人同时拿旧账本复印一份再互相覆盖。
+
+## autoEvolvePath 入口目录兼容
+
+2026-06-26 修复了 `autoEvolvePath(cwd, ...)` 的入口目录问题。以前它默认 `cwd` 一定是项目根目录，然后无条件拼 `auto-evolve/...`。如果调用方已经在 `opencode latest\auto-evolve` 目录下启动，就会变成 `auto-evolve\auto-evolve\...`，导致 runtime-state、config、task-packs 等路径全部错位。
+
+当前规则：
+
+- `cwd = opencode latest` 时，根目录解析为 `opencode latest\auto-evolve`。
+- `cwd = opencode latest\auto-evolve` 时，根目录仍解析为 `opencode latest\auto-evolve`。
+- `cwd = opencode latest\auto-evolve\.` 时，也必须解析到同一个位置。
+
+烟测：
+
+```powershell
+bun run auto-evolve/scripts/smoke-auto-evolve-path.ts
+```
+
+大白话：以后从项目根目录启动，或者从 `auto-evolve` 子目录启动，系统看到的是同一个 Auto-Evolve 根，不会再多套一层文件夹。
+
+## Validator 文件参数路径解析与 infra 失败分类
+
+2026-06-26 修复了长程任务验证器的文件参数解析问题。`loadLongTaskSpec(...)` 现在会把脚本验证器中明确表示文件路径的参数值解析到 spec 所在目录，例如 `--answer`、`--candidate`、`--ground-truth-path`、`--config` 等；不会改写 `--range D2:D13` 这类普通参数。
+
+这次修复的直接背景是 SpreadsheetBench 的 `../../private-answers/<id>/answer.xlsx` 曾被错误锚定到桌面目录，导致空白 agent 验收阶段出现 `Validator crashed`。批跑外层现在也把 `Validator crashed`、`private-answers` 缺失这类错误归为基础设施失败（infra），在 `retryInfraFailed=true` 时允许重新跑，而不是当成模型真实做错。
+
+大白话：验证器找不到答案文件，属于平台路径坏了，不是 agent 不会做题；这种失败要修平台并重跑，不能让任务白白烧到多轮。
+
+## Blank Eval 产品验证器候选产物路径
+
+2026-06-26 继续修复了 Campaign 每轮空白验收的产品验证器路径。`buildCampaignBlankEvalSpec(...)` 现在会把产品验证器里的 `--candidate`、`--candidate-path`、`--input`、`--output` 等运行期文件参数重写到 Blank Eval sandbox 内，例如 `./workspace/answer.json`。`--answer` 私有答案路径不会被搬进 sandbox，它只给系统验证器使用，不能让空白 agent 读取。
+
+直接背景：SpreadsheetBench 某些轮次里空白 agent 在 sandbox 工作，但验证器仍去原始任务目录 `tasks/<id>/workspace/answer.json` 找候选答案，导致 `Candidate file not found`。这属于平台验收路径错误，不是模型真实不会做题。批跑外层已将 `Candidate file not found` / `missing candidate` 归为 infra failure，允许按 `retryInfraFailed=true` 重跑。
+
+大白话：空白 agent 在隔离考场里答题，改卷老师也必须去隔离考场收卷，不能跑回旧教室找卷子。

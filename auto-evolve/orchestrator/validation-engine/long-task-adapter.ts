@@ -88,6 +88,44 @@ async function resolveAttachedPath(input: { expected: string; bundle: unknown })
   return undefined
 }
 
+const ANSWER_FILE_NAMES = new Set(["answer.md", "answer.json", "answer.txt"])
+
+function isAnswerFileName(filePath: string) {
+  return ANSWER_FILE_NAMES.has(path.basename(filePath).toLowerCase())
+}
+
+function normalizedPathForRole(filePath: string | undefined) {
+  return (filePath ?? "").replace(/\\/g, "/").toLowerCase()
+}
+
+function isPrivateAnswerPath(filePath: string | undefined) {
+  const normalized = normalizedPathForRole(filePath)
+  return normalized.includes("/private-answers/") || normalized.includes("/answer/")
+}
+
+function isHumanOrContextPath(filePath: string | undefined) {
+  const normalized = normalizedPathForRole(filePath)
+  const base = path.basename(filePath ?? "").toLowerCase()
+  return (
+    base.includes("human-guidance") ||
+    base.includes("guidance") ||
+    base.includes("context") ||
+    normalized.includes("/human-guidance") ||
+    normalized.includes("/context")
+  )
+}
+
+function candidatePriority(filePath: string) {
+  const base = path.basename(filePath).toLowerCase()
+  if (base === "answer.txt") return 0
+  if (base === "answer.json") return 1
+  if (base === "plan.json") return 2
+  if (base.startsWith("answer.")) return 3
+  if (base.includes("candidate")) return 4
+  if (base.includes("output")) return 5
+  return 100
+}
+
 async function inferPrivateAnswer(input: { spec: LongTaskSpec; contract: LongTaskPromptValidatorContract }) {
   const human = input.contract.inputFiles?.humanGuidancePath
   if (!human) return undefined
@@ -95,11 +133,15 @@ async function inferPrivateAnswer(input: { spec: LongTaskSpec; contract: LongTas
   const dir = path.dirname(human)
   const parent = path.dirname(dir)
   if (path.basename(parent) !== "test-shadow") return undefined
-  const answer = path.join(path.dirname(parent), "private-answers", id, "answer.md")
-  return (await pathExists(answer)) ? answer : undefined
+  const answerRoot = path.join(path.dirname(parent), "private-answers", id)
+  for (const name of ANSWER_FILE_NAMES) {
+    const answer = path.join(answerRoot, name)
+    if (await pathExists(answer)) return answer
+  }
+  return undefined
 }
 
-async function buildPromptValidatorInput(input: {
+export async function buildPromptValidatorInput(input: {
   spec: LongTaskSpec
   unit: LongTaskWorkUnit
   contract: LongTaskPromptValidatorContract
@@ -116,15 +158,24 @@ async function buildPromptValidatorInput(input: {
     }),
   )
   const explicit = input.contract.inputFiles
+  const attachedAnswer = attached.find((item) => {
+    if (!item.resolved) return false
+    return (isAnswerFileName(item.expected) || isAnswerFileName(item.resolved)) && isPrivateAnswerPath(item.resolved)
+  })?.resolved
+  const candidateLike = attached
+    .filter((item): item is { expected: string; resolved: string } => typeof item.resolved === "string")
+    .filter((item) => item.resolved !== attachedAnswer)
+    .filter((item) => !isPrivateAnswerPath(item.resolved))
+    .filter((item) => !isHumanOrContextPath(item.expected) && !isHumanOrContextPath(item.resolved))
+    .sort((a, b) => candidatePriority(a.resolved) - candidatePriority(b.resolved))
   const answer =
     explicit?.answerPath && (await pathExists(explicit.answerPath))
       ? explicit.answerPath
-      : attached.find((item) => path.basename(item.expected).toLowerCase() === "answer.md")?.resolved ??
-        (await inferPrivateAnswer({ spec: input.spec, contract: input.contract }))
+      : attachedAnswer ?? (await inferPrivateAnswer({ spec: input.spec, contract: input.contract }))
   const candidate =
     explicit?.candidatePath && (await pathExists(explicit.candidatePath))
       ? explicit.candidatePath
-      : attached.find((item) => path.basename(item.expected).toLowerCase() !== "answer.md")?.resolved
+      : candidateLike[0]?.resolved
   const human =
     explicit?.humanGuidancePath && (await pathExists(explicit.humanGuidancePath))
       ? explicit.humanGuidancePath
@@ -386,21 +437,24 @@ async function runScriptLongTaskValidation(input: {
       preferredKeys: ["passed", "summary", "details", "blocking"],
     })
   const successExitCodes = input.contract.successExitCodes ?? [0]
-  const passedFromExit = !timedOut && successExitCodes.includes(exitCode)
-  const passed = readBooleanField(parsed, "passed", "ok", "success") ?? passedFromExit
+  const infraOK = !timedOut && successExitCodes.includes(exitCode)
+  const reportedPassed = readBooleanField(parsed, "passed", "ok", "success")
+  const passed = infraOK && (reportedPassed ?? true)
   const parsedSummary = readStringField(parsed, "summary", "message", "result_summary")
   const summary = parsedSummary
     ? parsedSummary
     : timedOut
       ? `${input.contract.title} timed out after ${timeoutMs} ms.`
-      : passedFromExit
-        ? `${input.contract.title} passed.`
+      : infraOK
+        ? reportedPassed === false
+          ? `${input.contract.title} reported product failure.`
+          : `${input.contract.title} passed.`
         : `${input.contract.title} failed with exit code ${exitCode}.`
   const failureText = [summary, normalizedStderr, stdout].join("\n").toLowerCase()
   const failureKind = passed
     ? undefined
-    : timedOut ||
-        (!parsed && !passedFromExit) ||
+    : !infraOK ||
+        timedOut ||
         failureText.includes("validator crashed") ||
         failureText.includes("validator runtime bootstrap failed") ||
         failureText.includes("usage:") ||
@@ -422,10 +476,15 @@ async function runScriptLongTaskValidation(input: {
       blocking: readBooleanField(parsed, "blocking", "is_blocking") ?? input.contract.blocking === true,
       failureKind,
       summary,
-      details:
-        readDetailsField(parsed).length > 0
+      details: [
+        `exitCode=${exitCode}`,
+        `timedOut=${timedOut}`,
+        `successExitCodes=${successExitCodes.join(",")}`,
+        ...(reportedPassed !== undefined ? [`reportedPassed=${reportedPassed}`] : []),
+        ...(readDetailsField(parsed).length > 0
           ? readDetailsField(parsed)
-          : [normalizedStderr.trim() || stdout.trim()].filter(Boolean),
+          : [normalizedStderr.trim() || stdout.trim()].filter(Boolean)),
+      ],
       evidenceRefs: [payloadPath, stdoutPath, stderrPath],
       rawOutputPath: stdoutPath,
     },

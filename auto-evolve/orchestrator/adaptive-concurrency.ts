@@ -219,9 +219,10 @@ export async function recordAdaptiveModelOutcome(input: {
             (failureClass === "provider_busy" ? profile.cooldownAfterProviderBusyMs : profile.cooldownAfterTimeoutMs),
         ).toISOString()
       } else if (blockingFailure) {
-        openCode = 0
-        tasks = 0
-        cooldownUntil = null
+        openCode = profile.minOpenCodeConcurrency
+        tasks = profile.minTaskConcurrency
+        spacing = profile.maxRequestSpacingMs
+        cooldownUntil = new Date(Date.now() + profile.cooldownAfterRateLimitMs).toISOString()
       }
     }
 

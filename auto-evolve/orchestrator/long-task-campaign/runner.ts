@@ -1,7 +1,7 @@
 import path from "node:path"
 import process from "node:process"
 import { randomUUID } from "node:crypto"
-import { appendFile, cp, lstat, readdir, rm } from "node:fs/promises"
+import { cp, lstat, readdir, rm } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
 import {
   autoEvolvePath,
@@ -14,6 +14,12 @@ import {
   writeJsonFile,
   writeTextFile,
 } from "../fs"
+import { appendJsonlLocked } from "../jsonl"
+import {
+  identifyProcessOwner,
+  optionalProcessOwnerHints,
+  strongProcessOwnerHints,
+} from "../process-identity"
 import {
   experienceWorkspacePathsFromRoot,
   readExperienceWorkspace,
@@ -26,6 +32,13 @@ import { readOperationalContext, resolveExistingLongTaskRun } from "../long-task
 import { loadLongTaskSpec } from "../long-task/spec"
 import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { runBlankEval } from "../blank-eval/runner"
+import {
+  defaultReuseForPolicy,
+  isCampaignAuthorizedForContext,
+  lineageForAttempt,
+  registerCampaignAttempt,
+  type BenchmarkHistoryContext,
+} from "../history-manager"
 import {
   writeBlankAgentEvidenceBundle,
   readLatestBlankAgentEvidenceBundlePath,
@@ -217,47 +230,54 @@ const STALE_OWNER_TIMEOUT_MS = (() => {
   return defaultRunHealthPolicy().staleOwnerMs
 })()
 
-async function isPidAlive(pid: number) {
-  if (!Number.isFinite(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
+type OwnerUseCase = "block_recovery" | "kill"
+
+function campaignOwnerHints(input: {
+  campaignID?: string
+  campaignRoot?: string
+  baseSpecPath?: string
+  runID?: string
+  commandHint?: string
+}) {
+  return {
+    requiredAny: strongProcessOwnerHints([
+      input.campaignID,
+      input.campaignRoot ? path.basename(input.campaignRoot) : undefined,
+      input.baseSpecPath,
+      input.baseSpecPath ? path.basename(input.baseSpecPath) : undefined,
+      input.runID,
+      input.commandHint,
+    ]),
+    optional: optionalProcessOwnerHints([input.commandHint]),
   }
 }
 
-async function readProcessCommandLine(pid: number) {
-  if (process.platform !== "win32") return undefined
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const script = [
-      "$ErrorActionPreference = 'Stop'",
-      `$proc = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"`,
-      "if ($null -eq $proc) { exit 2 }",
-      "Write-Output ($proc.CommandLine ?? '')",
-    ].join("; ")
-    const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
-    if (exitCode === 0) {
-      const normalized = stdout.trim()
-      if (normalized.length > 0) return normalized
-    }
-    if (attempt < 3) await sleep(100 * attempt)
-  }
-  return undefined
-}
-
-async function isPidOwnedByHint(pid: number, commandHint?: string) {
-  if (!(await isPidAlive(pid))) return false
-  if (typeof commandHint !== "string" || commandHint.trim().length === 0) return true
-  if (process.platform !== "win32") return true
-  const commandLine = await readProcessCommandLine(pid)
-  // Be conservative on Windows introspection failure to avoid false stale kills.
-  if (!commandLine) return true
-  return commandLine.toLowerCase().includes(commandHint.trim().toLowerCase())
+async function identifyCampaignOwnerProcess(input: {
+  pid: number
+  useCase: OwnerUseCase
+  commandHint?: string
+  expectedCreationTick?: string
+  heartbeatAt?: string
+  updatedAt?: string
+  campaignID?: string
+  campaignRoot?: string
+  baseSpecPath?: string
+  runID?: string
+}) {
+  const hints = campaignOwnerHints(input)
+  const identity = await identifyProcessOwner({
+    pid: input.pid,
+    requiredAnyCommandHints: hints.requiredAny,
+    optionalCommandHints: hints.optional,
+    expectedCreationTick: input.expectedCreationTick,
+    heartbeatAt: input.heartbeatAt,
+    updatedAt: input.updatedAt,
+    staleAfterMs: STALE_OWNER_TIMEOUT_MS,
+  })
+  if (input.useCase === "kill") return identity.ownership === "owned"
+  if (identity.ownership === "owned") return true
+  // A fresh unknown owner can be observed briefly, but it must not block stale recovery indefinitely.
+  return identity.ownership === "unknown_owner" && !isOwnerHeartbeatStale(input)
 }
 
 function isLiveCampaignStatus(status: LongTaskCampaignState["status"]) {
@@ -337,6 +357,7 @@ async function healStaleRuntimeStates(cwd: string) {
           ...state,
           ownerPID: undefined,
           ownerCommandHint: undefined,
+          ownerCreationTick: undefined,
           heartbeatAt: undefined,
           updatedAt: now,
           lastSummary: `Normalized legacy recovery marker: ${recovery.reason}`,
@@ -366,9 +387,29 @@ async function healStaleRuntimeStates(cwd: string) {
           updatedAt: state.updatedAt,
           nowMs,
         })
-        const owned = await isPidOwnedByHint(state.ownerPID, state.ownerCommandHint)
-        if (!stale && owned) continue
-        kill = owned
+        const blockRecovery = await identifyCampaignOwnerProcess({
+          pid: state.ownerPID,
+          useCase: "block_recovery",
+          commandHint: state.ownerCommandHint,
+          expectedCreationTick: state.ownerCreationTick,
+          heartbeatAt: state.heartbeatAt,
+          updatedAt: state.updatedAt,
+          campaignID: entry.name,
+          campaignRoot: campaignPaths.root,
+          baseSpecPath: state.baseSpecPath,
+        })
+        if (!stale && blockRecovery) continue
+        kill = await identifyCampaignOwnerProcess({
+          pid: state.ownerPID,
+          useCase: "kill",
+          commandHint: state.ownerCommandHint,
+          expectedCreationTick: state.ownerCreationTick,
+          heartbeatAt: state.heartbeatAt,
+          updatedAt: state.updatedAt,
+          campaignID: entry.name,
+          campaignRoot: campaignPaths.root,
+          baseSpecPath: state.baseSpecPath,
+        })
       }
       if (kill && typeof state.ownerPID === "number" && Number.isFinite(state.ownerPID) && state.ownerPID > 0) {
         await terminateProcessTree(state.ownerPID)
@@ -404,6 +445,7 @@ async function healStaleRuntimeStates(cwd: string) {
         ...state,
         status: "recovery_pending",
         ownerPID: process.pid,
+        ownerCreationTick: undefined,
         heartbeatAt: now,
         updatedAt: now,
         lastSummary: recovery.reason,
@@ -450,9 +492,25 @@ async function healStaleRuntimeStates(cwd: string) {
           updatedAt: progress.updatedAt,
           nowMs,
         })
-        const owned = await isPidOwnedByHint(progress.ownerPID, progress.ownerCommandHint)
-        if (!stale && owned) continue
-        kill = owned
+        const blockRecovery = await identifyCampaignOwnerProcess({
+          pid: progress.ownerPID,
+          useCase: "block_recovery",
+          commandHint: progress.ownerCommandHint,
+          expectedCreationTick: progress.ownerCreationTick,
+          heartbeatAt: progress.heartbeatAt,
+          updatedAt: progress.updatedAt,
+          runID: entry.name,
+        })
+        if (!stale && blockRecovery) continue
+        kill = await identifyCampaignOwnerProcess({
+          pid: progress.ownerPID,
+          useCase: "kill",
+          commandHint: progress.ownerCommandHint,
+          expectedCreationTick: progress.ownerCreationTick,
+          heartbeatAt: progress.heartbeatAt,
+          updatedAt: progress.updatedAt,
+          runID: entry.name,
+        })
       }
       if (kill && typeof progress.ownerPID === "number" && Number.isFinite(progress.ownerPID) && progress.ownerPID > 0) {
         await terminateProcessTree(progress.ownerPID)
@@ -473,6 +531,7 @@ async function healStaleRuntimeStates(cwd: string) {
         ...progress,
         status: recoveredStatus,
         ownerPID: process.pid,
+        ownerCreationTick: undefined,
         heartbeatAt: now,
         updatedAt: now,
         finalSummary:
@@ -492,7 +551,13 @@ async function healStaleRuntimeStates(cwd: string) {
   }
 }
 
-async function findExistingLiveCampaign(input: { cwd: string; title: string; baseSpecPath: string }) {
+async function findExistingLiveCampaign(input: {
+  cwd: string
+  title: string
+  baseSpecPath: string
+  historyContext?: BenchmarkHistoryContext
+  taskID?: string
+}) {
   const campaignsRoot = autoEvolvePath(input.cwd, "runtime-state", "long-task-campaigns")
   if (!(await pathExists(campaignsRoot))) return undefined
   const normalizedBaseSpecPath = path.resolve(input.baseSpecPath)
@@ -518,6 +583,8 @@ async function findExistingLiveCampaign(input: { cwd: string; title: string; bas
     const stateBaseSpecPath = typeof state.baseSpecPath === "string" ? path.resolve(state.baseSpecPath) : ""
     const sameTarget = stateBaseSpecPath === normalizedBaseSpecPath
     if (!sameTarget) continue
+    if (input.historyContext && !isCampaignAuthorizedForContext(state, input.historyContext, input.taskID)) continue
+    if (!input.historyContext && process.env.AUTO_EVOLVE_ALLOW_LEGACY_CAMPAIGN_RESUME !== "1") continue
     const health = await readCampaignHealth(campaignPaths.root)
     if (
       health &&
@@ -527,7 +594,21 @@ async function findExistingLiveCampaign(input: { cwd: string; title: string; bas
     }
     if (typeof state.ownerPID === "number" && Number.isFinite(state.ownerPID) && state.ownerPID > 0) {
       if (state.ownerPID === process.pid) continue
-      if (!(await isPidOwnedByHint(state.ownerPID, state.ownerCommandHint))) continue
+      if (
+        !(await identifyCampaignOwnerProcess({
+          pid: state.ownerPID,
+          useCase: "block_recovery",
+          commandHint: state.ownerCommandHint,
+          expectedCreationTick: state.ownerCreationTick,
+          heartbeatAt: state.heartbeatAt,
+          updatedAt: state.updatedAt,
+          campaignID,
+          campaignRoot: campaignPaths.root,
+          baseSpecPath: state.baseSpecPath,
+        }))
+      ) {
+        continue
+      }
     }
     candidates.push({
       campaignID,
@@ -695,7 +776,13 @@ export async function determineCampaignRecoveryDecision(input: {
   return undefined
 }
 
-async function findRecoverableCampaignForTarget(input: { cwd: string; title: string; baseSpecPath: string }) {
+async function findRecoverableCampaignForTarget(input: {
+  cwd: string
+  title: string
+  baseSpecPath: string
+  historyContext?: BenchmarkHistoryContext
+  taskID?: string
+}) {
   const campaignsRoot = autoEvolvePath(input.cwd, "runtime-state", "long-task-campaigns")
   if (!(await pathExists(campaignsRoot))) return undefined
   const normalizedBaseSpecPath = path.resolve(input.baseSpecPath)
@@ -721,6 +808,8 @@ async function findRecoverableCampaignForTarget(input: { cwd: string; title: str
     const stateBaseSpecPath = typeof state.baseSpecPath === "string" ? path.resolve(state.baseSpecPath) : ""
     const sameTarget = stateBaseSpecPath === normalizedBaseSpecPath
     if (!sameTarget) continue
+    if (input.historyContext && !isCampaignAuthorizedForContext(state, input.historyContext, input.taskID)) continue
+    if (!input.historyContext && process.env.AUTO_EVOLVE_ALLOW_LEGACY_CAMPAIGN_RESUME !== "1") continue
     const freshnessMs =
       parseTimestampMs(state.heartbeatAt) ??
       parseTimestampMs(state.updatedAt) ??
@@ -2364,6 +2453,59 @@ function isBaseSpecLocalRuntimePath(baseSpecPath: string, value: string) {
   )
 }
 
+function baseSpecLocalRuntimeRelativePath(baseSpecPath: string, value: string) {
+  const baseDir = path.dirname(path.resolve(baseSpecPath))
+  const resolved = path.isAbsolute(value) ? path.resolve(value) : path.resolve(baseDir, value)
+  const relative = path.relative(baseDir, resolved).replace(/\\/g, "/")
+  const isLocal =
+    relative === "workspace" ||
+    relative.startsWith("workspace/") ||
+    relative === "expert-workspace" ||
+    relative.startsWith("expert-workspace/") ||
+    relative === "validation-expert-workspace" ||
+    relative.startsWith("validation-expert-workspace/")
+  return isLocal ? relative : undefined
+}
+
+function isExperienceWorkspaceRuntimeRelativePath(relative: string | undefined) {
+  return (
+    relative === "expert-workspace" ||
+    relative?.startsWith("expert-workspace/") ||
+    relative === "validation-expert-workspace" ||
+    relative?.startsWith("validation-expert-workspace/")
+  )
+}
+
+function toBlankEvalRuntimePath(baseSpecPath: string, value: string) {
+  const relative = baseSpecLocalRuntimeRelativePath(baseSpecPath, value)
+  return relative ? `./${relative}` : value
+}
+
+const BLANK_EVAL_RUNTIME_FILE_ARG_FLAGS = new Set([
+  "--candidate",
+  "--candidate-path",
+  "--input",
+  "--input-path",
+  "--output",
+  "--output-path",
+])
+
+function rewriteBlankEvalValidatorArgs(baseSpecPath: string, args: string[] | undefined) {
+  if (!args?.length) return args
+  const out: string[] = []
+  let previousFlag: string | undefined
+  for (const arg of args) {
+    if (previousFlag && BLANK_EVAL_RUNTIME_FILE_ARG_FLAGS.has(previousFlag)) {
+      out.push(toBlankEvalRuntimePath(baseSpecPath, arg))
+      previousFlag = undefined
+      continue
+    }
+    out.push(arg)
+    previousFlag = arg.startsWith("--") ? arg : undefined
+  }
+  return out
+}
+
 function campaignRuntimeSeedTargets(campaignSpec: LongTaskCampaignSpec) {
   return campaignSpec.seedTargets.filter((seed) => !isBaseSpecLocalRuntimePath(campaignSpec.baseSpecPath, seed.targetPath))
 }
@@ -2505,19 +2647,51 @@ function buildCampaignFinalAcceptanceSpec(baseSpec: LongTaskSpec, pendingPackage
 
 function buildCampaignBlankEvalSpec(input: {
   baseSpec: LongTaskSpec
+  baseSpecPath: string
   pendingPackageRoot: string
   productValidators: LongTaskValidatorContract[]
 }): LongTaskSpec {
+  const productTargetPaths = (input.baseSpec.targetPaths ?? [])
+    .filter((ref) => {
+      if (ref.role === "experience-workspace") return false
+      return !isExperienceWorkspaceRuntimeRelativePath(baseSpecLocalRuntimeRelativePath(input.baseSpecPath, ref.path))
+    })
+    .map((ref) => ({
+      ...ref,
+      path: toBlankEvalRuntimePath(input.baseSpecPath, ref.path),
+    }))
+  const productEditablePaths = (input.baseSpec.editablePaths ?? [])
+    .filter((item) => !isExperienceWorkspaceRuntimeRelativePath(baseSpecLocalRuntimeRelativePath(input.baseSpecPath, item)))
+    .map((item) => toBlankEvalRuntimePath(input.baseSpecPath, item))
   return {
     ...input.baseSpec,
     disableCompletionValidators: false,
     initialExpertContextPaths: [input.pendingPackageRoot],
     formalPackageRoots: [input.pendingPackageRoot],
+    targetPaths: productTargetPaths,
+    editablePaths: productEditablePaths.length ? productEditablePaths : productTargetPaths.map((item) => item.path),
     campaignPendingPackageRoot: undefined,
     campaignExplorationTreePath: undefined,
     campaignWorkingMemoryPath: undefined,
     campaignRoutingControlPath: undefined,
-    validators: input.productValidators.map((validator) => ({ ...validator, placement: "unit" })),
+    validators: input.productValidators.map((validator) =>
+      validator.type === "script"
+        ? {
+            ...validator,
+            placement: "unit",
+            args: rewriteBlankEvalValidatorArgs(input.baseSpecPath, validator.args),
+          }
+        : {
+            ...validator,
+            placement: "unit",
+            inputFiles: validator.inputFiles?.candidatePath
+              ? {
+                  ...validator.inputFiles,
+                  candidatePath: toBlankEvalRuntimePath(input.baseSpecPath, validator.inputFiles.candidatePath),
+                }
+              : validator.inputFiles,
+          },
+    ),
     initialGraph: undefined,
   }
 }
@@ -3862,6 +4036,8 @@ async function runSurfaceGeneralizationPrecheck(input: {
   passID: string
   runID?: string
   runtimeScope: string
+  onActivation?: (signal: { kind: string; scope: string; pid: number }) => void
+  onPulse?: () => Promise<void>
 }) {
   const cfg = input.campaignSpec.surfaceGeneralization
   if (!cfg?.enabled) return
@@ -3913,6 +4089,8 @@ async function runSurfaceGeneralizationPrecheck(input: {
         targetPaths: [{ path: input.roundPaths.pendingPackageSnapshotRoot, role: "experience-workspace" }],
       },
       runtimeScope: input.runtimeScope,
+      onActivation: input.onActivation,
+      onPulse: input.onPulse,
     })
     if (result.passed) return
     const items = await readLongTaskCampaignOperationalMemory(input.campaignPaths)
@@ -3965,6 +4143,7 @@ async function runCampaignFinalAcceptance(input: {
   campaignID: string
   campaignSpec: LongTaskCampaignSpec
   baseSpec: LongTaskSpec
+  baseSpecPath: string
   roundNumber: number
   sourceRunID: string
   pendingPackageRoot: string
@@ -4117,6 +4296,7 @@ async function runCampaignFinalAcceptance(input: {
       try {
         const blankEvalSpec = buildCampaignBlankEvalSpec({
           baseSpec: input.baseSpec,
+          baseSpecPath: input.baseSpecPath,
           pendingPackageRoot: validationPackageRoot,
           productValidators: validatorPartitions.productValidators,
         })
@@ -4341,8 +4521,7 @@ async function appendAcceptanceExperienceV2(input: {
     resultPath: input.resultPath,
     createdAt: nowISO(),
   }
-  await ensureDirectory(path.dirname(input.jsonlPath))
-  await appendFile(input.jsonlPath, `${JSON.stringify(jsonEntry)}\n`, "utf8")
+  await appendJsonlLocked(input.jsonlPath, jsonEntry)
 
   const entry = [
     `- round-${String(input.roundNumber).padStart(3, "0")} pass-${String(input.passIndex).padStart(2, "0")} | ${
@@ -4381,7 +4560,9 @@ async function promoteRoundPendingAndTreeToCurrent(input: {
   let rawExplorationTree: unknown = currentTree
   if (await pathExists(input.roundPaths.explorationTreeDraftPath)) {
     try {
-      rawExplorationTree = await readJsonFile<unknown>(input.roundPaths.explorationTreeDraftPath)
+      rawExplorationTree = await readJsonFile<unknown>(input.roundPaths.explorationTreeDraftPath, {
+        salvage: "extract-object",
+      })
     } catch {
       // Agent-written JSON may have unescaped Windows backslashes; fall back to current
     }
@@ -4391,7 +4572,9 @@ async function promoteRoundPendingAndTreeToCurrent(input: {
   let rawRoutingControl: unknown = currentRoutingControl
   if (await pathExists(input.roundPaths.routingControlDraftPath)) {
     try {
-      rawRoutingControl = await readJsonFile<unknown>(input.roundPaths.routingControlDraftPath)
+      rawRoutingControl = await readJsonFile<unknown>(input.roundPaths.routingControlDraftPath, {
+        salvage: "extract-object",
+      })
     } catch {
       // Agent-written JSON may have unescaped Windows backslashes; fall back to current
     }
@@ -4404,6 +4587,10 @@ export async function runLongTaskCampaign(input: {
   cwd: string
   specPath: string
   forceNew?: boolean
+  historyContext?: BenchmarkHistoryContext
+  taskID?: string
+  attemptID?: string
+  specHash?: string
 }): Promise<LongTaskCampaignRunResult> {
   if (process.env.AUTO_EVOLVE_SKIP_STALE_HEAL !== "1") await healStaleRuntimeStates(input.cwd)
   const { spec: campaignSpec } = await loadLongTaskCampaignSpec(input.specPath)
@@ -4413,6 +4600,8 @@ export async function runLongTaskCampaign(input: {
       cwd: input.cwd,
       title: campaignSpec.title,
       baseSpecPath: campaignSpec.baseSpecPath,
+      historyContext: input.historyContext,
+      taskID: input.taskID,
     })
     if (existingLiveCampaign) {
       return toCampaignRunResult({
@@ -4425,6 +4614,8 @@ export async function runLongTaskCampaign(input: {
       cwd: input.cwd,
       title: campaignSpec.title,
       baseSpecPath: campaignSpec.baseSpecPath,
+      historyContext: input.historyContext,
+      taskID: input.taskID,
     })
     if (recoverableCampaign) {
       return resumeLongTaskCampaign({
@@ -4449,10 +4640,29 @@ export async function runLongTaskCampaign(input: {
     createdAt: nowISO(),
     updatedAt: nowISO(),
     notes: campaignSpec.notes,
+    runLineage:
+      input.historyContext && input.taskID && input.attemptID
+        ? lineageForAttempt({
+            context: input.historyContext,
+            taskID: input.taskID,
+            attemptID: input.attemptID,
+            specHash: input.specHash,
+          })
+        : undefined,
+    reuse: input.historyContext ? defaultReuseForPolicy(input.historyContext.historyPolicy) : undefined,
     recovery: undefined,
   }
 
   await initializeLongTaskCampaign(campaignPaths, initialState)
+  if (input.historyContext && input.taskID && input.attemptID) {
+    await registerCampaignAttempt({
+      outDir: input.historyContext.outDir,
+      taskID: input.taskID,
+      attemptID: input.attemptID,
+      campaignID,
+      campaignDir: campaignPaths.root,
+    })
+  }
   enforceCampaignTruthPaths({ campaignPaths })
   await seedCampaignCurrentPendingPackage({
     currentRoot: campaignPaths.pendingCurrentRoot,
@@ -4882,6 +5092,8 @@ export async function runLongTaskCampaign(input: {
             passID,
             runID: runResult.runID,
             runtimeScope: roundRuntimeScope,
+            onActivation: activateCampaignRound,
+            onPulse: pulseCampaignRound,
           })
 
           await promoteRoundPendingAndTreeToCurrent({
@@ -4938,6 +5150,7 @@ export async function runLongTaskCampaign(input: {
             campaignID,
             campaignSpec,
             baseSpec,
+            baseSpecPath: campaignSpec.baseSpecPath,
             roundNumber,
             sourceRunID: runResult.runID,
             pendingPackageRoot: campaignPaths.pendingCurrentRoot,
@@ -5156,6 +5369,8 @@ export async function resumeLongTaskCampaign(input: {
   cwd: string
   campaignID: string
   specPath: string
+  historyContext?: BenchmarkHistoryContext
+  taskID?: string
 }): Promise<LongTaskCampaignRunResult> {
   if (process.env.AUTO_EVOLVE_SKIP_STALE_HEAL !== "1") await healStaleRuntimeStates(input.cwd)
   const { spec: campaignSpec } = await loadLongTaskCampaignSpec(input.specPath)
@@ -5166,6 +5381,11 @@ export async function resumeLongTaskCampaign(input: {
   }
   enforceCampaignTruthPaths({ campaignPaths })
   let existingState = await readLongTaskCampaignState(campaignPaths)
+  if (input.historyContext && !isCampaignAuthorizedForContext(existingState, input.historyContext, input.taskID)) {
+    throw new Error(
+      `Resume blocked by history scope: campaign ${input.campaignID} is not authorized for run ${input.historyContext.runID}/${input.historyContext.generationID}.`,
+    )
+  }
   const specBaseResolved = path.resolve(campaignSpec.baseSpecPath)
   const stateBaseResolved = path.resolve(existingState.baseSpecPath)
   if (specBaseResolved !== stateBaseResolved) {
@@ -5197,7 +5417,17 @@ export async function resumeLongTaskCampaign(input: {
         : undefined
     const owned =
       typeof ownerPID === "number" && ownerPID !== process.pid
-        ? await isPidOwnedByHint(ownerPID, existingState.ownerCommandHint)
+        ? await identifyCampaignOwnerProcess({
+            pid: ownerPID,
+            useCase: "kill",
+            commandHint: existingState.ownerCommandHint,
+            expectedCreationTick: existingState.ownerCreationTick,
+            heartbeatAt: existingState.heartbeatAt,
+            updatedAt: existingState.updatedAt,
+            campaignID: input.campaignID,
+            campaignRoot: campaignPaths.root,
+            baseSpecPath: existingState.baseSpecPath,
+          })
         : false
     if (owned && typeof ownerPID === "number") {
       await terminateProcessTree(ownerPID)
@@ -5223,6 +5453,7 @@ export async function resumeLongTaskCampaign(input: {
       status: "recovery_pending",
       ownerPID: process.pid,
       ownerCommandHint: undefined,
+      ownerCreationTick: undefined,
       heartbeatAt: takeoverAt,
       updatedAt: takeoverAt,
       lastSummary: recovery.reason,
@@ -5236,6 +5467,8 @@ export async function resumeLongTaskCampaign(input: {
     cwd: input.cwd,
     title: existingState.title,
     baseSpecPath: existingState.baseSpecPath,
+    historyContext: input.historyContext,
+    taskID: input.taskID,
   })
   if (existingLiveCampaign && existingLiveCampaign.campaignID === input.campaignID) {
     return toCampaignRunResult({
@@ -5256,6 +5489,7 @@ export async function resumeLongTaskCampaign(input: {
       ...existingState,
       ownerPID: undefined,
       ownerCommandHint: undefined,
+      ownerCreationTick: undefined,
       heartbeatAt: undefined,
       updatedAt: nowISO(),
       lastSummary: `Normalized legacy recovery marker: ${recoveryPlan.reason}`,
@@ -5293,6 +5527,7 @@ export async function resumeLongTaskCampaign(input: {
     status: "bootstrapping",
     ownerPID: undefined,
     ownerCommandHint: undefined,
+    ownerCreationTick: undefined,
     heartbeatAt: undefined,
     updatedAt: nowISO(),
     notes: campaignSpec.notes ?? existingState.notes,
@@ -5717,6 +5952,8 @@ export async function resumeLongTaskCampaign(input: {
             passID,
             runID: runResult.runID,
             runtimeScope: roundRuntimeScope,
+            onActivation: activateCampaignRound,
+            onPulse: pulseCampaignRound,
           })
 
           await promoteRoundPendingAndTreeToCurrent({
@@ -5773,6 +6010,7 @@ export async function resumeLongTaskCampaign(input: {
             campaignID: input.campaignID,
             campaignSpec,
             baseSpec,
+            baseSpecPath: campaignSpec.baseSpecPath,
             roundNumber,
             sourceRunID: runResult.runID,
             pendingPackageRoot: campaignPaths.pendingCurrentRoot,

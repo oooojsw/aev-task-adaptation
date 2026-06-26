@@ -77,6 +77,26 @@
     "testDirectChat": 4,
     "baseline": 3
   },
+  "historyConfig": {
+    "policy": "fresh-non-verified",
+    "policyNote": "控制历史总体复用策略；fresh-non-verified 表示保留已成功任务，未成功任务进入新代际。",
+    "resumeMode": "safe-non-terminal",
+    "resumeModeNote": "控制断点续传的安全模式；safe-non-terminal 表示只自动恢复非终态和基础设施类失败。",
+    "allowLegacyAutoResume": false,
+    "allowLegacyAutoResumeNote": "控制是否允许无户口本的旧 campaign 被自动续传；正式实验默认关闭。",
+    "keepVerified": true,
+    "keepVerifiedNote": "控制已通过闭卷验收的任务是否保留，避免重复烧额度。",
+    "requireLineageForAutoResume": true,
+    "requireLineageForAutoResumeNote": "控制自动续传前是否必须匹配本次 benchmark 的血统记录。",
+    "excludedTaskIDs": [],
+    "excludedTaskIDsNote": "控制本轮临时跳过哪些任务；命中的任务会标成 excluded_for_now，不会被误启动。",
+    "retryInfraFailed": true,
+    "retryInfraFailedNote": "控制基础设施类失败是否自动重跑，例如进程崩溃、假活、锁、spawn、平台超时。",
+    "retryProductFailed": false,
+    "retryProductFailedNote": "控制真实产物或答案失败是否自动重跑；默认关闭，防止反复烧额度。",
+    "maxAttemptsPerTask": 2,
+    "maxAttemptsPerTaskNote": "控制单个任务最多自动尝试次数，防止无限重跑。"
+  },
   "adaptiveConcurrency": {
     "enabled": true,
     "defaultProfile": "conservative",

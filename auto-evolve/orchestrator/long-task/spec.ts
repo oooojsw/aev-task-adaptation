@@ -31,6 +31,45 @@ function normalizeMaybeString(input: unknown) {
   return typeof input === "string" && input.trim().length > 0 ? input.trim() : undefined
 }
 
+const VALIDATOR_FILE_ARG_FLAGS = new Set([
+  "--answer",
+  "--answer-path",
+  "--ground-truth",
+  "--ground-truth-path",
+  "--candidate",
+  "--candidate-path",
+  "--reference",
+  "--reference-path",
+  "--expected",
+  "--expected-path",
+  "--input",
+  "--input-path",
+  "--output",
+  "--output-path",
+  "--reward",
+  "--reward-path",
+  "--config",
+  "--config-path",
+  "--rubric",
+  "--rubric-path",
+])
+
+function resolveValidatorScriptArgs(baseDir: string, args: string[] | undefined) {
+  if (!args?.length) return args
+  const resolved: string[] = []
+  let previousFlag: string | undefined
+  for (const arg of args) {
+    if (previousFlag && VALIDATOR_FILE_ARG_FLAGS.has(previousFlag)) {
+      resolved.push(resolveMaybePath(baseDir, arg))
+      previousFlag = undefined
+      continue
+    }
+    resolved.push(arg)
+    previousFlag = arg.startsWith("--") ? arg : undefined
+  }
+  return resolved
+}
+
 function normalizeValidatorEngineHints(raw: unknown): LongTaskValidatorEngineHints | undefined {
   if (!isObject(raw)) return undefined
   const target =
@@ -435,6 +474,7 @@ export async function loadLongTaskSpec(
           ...validator,
           path: resolveMaybePath(baseDir, validator.path),
           cwd: validator.cwd ? resolveMaybePath(baseDir, validator.cwd) : undefined,
+          args: resolveValidatorScriptArgs(baseDir, validator.args),
         }
       : {
           ...validator,

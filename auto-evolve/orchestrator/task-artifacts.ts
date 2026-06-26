@@ -22,6 +22,7 @@ export interface TaskArtifactPaths {
   eventsPath: string
   toolFailuresPath: string
   runJsonPath: string
+  resourceUsagePath: string
   opencodeProcessLogPath?: string
 }
 
@@ -86,6 +87,7 @@ export function taskArtifactPaths(stageDir: string): TaskArtifactPaths {
     eventsPath: path.join(stageDir, "events.json"),
     toolFailuresPath: path.join(stageDir, "tool_failures.json"),
     runJsonPath: path.join(stageDir, "run.json"),
+    resourceUsagePath: path.join(stageDir, "resource-usage.json"),
   }
 }
 
@@ -159,6 +161,7 @@ export async function writeTaskArtifacts(
     updatedAt: input?.updatedAt ?? now,
     lastOutputAt: input?.lastOutputAt ?? run?.lastOutputAt ?? input?.updatedAt ?? now,
     model: task.selectedModel ?? null,
+    modelResolution: task.selectedModelResolution ?? task.result.modelResolution ?? null,
     agent: task.selectedAgent ?? null,
     variant: task.selectedVariant ?? null,
     referencedPaths: task.referencedPaths,
@@ -166,6 +169,7 @@ export async function writeTaskArtifacts(
     promptInlineFiles: task.promptInlineFiles,
     permissionReadPaths: task.permissionReadPaths,
     permissionEditPaths: task.permissionEditPaths,
+    resourceUsagePath: paths.resourceUsagePath,
   })
 
   try {

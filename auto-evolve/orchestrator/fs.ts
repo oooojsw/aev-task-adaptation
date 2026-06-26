@@ -1,8 +1,8 @@
 import path from "node:path"
 import { existsSync, realpathSync } from "node:fs"
-import { randomUUID } from "node:crypto"
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import type { AutoEvolveConfig } from "./schema"
+import { writeJsonAtomic } from "./atomic-write"
 
 export interface LayoutResult {
   autoEvolveRoot: string
@@ -45,7 +45,9 @@ export function isPathWithinTruthRoot(root: string, candidate: string) {
 }
 
 export function autoEvolvePath(cwd: string, ...segments: string[]) {
-  return resolvePathTruth(path.join(cwd, "auto-evolve", ...segments))
+  const resolved = path.resolve(cwd)
+  const base = path.basename(resolved).toLowerCase() === "auto-evolve" ? resolved : path.join(resolved, "auto-evolve")
+  return resolvePathTruth(path.join(base, ...segments))
 }
 
 function normalizeRuntimeRootCandidate(input: string | undefined) {
@@ -86,23 +88,74 @@ export async function readTextFile(target: string) {
   return readFile(target, "utf8")
 }
 
-export async function readJsonFile<T = any>(target: string): Promise<T> {
+export type ReadJsonFileOptions = {
+  salvage?: "none" | "extract-object"
+  validatePaths?: boolean
+}
+
+function looksLikePathKey(key: string) {
+  const lower = key.toLowerCase()
+  return (
+    lower === "path" ||
+    lower.endsWith("path") ||
+    lower.endsWith("paths") ||
+    lower.includes("dir") ||
+    lower.includes("root") ||
+    lower.includes("file")
+  )
+}
+
+function hasControlChars(value: string) {
+  return /[\r\n\t]/.test(value)
+}
+
+function assertNoSuspiciousPathControls(value: unknown, source: string, keyPath: string[] = []) {
+  if (typeof value === "string") {
+    const key = keyPath[keyPath.length - 1] ?? ""
+    const pathish = looksLikePathKey(key) || /[A-Za-z]:[\s\S]/.test(value) || value.includes("\\") || value.includes("/")
+    if (pathish && hasControlChars(value)) {
+      throw new Error(
+        `Cannot read ${normalizeSlash(source)}: suspicious control character in path-like field ${keyPath.join(".")}. ` +
+          "Use escaped Windows paths like C:\\\\dir\\\\file.json or forward slashes like C:/dir/file.json.",
+      )
+    }
+    return
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertNoSuspiciousPathControls(item, source, [...keyPath, String(index)]))
+    return
+  }
+
+  if (!value || typeof value !== "object") return
+
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    assertNoSuspiciousPathControls(raw, source, [...keyPath, key])
+  }
+}
+
+export async function readJsonFile<T = any>(target: string, options: ReadJsonFileOptions = {}): Promise<T> {
   const raw = await readTextFile(target)
   const cleaned = raw.replace(/^\uFEFF/, "").trim()
   if (!cleaned) {
     throw new Error(`Cannot read ${target}: empty or BOM-only JSON file`)
   }
   try {
-    return JSON.parse(cleaned) as T
+    const parsed = JSON.parse(cleaned) as T
+    if (options.validatePaths !== false) assertNoSuspiciousPathControls(parsed, target)
+    return parsed
   } catch (parseError) {
-    // Attempt salvage: extract the first valid JSON object from the text
-    const { extractJsonObject } = await import("./long-task/json-extract")
-    let salvaged = extractJsonObject(cleaned)
-    if (salvaged) {
-      console.warn(`[warn] ${target}: JSON corrupted (${(parseError as Error).message}), salvaged first valid object`)
-      return salvaged as T
+    if (options.salvage === "extract-object") {
+      const { extractJsonObject } = await import("./long-task/json-extract")
+      const salvaged = extractJsonObject(cleaned)
+      if (salvaged) {
+        if (options.validatePaths !== false) assertNoSuspiciousPathControls(salvaged, target)
+        console.warn(`[warn] ${target}: JSON corrupted (${(parseError as Error).message}), salvaged first valid object`)
+        return salvaged as T
+      }
     }
     // Attempt salvage 2: strip invalid escape sequences (e.g. \Ԫ, \非, or \e in paths)
+    /*
     const stripped = cleaned.replace(/\\([^"\\/bfnrtu])/g, "$1")
     if (stripped !== cleaned) {
       try {
@@ -134,6 +187,7 @@ export async function readJsonFile<T = any>(target: string): Promise<T> {
       }
     }
     // If salvage also fails, throw a clear error
+    */
     throw new Error(`Cannot read ${target}: ${(parseError as Error).message}`)
   }
 }
@@ -144,27 +198,7 @@ export async function writeTextFile(target: string, content: string) {
 }
 
 export async function writeJsonFile(target: string, value: unknown) {
-  await ensureDirectory(path.dirname(target))
-  const body = JSON.stringify(value, null, 2) + "\n"
-  for (let i = 1; i <= 3; i += 1) {
-    const tmp = path.join(path.dirname(target), `.${path.basename(target)}.tmp-${process.pid}-${randomUUID()}`)
-    try {
-      await writeFile(tmp, body, "utf8")
-      await rename(tmp, target)
-      return
-    } catch (error) {
-      await rm(tmp, { force: true }).catch(() => undefined)
-      const msg = error instanceof Error ? error.message : String(error)
-      const locked =
-        msg.includes("EBUSY") ||
-        msg.includes("EPERM") ||
-        msg.includes("EACCES") ||
-        msg.toLowerCase().includes("locked") ||
-        msg.includes("sharing violation")
-      if (!locked || i >= 3) throw error
-      await new Promise((resolve) => setTimeout(resolve, 100 * i))
-    }
-  }
+  await writeJsonAtomic(target, value)
 }
 
 async function writeIfMissing(target: string, content: string, created: string[]) {
@@ -786,6 +820,17 @@ const DEFAULT_CONFIG_JSON = `{
     "testBlank": 3,
     "testDirectChat": 4,
     "baseline": 3
+  },
+  "historyConfig": {
+    "policy": "fresh-non-verified",
+    "resumeMode": "safe-non-terminal",
+    "allowLegacyAutoResume": false,
+    "keepVerified": true,
+    "requireLineageForAutoResume": true,
+    "excludedTaskIDs": [],
+    "retryInfraFailed": true,
+    "retryProductFailed": false,
+    "maxAttemptsPerTask": 2
   },
   "defaultMethod": "sequential-refine",
   "defaultPropagationMethod": "single-branch-baseline",

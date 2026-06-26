@@ -235,11 +235,19 @@ export interface LongTaskProgressState {
   updatedAt: string
   ownerPID?: number
   ownerCommandHint?: string
+  ownerCreationTick?: string
   heartbeatAt?: string
   status: LongTaskRunStatus
   graphRevision: number
   activeUnitID?: string
   activeAttempt?: number
+  activeValidator?: {
+    unitID: string
+    validatorID: string
+    attempt: number
+    startedAt: string
+    validatorDir: string
+  }
   completedUnitIDs: string[]
   blockedUnitIDs: string[]
   failedUnitIDs: string[]

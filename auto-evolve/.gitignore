@@ -139,6 +139,7 @@ runtime-state/
 .tmp-opencode-gate-tests/
 .tmp-runtime-root-smoke.mjs
 .runtime/
+/.opencode-private/
 auto-evolve/.runtime/
 validator_input.json
 validate_input.json

@@ -1,8 +1,9 @@
 import process from "node:process"
 import { setTimeout as sleep } from "node:timers/promises"
 import path from "node:path"
-import { ensureDirectory, pathExists, runtimePath } from "./fs"
-import { readFile, rename, rm, writeFile } from "node:fs/promises"
+import { pathExists, runtimePath } from "./fs"
+import { readFile, rm } from "node:fs/promises"
+import { writeFileAtomic } from "./atomic-write"
 
 interface RegisteredRuntimeProcess {
   pid: number
@@ -67,25 +68,8 @@ async function loadRegistry() {
 
 async function writeRegistry() {
   const file = registryPath()
-  await ensureDirectory(path.dirname(file))
   const body = JSON.stringify(cloneRegistry(), null, 2)
-  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
-  await writeFile(tmp, body, "utf8")
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
-    try {
-      await rename(tmp, file)
-      return
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      const lock = /EPERM|EACCES|EBUSY|resource busy|operation not permitted/i.test(msg)
-      if (!lock) throw err
-      if (attempt >= 4) break
-      await sleep(80 * attempt)
-      await rm(file, { force: true }).catch(() => undefined)
-    }
-  }
-  await writeFile(file, body, "utf8")
-  await rm(tmp, { force: true }).catch(() => undefined)
+  await writeFileAtomic(file, body, { attempts: 8, baseDelayMs: 80, maxDelayMs: 2000 })
 }
 
 async function flushRegistry() {
@@ -357,9 +341,15 @@ export async function cleanupRuntimeProcessScope(scope: string | undefined) {
       const commandLine = windowsInfo.get(record.pid)?.commandLine
       if (commandLine) {
         const matches = commandLine.toLowerCase().includes(record.matcher.toLowerCase())
-        if (!matches) mismatchCount += 1
+        if (!matches) {
+          mismatchCount += 1
+          remaining.push(record)
+          continue
+        }
       } else {
         unreadableCount += 1
+        remaining.push(record)
+        continue
       }
     }
 

@@ -1,5 +1,6 @@
 import path from "node:path"
-import { autoEvolvePath, ensureDirectory, readJsonFile, readTextFile, writeJsonFile, writeTextFile } from "../fs"
+import { autoEvolvePath, ensureDirectory, readJsonFile, writeJsonFile } from "../fs"
+import { appendJsonlIfMissingLocked, ensureJsonlFileLocked, readJsonlFile } from "../jsonl"
 import type { AutoEvolveConfig } from "../schema"
 import type { MaintenanceRequest } from "./contract"
 
@@ -13,19 +14,8 @@ function nowISO() {
   return new Date().toISOString()
 }
 
-async function appendJsonl<T>(target: string, value: T) {
-  await ensureDirectory(path.dirname(target))
-  const existing = await readTextFile(target).catch(() => "")
-  await writeTextFile(target, existing + JSON.stringify(value) + "\n")
-}
-
 async function readJsonl<T>(target: string): Promise<T[]> {
-  const raw = await readTextFile(target).catch(() => "")
-  return raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as T)
+  return readJsonlFile<T>(target)
 }
 
 function stripRecordTimestamps<T extends { createdAt?: string; updatedAt?: string }>(value: T) {
@@ -55,9 +45,7 @@ export function maintenanceGatewayPaths(cwd: string, config?: Pick<AutoEvolveCon
 export async function ensureMaintenanceGatewayLayout(paths: MaintenanceGatewayPaths) {
   await ensureDirectory(paths.root)
   await ensureDirectory(paths.requestsRoot)
-  if (!(await readTextFile(paths.indexPath).catch(() => ""))) {
-    await writeTextFile(paths.indexPath, "")
-  }
+  await ensureJsonlFileLocked(paths.indexPath)
 }
 
 export function maintenanceRequestPath(paths: MaintenanceGatewayPaths, requestID: string) {
@@ -84,10 +72,11 @@ export async function writeMaintenanceRequest(
   }
   const request = existing && sameLogicalRecord(existing, draft) ? { ...draft, updatedAt: existing.updatedAt } : draft
   await writeJsonFile(target, request)
-  const existingIndexed = await findIndexedRecordByID<MaintenanceRequest>(paths.indexPath, request.id)
-  if (!existingIndexed || !sameLogicalRecord(existingIndexed, request)) {
-    await appendJsonl(paths.indexPath, request)
-  }
+  await appendJsonlIfMissingLocked<MaintenanceRequest>(
+    paths.indexPath,
+    request,
+    (existingIndexed, next) => existingIndexed.id === next.id && sameLogicalRecord(existingIndexed, next),
+  )
   if (mirrorPath) {
     await writeJsonFile(mirrorPath, request)
   }

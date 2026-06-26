@@ -1,7 +1,8 @@
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 import type { CaseRuntimeContext } from "../case-runtime"
-import { ensureDirectory, readTextFile, writeJsonFile, writeTextFile } from "../fs"
+import { writeJsonFile } from "../fs"
+import { appendJsonlLocked } from "../jsonl"
 import type { KnowledgeMaintainerPlan } from "../knowledge-maintainer/contract"
 import { buildSessionRecordRef, relativeToRunDir } from "../method-strategy-helpers"
 import { resolveReversePropagationRecipe } from "../reverse-propagation-control/recipes"
@@ -78,21 +79,6 @@ function short(text: string, limit = 220) {
   const normalized = text.replace(/\s+/g, " ").trim()
   if (normalized.length <= limit) return normalized
   return normalized.slice(0, limit - 3) + "..."
-}
-
-async function ensureJsonlFile(target: string) {
-  await ensureDirectory(path.dirname(target))
-  try {
-    await readTextFile(target)
-  } catch {
-    await writeTextFile(target, "")
-  }
-}
-
-async function appendJsonl<T>(target: string, value: T) {
-  await ensureJsonlFile(target)
-  const existing = await readTextFile(target)
-  await writeTextFile(target, existing + JSON.stringify(value) + "\n")
 }
 
 function latestCompletedAttempt(context: CaseRuntimeContext) {
@@ -202,10 +188,10 @@ export async function recordShortTaskFailureEvidence(context: CaseRuntimeContext
 
   await writeJsonFile(context.evidencePaths.failurePacketPath, failurePacket)
   for (const unit of learningUnits) {
-    await appendJsonl(context.evidencePaths.learningUnitsPath, unit)
+    await appendJsonlLocked(context.evidencePaths.learningUnitsPath, unit)
   }
   for (const entry of scratchEntries) {
-    await appendJsonl(context.evidencePaths.scratchMemoryPath, entry)
+    await appendJsonlLocked(context.evidencePaths.scratchMemoryPath, entry)
   }
 
   context.attemptSummary.failurePacketPath = context.evidencePaths.failurePacketPath
@@ -266,7 +252,7 @@ export async function appendShortTaskRetryLessons(context: CaseRuntimeContext) {
   if (!lessons.length) return []
 
   for (const lesson of lessons) {
-    await appendJsonl(context.evidencePaths.retryLessonsPath, lesson)
+    await appendJsonlLocked(context.evidencePaths.retryLessonsPath, lesson)
   }
   context.attemptSummary.retryLessonsPath = context.evidencePaths.retryLessonsPath
   return lessons

@@ -1,8 +1,10 @@
 import path from "node:path"
 import process from "node:process"
 import { randomBytes } from "node:crypto"
-import { appendFile, readFile } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
 import { autoEvolvePath, ensureDirectory, readJsonFile, writeJsonFile, writeTextFile } from "../fs"
+import { appendJsonlLinesLocked, appendJsonlLocked, readJsonlFile, withJsonlLock } from "../jsonl"
+import { readCurrentProcessCreationTick } from "../process-identity"
 import type {
   LongTaskCampaignDispatchTicketDocument,
   LongTaskCampaignExplorationTreeDocument,
@@ -62,10 +64,7 @@ export interface LongTaskCampaignRoundPaths {
 }
 
 function detectOwnerCommandHint() {
-  const argv = process.argv.map((item) => item.toLowerCase())
-  if (argv.some((item) => item.includes("run-long-task-campaign"))) return "run-long-task-campaign"
-  if (argv.some((item) => item.includes("run-long-task"))) return "run-long-task"
-  return undefined
+  return process.argv.join(" ")
 }
 
 function slugify(input: string) {
@@ -216,10 +215,12 @@ export async function initializeLongTaskCampaign(paths: LongTaskCampaignPaths, s
 
 export async function writeLongTaskCampaignState(paths: LongTaskCampaignPaths, state: LongTaskCampaignState) {
   const heartbeatAt = new Date().toISOString()
+  const ownerCreationTick = state.ownerCreationTick ?? (await readCurrentProcessCreationTick())
   await writeJsonFile(paths.campaignStatePath, {
     ...state,
     ownerPID: state.ownerPID ?? process.pid,
     ownerCommandHint: state.ownerCommandHint ?? detectOwnerCommandHint(),
+    ownerCreationTick,
     heartbeatAt,
     updatedAt: heartbeatAt,
   })
@@ -230,8 +231,7 @@ export async function readLongTaskCampaignState(paths: LongTaskCampaignPaths) {
 }
 
 export async function appendLongTaskCampaignHistory(paths: LongTaskCampaignPaths, record: LongTaskCampaignRoundRecord) {
-  await ensureDirectory(path.dirname(paths.historyPath))
-  await appendFile(paths.historyPath, JSON.stringify(record) + "\n", "utf8")
+  await appendJsonlLocked(paths.historyPath, record)
 }
 
 export async function rewriteLongTaskCampaignHistoryRecord(
@@ -239,37 +239,19 @@ export async function rewriteLongTaskCampaignHistoryRecord(
   roundNumber: number,
   updater: (record: LongTaskCampaignRoundRecord) => LongTaskCampaignRoundRecord,
 ) {
-  await ensureDirectory(path.dirname(paths.historyPath))
-  const raw = await readFile(paths.historyPath, "utf8").catch((error: unknown) => {
-    const code =
-      typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : undefined
-    if (code === "ENOENT") return ""
-    throw error
+  return withJsonlLock(paths.historyPath, async () => {
+    const records = await readJsonlFile<LongTaskCampaignRoundRecord>(paths.historyPath)
+    if (!records.length) return false
+    const index = records.findIndex((record) => record.roundNumber === roundNumber)
+    if (index < 0) return false
+    records[index] = updater(records[index])
+    await writeTextFile(paths.historyPath, records.map((record) => JSON.stringify(record)).join("\n") + "\n")
+    return true
   })
-  if (!raw.trim()) return false
-  const records = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as LongTaskCampaignRoundRecord)
-  const index = records.findIndex((record) => record.roundNumber === roundNumber)
-  if (index < 0) return false
-  records[index] = updater(records[index])
-  await writeTextFile(paths.historyPath, records.map((record) => JSON.stringify(record)).join("\n") + "\n")
-  return true
 }
 
 export async function appendLinesToAggregate(target: string, lines: string[]) {
-  if (!lines.length) return
-  await ensureDirectory(path.dirname(target))
-  await appendFile(
-    target,
-    lines
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .join("\n") + "\n",
-    "utf8",
-  )
+  await appendJsonlLinesLocked(target, lines)
 }
 
 export async function writeLongTaskCampaignLessons(paths: LongTaskCampaignPaths, content: string) {
@@ -328,7 +310,7 @@ export async function writeLongTaskCampaignReviewerSuggestion(
   paths: LongTaskCampaignPaths,
   suggestion: LongTaskCampaignReviewSuggestion,
 ) {
-  await appendFile(paths.campaignReviewSuggestionsPath, JSON.stringify(suggestion) + "\n", "utf8")
+  await appendJsonlLocked(paths.campaignReviewSuggestionsPath, suggestion)
 }
 
 export async function writeLongTaskCampaignWorkerSuggestion(
