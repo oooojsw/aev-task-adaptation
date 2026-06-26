@@ -1864,3 +1864,9 @@ bun run auto-evolve/scripts/smoke-auto-evolve-path.ts
 直接背景：SpreadsheetBench 某些轮次里空白 agent 在 sandbox 工作，但验证器仍去原始任务目录 `tasks/<id>/workspace/answer.json` 找候选答案，导致 `Candidate file not found`。这属于平台验收路径错误，不是模型真实不会做题。批跑外层已将 `Candidate file not found` / `missing candidate` 归为 infra failure，允许按 `retryInfraFailed=true` 重跑。
 
 大白话：空白 agent 在隔离考场里答题，改卷老师也必须去隔离考场收卷，不能跑回旧教室找卷子。
+
+## Benchmark Task Lease（2026-06-26）
+
+通用批跑脚本 `auto-evolve/scripts/run-benchmark-orchestrator.ts` 现在会在 `<out>/benchmark-leases/<task-id>.json` 维护任务级 lease。lease 是外层 orchestrator 的“任务认领票”，记录 `ownerPID`、`ownerCreationTick`、`mode`、`campaignID/campaignDir`、`heartbeatAt` 和 `expiresAt`。
+
+规则：启动或恢复训练任务前必须先拿到 lease；任务成功、终态或失败后释放；任务转入 `watch_live` 时刷新成 watch lease。lease 不用于杀进程，只用于防止外层重启或多个 agent 接手时重复启动同一个 task。大白话：内存里的 `activeIDs` 会随着外层进程退出而丢失，lease 是落盘的小票，用来告诉后来的调度器“这个训练项刚刚已经有人认领过”。

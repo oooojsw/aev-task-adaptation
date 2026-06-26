@@ -1,5 +1,6 @@
 import path from "node:path"
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
 import { createCoordinatorRun } from "../orchestrator/multi-instance/coordinator"
@@ -16,6 +17,8 @@ import { saveCoordinatorState } from "../orchestrator/multi-instance/repository"
 import { runBlankEval } from "../orchestrator/blank-eval/runner"
 import { pathExists, readJsonFile, writeJsonFile } from "../orchestrator/fs"
 import { readCampaignHealth, writeRunDashboard, type CampaignHealth } from "../orchestrator/run-health"
+import { identifyProcessOwner, readCurrentProcessCreationTick } from "../orchestrator/process-identity"
+import { withFileLock } from "../orchestrator/jsonl"
 import { buildDirectChatDatasetWithAdapter } from "../orchestrator/direct-chat/adapters"
 import { buildSkillBundle } from "../orchestrator/direct-chat/skill-bundler"
 import { runDirectChatEvaluation } from "../orchestrator/direct-chat/runner"
@@ -79,6 +82,21 @@ type WatchPick = {
   campaignDir: string
   attemptID?: string
   lastHealth?: CampaignHealth
+}
+
+type BenchmarkTaskLeaseMode = "start_new" | "resume_recovery" | "takeover_recovery" | "watch_live"
+
+type BenchmarkTaskLease = {
+  taskID: string
+  leaseID: string
+  ownerPID: number
+  ownerCreationTick?: string
+  ownerCommandHint: string
+  mode: BenchmarkTaskLeaseMode
+  campaignID?: string
+  campaignDir?: string
+  heartbeatAt: string
+  expiresAt: string
 }
 
 type CampaignSchedulingDecision =
@@ -270,6 +288,7 @@ const TRAIN_WATCHDOG_INTERVAL_MS = (() => {
   if (Number.isFinite(value) && value > 0) return value
   return 5 * 60 * 1000
 })()
+const BENCHMARK_LEASE_TTL_MS = Math.max(TRAIN_WATCHDOG_INTERVAL_MS * 3, 15 * 60 * 1000)
 
 function stamp() {
   const d = new Date()
@@ -363,6 +382,106 @@ function parseBooleanOption(args: string[], name: string, fallback: boolean) {
 async function writeJson(file: string, value: unknown) {
   await mkdir(path.dirname(file), { recursive: true })
   await writeJsonFile(file, value)
+}
+
+function benchmarkLeasePath(config: BenchmarkConfig, taskID: string) {
+  return path.join(config.outDir, "benchmark-leases", `${taskID}.json`)
+}
+
+function benchmarkLeaseLockPath(config: BenchmarkConfig, taskID: string) {
+  return `${benchmarkLeasePath(config, taskID)}.lock`
+}
+
+function benchmarkLeaseOwnerCommandHint() {
+  return process.argv.join(" ").slice(0, 2000)
+}
+
+function normalizeLeaseMode(mode: BenchmarkTaskLeaseMode) {
+  return mode
+}
+
+async function readBenchmarkTaskLease(config: BenchmarkConfig, taskID: string) {
+  const file = benchmarkLeasePath(config, taskID)
+  if (!existsSync(file)) return undefined
+  try {
+    return (await readJsonFile(file)) as BenchmarkTaskLease
+  } catch {
+    return undefined
+  }
+}
+
+async function existingLeaseStillBlocks(lease: BenchmarkTaskLease) {
+  if (lease.ownerPID === process.pid) return false
+  const expiresAt = Date.parse(lease.expiresAt || "")
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return false
+  const owner = await identifyProcessOwner({
+    pid: lease.ownerPID,
+    expectedCreationTick: lease.ownerCreationTick,
+    heartbeatAt: lease.heartbeatAt,
+    updatedAt: lease.heartbeatAt,
+    staleAfterMs: BENCHMARK_LEASE_TTL_MS,
+    requiredAnyCommandHints: [lease.ownerCommandHint].filter(Boolean),
+  })
+  return owner.ownership === "owned" || owner.ownership === "unknown_owner"
+}
+
+async function acquireBenchmarkTaskLease(
+  config: BenchmarkConfig,
+  input: {
+    taskID: string
+    mode: BenchmarkTaskLeaseMode
+    campaignID?: string
+    campaignDir?: string
+  },
+) {
+  await mkdir(path.join(config.outDir, "benchmark-leases"), { recursive: true })
+  return withFileLock(benchmarkLeaseLockPath(config, input.taskID), async () => {
+    const existing = await readBenchmarkTaskLease(config, input.taskID)
+    if (existing && (await existingLeaseStillBlocks(existing))) return undefined
+    const now = nowISO()
+    const lease: BenchmarkTaskLease = {
+      taskID: input.taskID,
+      leaseID: randomUUID(),
+      ownerPID: process.pid,
+      ownerCreationTick: await readCurrentProcessCreationTick(),
+      ownerCommandHint: benchmarkLeaseOwnerCommandHint(),
+      mode: normalizeLeaseMode(input.mode),
+      campaignID: input.campaignID,
+      campaignDir: input.campaignDir,
+      heartbeatAt: now,
+      expiresAt: new Date(Date.now() + BENCHMARK_LEASE_TTL_MS).toISOString(),
+    }
+    await writeJson(benchmarkLeasePath(config, input.taskID), lease)
+    return lease
+  })
+}
+
+async function refreshBenchmarkTaskLease(
+  config: BenchmarkConfig,
+  taskID: string,
+  leaseID: string | undefined,
+  patch: Partial<Pick<BenchmarkTaskLease, "mode" | "campaignID" | "campaignDir">> = {},
+) {
+  if (!leaseID) return
+  await withFileLock(benchmarkLeaseLockPath(config, taskID), async () => {
+    const current = await readBenchmarkTaskLease(config, taskID)
+    if (!current || current.leaseID !== leaseID) return
+    await writeJson(benchmarkLeasePath(config, taskID), {
+      ...current,
+      ...patch,
+      heartbeatAt: nowISO(),
+      expiresAt: new Date(Date.now() + BENCHMARK_LEASE_TTL_MS).toISOString(),
+    } satisfies BenchmarkTaskLease)
+  })
+}
+
+async function releaseBenchmarkTaskLease(config: BenchmarkConfig, taskID: string, leaseID: string | undefined) {
+  if (!leaseID) return
+  await withFileLock(benchmarkLeaseLockPath(config, taskID), async () => {
+    const current = await readBenchmarkTaskLease(config, taskID)
+    if (!current || current.leaseID !== leaseID) return
+    await rm(benchmarkLeasePath(config, taskID), { force: true })
+  })
 }
 
 async function readState(file: string) {
@@ -840,6 +959,7 @@ async function queueTrain(
   const active = new Set<Promise<void>>()
   const activeIDs = new Map<string, string>()
   const watch = new Map<string, WatchPick>(watchSeed.map((item) => [item.id, item]))
+  const leaseIDs = new Map<string, string>()
   let lastEffectiveCapacity = config.stageConcurrency.training
 
   const currentTrainingCapacity = async () => {
@@ -863,6 +983,24 @@ async function queueTrain(
     await persistState(stateFile, scorecardFile, state)
   }
   const excluded = new Set(config.excludedTaskIDs)
+
+  async function ensureWatchLease(watched: WatchPick) {
+    if (leaseIDs.has(watched.id)) {
+      await refreshBenchmarkTaskLease(config, watched.id, leaseIDs.get(watched.id), {
+        mode: "watch_live",
+        campaignID: watched.campaignID,
+        campaignDir: watched.campaignDir,
+      })
+      return
+    }
+    const lease = await acquireBenchmarkTaskLease(config, {
+      taskID: watched.id,
+      mode: "watch_live",
+      campaignID: watched.campaignID,
+      campaignDir: watched.campaignDir,
+    })
+    if (lease) leaseIDs.set(watched.id, lease.leaseID)
+  }
 
   async function enqueueRecoveryPick(input: {
     id: string
@@ -896,6 +1034,7 @@ async function queueTrain(
 
   async function pollWatchedCampaigns() {
     for (const [id, watched] of Array.from(watch.entries())) {
+      await ensureWatchLease(watched)
       const health = await readCampaignHealth(watched.campaignDir)
       if (!health) {
         watch.delete(id)
@@ -925,6 +1064,8 @@ async function queueTrain(
             campaignID: path.basename(hit.cdir),
             status: "verified_success",
           })
+          await releaseBenchmarkTaskLease(config, id, leaseIDs.get(id))
+          leaseIDs.delete(id)
         } else if (hit && isTerminalTrainStatus(hit.status)) {
           rows.push({ id, code: 0, status: hit.status, campaignDir: hit.cdir, pending: hit.pending, verified: false })
           await mark(id, { status: hit.status, campaignDir: hit.cdir })
@@ -935,12 +1076,19 @@ async function queueTrain(
             status: "terminal",
             reason: hit.status,
           })
+          await releaseBenchmarkTaskLease(config, id, leaseIDs.get(id))
+          leaseIDs.delete(id)
         } else {
           await enqueueRecoveryPick({ ...watched, mode: "resume_recovery", status: "recovery_pending" })
         }
         continue
       }
       watched.lastHealth = health
+      await refreshBenchmarkTaskLease(config, id, leaseIDs.get(id), {
+        mode: "watch_live",
+        campaignID: watched.campaignID,
+        campaignDir: watched.campaignDir,
+      })
       await mark(id, { status: "running", campaignDir: watched.campaignDir })
     }
   }
@@ -950,14 +1098,33 @@ async function queueTrain(
       await mark(pick.id, { status: "excluded_for_now" })
       return
     }
+    const lease = await acquireBenchmarkTaskLease(config, {
+      taskID: pick.id,
+      mode: pick.mode,
+      campaignID: pick.campaign,
+      campaignDir: pick.campaign ? path.join(runtimeCampaignRoot, pick.campaign) : undefined,
+    })
+    if (!lease) {
+      rows.push({ id: pick.id, code: 0, status: "running", campaignDir: "", pending: "", verified: false })
+      await mark(pick.id, { status: "running" })
+      return
+    }
+    leaseIDs.set(pick.id, lease.leaseID)
     const activeToken = `${Date.now()}:${Math.random().toString(36).slice(2)}`
     activeIDs.set(pick.id, activeToken)
     await mark(pick.id, { status: "running" })
+    let keepLease = false
     const task = runOneCampaign(config, pick)
       .then(async (row) => {
         rows.push(row)
         await mark(row.id, { status: row.status, campaignDir: row.campaignDir })
         if (row.status === "watch_live" && row.campaignDir) {
+          keepLease = true
+          await refreshBenchmarkTaskLease(config, row.id, lease.leaseID, {
+            mode: "watch_live",
+            campaignID: path.basename(row.campaignDir),
+            campaignDir: row.campaignDir,
+          })
           watch.set(row.id, {
             id: row.id,
             spec: campaignSpecPath(config.taskPackRoot, row.id),
@@ -1021,6 +1188,9 @@ async function queueTrain(
       .finally(() => {
         active.delete(task)
         if (activeIDs.get(pick.id) === activeToken) activeIDs.delete(pick.id)
+        if (!keepLease) {
+          void releaseBenchmarkTaskLease(config, pick.id, lease.leaseID).then(() => leaseIDs.delete(pick.id))
+        }
       })
     active.add(task)
   }

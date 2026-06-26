@@ -859,6 +859,8 @@ type LongTaskCampaignRunResult = {
   lastRunID?: string
   lessonsPath: string
   roundSummaryPath?: string
+  attachedLive?: boolean
+  terminal?: boolean
 }
 
 function toCampaignRunResult(input: {
@@ -866,7 +868,12 @@ function toCampaignRunResult(input: {
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   state: LongTaskCampaignState
   roundsCompleted?: number
+  attachedLive?: boolean
 }): LongTaskCampaignRunResult {
+  const terminal =
+    input.state.status === "verified_success" ||
+    input.state.status === "round_limit_reached" ||
+    input.state.status === "failed"
   return {
     campaignID: input.campaignID,
     campaignDir: input.campaignPaths.root,
@@ -875,6 +882,8 @@ function toCampaignRunResult(input: {
     lastRunID: input.state.lastRunID,
     lessonsPath: input.campaignPaths.campaignLessonsPath,
     roundSummaryPath: input.state.lastRoundSummaryPath,
+    attachedLive: input.attachedLive,
+    terminal,
   }
 }
 
@@ -4608,6 +4617,7 @@ export async function runLongTaskCampaign(input: {
         campaignID: existingLiveCampaign.campaignID,
         campaignPaths: existingLiveCampaign.campaignPaths,
         state: existingLiveCampaign.state,
+        attachedLive: true,
       })
     }
     const recoverableCampaign = await findRecoverableCampaignForTarget({
@@ -5475,6 +5485,7 @@ export async function resumeLongTaskCampaign(input: {
       campaignID: existingLiveCampaign.campaignID,
       campaignPaths: existingLiveCampaign.campaignPaths,
       state: existingLiveCampaign.state,
+      attachedLive: true,
     })
   }
 
