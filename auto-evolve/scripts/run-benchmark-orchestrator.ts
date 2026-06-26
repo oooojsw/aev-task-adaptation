@@ -713,7 +713,7 @@ function hasUnfinishedTrainWork(state: BenchmarkState) {
   return state.trainResults.some((row) => row.status !== "verified_success" && !isTerminalTrainStatus(row.status))
 }
 
-type CampaignFailureClass = "infra" | "product" | "unknown"
+type CampaignFailureClass = "infra" | "product" | "dataset" | "unknown"
 
 async function readTextIfExists(file: string, maxChars = 4000) {
   if (!(await pathExists(file))) return ""
@@ -743,6 +743,9 @@ async function classifyCampaignFailure(campaignDir: string | undefined): Promise
     // Best-effort classification only; keep unknown if the campaign is incomplete.
   }
   const text = snippets.join("\n").toLowerCase()
+  if (/dataset_failure|dataset consistency|test-construction mismatch|input.*hidden answer|hidden answer.*input/.test(text)) {
+    return "dataset"
+  }
   if (
     /opencodegate acquire timed out|infrastructure_failure|execution_blocked|validator infrastructure|spawn|eperm|owner pid|stale|stuck|process crash|aborted unexpectedly/.test(
       text,
@@ -769,6 +772,7 @@ async function shouldRetryFailedCampaign(config: BenchmarkConfig, latest: Campai
   const failureClass = await classifyCampaignFailure(latest.cdir)
   if (failureClass === "infra") return config.retryInfraFailed
   if (failureClass === "product") return config.retryProductFailed
+  if (failureClass === "dataset") return false
   return config.resumeMode === "fresh-non-verified" && (config.retryInfraFailed || config.retryProductFailed)
 }
 

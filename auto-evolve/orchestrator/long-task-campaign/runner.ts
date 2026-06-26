@@ -2963,7 +2963,7 @@ function finalizeRoundRecordWithAcceptance(input: {
   roundRecord: LongTaskCampaignRoundRecord
   finalAcceptance?: {
     passed: boolean
-    failureKind?: "product_failure" | "infrastructure_failure"
+  failureKind?: "product_failure" | "infrastructure_failure" | "dataset_failure"
     summary: string
     validatorResults: Array<{
       validatorID: string
@@ -4420,6 +4420,8 @@ async function runCampaignFinalAcceptance(input: {
   const passed = validatorResults.every((result) => result.passed)
   const failureKind = passed
     ? undefined
+    : validatorResults.some((result) => !result.passed && result.failureKind === "dataset_failure")
+      ? ("dataset_failure" as const)
     : validatorResults.some(
           (result) => !result.passed && result.failureKind === "validator_infrastructure",
         )
@@ -5303,7 +5305,8 @@ export async function runLongTaskCampaign(input: {
           await writeLongTaskCampaignRoutingControl(campaignPaths, routingAfterAcceptance)
           finalAcceptanceFeedbackPath = acceptancePassResultPath
           const acceptanceInfrastructureFailure = finalAcceptance.failureKind === "infrastructure_failure"
-          if (!finalAcceptance.passed && !acceptanceInfrastructureFailure) {
+          const acceptanceDatasetFailure = finalAcceptance.failureKind === "dataset_failure"
+          if (!finalAcceptance.passed && !acceptanceInfrastructureFailure && !acceptanceDatasetFailure) {
             await runBlankAgentAcceptanceDiagnosisWorker({
               cwd: input.cwd,
               campaignSpec,
@@ -5330,7 +5333,7 @@ export async function runLongTaskCampaign(input: {
               onPulse: pulseCampaignRound,
             })
           }
-          if (finalAcceptance.passed || acceptanceInfrastructureFailure) break
+          if (finalAcceptance.passed || acceptanceInfrastructureFailure || acceptanceDatasetFailure) break
         }
 
         const finalizedRoundRecord = finalizeRoundRecordWithAcceptance({
@@ -5360,8 +5363,9 @@ export async function runLongTaskCampaign(input: {
         )
 
         const acceptanceInfrastructureFailure = finalAcceptance?.failureKind === "infrastructure_failure"
+        const acceptanceDatasetFailure = finalAcceptance?.failureKind === "dataset_failure"
         const nextStatus =
-          acceptanceInfrastructureFailure
+          acceptanceInfrastructureFailure || acceptanceDatasetFailure
             ? "failed"
             : finalAcceptance?.passed === true
             ? "verified_success"
@@ -5371,6 +5375,8 @@ export async function runLongTaskCampaign(input: {
         const lastRoundClosure =
           acceptanceInfrastructureFailure
             ? "closed_infra_failure"
+            : acceptanceDatasetFailure
+            ? "closed_dataset_failure"
             : finalAcceptance?.passed === true
             ? "closed_success"
             : finalAcceptance
@@ -5379,6 +5385,8 @@ export async function runLongTaskCampaign(input: {
         const lastGateFailureKind =
           acceptanceInfrastructureFailure
             ? "infrastructure_failure"
+            : acceptanceDatasetFailure
+            ? "dataset_failure"
             : finalAcceptance && !finalAcceptance.passed
             ? "final_acceptance_failed"
             : finalizedRoundRecord.gateFailureKind
@@ -6211,7 +6219,8 @@ export async function resumeLongTaskCampaign(input: {
           await writeLongTaskCampaignRoutingControl(campaignPaths, routingAfterAcceptance)
           finalAcceptanceFeedbackPath = acceptancePassResultPath
           const acceptanceInfrastructureFailure = finalAcceptance.failureKind === "infrastructure_failure"
-          if (!finalAcceptance.passed && !acceptanceInfrastructureFailure) {
+          const acceptanceDatasetFailure = finalAcceptance.failureKind === "dataset_failure"
+          if (!finalAcceptance.passed && !acceptanceInfrastructureFailure && !acceptanceDatasetFailure) {
             await runBlankAgentAcceptanceDiagnosisWorker({
               cwd: input.cwd,
               campaignSpec,
@@ -6238,7 +6247,7 @@ export async function resumeLongTaskCampaign(input: {
               onPulse: pulseCampaignRound,
             })
           }
-          if (finalAcceptance.passed || acceptanceInfrastructureFailure) break
+          if (finalAcceptance.passed || acceptanceInfrastructureFailure || acceptanceDatasetFailure) break
         }
 
         const finalizedRoundRecord = finalizeRoundRecordWithAcceptance({
@@ -6268,8 +6277,9 @@ export async function resumeLongTaskCampaign(input: {
         )
 
         const acceptanceInfrastructureFailure = finalAcceptance?.failureKind === "infrastructure_failure"
+        const acceptanceDatasetFailure = finalAcceptance?.failureKind === "dataset_failure"
         const nextStatus =
-          acceptanceInfrastructureFailure
+          acceptanceInfrastructureFailure || acceptanceDatasetFailure
             ? "failed"
             : finalAcceptance?.passed === true
             ? "verified_success"
@@ -6279,6 +6289,8 @@ export async function resumeLongTaskCampaign(input: {
         const lastRoundClosure =
           acceptanceInfrastructureFailure
             ? "closed_infra_failure"
+            : acceptanceDatasetFailure
+            ? "closed_dataset_failure"
             : finalAcceptance?.passed === true
             ? "closed_success"
             : finalAcceptance
@@ -6287,6 +6299,8 @@ export async function resumeLongTaskCampaign(input: {
         const lastGateFailureKind =
           acceptanceInfrastructureFailure
             ? "infrastructure_failure"
+            : acceptanceDatasetFailure
+            ? "dataset_failure"
             : finalAcceptance && !finalAcceptance.passed
             ? "final_acceptance_failed"
             : finalizedRoundRecord.gateFailureKind

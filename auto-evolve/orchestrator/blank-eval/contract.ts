@@ -20,7 +20,7 @@ export interface BlankEvalResult {
   runID: string
   runDir: string
   passed: boolean
-  failureKind?: "product_failure" | "validator_infrastructure"
+  failureKind?: "product_failure" | "validator_infrastructure" | "dataset_failure"
   summary: string
   validatorResults: LongTaskValidatorResult[]
   sessionExecutionReportPath: string

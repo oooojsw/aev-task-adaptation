@@ -730,8 +730,11 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
     const validatorInfrastructureFailure = required.some(
       (item) => !item.passed && item.failureKind === "validator_infrastructure",
     )
+    const validatorDatasetFailure = required.some((item) => !item.passed && item.failureKind === "dataset_failure")
     const failureKind = passed
       ? undefined
+      : validatorDatasetFailure
+        ? ("dataset_failure" as const)
       : sessionInfrastructureFailure || validatorInfrastructureFailure
         ? ("validator_infrastructure" as const)
         : ("product_failure" as const)

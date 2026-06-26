@@ -392,6 +392,7 @@ async function runScriptValidator(input: {
   const infraOK = !timedOut && successExitCodes.includes(exitCode)
   const reportedPassed = readBooleanField(parsed, "passed", "ok", "success")
   const passed = infraOK && (reportedPassed ?? true)
+  const reportedFailureKind = readStringField(parsed, "failureKind", "failure_kind")
   const parsedSummary = readStringField(parsed, "summary", "message", "result_summary")
   const summary = parsedSummary
     ? parsedSummary
@@ -405,7 +406,9 @@ async function runScriptValidator(input: {
   const failureText = [summary, normalizedStderr, stdout].join("\n").toLowerCase()
   const failureKind = passed
     ? undefined
-    : !infraOK ||
+    : reportedFailureKind === "dataset_failure"
+      ? ("dataset_failure" as const)
+      : !infraOK ||
         timedOut ||
         failureText.includes("validator crashed") ||
         failureText.includes("validator runtime bootstrap failed") ||

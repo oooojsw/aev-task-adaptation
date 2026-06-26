@@ -263,6 +263,83 @@ def read_candidate(candidate: dict, expected: list[list[Any]]) -> list[list[Any]
     return out
 
 
+def input_workbook_from_payload(payload: dict) -> str | None:
+    for item in payload.get("materials", []):
+        if not isinstance(item, dict):
+            continue
+        value = item.get("path")
+        role = item.get("role")
+        if (
+            isinstance(value, str)
+            and role == "source-artifact"
+            and value.lower().endswith((".xlsx", ".xlsm"))
+            and os.path.exists(value)
+        ):
+            return value
+    for item in payload.get("materials", []):
+        if not isinstance(item, dict):
+            continue
+        value = item.get("path")
+        if isinstance(value, str) and value.lower().endswith((".xlsx", ".xlsm")) and os.path.exists(value):
+            return value
+    return None
+
+
+def simple_cell_refs(formula: Any) -> list[str]:
+    if not isinstance(formula, str) or not formula.startswith("="):
+        return []
+    refs: list[str] = []
+    # Deliberately narrow: this is a consistency guard for same-sheet formulas,
+    # not a full Excel parser.
+    for match in re.finditer(r"(?<![A-Za-z0-9_])\$?([A-Za-z]{1,3})\$?(\d+)", formula):
+        ref = f"{match.group(1).upper()}{match.group(2)}"
+        if ref not in refs:
+            refs.append(ref)
+    return refs
+
+
+def detect_dataset_formula_selector_mismatch(
+    payload: dict,
+    answer_path: str,
+    sheet_name: str,
+    cell_range: str,
+) -> list[str]:
+    input_path = input_workbook_from_payload(payload)
+    if not input_path:
+        return []
+    try:
+        input_wb = load_workbook(input_path, data_only=False, read_only=False)
+        answer_wb = load_workbook(answer_path, data_only=False, read_only=False)
+    except Exception:
+        return []
+    try:
+        input_sheet = resolve_workbook_sheet(sheet_name, list(input_wb.sheetnames))
+        answer_sheet = resolve_workbook_sheet(sheet_name, list(answer_wb.sheetnames))
+        input_ws = input_wb[input_sheet]
+        answer_ws = answer_wb[answer_sheet]
+        min_col, min_row, max_col, max_row = [int(v) for v in normalize_cell_range(cell_range, input_ws.max_row).split(",")]
+        target_refs = set()
+        for row in input_ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col):
+            for cell in row:
+                for ref in simple_cell_refs(cell.value):
+                    target_refs.add(ref)
+        mismatches: list[str] = []
+        for ref in sorted(target_refs):
+            try:
+                input_value = norm(input_ws[ref].value)
+                answer_value = norm(answer_ws[ref].value)
+            except Exception:
+                continue
+            if input_value != answer_value:
+                mismatches.append(f"formula reference {ref} differs between public input and hidden answer: input={input_value!r} answer={answer_value!r}")
+                if len(mismatches) >= 8:
+                    break
+        return mismatches
+    finally:
+        input_wb.close()
+        answer_wb.close()
+
+
 def compare_rows(expected: list[list[Any]], got: list[list[Any]]) -> tuple[bool, list[str]]:
     details: list[str] = []
     if len(expected) != len(got):
@@ -300,11 +377,13 @@ def main() -> int:
         expected = read_expected(answer_path, sheet_name, cell_range)
         got = read_candidate(candidate, expected)
         passed, diffs = compare_rows(expected, got)
+        dataset_mismatches = [] if passed else detect_dataset_formula_selector_mismatch(payload, answer_path, sheet_name, cell_range)
         result = {
             "passed": passed,
             "blocking": True,
-            "summary": "Spreadsheet answer matched." if passed else "Spreadsheet answer mismatch.",
-            "details": diffs if diffs else [f"matched sheet={sheet_name} range={cell_range}"],
+            "failureKind": "dataset_failure" if dataset_mismatches else None,
+            "summary": "Spreadsheet answer matched." if passed else ("Spreadsheet dataset consistency failure." if dataset_mismatches else "Spreadsheet answer mismatch."),
+            "details": (dataset_mismatches + diffs) if dataset_mismatches else (diffs if diffs else [f"matched sheet={sheet_name} range={cell_range}"]),
         }
         print(json.dumps(result, ensure_ascii=False))
         return 0

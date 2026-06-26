@@ -286,7 +286,7 @@ export interface LongTaskValidatorResult {
   createdAt: string
   passed: boolean
   blocking: boolean
-  failureKind?: "product_failure" | "validator_infrastructure"
+  failureKind?: "product_failure" | "validator_infrastructure" | "dataset_failure"
   summary: string
   details: string[]
   evidenceRefs: string[]
