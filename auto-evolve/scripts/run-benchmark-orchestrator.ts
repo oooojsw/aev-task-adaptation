@@ -851,6 +851,10 @@ async function runOneCampaign(config: BenchmarkConfig, pick: TrainPick) {
   try {
     const specPath = await campaignSpecPathForRun(config, pick)
     const specHash = await hashFileIfExists(specPath)
+    const campaignForResume =
+      pick.campaign && (await isAuthorizedCampaignPick(config, pick.id, pick.campaign, specHash))
+        ? pick.campaign
+        : undefined
     const historyPayload =
       config.historyContext && pick.attemptID
         ? JSON.stringify({
@@ -860,8 +864,8 @@ async function runOneCampaign(config: BenchmarkConfig, pick: TrainPick) {
             specHash,
           })
         : undefined
-    const args = pick.campaign
-      ? ["run", "cli.ts", "resume-long-task-campaign", "--campaign", pick.campaign, "--spec", specPath]
+    const args = campaignForResume
+      ? ["run", "cli.ts", "resume-long-task-campaign", "--campaign", campaignForResume, "--spec", specPath]
       : [
           "run",
           "cli.ts",
@@ -917,6 +921,23 @@ async function runOneCampaign(config: BenchmarkConfig, pick: TrainPick) {
       pending: "",
       verified: false,
     } satisfies TrainQueueResult
+  }
+}
+
+async function isAuthorizedCampaignPick(
+  config: BenchmarkConfig,
+  taskID: string,
+  campaignID: string,
+  expectedSpecHash?: string,
+) {
+  if (!config.historyContext) return process.env.AUTO_EVOLVE_ALLOW_LEGACY_CAMPAIGN_REUSE === "1"
+  const campaignPath = path.join(runtimeCampaignRoot, campaignID, "campaign.json")
+  if (!(await pathExists(campaignPath))) return false
+  try {
+    const state = await readJsonFile<Record<string, unknown>>(campaignPath)
+    return isCampaignAuthorizedForContext(state as any, config.historyContext, taskID, expectedSpecHash)
+  } catch {
+    return false
   }
 }
 
