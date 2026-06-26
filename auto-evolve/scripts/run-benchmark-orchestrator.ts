@@ -850,7 +850,10 @@ async function runOneCampaign(config: BenchmarkConfig, pick: TrainPick) {
   await mkdir(logDir, { recursive: true })
   try {
     const specPath = await campaignSpecPathForRun(config, pick)
-    const specHash = await hashFileIfExists(specPath)
+    // History lineage must identify the real task spec, not this run's generated
+    // campaign wrapper. The wrapper changes when maxRounds/concurrency knobs change;
+    // resume authorization inside long-task-campaign validates against baseSpecPath.
+    const specHash = await hashFileIfExists(baseSpecPath(config.taskPackRoot, pick.id))
     const campaignForResume =
       pick.campaign && (await isAuthorizedCampaignPick(config, pick.id, pick.campaign, specHash))
         ? pick.campaign
