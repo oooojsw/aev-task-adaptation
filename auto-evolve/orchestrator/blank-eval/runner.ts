@@ -58,7 +58,10 @@ function resolveFromSpecDir(specPath: string, value: string) {
   return path.isAbsolute(value) ? path.resolve(value) : path.resolve(path.dirname(specPath), value)
 }
 
-async function copyNoLinks(source: string, target: string) {
+async function copyNoLinks(source: string, target: string, relativePath = path.basename(source)) {
+  if (isSensitiveSandboxInputPath(source) || isSensitiveSandboxInputPath(relativePath)) {
+    throw new Error(`Blank Eval sandbox refuses sensitive input path: ${source}`)
+  }
   const info = await lstat(source)
   if (info.isSymbolicLink()) {
     throw new Error(`Blank Eval sandbox refuses symlink/junction input: ${source}`)
@@ -70,7 +73,7 @@ async function copyNoLinks(source: string, target: string) {
       if (entry.name === ".git" || entry.name === ".opencode" || entry.name === "node_modules") continue
       const childSource = path.join(source, entry.name)
       const childTarget = path.join(target, entry.name)
-      await copyNoLinks(childSource, childTarget)
+      await copyNoLinks(childSource, childTarget, path.join(relativePath, entry.name))
     }
     return
   }
@@ -366,7 +369,7 @@ async function snapshot(root: string, spec: LongTaskSpec, timedOut: boolean) {
   await writeJsonFile(path.join(dir, "stall-summary.json"), { snapshotAt: nowISO(), timedOut, entries })
 }
 
-function isSensitiveSkillPath(relativePath: string) {
+function isSensitiveSandboxInputPath(relativePath: string) {
   const normalized = relativePath.replace(/\\/g, "/").toLowerCase()
   const parts = normalized.split("/").filter(Boolean)
   const blockedExact = new Set([
@@ -392,13 +395,13 @@ function isSensitiveSkillPath(relativePath: string) {
   if (parts.some((part) => part.includes("validator_input") || part.includes("result.private"))) return true
   if (parts.some((part) => part.includes("cache") || part.includes("temp"))) return true
   const base = parts.at(-1) ?? ""
-  if (base === "validator_input.json" || base === "result.private.json") return true
+  if (base === "validator_input.json" || base === "result.private.json" || base === "result.json") return true
   return false
 }
 
 function shouldCopySkillEntry(name: string, relativePath = name) {
   if (!name) return false
-  if (isSensitiveSkillPath(relativePath)) return false
+  if (isSensitiveSandboxInputPath(relativePath)) return false
   return true
 }
 
