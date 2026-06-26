@@ -19,6 +19,7 @@ import { runManagedProcess } from "../managed-process"
 import { runOpencodeTask } from "../opencode"
 import { writeTaskArtifacts } from "../task-artifacts"
 import { buildValidationResultViews, writeValidationResultViews } from "./result-views"
+import { assertNoBlankAgentAudience } from "./registry"
 import type {
   ValidationEngineResult,
   ValidationMechanism,
@@ -355,7 +356,7 @@ function inferStage(contract: LongTaskValidatorContract): ValidationStage {
 function descriptorForLongTask(contract: LongTaskValidatorContract): ValidationModuleDescriptor {
   const mechanism: ValidationMechanism = contract.type === "script" ? "hard_script" : "soft_llm"
   const target = contract.validation?.target ?? inferTargetKind(contract)
-  return {
+  const descriptor = {
     id: contract.id,
     title: contract.title,
     target,
@@ -373,6 +374,8 @@ function descriptorForLongTask(contract: LongTaskValidatorContract): ValidationM
       "audit",
     ],
   }
+  assertNoBlankAgentAudience(contract, descriptor.allowedAudiences)
+  return descriptor
 }
 
 async function runScriptLongTaskValidation(input: {

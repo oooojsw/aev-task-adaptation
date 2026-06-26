@@ -11,6 +11,7 @@ import type {
 } from "./contract"
 import { DEFAULT_LONG_TASK_BUDGETS } from "./contract"
 import { pathExists, readJsonFile } from "../fs"
+import { assertNoBlankAgentAudience } from "../validation-engine/registry"
 
 export interface LoadLongTaskSpecOptions {
   allowMissingInitialExpertContextPaths?: boolean
@@ -96,7 +97,14 @@ function normalizeValidatorEngineHints(raw: unknown): LongTaskValidatorEngineHin
     raw.answerAccess === "none" || raw.answerAccess === "private_oracle" || raw.answerAccess === "full_training"
       ? raw.answerAccess
       : undefined
-  const allowedAudiences = normalizeStringArray(raw.allowedAudiences).filter(
+  const rawAllowedAudiences = normalizeStringArray(raw.allowedAudiences)
+  if (rawAllowedAudiences.includes("blank_agent")) {
+    throw new Error(
+      "validation.allowedAudiences must not include 'blank_agent'. " +
+        "blank_agent is closed-book and cannot read validation result views.",
+    )
+  }
+  const allowedAudiences = rawAllowedAudiences.filter(
     (item): item is NonNullable<LongTaskValidatorEngineHints["allowedAudiences"]>[number] =>
       item === "executor" ||
       item === "worker" ||
@@ -105,7 +113,6 @@ function normalizeValidatorEngineHints(raw: unknown): LongTaskValidatorEngineHin
       item === "merger" ||
       item === "repair_agent" ||
       item === "dashboard" ||
-      item === "blank_agent" ||
       item === "memory" ||
       item === "audit",
   )
@@ -468,6 +475,21 @@ export async function loadLongTaskSpec(
       )
     : []
   const mergedValidatorEntries = [...profileValidatorEntries, ...inlineValidatorEntries]
+
+  // Reject validator profiles that grant `blank_agent` access at load time.
+  for (const entry of mergedValidatorEntries) {
+    if (isObject(entry) && entry && "validation" in entry) {
+      const audiences = (entry as { validation?: { allowedAudiences?: unknown } }).validation?.allowedAudiences
+      if (Array.isArray(audiences) && audiences.includes("blank_agent")) {
+        const id = (entry as { id?: string }).id ?? "(unknown-validator)"
+        throw new Error(
+          `Validator '${id}' has allowedAudiences containing 'blank_agent'. ` +
+            `blank_agent cannot read any validation result view. ` +
+            `Remove 'blank_agent' from allowedAudiences; use audit / dashboard / memory for monitoring instead.`,
+        )
+      }
+    }
+  }
   const validators = mergeValidatorsKeepLast(normalizeValidators(mergedValidatorEntries)).map((validator) =>
     validator.type === "script"
       ? {

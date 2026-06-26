@@ -1889,6 +1889,7 @@ bun run auto-evolve/scripts/smoke-auto-evolve-path.ts
 - Blank Eval clean skill copy 会按路径过滤 `private-answers`、`answer-key`、`ground-truth`、`validators`、`validator_input.json`、`result.private.json`、`.opencode`、`.runtime`、cache/temp 等敏感目录或文件。
 - Blank Eval 复制 `materials`、guidance 和 capability 文件时也走同一套敏感路径检查。若源目录本身或子路径包含 `private-answers`、`answer-key`、`ground-truth`、`validators`、`validator_input.json`、`result.private.json`、`result.json` 等，直接 fail closed，不能把大目录静默拷进 sandbox。
 - Blank-agent evidence 给 worker 看的只应是训练视图和压缩证据，例如 `validation-training.compact.json`、工具调用摘要、workspace 文本 manifest；不能把 final acceptance 原始 result 或 private validator 输入直接放进 readable paths。
+- `validation.allowedAudiences` 禁止包含 `blank_agent`。这个检查必须在 spec 加载/规范化阶段 fail fast，validation descriptor 生成时也会再防御一次。blank agent 是闭卷执行者，不允许读取任何 validation result view。
 - long-task runID 和 blank-eval runID 都带随机盐，避免同毫秒并发时目录名撞车。
 
 大白话：任务之间可以在系统账本里留下历史，但不能默认互相递小抄；真要复用，必须证明是同一轮实验、同一个 task、同一个 spec 版本。
@@ -1897,4 +1898,5 @@ bun run auto-evolve/scripts/smoke-auto-evolve-path.ts
 
 ```powershell
 bun run auto-evolve/scripts/smoke-blank-eval-sensitive-material-guard.ts
+bun run auto-evolve/scripts/smoke-validator-blank-agent-audience-guard.ts
 ```
