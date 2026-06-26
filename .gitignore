@@ -211,6 +211,7 @@ runtime-logs/
 auto-evolve/runtime-state/
 auto-evolve/runtime-logs/
 auto-evolve/.tmp*/
+auto-evolve/.opencode-private/
 auto-evolve/cookies/
 auto-evolve/direct-chat-runs/
 auto-evolve/direct-chat-reports/

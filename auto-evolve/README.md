@@ -1,3 +1,14 @@
+## Git 推送主链规则（2026-06-26）
+
+以后本项目默认推送到干净主链仓库：
+
+```text
+C:\Users\ZhuanZ\Desktop\opencode re\opencode-auto-evolve-mainline
+https://github.com/oooojsw/opencode-auto-evolve-mainline
+```
+
+`C:\Users\ZhuanZ\Desktop\opencode re\opencode latest` 只作为运行宿主和完整混合本地仓库；它包含 OpenCode 官方上游历史、运行数据和历史大文件，禁止再从这里直接 push 作为默认同步方式。需要上云时，先把核心源码、配置、文档、smoke、进度记录同步到 `opencode-auto-evolve-mainline`，确认没有 `runtime-state`、`task-packs` 大材料、`private-answers`、workspace、outputs、缓存、PDF/视频/Office 材料、Cookie、API key 和运行产物，再从干净主链提交并推送。
+
 ## 断点续传主线红线（2026-06-26）
 
 用户说“继续训练 / 断点续传 / 续传 / 重启外层 orchestrator / 恢复训练”时，默认含义是续传已有最高进度 benchmark run，而不是新建一个新的 `--out` 目录。
