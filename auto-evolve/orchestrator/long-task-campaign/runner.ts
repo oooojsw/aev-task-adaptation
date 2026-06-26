@@ -450,7 +450,10 @@ async function healStaleRuntimeStates(cwd: string) {
       const wroteCampaign = await retryWriteJson(campaignStatePath, {
         ...state,
         status: "recovery_pending",
-        ownerPID: process.pid,
+        // Marking a stale campaign as recoverable is not ownership. The next
+        // real runner will claim owner fields when it actually resumes work.
+        ownerPID: undefined,
+        ownerCommandHint: undefined,
         ownerCreationTick: undefined,
         heartbeatAt: now,
         updatedAt: now,
@@ -536,7 +539,10 @@ async function healStaleRuntimeStates(cwd: string) {
       const wroteRun = await retryWriteJson(progressPath, {
         ...progress,
         status: recoveredStatus,
-        ownerPID: process.pid,
+        // A healer only changes the run back into a resumable state; it must
+        // not become the recorded owner of work it is not executing.
+        ownerPID: undefined,
+        ownerCommandHint: undefined,
         ownerCreationTick: undefined,
         heartbeatAt: now,
         updatedAt: now,
@@ -5556,7 +5562,10 @@ export async function resumeLongTaskCampaign(input: {
     await writeLongTaskCampaignState(campaignPaths, {
       ...existingState,
       status: "recovery_pending",
-      ownerPID: process.pid,
+      // Recovery markers are queue state, not live ownership. Clear owner
+      // fields so health checks do not attribute this campaign to the
+      // supervisor/resume process that merely detected the issue.
+      ownerPID: undefined,
       ownerCommandHint: undefined,
       ownerCreationTick: undefined,
       heartbeatAt: takeoverAt,
