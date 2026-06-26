@@ -104,7 +104,7 @@ function slugify(input: string) {
 export function createLongTaskRunID(title: string) {
   const now = new Date()
   const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}${String(now.getMilliseconds()).padStart(3, "0")}`
-  return `${stamp}-${slugify(title)}`
+  return `${stamp}-${randomUUID().slice(0, 8)}-${slugify(title)}`
 }
 
 async function ensureJsonlFile(target: string) {
@@ -691,13 +691,14 @@ export async function buildRetryInputBundle(input: {
   const sameUnitRetryLessons = retryLessons
     .filter((item) => item.unitID === unit.id)
     .slice(-(input.maxRetryLessons ?? 4))
-  const scope = input.spec.shadowMemoryScope ?? {
+  const explicitShadowMemoryScope = input.spec.shadowMemoryScope
+  const scope = explicitShadowMemoryScope ?? {
     namespace: input.spec.taskFamily ?? "long-task",
     tags: input.spec.domainTags ?? [],
     retrievalMode: "isolated" as const,
   }
   const relevantShadowMemory =
-    scope.retrievalMode === "manual"
+    !explicitShadowMemoryScope || scope.retrievalMode === "manual" || scope.retrievalMode === "isolated"
       ? []
       : shadow
           .filter((record) => record.runID !== progress.runID)

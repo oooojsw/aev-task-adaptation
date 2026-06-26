@@ -27,7 +27,6 @@ import {
   readOperationalContext,
   readRetryLessons,
   readScratchUnits,
-  readShadowMemoryRecords,
   readVerificationClaims,
   appendValidatorResult,
   appendVerificationClaim,
@@ -1556,16 +1555,14 @@ async function runCompletionValidators(input: {
   }
   const completionDir = path.join(input.run.root, "completion")
   const bundlePath = path.join(completionDir, "completion_bundle.json")
-  const [claims, failures, scratchUnits, learningUnits, retryLessons, operationalContext, shadowMemory] =
-    await Promise.all([
-      readVerificationClaims(input.run),
-      readFailurePackets(input.run),
-      readScratchUnits(input.run),
-      readLearningUnits(input.run),
-      readRetryLessons(input.run),
-      readOperationalContext(input.run),
-      readShadowMemoryRecords(longTaskPaths(input.cwd)),
-    ])
+  const [claims, failures, scratchUnits, learningUnits, retryLessons, operationalContext] = await Promise.all([
+    readVerificationClaims(input.run),
+    readFailurePackets(input.run),
+    readScratchUnits(input.run),
+    readLearningUnits(input.run),
+    readRetryLessons(input.run),
+    readOperationalContext(input.run),
+  ])
   await writeRetryInputBundle(bundlePath, {
     id: `completion-${randomUUID().slice(0, 8)}`,
     runID: progress.runID,
@@ -1582,7 +1579,7 @@ async function runCompletionValidators(input: {
     sameUnitRetryLessons: retryLessons.slice(-8),
     relevantScratchUnits: scratchUnits.slice(-12),
     relevantLearningUnits: learningUnits.slice(-12),
-    relevantShadowMemory: shadowMemory.filter((record) => record.runID !== progress.runID).slice(-6),
+    relevantShadowMemory: [],
     runGlobalOperationalContext: operationalContext.slice(0, 12),
     formalPackageRoots: resolveLongTaskFormalPackageRoots(completionSpec),
   })

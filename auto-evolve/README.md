@@ -1876,3 +1876,18 @@ bun run auto-evolve/scripts/smoke-auto-evolve-path.ts
 `OpenCodeGate.acquire()` 返回的 `permit.release()` 必须真正返回 `this.release(...)` 的 Promise，禁止 `void this.release(...)`。调用方在 `finally` 里 `await permit.release()` 后，`opencode-gate/state.json` 的 active slot 必须已经删除。否则任务结束后外层会以为锁已释放，但磁盘 state 仍占用并发名额，造成队列饿死、假卡住或长时间不补位。
 
 对应 smoke：`bun run auto-evolve/scripts/test-opencode-gate.ts` 会直接读取 gate 的 `state.json`，断言单次 release 和 20 个并发 `gate.run(...)` 结束后 `active.length === 0`。
+
+## 长程任务隔离边界（2026-06-26）
+
+每个长程任务默认必须像独立考场。平台可以保存全局账本，但不能默认把别的任务、别的 spec、别的验收私有文件塞进当前任务上下文。
+
+当前规则：
+
+- `shadow-memory/index.jsonl` 仍可记录影子经验，但 retry bundle 默认不读取跨 run shadow memory。只有 spec 明确配置 `shadowMemoryScope.retrievalMode = "related_only"` 时，才允许按 namespace/tags 取相关记忆；`isolated` 和未配置都等于不注入。
+- completion bundle 不再读取全局 shadow memory，只使用当前 run 的 claim、failure、learning、scratch 和 operational context。
+- benchmark 复用旧 campaign 时必须同时满足 history lineage、taskID、generationID 和 specHash。无 historyContext 的旧全局 campaign 默认不复用；如确需兼容旧实验，必须显式设置 `AUTO_EVOLVE_ALLOW_LEGACY_CAMPAIGN_REUSE=1`。
+- Blank Eval clean skill copy 会按路径过滤 `private-answers`、`answer-key`、`ground-truth`、`validators`、`validator_input.json`、`result.private.json`、`.opencode`、`.runtime`、cache/temp 等敏感目录或文件。
+- Blank-agent evidence 给 worker 看的只应是训练视图和压缩证据，例如 `validation-training.compact.json`、工具调用摘要、workspace 文本 manifest；不能把 final acceptance 原始 result 或 private validator 输入直接放进 readable paths。
+- long-task runID 和 blank-eval runID 都带随机盐，避免同毫秒并发时目录名撞车。
+
+大白话：任务之间可以在系统账本里留下历史，但不能默认互相递小抄；真要复用，必须证明是同一轮实验、同一个 task、同一个 spec 版本。

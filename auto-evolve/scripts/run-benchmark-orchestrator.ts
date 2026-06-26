@@ -503,6 +503,14 @@ function baseSpecPath(taskPackRoot: string, id: string) {
 
 async function campaigns(taskPackRoot: string, ids: string[], historyContext?: BenchmarkHistoryContext) {
   const got = new Map<string, CampaignRow[]>()
+  const expectedSpecHashByID = new Map<string, string | undefined>()
+  if (historyContext) {
+    await Promise.all(
+      ids.map(async (id) => {
+        expectedSpecHashByID.set(id, await hashFileIfExists(baseSpecPath(taskPackRoot, id)))
+      }),
+    )
+  }
   const entries = await readdir(runtimeCampaignRoot, { withFileTypes: true }).catch(() => [])
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
@@ -513,7 +521,10 @@ async function campaigns(taskPackRoot: string, ids: string[], historyContext?: B
     const row = JSON.parse(raw.replace(/^\uFEFF/, "")) as Record<string, unknown>
     const hit = ids.find((id) => path.resolve(String(row.baseSpecPath ?? "")) === path.resolve(baseSpecPath(taskPackRoot, id)))
     if (!hit) continue
-    if (historyContext && !isCampaignAuthorizedForContext(row as any, historyContext, hit)) continue
+    if (!historyContext && process.env.AUTO_EVOLVE_ALLOW_LEGACY_CAMPAIGN_REUSE !== "1") continue
+    if (historyContext && !isCampaignAuthorizedForContext(row as any, historyContext, hit, expectedSpecHashByID.get(hit))) {
+      continue
+    }
     const cdir = path.join(runtimeCampaignRoot, entry.name)
     const pending = path.join(cdir, "pending-expert-package", "current")
     const rec: CampaignRow = {

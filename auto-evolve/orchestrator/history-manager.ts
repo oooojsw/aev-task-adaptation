@@ -290,12 +290,14 @@ export function isCampaignAuthorizedForContext(
   state: Pick<LongTaskCampaignState, "runLineage" | "reuse">,
   context: BenchmarkHistoryContext,
   taskID?: string,
+  expectedSpecHash?: string,
 ) {
   const lineage = state.runLineage
   if (!lineage) return false
   if (lineage.benchmarkRunID !== context.runID) return false
   if (lineage.generationID !== context.generationID) return false
   if (taskID && lineage.taskID !== taskID) return false
+  if (expectedSpecHash && lineage.specHash !== expectedSpecHash) return false
   const reuse = state.reuse
   if (reuse?.tainted || reuse?.superseded) return false
   if (reuse && !reuse.allowed) return false

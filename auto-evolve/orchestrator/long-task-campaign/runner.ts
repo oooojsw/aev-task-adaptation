@@ -34,6 +34,7 @@ import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { runBlankEval } from "../blank-eval/runner"
 import {
   defaultReuseForPolicy,
+  hashFileIfExists,
   isCampaignAuthorizedForContext,
   lineageForAttempt,
   registerCampaignAttempt,
@@ -557,6 +558,7 @@ async function findExistingLiveCampaign(input: {
   baseSpecPath: string
   historyContext?: BenchmarkHistoryContext
   taskID?: string
+  specHash?: string
 }) {
   const campaignsRoot = autoEvolvePath(input.cwd, "runtime-state", "long-task-campaigns")
   if (!(await pathExists(campaignsRoot))) return undefined
@@ -583,7 +585,9 @@ async function findExistingLiveCampaign(input: {
     const stateBaseSpecPath = typeof state.baseSpecPath === "string" ? path.resolve(state.baseSpecPath) : ""
     const sameTarget = stateBaseSpecPath === normalizedBaseSpecPath
     if (!sameTarget) continue
-    if (input.historyContext && !isCampaignAuthorizedForContext(state, input.historyContext, input.taskID)) continue
+    if (input.historyContext && !isCampaignAuthorizedForContext(state, input.historyContext, input.taskID, input.specHash)) {
+      continue
+    }
     if (!input.historyContext && process.env.AUTO_EVOLVE_ALLOW_LEGACY_CAMPAIGN_RESUME !== "1") continue
     const health = await readCampaignHealth(campaignPaths.root)
     if (
@@ -782,6 +786,7 @@ async function findRecoverableCampaignForTarget(input: {
   baseSpecPath: string
   historyContext?: BenchmarkHistoryContext
   taskID?: string
+  specHash?: string
 }) {
   const campaignsRoot = autoEvolvePath(input.cwd, "runtime-state", "long-task-campaigns")
   if (!(await pathExists(campaignsRoot))) return undefined
@@ -808,7 +813,9 @@ async function findRecoverableCampaignForTarget(input: {
     const stateBaseSpecPath = typeof state.baseSpecPath === "string" ? path.resolve(state.baseSpecPath) : ""
     const sameTarget = stateBaseSpecPath === normalizedBaseSpecPath
     if (!sameTarget) continue
-    if (input.historyContext && !isCampaignAuthorizedForContext(state, input.historyContext, input.taskID)) continue
+    if (input.historyContext && !isCampaignAuthorizedForContext(state, input.historyContext, input.taskID, input.specHash)) {
+      continue
+    }
     if (!input.historyContext && process.env.AUTO_EVOLVE_ALLOW_LEGACY_CAMPAIGN_RESUME !== "1") continue
     const freshnessMs =
       parseTimestampMs(state.heartbeatAt) ??
@@ -4604,6 +4611,7 @@ export async function runLongTaskCampaign(input: {
   if (process.env.AUTO_EVOLVE_SKIP_STALE_HEAL !== "1") await healStaleRuntimeStates(input.cwd)
   const { spec: campaignSpec } = await loadLongTaskCampaignSpec(input.specPath)
   const { spec: baseSpec } = await loadLongTaskSpec(campaignSpec.baseSpecPath)
+  const expectedSpecHash = input.specHash ?? (await hashFileIfExists(campaignSpec.baseSpecPath))
   if (!input.forceNew) {
     const existingLiveCampaign = await findExistingLiveCampaign({
       cwd: input.cwd,
@@ -4611,6 +4619,7 @@ export async function runLongTaskCampaign(input: {
       baseSpecPath: campaignSpec.baseSpecPath,
       historyContext: input.historyContext,
       taskID: input.taskID,
+      specHash: expectedSpecHash,
     })
     if (existingLiveCampaign) {
       return toCampaignRunResult({
@@ -4626,12 +4635,15 @@ export async function runLongTaskCampaign(input: {
       baseSpecPath: campaignSpec.baseSpecPath,
       historyContext: input.historyContext,
       taskID: input.taskID,
+      specHash: expectedSpecHash,
     })
     if (recoverableCampaign) {
       return resumeLongTaskCampaign({
         cwd: input.cwd,
         campaignID: recoverableCampaign.campaignID,
         specPath: input.specPath,
+        historyContext: input.historyContext,
+        taskID: input.taskID,
       })
     }
   }
@@ -5391,7 +5403,8 @@ export async function resumeLongTaskCampaign(input: {
   }
   enforceCampaignTruthPaths({ campaignPaths })
   let existingState = await readLongTaskCampaignState(campaignPaths)
-  if (input.historyContext && !isCampaignAuthorizedForContext(existingState, input.historyContext, input.taskID)) {
+  const expectedSpecHash = await hashFileIfExists(campaignSpec.baseSpecPath)
+  if (input.historyContext && !isCampaignAuthorizedForContext(existingState, input.historyContext, input.taskID, expectedSpecHash)) {
     throw new Error(
       `Resume blocked by history scope: campaign ${input.campaignID} is not authorized for run ${input.historyContext.runID}/${input.historyContext.generationID}.`,
     )

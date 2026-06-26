@@ -478,7 +478,7 @@ export async function writeBlankAgentEvidenceBundle(input: WriteBlankAgentEviden
     roundNumber: input.roundNumber,
     passID: input.passID,
     sourceRunID: input.sourceRunID,
-    finalAcceptanceResultPath: normalizeSlashes(input.acceptanceResultPath),
+    finalAcceptanceResultPath: "(withheld; read validation-training.compact.json instead)",
     blankEval: {
       runDir: input.finalAcceptance.blankEvalRunDir ? normalizeSlashes(input.finalAcceptance.blankEvalRunDir) : undefined,
       resultPath: input.finalAcceptance.blankEvalResultPath ? normalizeSlashes(input.finalAcceptance.blankEvalResultPath) : undefined,
@@ -496,7 +496,7 @@ export async function writeBlankAgentEvidenceBundle(input: WriteBlankAgentEviden
       sessionArtifactPaths: [],
       validationTrainingViewPaths: [],
       workspaceTextFilePaths: [],
-      finalAcceptancePaths: [normalizeSlashes(input.acceptanceResultPath)],
+      finalAcceptancePaths: [],
     },
     readablePaths: [],
     blockedRefs: [],
@@ -596,7 +596,6 @@ export async function writeBlankAgentEvidenceBundle(input: WriteBlankAgentEviden
   for (const p of bundle.exactArtifacts.sessionArtifactPaths) readable.add(p)
   for (const p of bundle.exactArtifacts.validationTrainingViewPaths) readable.add(p)
   for (const p of bundle.exactArtifacts.workspaceTextFilePaths) readable.add(p)
-  for (const p of bundle.exactArtifacts.finalAcceptancePaths) readable.add(p)
 
   bundle.readablePaths = Array.from(readable)
 

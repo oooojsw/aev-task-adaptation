@@ -1,4 +1,5 @@
 import path from "node:path"
+import { randomUUID } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
 import { cp, lstat, mkdir, readdir, rm, stat } from "node:fs/promises"
 import { resolveModelSelection } from "../model-selection"
@@ -27,7 +28,7 @@ function stamp(title: string) {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 48) || "blank-eval"
-  return `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}${p(now.getMilliseconds(), 3)}-${tag}`
+  return `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}${p(now.getMilliseconds(), 3)}-${randomUUID().slice(0, 8)}-${tag}`
 }
 
 function short(text: string, limit = 260) {
@@ -365,26 +366,53 @@ async function snapshot(root: string, spec: LongTaskSpec, timedOut: boolean) {
   await writeJsonFile(path.join(dir, "stall-summary.json"), { snapshotAt: nowISO(), timedOut, entries })
 }
 
-function shouldCopySkillEntry(name: string) {
-  const lower = name.toLowerCase()
-  if (!name || name.startsWith(".")) return false
-  if (lower === "node_modules" || lower === "__pycache__") return false
-  if (lower === "temp" || lower === "tmp" || lower === "cache") return false
-  if (lower.includes(".opencode") || lower.includes(".runtime")) return false
-  if (lower.includes("cache") || lower.includes("temp")) return false
+function isSensitiveSkillPath(relativePath: string) {
+  const normalized = relativePath.replace(/\\/g, "/").toLowerCase()
+  const parts = normalized.split("/").filter(Boolean)
+  const blockedExact = new Set([
+    "node_modules",
+    "__pycache__",
+    "temp",
+    "tmp",
+    "cache",
+    "private-answers",
+    "private-answer",
+    "answer-key",
+    "answer-keys",
+    "ground-truth",
+    "ground-truths",
+    "validators",
+    ".opencode",
+    ".runtime",
+  ])
+  if (parts.some((part) => part.startsWith(".") || blockedExact.has(part))) return true
+  if (parts.some((part) => part.includes(".opencode") || part.includes(".runtime"))) return true
+  if (parts.some((part) => part.includes("private-answer") || part.includes("answer-key"))) return true
+  if (parts.some((part) => part.includes("ground-truth") || part.includes("ground_truth"))) return true
+  if (parts.some((part) => part.includes("validator_input") || part.includes("result.private"))) return true
+  if (parts.some((part) => part.includes("cache") || part.includes("temp"))) return true
+  const base = parts.at(-1) ?? ""
+  if (base === "validator_input.json" || base === "result.private.json") return true
+  return false
+}
+
+function shouldCopySkillEntry(name: string, relativePath = name) {
+  if (!name) return false
+  if (isSensitiveSkillPath(relativePath)) return false
   return true
 }
 
-async function copyCleanSkillRoot(sourceRoot: string, targetRoot: string) {
+async function copyCleanSkillRoot(sourceRoot: string, targetRoot: string, relativeRoot = "") {
   await ensureDirectory(targetRoot)
   const entries = await readdir(sourceRoot, { withFileTypes: true })
   for (const entry of entries) {
-    if (!shouldCopySkillEntry(entry.name)) continue
+    const relativePath = relativeRoot ? path.join(relativeRoot, entry.name) : entry.name
+    if (!shouldCopySkillEntry(entry.name, relativePath)) continue
     if (entry.isSymbolicLink()) continue
     const source = path.join(sourceRoot, entry.name)
     const target = path.join(targetRoot, entry.name)
     if (entry.isDirectory()) {
-      await copyCleanSkillRoot(source, target)
+      await copyCleanSkillRoot(source, target, relativePath)
       continue
     }
     if (entry.isFile()) {
