@@ -1870,3 +1870,9 @@ bun run auto-evolve/scripts/smoke-auto-evolve-path.ts
 通用批跑脚本 `auto-evolve/scripts/run-benchmark-orchestrator.ts` 现在会在 `<out>/benchmark-leases/<task-id>.json` 维护任务级 lease。lease 是外层 orchestrator 的“任务认领票”，记录 `ownerPID`、`ownerCreationTick`、`mode`、`campaignID/campaignDir`、`heartbeatAt` 和 `expiresAt`。
 
 规则：启动或恢复训练任务前必须先拿到 lease；任务成功、终态或失败后释放；任务转入 `watch_live` 时刷新成 watch lease。lease 不用于杀进程，只用于防止外层重启或多个 agent 接手时重复启动同一个 task。大白话：内存里的 `activeIDs` 会随着外层进程退出而丢失，lease 是落盘的小票，用来告诉后来的调度器“这个训练项刚刚已经有人认领过”。
+
+## OpenCodeGate Release Await（2026-06-26）
+
+`OpenCodeGate.acquire()` 返回的 `permit.release()` 必须真正返回 `this.release(...)` 的 Promise，禁止 `void this.release(...)`。调用方在 `finally` 里 `await permit.release()` 后，`opencode-gate/state.json` 的 active slot 必须已经删除。否则任务结束后外层会以为锁已释放，但磁盘 state 仍占用并发名额，造成队列饿死、假卡住或长时间不补位。
+
+对应 smoke：`bun run auto-evolve/scripts/test-opencode-gate.ts` 会直接读取 gate 的 `state.json`，断言单次 release 和 20 个并发 `gate.run(...)` 结束后 `active.length === 0`。

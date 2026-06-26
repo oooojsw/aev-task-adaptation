@@ -13,8 +13,10 @@
 
 import path from "node:path"
 import { randomUUID } from "node:crypto"
+import { readFile } from "node:fs/promises"
 import { OpenCodeGate, GateBusyError, GateTimeoutError } from "../orchestrator/opencode-gate"
 import { setTimeout as sleep } from "node:timers/promises"
+import { runtimePath } from "../orchestrator/fs"
 
 let failures = 0
 function testRoot(name: string) {
@@ -27,6 +29,14 @@ function assert(cond: boolean, msg: string) {
     failures += 1
   } else {
     console.log(`ok   ${msg}`)
+  }
+}
+
+async function readGateState(root: string) {
+  const statePath = path.join(runtimePath(root, "opencode-gate"), "state.json")
+  return JSON.parse(await readFile(statePath, "utf8").then((text) => text.replace(/^\uFEFF/, ""))) as {
+    active: unknown[]
+    queue: unknown[]
   }
 }
 
@@ -135,6 +145,74 @@ async function testRunWrapper() {
   assert(peak <= 2, "run() never exceeds the configured concurrency cap")
 }
 
+async function testReleaseAwaitWritesState() {
+  OpenCodeGate.__resetForTest()
+  OpenCodeGate.configure({ maxConcurrent: 20, perScopeMaxConcurrent: 20, maxQueueDepth: 40, acquireTimeoutMs: 5000 })
+  const gate = OpenCodeGate.instance()
+  const root = testRoot("release-await")
+  const permit = await gate.acquire({ caller: "direct", scope: "direct", root })
+  await permit.release()
+  let state = await readGateState(root)
+  assert(state.active.length === 0, "await permit.release() flushes active slot to state.json")
+
+  await Promise.all(
+    Array.from({ length: 20 }, (_, index) =>
+      gate.run({ caller: `run-${index}`, scope: `scope-${index}`, root }, async () => {
+        await sleep(5)
+      }),
+    ),
+  )
+  state = await readGateState(root)
+  assert(state.active.length === 0, "20 awaited gate.run() calls leave no active slots")
+}
+
+async function testModelCap() {
+  OpenCodeGate.__resetForTest()
+  OpenCodeGate.configure({
+    maxConcurrent: 3,
+    perScopeMaxConcurrent: 3,
+    maxQueueDepth: 10,
+    acquireTimeoutMs: 5000,
+    modelLimits: { "provider/model-a": { maxConcurrent: 1, minSpawnIntervalMs: 0 } },
+  })
+  const gate = OpenCodeGate.instance()
+  const root = testRoot("model-cap")
+  const p1 = await gate.acquire({ caller: "m1", scope: "one", model: "provider/model-a", root })
+  const other = await gate.acquire({ caller: "m2", scope: "two", model: "provider/model-b", root })
+  let resolvedSameModel = false
+  const waiting = gate.acquire({ caller: "m3", scope: "three", model: "provider/model-a", root }).then((permit) => {
+    resolvedSameModel = true
+    return permit
+  })
+  await sleep(100)
+  assert(!resolvedSameModel, "same model waits at per-model concurrency cap")
+  await p1.release()
+  const p3 = await waiting
+  assert(resolvedSameModel, "same model resumes after model permit release")
+  await other.release()
+  await p3.release()
+}
+
+async function testModelSpacing() {
+  OpenCodeGate.__resetForTest()
+  OpenCodeGate.configure({
+    maxConcurrent: 3,
+    perScopeMaxConcurrent: 3,
+    maxQueueDepth: 10,
+    acquireTimeoutMs: 5000,
+    modelLimits: { "provider/model-a": { maxConcurrent: 3, minSpawnIntervalMs: 200 } },
+  })
+  const gate = OpenCodeGate.instance()
+  const root = testRoot("model-spacing")
+  const p1 = await gate.acquire({ caller: "first", scope: "one", model: "provider/model-a", root })
+  await p1.release()
+  const started = Date.now()
+  const p2 = await gate.acquire({ caller: "second", scope: "two", model: "provider/model-a", root })
+  const elapsed = Date.now() - started
+  assert(elapsed >= 150, "same model respects minimum spawn interval")
+  await p2.release()
+}
+
 async function main() {
   console.log("=== OpenCodeGate smoke test ===")
   await testSemaphoreCap()
@@ -142,6 +220,9 @@ async function main() {
   await testScopeCap()
   await testTimeout()
   await testRunWrapper()
+  await testReleaseAwaitWritesState()
+  await testModelCap()
+  await testModelSpacing()
   if (failures > 0) {
     console.error(`\n${failures} assertion(s) failed`)
     process.exit(1)

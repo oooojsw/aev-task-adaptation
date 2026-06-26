@@ -245,9 +245,7 @@ export class OpenCodeGate {
           id: result.id,
           caller: result.caller,
           acquiredAt: result.acquiredAt,
-          release: () => {
-            void this.release(stateRoot, result.id)
-          },
+          release: () => this.release(stateRoot, result.id),
         }
       }
 
