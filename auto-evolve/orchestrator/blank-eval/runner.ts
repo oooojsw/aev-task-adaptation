@@ -1,7 +1,7 @@
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
-import { cp, lstat, mkdir, readdir, rm, stat } from "node:fs/promises"
+import { cp, lstat, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { resolveModelSelection } from "../model-selection"
 import { runOpencodeTask } from "../opencode"
 import { loadConfig } from "../schema"
@@ -112,6 +112,56 @@ async function copyPathRefsToSandbox(
   for (const [index, ref] of (refs ?? []).entries()) {
     const copied = await copySandboxInput({ source: ref.path, targetRoot, index, specPath, required })
     if (copied) out.push({ ...ref, path: copied })
+  }
+  return out
+}
+
+async function materializeSpreadsheetRefsForBlankEval(
+  refs: { path: string; label?: string; role?: string }[],
+  cwd: string,
+) {
+  const out: { path: string; label?: string; role?: string }[] = []
+  const scriptPath = autoEvolvePath(cwd, "scripts", "materialize-xlsx-for-direct-chat.py")
+  if (!(await pathExists(scriptPath))) return out
+
+  for (const ref of refs) {
+    const ext = path.extname(ref.path).toLowerCase()
+    if (ext !== ".xlsx" && ext !== ".xlsm") continue
+    const target = path.join(path.dirname(ref.path), `${path.basename(ref.path)}.readable.json`)
+    const child = Bun.spawn(
+      [
+        "python",
+        scriptPath,
+        "--xlsx",
+        ref.path,
+        "--max-sheets",
+        "12",
+        "--max-rows",
+        "120",
+        "--max-cols",
+        "80",
+      ],
+      {
+        cwd,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    )
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ])
+    if (code !== 0 || !stdout.trim()) {
+      const detail = stderr.trim() || `exit code ${code}`
+      throw new Error(`Blank Eval could not materialize spreadsheet input ${ref.path}: ${detail}`)
+    }
+    await writeFile(target, stdout.trim() + "\n", "utf8")
+    out.push({
+      path: target,
+      label: `${ref.label ?? path.basename(ref.path)} readable workbook extraction`,
+      role: "derived-source-artifact",
+    })
   }
   return out
 }
@@ -327,6 +377,7 @@ function prompt(input: {
     "- Do not browse unrelated project, runtime, cache, history, private answer, or old output folders.",
     "- Do not create or repair the reference guidance unless the requested output explicitly asks for that.",
     "- Treat the reference guidance as practical task guidance. It may be incomplete, so use the materials to resolve details.",
+    "- If an Office or spreadsheet binary has a matching readable extraction material, use the readable extraction first and treat it as derived from the original material.",
     "- Materials can be large. Read only what is useful, but cite concrete source locations when the task calls for evidence.",
     "- Write final artifacts only to the declared output targets or editable paths.",
     "- Before returning, perform reasonable self-checks derived only from the listed inputs.",
@@ -490,7 +541,14 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
 
     const sourceSkillRoots = unique(input.skillRoots.map((item) => path.resolve(item)))
     const skillRoots = await prepareCleanSkillRoots(sourceSkillRoots, cleanSkillRoot)
-    const sandboxMaterials = await copyPathRefsToSandbox(baseRuntimeSpec.materials, sandboxMaterialsRoot, loaded.specPath, true)
+    const copiedSandboxMaterials = await copyPathRefsToSandbox(
+      baseRuntimeSpec.materials,
+      sandboxMaterialsRoot,
+      loaded.specPath,
+      true,
+    )
+    const derivedSandboxMaterials = await materializeSpreadsheetRefsForBlankEval(copiedSandboxMaterials, input.cwd)
+    const sandboxMaterials = [...copiedSandboxMaterials, ...derivedSandboxMaterials]
     const sandboxGuides = await copyStringPathsToSandbox(
       [...(input.promptInlinePaths ?? []), ...guidance(loaded.spec, loaded.specPath)],
       sandboxGuidanceRoot,
@@ -528,6 +586,8 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
     const cRefs = capRefs(spec)
     const cFiles = capFiles(spec)
     const edits = unique([...resolveLongTaskEditablePaths(spec), ...(spec.targetPaths ?? []).map((item) => item.path)])
+    const derivedMaterialPaths = derivedSandboxMaterials.map((item) => item.path)
+    const inlineFiles = unique([...sandboxGuides, ...derivedMaterialPaths])
     const reads = unique([
       bundlePath,
       ...skillRoots,
@@ -587,12 +647,12 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
             entries: entries.map(fix),
             bundlePath: fix(bundlePath),
             mode: input.mode ?? "deployment",
-            inline: sandboxGuides.map(fix),
+            inline: inlineFiles.map(fix),
             unicode: norm.size > 0,
           }),
           referencePaths: reads.map(fix),
           attachedFiles: cFiles.map(fix),
-          promptInlineFiles: sandboxGuides.map(fix),
+          promptInlineFiles: inlineFiles.map(fix),
           permissionReadPaths: permissionReads.map(fix),
           permissionEditPaths: edits.map(fix),
           allowShell: false,
