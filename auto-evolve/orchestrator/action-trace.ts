@@ -1,4 +1,5 @@
 import type { OpencodeEvent } from "./opencode"
+import { safePreview } from "./safe-preview"
 
 function limitText(input: string, maxLines = 12, maxChars = 800) {
   const trimmed = input.replace(/\r\n/g, "\n").trim()
@@ -22,7 +23,7 @@ function formatBlock(label: string, value: unknown) {
     return text ? `${label}:\n${text}` : ""
   }
   try {
-    return `${label}:\n${limitText(JSON.stringify(value, null, 2))}`
+    return `${label}:\n${limitText(safePreview(value))}`
   } catch {
     return `${label}:\n${String(value)}`
   }
@@ -86,7 +87,7 @@ export function buildActionTrace(events: OpencodeEvent[]) {
 
     if (event.type === "error") {
       lines.push(`## ${index}. session_error`)
-      lines.push(limitText(JSON.stringify(event.error ?? {}, null, 2)))
+      lines.push(limitText(safePreview(event.error ?? {})))
       lines.push("")
     }
   }

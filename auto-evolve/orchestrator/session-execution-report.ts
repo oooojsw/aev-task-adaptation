@@ -1,5 +1,6 @@
 import type { EvaluationResult } from "./evaluator"
 import type { OpencodeEvent, OpencodeTaskRun } from "./opencode"
+import { hasPreviewableContent, safePreview } from "./safe-preview"
 
 export interface SessionExecutionReportInput {
   task: OpencodeTaskRun
@@ -23,9 +24,8 @@ function limitText(input: string, maxLines = 16, maxChars = 1400) {
 
 function formatUnknown(value: unknown) {
   if (value === undefined || value === null) return ""
-  if (typeof value === "string") return limitText(value)
   try {
-    return limitText(JSON.stringify(value, null, 2))
+    return limitText(safePreview(value))
   } catch {
     return limitText(String(value))
   }
@@ -60,8 +60,8 @@ function summarizeToolUsage(events: OpencodeEvent[]) {
       failures.push(`${tool}: ${formatUnknown(event.part?.state?.error) || "unknown error"}`)
     }
 
-    const output = (event.part?.state?.output ?? "").toString().trim()
-    if ((tool === "read" || tool === "list" || tool === "glob" || tool === "grep") && !output) {
+    const hasOutput = hasPreviewableContent(event.part?.state?.output)
+    if ((tool === "read" || tool === "list" || tool === "glob" || tool === "grep") && !hasOutput) {
       likelyEmptyExplorations.push(`${tool}: empty output`)
     }
   }
