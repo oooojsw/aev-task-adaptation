@@ -1,6 +1,7 @@
 import path from "node:path"
 import process from "node:process"
-import { openSync } from "node:fs"
+import { closeSync, openSync } from "node:fs"
+import { stat, unlink } from "node:fs/promises"
 import { spawn } from "node:child_process"
 import { ensureDirectory, pathExists, readJsonFile, runtimePath, writeJsonFile } from "./fs"
 import type { AutoEvolveConfig } from "./schema"
@@ -48,6 +49,31 @@ async function waitForDashboard(url: string, timeoutMs = 15000) {
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
   return false
+}
+
+async function acquireMonitorStartLock(lockPath: string) {
+  try {
+    const fd = openSync(lockPath, "wx")
+    return {
+      acquired: true,
+      release: async () => {
+        closeSync(fd)
+        await unlink(lockPath).catch(() => {})
+      },
+    }
+  } catch {
+    const ageMs = await stat(lockPath)
+      .then((info) => Date.now() - info.mtimeMs)
+      .catch(() => 0)
+    if (ageMs > 60_000) {
+      await unlink(lockPath).catch(() => {})
+      return acquireMonitorStartLock(lockPath)
+    }
+    return {
+      acquired: false,
+      release: async () => {},
+    }
+  }
 }
 
 function openBrowser(url: string) {
@@ -106,6 +132,7 @@ export async function ensureExperimentMonitor(cwd: string, config: AutoEvolveCon
 
   const runtimeDir = runtimePath(cwd, "monitor")
   const statePath = path.join(runtimeDir, "session-dashboard.json")
+  const lockPath = path.join(runtimeDir, "session-dashboard.start.lock")
   const logFile = path.join(runtimeDir, "session-dashboard.log")
   await ensureDirectory(runtimeDir)
 
@@ -119,56 +146,82 @@ export async function ensureExperimentMonitor(cwd: string, config: AutoEvolveCon
     }
   }
 
-  const stdoutFd = openSync(logFile, "a")
-  const stderrFd = openSync(logFile, "a")
-  const child = spawn(
-    process.execPath,
-    [
-      "run",
-      "auto-evolve/monitor-server.ts",
-      "--hostname",
-      monitor.hostname,
-      "--port",
-      String(monitor.port),
-      "--interval",
-      String(monitor.intervalSeconds),
-      "--limit",
-      String(monitor.defaultLimit),
-      "--no-open",
-    ],
-    {
-      cwd,
-      detached: true,
-      stdio: ["ignore", stdoutFd, stderrFd],
-      windowsHide: true,
-      env: process.env,
-    },
-  )
-  child.unref()
-
-  const healthy = await waitForDashboard(url)
-  if (!healthy) {
-    throw new Error(`Session dashboard failed to start at ${url}. Check ${logFile}`)
+  const startLock = await acquireMonitorStartLock(lockPath)
+  if (!startLock.acquired) {
+    if (await waitForDashboard(url, 20_000)) {
+      return {
+        enabled: true,
+        url,
+        reused: true,
+        started: false,
+      }
+    }
+    throw new Error(`Session dashboard is already starting at ${url}. Try again after the startup lock clears: ${lockPath}`)
   }
 
-  await writeJsonFile(statePath, {
-    version: 1,
-    pid: child.pid ?? -1,
-    url,
-    hostname: monitor.hostname,
-    port: monitor.port,
-    startedAt: Date.now(),
-    logFile,
-  } satisfies DashboardState)
+  try {
+    if (await isDashboardHealthy(url)) {
+      return {
+        enabled: true,
+        url,
+        reused: true,
+        started: false,
+      }
+    }
 
-  if (monitor.openBrowserOnStart) {
-    openBrowser(url)
-  }
+    const stdoutFd = openSync(logFile, "a")
+    const stderrFd = openSync(logFile, "a")
+    const child = spawn(
+      process.execPath,
+      [
+        "run",
+        "auto-evolve/monitor-server.ts",
+        "--hostname",
+        monitor.hostname,
+        "--port",
+        String(monitor.port),
+        "--interval",
+        String(monitor.intervalSeconds),
+        "--limit",
+        String(monitor.defaultLimit),
+        "--no-open",
+      ],
+      {
+        cwd,
+        detached: true,
+        stdio: ["ignore", stdoutFd, stderrFd],
+        windowsHide: true,
+        env: process.env,
+      },
+    )
+    child.unref()
 
-  return {
-    enabled: true,
-    url,
-    reused: false,
-    started: true,
+    const healthy = await waitForDashboard(url)
+    if (!healthy) {
+      throw new Error(`Session dashboard failed to start at ${url}. Check ${logFile}`)
+    }
+
+    await writeJsonFile(statePath, {
+      version: 1,
+      pid: child.pid ?? -1,
+      url,
+      hostname: monitor.hostname,
+      port: monitor.port,
+      startedAt: Date.now(),
+      logFile,
+    } satisfies DashboardState)
+
+    if (monitor.openBrowserOnStart) {
+      openBrowser(url)
+    }
+
+    return {
+      enabled: true,
+      url,
+      reused: false,
+      started: true,
+    }
+  } finally {
+    await startLock.release()
   }
 }

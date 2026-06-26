@@ -1900,3 +1900,6 @@ bun run auto-evolve/scripts/smoke-auto-evolve-path.ts
 bun run auto-evolve/scripts/smoke-blank-eval-sensitive-material-guard.ts
 bun run auto-evolve/scripts/smoke-validator-blank-agent-audience-guard.ts
 ```
+## Monitor 看板减负规则（2026-06-26）
+
+`auto-evolve/monitor-server.ts` 不能再用 2 秒高频刷新和无限深度递归扫描 `runtime-state`。默认刷新间隔改为 15 秒、默认 limit 改为 30，artifact/lifecycle 扫描结果缓存 15 秒，并对递归扫描加入最大深度、最大目录数和重目录跳过规则（workspace、materials、outputs、private-answers、blank-eval-runs、node_modules 等）。`orchestrator/monitor.ts` 已加入启动锁，同一端口看板启动中时其他 orchestrator 必须等待/复用，不能并发拉起多个 monitor-server。训练监控优先读 `orchestrator-state.json`、`run-dashboard` 和真实进程；不要为了持续监控反复启动看板。

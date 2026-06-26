@@ -136,10 +136,31 @@ const ARTIFACT_SCAN_ROOTS = [
   LONG_TASK_RUNS_ROOT,
   LONG_TASK_CAMPAIGNS_ROOT,
 ]
-const ARTIFACT_CACHE_TTL_MS = 1500
+const ARTIFACT_CACHE_TTL_MS = 15_000
+const LIFECYCLE_CACHE_TTL_MS = 15_000
+const ARTIFACT_SCAN_MAX_DEPTH = 8
+const ARTIFACT_SCAN_MAX_DIRECTORIES = 2_000
+const ARTIFACT_SCAN_SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  "workspace",
+  "workspaces",
+  "materials",
+  "outputs",
+  "private-answers",
+  "blank-eval-runs",
+  "direct-chat-ocr-cache",
+])
 const MONITOR_FRONTEND_TEMPLATE_PATH = path.join(AUTO_EVOLVE_ROOT, "frontend", "monitor", "index.html")
 
 let artifactCache:
+  | {
+      expiresAt: number
+      rows: MonitorRow[]
+    }
+  | undefined
+
+let lifecycleCache:
   | {
       expiresAt: number
       rows: MonitorRow[]
@@ -583,9 +604,13 @@ function actionFromEvent(event: any): MonitorAction | undefined {
 
 async function listFilesRecursive(root: string, targetName: string, maxFiles: number) {
   const files: { filePath: string; updated: number }[] = []
+  let visitedDirectories = 0
 
-  async function visit(directory: string): Promise<void> {
+  async function visit(directory: string, depth: number): Promise<void> {
     if (files.length >= maxFiles) return
+    if (depth > ARTIFACT_SCAN_MAX_DEPTH) return
+    if (visitedDirectories >= ARTIFACT_SCAN_MAX_DIRECTORIES) return
+    visitedDirectories++
 
     let entries: import("node:fs").Dirent[]
     try {
@@ -596,9 +621,12 @@ async function listFilesRecursive(root: string, targetName: string, maxFiles: nu
 
     for (const entry of entries) {
       if (files.length >= maxFiles) break
+      if (visitedDirectories >= ARTIFACT_SCAN_MAX_DIRECTORIES) break
       const fullPath = path.join(directory, entry.name)
+      if (entry.isSymbolicLink()) continue
       if (entry.isDirectory()) {
-        await visit(fullPath)
+        if (ARTIFACT_SCAN_SKIP_DIRS.has(entry.name)) continue
+        await visit(fullPath, depth + 1)
         continue
       }
       if (!entry.isFile() || entry.name !== targetName) continue
@@ -607,7 +635,7 @@ async function listFilesRecursive(root: string, targetName: string, maxFiles: nu
     }
   }
 
-  await visit(root)
+  await visit(root, 0)
   return files
 }
 
@@ -827,6 +855,11 @@ async function buildCampaignStateRow(campaignStatePath: string) {
 }
 
 async function collectLifecycleRows(limit: number) {
+  const now = Date.now()
+  if (lifecycleCache && lifecycleCache.expiresAt > now) {
+    return lifecycleCache.rows.slice(0, limit)
+  }
+
   const maxFiles = Math.max(limit * 8, 80)
   const [progressCandidates, campaignCandidates] = await Promise.all([
     listFilesRecursive(LONG_TASK_RUNS_ROOT, "progress_state.json", maxFiles),
@@ -842,7 +875,12 @@ async function collectLifecycleRows(limit: number) {
     const row = await buildCampaignStateRow(item.filePath)
     if (row) rows.push(row)
   }
-  return uniqueRows(rows).sort((left, right) => right.updated - left.updated).slice(0, limit)
+  const unique = uniqueRows(rows).sort((left, right) => right.updated - left.updated)
+  lifecycleCache = {
+    expiresAt: now + LIFECYCLE_CACHE_TTL_MS,
+    rows: unique,
+  }
+  return unique.slice(0, limit)
 }
 
 async function collectArtifactRows(limit: number) {
@@ -1301,7 +1339,7 @@ function finalizeNarrativeRow(row: MonitorRow): MonitorRow {
 
 async function collectMonitorRows(limit: number) {
   const requestLimit = Math.max(1, limit)
-  const expandedLimit = Math.max(requestLimit * 12, 240)
+  const expandedLimit = Math.max(requestLimit * 4, 120)
   const [statuses, artifactRows, lifecycleRows] = await Promise.all([
     SessionStatus.list(),
     collectArtifactRows(expandedLimit),
@@ -1355,8 +1393,8 @@ async function renderDashboardHtml(options: { limit: number; intervalSeconds: nu
 async function main() {
   const hostname = getOption("--hostname", "127.0.0.1")
   const port = Math.max(1, Number(getOption("--port", "4219")) || 4219)
-  const intervalSeconds = Math.max(1, Number(getOption("--interval", "2")) || 2)
-  const limit = Math.max(1, Number(getOption("--limit", "50")) || 50)
+  const intervalSeconds = Math.max(5, Number(getOption("--interval", "15")) || 15)
+  const limit = Math.max(1, Number(getOption("--limit", "30")) || 30)
 
   // Warm once so monitor refresh does not repeatedly bootstrap/dispose the OpenCode runtime.
   await withMonitorInstance(async () => undefined)

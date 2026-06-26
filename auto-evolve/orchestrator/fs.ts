@@ -801,8 +801,8 @@ const DEFAULT_CONFIG_JSON = `{
     "autoStart": true,
     "hostname": "127.0.0.1",
     "port": 4219,
-    "intervalSeconds": 2,
-    "defaultLimit": 50,
+    "intervalSeconds": 15,
+    "defaultLimit": 30,
     "openBrowserOnStart": true
   },
   "concurrencyConfig": {
@@ -1006,8 +1006,8 @@ const DEFAULT_MONITOR_CONFIG_JSON = `{
   "autoStart": true,
   "hostname": "127.0.0.1",
   "port": 4219,
-  "intervalSeconds": 2,
-  "defaultLimit": 50,
+  "intervalSeconds": 15,
+  "defaultLimit": 30,
   "openBrowserOnStart": true
 }
 `
