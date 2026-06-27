@@ -54,12 +54,12 @@
   "monitorConfig": {
     "version": 1,
     "enabled": true,
-    "autoStart": true,
+    "autoStart": false,
     "hostname": "127.0.0.1",
     "port": 4219,
     "intervalSeconds": 15,
     "defaultLimit": 30,
-    "openBrowserOnStart": true
+    "openBrowserOnStart": false
   },
   "concurrencyConfig": {
     "maxConcurrent": 15,
