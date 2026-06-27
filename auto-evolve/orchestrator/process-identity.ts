@@ -192,6 +192,9 @@ export async function identifyProcessOwner(input: ProcessIdentityInput): Promise
   if (expectedCreationTick && creationTick && creationTick !== expectedCreationTick) {
     return { pid, alive: true, ownership: "wrong_owner", commandLine, creationTick, reason: "creation tick did not match" }
   }
+  if (expectedCreationTick && creationTick && creationTick === expectedCreationTick) {
+    return { pid, alive: true, ownership: "owned", commandLine, creationTick, reason: "creation tick matched" }
+  }
 
   const matched = evaluateCommandHints(commandLine, input)
   if (matched === true) return { pid, alive: true, ownership: "owned", commandLine, creationTick, reason: "identity matched" }
