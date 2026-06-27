@@ -122,6 +122,7 @@ const LOCK_POLL_MS = 50
 const LOCK_IO_RETRIES = 5
 const STATE_VERSION = 1
 const STATE_DIR = "opencode-gate"
+const HEAD_OF_LINE_BYPASS_MS = 15 * 60 * 1000
 
 let _instance: OpenCodeGate | undefined
 
@@ -201,7 +202,7 @@ export class OpenCodeGate {
           throw new GateBusyError(queue.length - 1, this.config.maxQueueDepth)
         }
 
-        const grant = selectGrant(queue, cleaned.active, cleaned.lastGrantedAtByModel, effectiveConfig)
+        const grant = selectGrant(queue, cleaned.active, cleaned.lastGrantedAtByModel, effectiveConfig, request.id)
         if (!grant || grant.id !== request.id) {
           await writeState(stateRoot, {
             version: STATE_VERSION,
@@ -334,27 +335,48 @@ function selectGrant(
   active: ActiveSlot[],
   lastGrantedAtByModel: Record<string, number>,
   config: OpenCodeGateConfig,
+  preferredID?: string,
 ) {
   const activeByScope = countByScope(active)
   const activeByModel = countByModel(active)
   const activeTotal = active.length
   if (activeTotal >= config.maxConcurrent) return undefined
+  const eligible: QueueSlot[] = []
   for (const item of queue) {
-    const scopeCount = activeByScope.get(item.scope) ?? 0
-    if (scopeCount >= config.perScopeMaxConcurrent) continue
-    if (item.model) {
-      const modelLimit = config.modelLimits?.[item.model]
-      if (modelLimit) {
-        if (modelLimit.cooldownUntil && Date.parse(modelLimit.cooldownUntil) > Date.now()) continue
-        const modelCount = activeByModel.get(item.model) ?? 0
-        if (modelCount >= modelLimit.maxConcurrent) continue
-        const lastGrant = lastGrantedAtByModel[item.model] ?? 0
-        if (modelLimit.minSpawnIntervalMs && Date.now() - lastGrant < modelLimit.minSpawnIntervalMs) continue
-      }
-    }
-    return item
+    if (isGrantEligible(item, activeByScope, activeByModel, lastGrantedAtByModel, config)) eligible.push(item)
   }
-  return undefined
+  const first = eligible[0]
+  if (!first) return undefined
+  if (preferredID && activeTotal === 0 && first.id !== preferredID && Date.now() - first.enqueuedAtMs > HEAD_OF_LINE_BYPASS_MS) {
+    // If the head request has not acquired an entirely empty gate for a long time,
+    // its waiting coroutine is likely gone while the owner process is still alive.
+    // Let a later live waiter take the empty slot instead of deadlocking the queue.
+    const preferred = eligible.find((item) => item.id === preferredID)
+    if (preferred) return preferred
+  }
+  return first
+}
+
+function isGrantEligible(
+  item: QueueSlot,
+  activeByScope: Map<string, number>,
+  activeByModel: Map<string, number>,
+  lastGrantedAtByModel: Record<string, number>,
+  config: OpenCodeGateConfig,
+) {
+  const scopeCount = activeByScope.get(item.scope) ?? 0
+  if (scopeCount >= config.perScopeMaxConcurrent) return false
+  if (item.model) {
+    const modelLimit = config.modelLimits?.[item.model]
+    if (modelLimit) {
+      if (modelLimit.cooldownUntil && Date.parse(modelLimit.cooldownUntil) > Date.now()) return false
+      const modelCount = activeByModel.get(item.model) ?? 0
+      if (modelCount >= modelLimit.maxConcurrent) return false
+      const lastGrant = lastGrantedAtByModel[item.model] ?? 0
+      if (modelLimit.minSpawnIntervalMs && Date.now() - lastGrant < modelLimit.minSpawnIntervalMs) return false
+    }
+  }
+  return true
 }
 
 function countByModel(active: ActiveSlot[]) {
