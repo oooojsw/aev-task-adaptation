@@ -65,7 +65,8 @@
     "maxConcurrent": 15,
     "perScopeMaxConcurrent": 5,
     "maxQueueDepth": 60,
-    "acquireTimeoutMs": 3600000,
+    "acquireTimeoutMs": 21600000,
+    "acquireTimeoutMsNote": "控制等待 OpenCodeGate 名额的最长时间；长程任务单个 OpenCode 会话可能超过 1 小时，所以这里设为 6 小时，避免排队任务被误判为基础设施失败。",
     "minSpawnIntervalMs": 0
   },
   "stageConcurrency": {
