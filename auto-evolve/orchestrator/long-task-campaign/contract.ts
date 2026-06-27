@@ -338,11 +338,17 @@ export interface LongTaskCampaignRoundRecord {
   learningUnitCount: number
   runVerificationSignal?: LongTaskRunVerificationSignal
   roundClosure?: LongTaskRoundClosure
-  gateFailureKind?: "completion_gate_failed" | "execution_blocked" | "infrastructure_failure" | "final_acceptance_failed"
+  gateFailureKind?:
+    | "completion_gate_failed"
+    | "execution_blocked"
+    | "infrastructure_failure"
+    | "final_acceptance_failed"
+    | "dataset_failure"
   gateFailureSummary?: string
   finalAcceptanceSignal?: {
     executed: boolean
     passed: boolean
+    failureKind?: "product_failure" | "infrastructure_failure" | "dataset_failure"
     failedValidatorIDs: string[]
     feedbackPath?: string
   }

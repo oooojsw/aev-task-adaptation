@@ -2987,6 +2987,7 @@ function finalizeRoundRecordWithAcceptance(input: {
     .filter((item) => !item.passed)
     .map((item) => item.validatorID)
   const infrastructureFailure = input.finalAcceptance.failureKind === "infrastructure_failure"
+  const datasetFailure = input.finalAcceptance.failureKind === "dataset_failure"
   return {
     ...input.roundRecord,
     summary: input.finalAcceptance.summary,
@@ -2994,16 +2995,21 @@ function finalizeRoundRecordWithAcceptance(input: {
       ? "closed_success"
       : infrastructureFailure
         ? "closed_infra_failure"
+        : datasetFailure
+          ? "closed_dataset_failure"
         : "closed_repairable",
     gateFailureKind: input.finalAcceptance.passed
       ? undefined
       : infrastructureFailure
         ? "infrastructure_failure"
+        : datasetFailure
+          ? "dataset_failure"
         : "final_acceptance_failed",
     gateFailureSummary: input.finalAcceptance.passed ? undefined : input.finalAcceptance.summary,
     finalAcceptanceSignal: {
       executed: true,
       passed: input.finalAcceptance.passed,
+      failureKind: input.finalAcceptance.failureKind,
       failedValidatorIDs,
       feedbackPath: input.feedbackPath,
     },
@@ -5432,7 +5438,7 @@ export async function runLongTaskCampaign(input: {
             roundsCompleted: roundNumber,
           })
         }
-        if (nextStatus === "failed" && acceptanceInfrastructureFailure) {
+        if (nextStatus === "failed") {
           return toCampaignRunResult({
             campaignID,
             campaignPaths,
@@ -6346,7 +6352,7 @@ export async function resumeLongTaskCampaign(input: {
             roundsCompleted: roundNumber,
           })
         }
-        if (nextStatus === "failed" && acceptanceInfrastructureFailure) {
+        if (nextStatus === "failed") {
           return toCampaignRunResult({
             campaignID: input.campaignID,
             campaignPaths,

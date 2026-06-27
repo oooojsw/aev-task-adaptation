@@ -313,25 +313,28 @@ def detect_dataset_formula_selector_mismatch(
     except Exception:
         return []
     try:
-        input_sheet = resolve_workbook_sheet(sheet_name, list(input_wb.sheetnames))
-        answer_sheet = resolve_workbook_sheet(sheet_name, list(answer_wb.sheetnames))
-        input_ws = input_wb[input_sheet]
-        answer_ws = answer_wb[answer_sheet]
-        min_col, min_row, max_col, max_row = [int(v) for v in normalize_cell_range(cell_range, input_ws.max_row).split(",")]
         target_refs = set()
-        for row in input_ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col):
-            for cell in row:
-                for ref in simple_cell_refs(cell.value):
-                    target_refs.add(ref)
         mismatches: list[str] = []
-        for ref in sorted(target_refs):
+        for segment_sheet, segment_range in split_reference_segments(sheet_name, cell_range):
+            input_sheet = resolve_workbook_sheet(segment_sheet, list(input_wb.sheetnames))
+            answer_sheet = resolve_workbook_sheet(segment_sheet, list(answer_wb.sheetnames))
+            input_ws = input_wb[input_sheet]
+            answer_ws = answer_wb[answer_sheet]
+            min_col, min_row, max_col, max_row = [int(v) for v in normalize_cell_range(segment_range, input_ws.max_row).split(",")]
+            for row in input_ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col):
+                for cell in row:
+                    for ref in simple_cell_refs(cell.value):
+                        target_refs.add((input_sheet, answer_sheet, ref))
+        for input_sheet, answer_sheet, ref in sorted(target_refs):
             try:
+                input_ws = input_wb[input_sheet]
+                answer_ws = answer_wb[answer_sheet]
                 input_value = norm(input_ws[ref].value)
                 answer_value = norm(answer_ws[ref].value)
             except Exception:
                 continue
             if input_value != answer_value:
-                mismatches.append(f"formula reference {ref} differs between public input and hidden answer: input={input_value!r} answer={answer_value!r}")
+                mismatches.append(f"formula reference {input_sheet}!{ref} differs between public input and hidden answer: input={input_value!r} answer={answer_value!r}")
                 if len(mismatches) >= 8:
                     break
         return mismatches
