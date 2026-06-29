@@ -10,13 +10,14 @@ import type {
 
 const cwd = path.resolve(import.meta.dir, "..", "..")
 const root = path.join(cwd, "auto-evolve", "task-packs", "real-long-tasks", "officeqa-pro-learnbench")
-const stamp = new Date().toISOString().replace(/[:.]/g, "-")
 
 function envChoice<T extends string>(raw: string | undefined, fallback: T, aliases: Record<string, T>) {
   const key = (raw ?? fallback).trim().toLowerCase().replace(/-/g, "_")
   return aliases[key] ?? fallback
 }
 
+async function main() {
+const stamp = new Date().toISOString().replace(/[:.]/g, "-")
 const mergeStrategy = envChoice<"flat" | "hierarchical">(process.env.OFFICEQA_PRO_MERGE_STRATEGY, "flat", {
   flat: "flat",
   hierarchical: "hierarchical",
@@ -140,6 +141,13 @@ const report = await runTaskPackBenchmark({
   replayConcurrency: stageConcurrency.trainReplay,
   testConcurrency: stageConcurrency.testBlank,
   baselineConcurrency: stageConcurrency.baseline,
+  historyPolicy:
+    process.env.OFFICEQA_PRO_HISTORY_POLICY === "fresh-non-verified" ||
+    process.env.OFFICEQA_PRO_HISTORY_POLICY === "fresh-all" ||
+    process.env.OFFICEQA_PRO_HISTORY_POLICY === "resume-explicit-only" ||
+    process.env.OFFICEQA_PRO_HISTORY_POLICY === "audit-only"
+      ? process.env.OFFICEQA_PRO_HISTORY_POLICY
+      : "resume-current-generation",
   continueAfterTrainReplayFailure:
     process.env.OFFICEQA_PRO_CONTINUE_AFTER_TRAIN_REPLAY_FAILURE === "1" ||
     process.env.OFFICEQA_PRO_CONTINUE_AFTER_TRAINING_INCOMPLETE === "1" ||
@@ -151,3 +159,8 @@ const report = await runTaskPackBenchmark({
 })
 
 console.log(JSON.stringify(report, null, 2))
+}
+
+if (import.meta.main && !process.execArgv.includes("--check")) {
+  await main()
+}
