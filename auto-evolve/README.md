@@ -1905,23 +1905,29 @@ bun run auto-evolve/scripts/smoke-validator-blank-agent-audience-guard.ts
 `auto-evolve/monitor-server.ts` 不能再用 2 秒高频刷新和无限深度递归扫描 `runtime-state`。默认刷新间隔改为 15 秒、默认 limit 改为 30，artifact/lifecycle 扫描结果缓存 15 秒，并对递归扫描加入最大深度、最大目录数和重目录跳过规则（workspace、materials、outputs、private-answers、blank-eval-runs、node_modules 等）。`orchestrator/monitor.ts` 已加入启动锁，同一端口看板启动中时其他 orchestrator 必须等待/复用，不能并发拉起多个 monitor-server。训练监控优先读 `orchestrator-state.json`、`run-dashboard` 和真实进程；不要为了持续监控反复启动看板。
 ## Skill Structure Profile Hard Gate
 
-AEV 现在支持把“专家经验 skill 必须长什么样”做成可拔插硬验证 profile。任务 spec 只需要挂载：
+AEV 现在支持把“专家经验 skill 必须长什么样”做成可拔插硬验证 profile。
+
+- Validator script: `auto-evolve/scripts/validate-skill-structure-profile.ts`
+- Example validator profile: `auto-evolve/task-packs/validator-profiles/skill-surface/standard-hard-v1.json`
+- Example structure profile: `auto-evolve/task-packs/validator-profiles/skill-surface/profiles/standard-structure-v1.json`
+- Smoke test: `bun run auto-evolve/scripts/smoke-skill-structure-profile.ts`
+
+这层属于 surface/layout 硬门，默认在 blank agent 之前检查“待转正专家经验区”，用于约束必需文件、目录、Markdown 标题、JSON 字段、文件类型和是否允许额外文件。它不读取 private answers，也不验证空白 agent 产物；产物对错仍由 product validator 负责。软验证仍是未来独立模块，不和这个硬结构门混在一起。
+
+`auto-evolve/config.json` 现在也有总控级 `validationConfig`。验证模块集中放在 `task-packs/validator-profiles`，总控可以选择命名 profile set，不必逐个修改数据集 spec。默认配置已经定义 `skill-structure-standard`，但 `enabledProfileSets` 先保持为空，避免旧实验突然被新硬门卡住。要全局启用标准 skill 结构硬门，设置：
 
 ```json
-{
-  "validatorProfiles": ["skill-surface/standard-hard-v1"]
+"validationConfig": {
+  "enabled": true,
+  "enabledProfileSets": ["skill-structure-standard"]
 }
 ```
 
-示例 profile：
+任务本地 `validatorProfiles` 仍然有效，会和总控 profile 合并。总控 profile 在 spec 加载时追加，不修改原始 task-pack 文件，也不改 campaign 的 `baseSpecPath`，因此不会破坏断点续传和历史血统匹配。
 
-- `auto-evolve/task-packs/validator-profiles/skill-surface/standard-hard-v1.json`
-- `auto-evolve/task-packs/validator-profiles/skill-surface/profiles/standard-structure-v1.json`
-
-这层属于 surface/layout 硬门，默认在 blank agent 之前检查“待转正专家经验区”，用于约束必需文件、目录、Markdown 标题、JSON 字段、文件类型和是否允许额外文件。它不读取 private answers，也不验证空白 agent 产物；产物对错仍由 product validator 负责。
-
-烟测脚本：
+Smoke：
 
 ```powershell
+bun run auto-evolve/scripts/smoke-validation-config-profiles.ts
 bun run auto-evolve/scripts/smoke-skill-structure-profile.ts
 ```

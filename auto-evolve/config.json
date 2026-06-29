@@ -78,6 +78,27 @@
     "testDirectChat": 4,
     "baseline": 3
   },
+  "validationConfig": {
+    "enabled": true,
+    "enabledNote": "控制是否启用总控级 validator profile 注入；关闭后只使用任务 spec 自己声明的 validatorProfiles。",
+    "profilesRoot": "task-packs/validator-profiles",
+    "profilesRootNote": "控制可拔插验证模块 JSON 的集中存放目录；profile 引用会优先按任务本地路径解析，再按这个目录解析。",
+    "enabledProfileSets": [],
+    "enabledProfileSetsNote": "控制本次全局启用哪些验证模块组；例如填入 [\"skill-structure-standard\"] 后，所有 long-task spec 会自动追加标准 skill 结构硬门。",
+    "defaultValidatorProfiles": [],
+    "defaultValidatorProfilesNote": "控制所有 long-task 默认追加哪些 validatorProfiles；通常建议优先使用 enabledProfileSets。",
+    "defaultBlankEvalValidatorProfiles": [],
+    "defaultBlankEvalValidatorProfilesNote": "控制 blank-eval/deployment 类运行默认追加哪些专用 profile；普通训练硬门通常不要放这里。",
+    "profileSets": {
+      "skill-structure-standard": {
+        "description": "标准专家经验 skill 文件结构硬验证：检查必需文件、目录、Markdown 标题、JSON 字段、文件类型和额外文件。",
+        "validatorProfiles": [
+          "skill-surface/standard-hard-v1"
+        ],
+        "blankEvalValidatorProfiles": []
+      }
+    }
+  },
   "historyConfig": {
     "policy": "fresh-non-verified",
     "policyNote": "控制历史总体复用策略；fresh-non-verified 表示保留已成功任务，未成功任务进入新代际。",

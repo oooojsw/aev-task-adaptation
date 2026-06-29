@@ -17,7 +17,8 @@ export interface LoadLongTaskSpecOptions {
   allowMissingInitialExpertContextPaths?: boolean
 }
 
-const VALIDATOR_PROFILES_ROOT = path.resolve(import.meta.dir, "..", "..", "task-packs", "validator-profiles")
+const AUTO_EVOLVE_ROOT = path.resolve(import.meta.dir, "..", "..")
+const DEFAULT_VALIDATOR_PROFILES_ROOT = path.resolve(AUTO_EVOLVE_ROOT, "task-packs", "validator-profiles")
 
 function isObject(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input)
@@ -26,6 +27,20 @@ function isObject(input: unknown): input is Record<string, unknown> {
 function normalizeStringArray(input: unknown) {
   if (!Array.isArray(input)) return []
   return input.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+}
+
+function normalizeStringList(input: unknown) {
+  if (typeof input === "string") {
+    return input
+      .split(/[,\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  return normalizeStringArray(input).map((item) => item.trim()).filter(Boolean)
+}
+
+function uniqueStrings(input: string[]) {
+  return Array.from(new Set(input.map((item) => item.trim()).filter(Boolean)))
 }
 
 function normalizeMaybeString(input: unknown) {
@@ -335,7 +350,7 @@ function isUseRef(raw: unknown): raw is { use: string } {
   return typeof raw.use === "string" && raw.use.trim().length > 0
 }
 
-async function resolveValidatorProfilePath(baseDir: string, profileRef: string) {
+async function resolveValidatorProfilePath(baseDir: string, profileRef: string, profilesRoot = DEFAULT_VALIDATOR_PROFILES_ROOT) {
   if (!profileRef.trim()) return undefined
   if (path.isAbsolute(profileRef)) {
     return profileRef.endsWith(".json") ? profileRef : `${profileRef}.json`
@@ -344,9 +359,9 @@ async function resolveValidatorProfilePath(baseDir: string, profileRef: string) 
     const maybeLocal = resolveMaybePath(baseDir, profileRef)
     if (await pathExists(maybeLocal)) return maybeLocal
     const normalizedRef = profileRef.replace(/\\/g, "/").replace(/^\/+/, "")
-    return path.resolve(VALIDATOR_PROFILES_ROOT, normalizedRef.endsWith(".json") ? normalizedRef : `${normalizedRef}.json`)
+    return path.resolve(profilesRoot, normalizedRef.endsWith(".json") ? normalizedRef : `${normalizedRef}.json`)
   }
-  return path.resolve(VALIDATOR_PROFILES_ROOT, `${profileRef}.json`)
+  return path.resolve(profilesRoot, `${profileRef}.json`)
 }
 
 async function materializePromptPath(baseDir: string, raw: Record<string, unknown>) {
@@ -416,10 +431,15 @@ function materializeValidatorEntryPaths(baseDir: string, raw: Record<string, unk
   return out
 }
 
-async function resolveValidatorProfileEntries(baseDir: string, refs: string[], chain: string[] = []): Promise<unknown[]> {
+async function resolveValidatorProfileEntries(
+  baseDir: string,
+  refs: string[],
+  chain: string[] = [],
+  profilesRoot = DEFAULT_VALIDATOR_PROFILES_ROOT,
+): Promise<unknown[]> {
   const out: unknown[] = []
   for (const ref of refs) {
-    const resolvedPath = await resolveValidatorProfilePath(baseDir, ref)
+    const resolvedPath = await resolveValidatorProfilePath(baseDir, ref, profilesRoot)
     if (!resolvedPath) continue
     if (!(await pathExists(resolvedPath))) {
       throw new Error(`Validator profile does not exist: ${resolvedPath}`)
@@ -433,7 +453,7 @@ async function resolveValidatorProfileEntries(baseDir: string, refs: string[], c
     const profileDir = path.dirname(resolvedPath)
     for (const rawItem of rawValidators) {
       if (isUseRef(rawItem)) {
-        const nested = await resolveValidatorProfileEntries(profileDir, [rawItem.use], [...chain, key])
+        const nested = await resolveValidatorProfileEntries(profileDir, [rawItem.use], [...chain, key], profilesRoot)
         out.push(...nested)
         continue
       }
@@ -444,6 +464,45 @@ async function resolveValidatorProfileEntries(baseDir: string, refs: string[], c
     }
   }
   return out
+}
+
+async function loadConfigValidationProfiles() {
+  const configPath = path.join(AUTO_EVOLVE_ROOT, "config.json")
+  const raw = await readJsonFile<Record<string, unknown>>(configPath).catch(() => undefined)
+  const validation = isObject(raw?.validationConfig) ? raw.validationConfig : undefined
+  if (!validation || validation.enabled === false) {
+    return {
+      profilesRoot: DEFAULT_VALIDATOR_PROFILES_ROOT,
+      validatorProfiles: [] as string[],
+      blankEvalValidatorProfiles: [] as string[],
+    }
+  }
+  const profilesRoot =
+    typeof validation.profilesRoot === "string" && validation.profilesRoot.trim()
+      ? resolveMaybePath(AUTO_EVOLVE_ROOT, validation.profilesRoot)
+      : DEFAULT_VALIDATOR_PROFILES_ROOT
+  const validatorProfiles = normalizeStringList(validation.defaultValidatorProfiles)
+  const blankEvalValidatorProfiles = normalizeStringList(validation.defaultBlankEvalValidatorProfiles)
+  const enabledProfileSets =
+    process.env.AUTO_EVOLVE_VALIDATION_PROFILE_SETS !== undefined
+      ? normalizeStringList(process.env.AUTO_EVOLVE_VALIDATION_PROFILE_SETS)
+      : normalizeStringList(validation.enabledProfileSets)
+  validatorProfiles.push(...normalizeStringList(process.env.AUTO_EVOLVE_VALIDATOR_PROFILES))
+  blankEvalValidatorProfiles.push(...normalizeStringList(process.env.AUTO_EVOLVE_BLANK_EVAL_VALIDATOR_PROFILES))
+  const profileSets = isObject(validation.profileSets) ? validation.profileSets : {}
+  for (const setName of enabledProfileSets) {
+    const set = profileSets[setName]
+    if (!isObject(set)) {
+      throw new Error(`validationConfig.enabledProfileSets references unknown profile set: ${setName}`)
+    }
+    validatorProfiles.push(...normalizeStringList(set.validatorProfiles))
+    blankEvalValidatorProfiles.push(...normalizeStringList(set.blankEvalValidatorProfiles))
+  }
+  return {
+    profilesRoot,
+    validatorProfiles: uniqueStrings(validatorProfiles),
+    blankEvalValidatorProfiles: uniqueStrings(blankEvalValidatorProfiles),
+  }
 }
 
 export async function loadLongTaskSpec(
@@ -474,9 +533,21 @@ export async function loadLongTaskSpec(
   const campaignExplorationTreePath = normalizeMaybeString(raw.campaignExplorationTreePath)
   const campaignWorkingMemoryPath = normalizeMaybeString(raw.campaignWorkingMemoryPath)
   const campaignRoutingControlPath = normalizeMaybeString(raw.campaignRoutingControlPath)
-  const validatorProfiles = normalizeStringArray(raw.validatorProfiles)
-  const blankEvalValidatorProfiles = normalizeStringArray(raw.blankEvalValidatorProfiles)
-  const profileValidatorEntries = await resolveValidatorProfileEntries(baseDir, validatorProfiles)
+  const configValidationProfiles = await loadConfigValidationProfiles()
+  const validatorProfiles = uniqueStrings([
+    ...normalizeStringArray(raw.validatorProfiles),
+    ...configValidationProfiles.validatorProfiles,
+  ])
+  const blankEvalValidatorProfiles = uniqueStrings([
+    ...normalizeStringArray(raw.blankEvalValidatorProfiles),
+    ...configValidationProfiles.blankEvalValidatorProfiles,
+  ])
+  const profileValidatorEntries = await resolveValidatorProfileEntries(
+    baseDir,
+    validatorProfiles,
+    [],
+    configValidationProfiles.profilesRoot,
+  )
   const inlineValidatorEntries = Array.isArray(raw.validators)
     ? await Promise.all(
         raw.validators.map(async (item) => (isObject(item) ? materializePromptPath(baseDir, item) : item)),

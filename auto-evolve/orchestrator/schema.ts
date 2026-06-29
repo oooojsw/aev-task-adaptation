@@ -85,6 +85,30 @@ export interface LoadedStageConcurrencyConfig {
   baseline: number
 }
 
+export interface LoadedValidationProfileSet {
+  /** Human-readable note for config files and dashboards. */
+  description?: string
+  /** Long-task validator profiles appended to every loaded spec. */
+  validatorProfiles: string[]
+  /** Blank-eval/deployment validator profiles appended when that path asks for them. */
+  blankEvalValidatorProfiles: string[]
+}
+
+export interface LoadedValidationConfig {
+  /** Master switch for config-level validator profile injection. */
+  enabled: boolean
+  /** Shared folder for validator profile JSON modules. */
+  profilesRoot: string
+  /** Named profile sets selected by the global config. */
+  enabledProfileSets: string[]
+  /** Always appended long-task validator profiles. */
+  defaultValidatorProfiles: string[]
+  /** Always appended blank-eval/deployment validator profiles. */
+  defaultBlankEvalValidatorProfiles: string[]
+  /** Reusable named groups of validator profiles. */
+  profileSets: Record<string, LoadedValidationProfileSet>
+}
+
 export type BenchmarkResumeMode = "fresh-non-verified" | "safe-non-terminal" | "manual-explicit-only"
 
 export interface LoadedHistoryConfig {
@@ -171,6 +195,7 @@ export interface AutoEvolveConfig {
   concurrencyConfigPath: string
   concurrencyConfig: LoadedConcurrencyConfig
   stageConcurrency: LoadedStageConcurrencyConfig
+  validationConfig: LoadedValidationConfig
   historyConfig: LoadedHistoryConfig
   directChatConfigFile: string
   directChatConfigPath: string
@@ -307,6 +332,20 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
     testBlank: 3,
     testDirectChat: 4,
     baseline: 3,
+  },
+  validationConfig: {
+    enabled: true,
+    profilesRoot: "task-packs/validator-profiles",
+    enabledProfileSets: [],
+    defaultValidatorProfiles: [],
+    defaultBlankEvalValidatorProfiles: [],
+    profileSets: {
+      "skill-structure-standard": {
+        description: "Pre-blank hard gate for the standard generated skill file layout.",
+        validatorProfiles: ["skill-surface/standard-hard-v1"],
+        blankEvalValidatorProfiles: [],
+      },
+    },
   },
   historyConfig: {
     policy: "fresh-non-verified",
@@ -590,6 +629,60 @@ function normalizeStringList(input: unknown, fallback: string[] = []) {
   return [...fallback]
 }
 
+function normalizeValidationProfileSet(raw: unknown, fallback?: LoadedValidationProfileSet): LoadedValidationProfileSet {
+  if (!isObject(raw)) {
+    return {
+      description: fallback?.description,
+      validatorProfiles: [...(fallback?.validatorProfiles ?? [])],
+      blankEvalValidatorProfiles: [...(fallback?.blankEvalValidatorProfiles ?? [])],
+    }
+  }
+  return {
+    description: normalizeOptionalString(raw.description) ?? fallback?.description,
+    validatorProfiles: normalizeStringList(raw.validatorProfiles, fallback?.validatorProfiles ?? []),
+    blankEvalValidatorProfiles: normalizeStringList(
+      raw.blankEvalValidatorProfiles,
+      fallback?.blankEvalValidatorProfiles ?? [],
+    ),
+  }
+}
+
+function normalizeValidationConfig(
+  raw: unknown,
+  fallback: LoadedValidationConfig = DEFAULT_CONFIG.validationConfig,
+): LoadedValidationConfig {
+  if (!isObject(raw)) {
+    return {
+      ...fallback,
+      enabledProfileSets: [...fallback.enabledProfileSets],
+      defaultValidatorProfiles: [...fallback.defaultValidatorProfiles],
+      defaultBlankEvalValidatorProfiles: [...fallback.defaultBlankEvalValidatorProfiles],
+      profileSets: Object.fromEntries(
+        Object.entries(fallback.profileSets).map(([key, value]) => [key, normalizeValidationProfileSet(undefined, value)]),
+      ),
+    }
+  }
+  const profileSets: Record<string, LoadedValidationProfileSet> = Object.fromEntries(
+    Object.entries(fallback.profileSets).map(([key, value]) => [key, normalizeValidationProfileSet(undefined, value)]),
+  )
+  const rawProfileSets = isObject(raw.profileSets) ? raw.profileSets : {}
+  for (const [key, value] of Object.entries(rawProfileSets)) {
+    if (!key.trim()) continue
+    profileSets[key] = normalizeValidationProfileSet(value, profileSets[key])
+  }
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    profilesRoot: normalizeOptionalString(raw.profilesRoot) ?? fallback.profilesRoot,
+    enabledProfileSets: normalizeStringList(raw.enabledProfileSets, fallback.enabledProfileSets),
+    defaultValidatorProfiles: normalizeStringList(raw.defaultValidatorProfiles, fallback.defaultValidatorProfiles),
+    defaultBlankEvalValidatorProfiles: normalizeStringList(
+      raw.defaultBlankEvalValidatorProfiles,
+      fallback.defaultBlankEvalValidatorProfiles,
+    ),
+    profileSets,
+  }
+}
+
 function normalizeHistoryConfig(
   raw: unknown,
   fallback: LoadedHistoryConfig = DEFAULT_CONFIG.historyConfig,
@@ -836,6 +929,7 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
   }
   concurrencyConfig = normalizeConcurrencyConfig(raw.concurrencyConfig, concurrencyConfig)
   const stageConcurrency = normalizeStageConcurrencyConfig(raw.stageConcurrency)
+  const validationConfig = normalizeValidationConfig(raw.validationConfig)
   const historyConfig = normalizeHistoryConfig(raw.historyConfig)
   let directChatConfig = normalizeDirectChatConfig(undefined)
   if (await pathExists(directChatConfigPath)) {
@@ -982,6 +1076,7 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
     concurrencyConfigPath,
     concurrencyConfig,
     stageConcurrency,
+    validationConfig,
     historyConfig,
     directChatConfigFile,
     directChatConfigPath,
