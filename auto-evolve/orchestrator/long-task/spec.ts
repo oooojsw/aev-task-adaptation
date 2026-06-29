@@ -53,6 +53,8 @@ const VALIDATOR_FILE_ARG_FLAGS = new Set([
   "--config-path",
   "--rubric",
   "--rubric-path",
+  "--profile",
+  "--profile-path",
 ])
 
 function resolveValidatorScriptArgs(baseDir: string, args: string[] | undefined) {
@@ -370,6 +372,12 @@ function materializeValidatorEntryPaths(baseDir: string, raw: Record<string, unk
     }
     if (typeof out.cwd === "string" && out.cwd.trim().length > 0) {
       out.cwd = resolveMaybePath(baseDir, out.cwd)
+    }
+    if (Array.isArray(out.args)) {
+      out.args = resolveValidatorScriptArgs(
+        baseDir,
+        out.args.filter((item): item is string => typeof item === "string" && item.trim().length > 0),
+      )
     }
   }
   if (out.type === "prompt_json") {

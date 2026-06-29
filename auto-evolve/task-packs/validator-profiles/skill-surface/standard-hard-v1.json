@@ -1,0 +1,33 @@
+{
+  "id": "skill-surface.standard-hard-v1",
+  "validators": [
+    {
+      "id": "skill-structure-hard",
+      "type": "script",
+      "title": "Skill structure profile hard check",
+      "path": "../../../scripts/validate-skill-structure-profile.ts",
+      "runner": "bun",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "args": [
+        "--profile",
+        "./profiles/standard-structure-v1.json"
+      ],
+      "validation": {
+        "target": "layout",
+        "stage": "pre_blank",
+        "answerAccess": "none",
+        "allowedAudiences": [
+          "lead",
+          "reviewer",
+          "merger",
+          "repair_agent",
+          "dashboard",
+          "memory",
+          "audit"
+        ]
+      }
+    }
+  ]
+}

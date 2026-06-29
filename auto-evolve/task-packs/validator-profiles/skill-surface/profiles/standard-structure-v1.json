@@ -1,0 +1,71 @@
+{
+  "id": "skill-surface.standard-structure-v1",
+  "rootRoles": [
+    "experience-workspace"
+  ],
+  "closedWorld": true,
+  "requiredDirs": [
+    "casebook"
+  ],
+  "allowedGlobs": [
+    "casebook/*.md",
+    "tools/*.py",
+    "tools/*.ps1",
+    "tools/*.sh",
+    "tools/*.js",
+    "tools/*.mjs",
+    "tools/*.cjs",
+    "tools/*.ts",
+    "tools/*.json"
+  ],
+  "files": [
+    {
+      "path": "INDEX.md",
+      "required": true,
+      "kind": "markdown",
+      "requiredHeadings": [
+        "## How To Use",
+        "## Read Order",
+        "## Output Requirements"
+      ]
+    },
+    {
+      "path": "CORE.md",
+      "required": true,
+      "kind": "markdown",
+      "requiredHeadings": [
+        "## Material Navigation Rules",
+        "## Extraction Rules",
+        "## Calculation Or Transformation Rules",
+        "## Output Discipline",
+        "## Failure Lessons"
+      ]
+    },
+    {
+      "path": "meta.json",
+      "required": true,
+      "kind": "json",
+      "requiredKeys": [
+        "schema",
+        "profileID",
+        "createdAt"
+      ]
+    },
+    {
+      "path": "surface_contract.json",
+      "required": true,
+      "kind": "json",
+      "requiredKeys": [
+        "version",
+        "entry",
+        "documents"
+      ]
+    },
+    {
+      "path": "open_observations.md",
+      "required": true,
+      "kind": "markdown",
+      "allowEmpty": true
+    }
+  ]
+}
