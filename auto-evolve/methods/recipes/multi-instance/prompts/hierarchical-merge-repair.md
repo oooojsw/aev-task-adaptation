@@ -9,31 +9,28 @@ Read:
 - the original successful case skill if present,
 - the replay failure result if present.
 
+## Merge Contract
+
+The runtime prompt will provide a `Merge Contract` JSON block.
+That contract is authoritative for the repaired skill's files, sections, metadata, and allowed edit surface.
+If this generic repair prompt and the contract disagree, follow the contract.
+
 ## Editing Policy
 
-`CORE.md`:
-- append only
-- do not delete
-- do not rewrite existing semantics
-- add only cross-case-stable lessons
+Follow the edit policy in the repair manifest and the file/section rules in the merge contract.
+By default, preserve existing core semantics and add only the smallest missing successful method needed to restore the failed replay case.
+Use append-only edits for shared core files unless the contract explicitly allows rewriting.
+Case-specific files may be created or rewritten only when the contract allows them.
+Filenames must be simplified human-readable scenario names; do not use raw UID-only names and do not put answer values in filenames.
+Metadata files may be rewritten only when necessary and only if the contract permits it.
 
-`INDEX.md`:
-- append only
-- add only minimal navigation or output-discipline clarification
-
-`casebook/*.md`:
-- you may create or fully rewrite one semantic casebook file for this case/scenario
-- filename must be a simplified human-readable scenario name
-- filename must not be raw UID-only
-- filename must not contain answer values
-
-`patches/*.md` and `patches/*.jsonl`:
-- append only
-- record what was repaired and why
-
-`meta.json` and `surface_contract.json`:
-- may be rewritten if necessary
-- must not include answer values, private answer paths, or hidden-answer labels
+If the merge contract or repair manifest requires append-only repair:
+- Existing `CORE.md`, `INDEX.md`, `open_observations.md`, and `patches/*` files may only receive new text at the end.
+- Do not rewrite, reorder, or reformat existing lines in append-only files.
+- Use the contract's `repairPolicy.patchLogPath` for patch records when present; otherwise use `patches/patch-log.jsonl`.
+- Append exactly one JSON object as a new JSONL line to the patch log. Never rewrite old patch-log entries.
+- Do not create root-level repair logs such as `patch-log.md`, `patches.md`, or `repair.md` unless the contract explicitly allows them.
+- If uncertain, add a narrow casebook note or append a clearly titled section to an existing allowed file.
 
 ## Repair Scope
 

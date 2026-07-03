@@ -96,8 +96,97 @@
           "skill-surface/standard-hard-v1"
         ],
         "blankEvalValidatorProfiles": []
+      },
+      "paper-review-surface-generalization": {
+          "description": "Paper-review 专用表面泛化硬验证：检查正式 skill 是否泄漏任务编号、gold/private answer、最终评分或单篇论文专名；用于 pre_blank 阶段，默认不启用，按实验分支选择。",
+          "validatorProfiles": [
+            "paper-review/surface-generalization-v2"
+          ],
+        "blankEvalValidatorProfiles": []
       }
     }
+  },
+  "mergeConfig": {
+    "enabled": true,
+    "enabledNote": "控制 multi-instance flat merge / replay repair 是否注入可拔插 merge contract；开启后合并 prompt 保持通用，任务差异由 contract 提供。",
+    "defaultPrompt": "methods/recipes/multi-instance/prompts/merge.md",
+    "defaultPromptNote": "控制通用平面合并 prompt；该文件必须保持数据集无关，不允许写死 audit / paper / spreadsheet 等任务专用输出。",
+    "defaultRepairPrompt": "methods/recipes/multi-instance/prompts/merge-repair.md",
+    "defaultRepairPromptNote": "控制通用 append-only 回撤修复 prompt；任务专用文件结构和输出路径必须来自 merge contract。",
+    "defaultHierarchicalPrompt": "methods/recipes/multi-instance/prompts/hierarchical-merge-generic.md",
+    "defaultHierarchicalPromptNote": "控制分层合并每个 group 使用的通用 prompt；它只描述分层合并流程，任务专用 skill 结构必须来自 merge contract。",
+    "defaultHierarchicalRepairPrompt": "methods/recipes/multi-instance/prompts/hierarchical-merge-repair.md",
+    "defaultHierarchicalRepairPromptNote": "控制分层合并 local replay 失败后的单次修复 prompt；具体可改文件和结构要求必须来自 merge contract。",
+    "contractsRoot": "task-packs/merge-contracts",
+    "contractsRootNote": "控制可拔插合并约束 JSON 的集中存放目录；每个数据集只新增小 contract，不新增整份合并 prompt。",
+    "defaultContract": "generic/standard-skill-v1",
+    "defaultContractNote": "控制没有命中 taskPackContracts 时使用的默认 skill 合并约束。",
+    "taskPackContracts": {
+      "audit-point-learnbench": "audit-point/audit-skill-v1",
+      "paper-review-learnbench": "paper-review/review-skill-v1",
+      "spreadsheetbench-learnbench": "spreadsheet/spreadsheet-skill-v1"
+    },
+    "taskPackContractsNote": "按 task-pack 文件夹名选择合并约束；以后新增数据集优先在这里挂 contract，而不是复制一份新 merge prompt。",
+    "defaultAcceptanceProfile": "repair_promote",
+    "defaultAcceptanceProfileNote": "控制没有传 --merge-acceptance-profile 时默认使用哪套合并后验收策略；它比旧 acceptancePreset 更像一个完整流程模块。",
+    "acceptanceProfiles": {
+      "merge_only": {
+        "description": "只合并，不回撤；适合快速看合并器是否能产出 skill。",
+        "preset": "merge_only",
+        "successCriterion": "report_only"
+      },
+      "replay_report": {
+        "description": "合并后只跑一次训练集回撤并记录失败，不自动 repair。",
+        "preset": "replay_report",
+        "successCriterion": "report_only"
+      },
+      "repair_promote": {
+        "description": "旧默认行为：初次回撤，失败 case 做一次 append-only repair，repair 通过后把修复 skill 提升为新基线。",
+        "preset": "repair_promote",
+        "successCriterion": "all_pass"
+      },
+      "final_replay": {
+        "description": "repair/promote 后再对最终 skill 做一次全量训练集回撤。",
+        "preset": "final_replay",
+        "successCriterion": "all_pass"
+      },
+      "strict_all_pass": {
+        "description": "最高严格模式：repair/promote 后做最终全量回撤，并且必须全过才算合并成功。",
+        "preset": "strict_all_pass",
+        "successCriterion": "all_pass"
+      }
+    },
+    "acceptanceProfilesNote": "控制可拔插合并后验收模块；新增策略优先在这里加 profile，而不是改合并代码或复制 prompt。",
+    "acceptancePreset": "repair_promote",
+    "acceptancePresetNote": "旧兼容字段：控制合并后验收流水线跑到哪一步；新实验优先使用 defaultAcceptanceProfile / --merge-acceptance-profile。",
+    "acceptanceSuccessCriterion": "all_pass",
+    "acceptanceSuccessCriterionNote": "控制 strict_all_pass 的成功标准；all_pass 表示最终回撤必须全过，allow_partial/report_only 只适合探索实验。"
+  },
+  "blankAcceptanceConfig": {
+    "enabled": true,
+    "enabledNote": "控制空白 agent 最终验收失败后是否启动可拔插诊断器。",
+    "defaultDiagnosisProfile": "auto",
+    "defaultDiagnosisProfileNote": "默认诊断 profile；auto 会根据证据自动兼容单题 blank eval 和多 case blank_eval_plan。",
+    "taskPackDiagnosisProfiles": {},
+    "taskPackDiagnosisProfilesNote": "按 task-pack 文件夹名或 taskFamily 指定诊断 profile；例如可把某个数据集固定到 plan-replay。",
+    "diagnosisProfiles": {
+      "auto": {
+        "description": "自动模式：诊断器同时理解单个空白 agent 轨迹、多 case 回撤摘要和平台故障分流。",
+        "mode": "auto",
+        "enabledModules": ["single-case", "plan-replay", "infra-triage"]
+      },
+      "single-case": {
+        "description": "单题模式：保留旧行为，只围绕一个 blank agent 验收失败轨迹做诊断。",
+        "mode": "single_case",
+        "enabledModules": ["single-case"]
+      },
+      "plan-replay": {
+        "description": "多 case 回撤模式：用于 blank_eval_plan、合并后回撤、批量验收失败诊断。",
+        "mode": "plan_replay",
+        "enabledModules": ["plan-replay", "infra-triage"]
+      }
+    },
+    "diagnosisProfilesNote": "控制可拔插空白验收诊断模块；新增诊断策略优先在这里加 profile，不要复制任务专用诊断 prompt。"
   },
   "historyConfig": {
     "policy": "fresh-non-verified",

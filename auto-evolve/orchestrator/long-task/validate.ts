@@ -57,6 +57,13 @@ async function validateValidatorContract(errors: string[], validator: LongTaskVa
     return
   }
 
+  if (validator.type === "blank_eval_plan") {
+    if (!(await pathExists(validator.planPath))) {
+      errors.push(`Long-task validator ${validator.id} references a missing blank eval plan: ${validator.planPath}`)
+    }
+    return
+  }
+
   if (!validator.prompt.trim()) {
     errors.push(`Long-task validator ${validator.id} has an empty prompt.`)
   }

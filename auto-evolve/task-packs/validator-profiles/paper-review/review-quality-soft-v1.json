@@ -1,0 +1,34 @@
+{
+  "id": "paper-review.review-quality-soft-v1",
+  "validators": [
+    {
+      "id": "paper-review-quality-soft",
+      "type": "prompt_json",
+      "title": "Paper review quality soft validation",
+      "promptPath": "./prompts/review-quality-soft-v1.md",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "rubric": {
+        "min_score": 0.75,
+        "must_match_rating": true,
+        "must_be_grounded_in_pdf": true,
+        "must_cover_core_strengths_and_weaknesses": true
+      },
+      "validation": {
+        "target": "product",
+        "stage": "post_blank",
+        "answerAccess": "private_oracle",
+        "allowedAudiences": [
+          "executor",
+          "worker",
+          "lead",
+          "reviewer",
+          "dashboard",
+          "memory",
+          "audit"
+        ]
+      }
+    }
+  ]
+}

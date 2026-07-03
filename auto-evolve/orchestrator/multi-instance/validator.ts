@@ -40,6 +40,14 @@ import type {
 import { runBlankEval } from "../blank-eval/runner"
 import type { CoordinatorState, InstanceState } from "./contract"
 import { appendCoordinatorLog, saveCoordinatorState, validateDir } from "./repository"
+import {
+  hasMergeAcceptanceStage,
+  normalizeMergeAcceptanceStages,
+  normalizeMergeAcceptanceSuccessCriterion,
+  type MergeAcceptanceStage,
+  type MergeAcceptanceStatus,
+  type MergeAcceptanceSuccessCriterion,
+} from "./merge-acceptance-policy"
 
 export interface RunValidateInput {
   cwd: string
@@ -55,7 +63,21 @@ export interface RunValidateInput {
     mode: "append_only"
     maxAttemptsPerCase: number
     promptPath?: string
+    contractPath?: string
   }
+  acceptancePolicy?: {
+    stages?: MergeAcceptanceStage[]
+    successCriterion?: MergeAcceptanceSuccessCriterion
+    finalReplaySlotName?: string
+  }
+}
+
+export interface ReplaySnapshot {
+  total: number
+  passed: number
+  failed: number
+  skipped: number
+  regressions: string[]
 }
 
 export interface ValidateOutcome {
@@ -66,6 +88,12 @@ export interface ValidateOutcome {
   regressions: string[]
   repairAttempts?: number
   repairFixed?: number
+  initialReplay?: ReplaySnapshot
+  finalReplay?: ReplaySnapshot
+  acceptanceStatus?: MergeAcceptanceStatus
+  accepted?: boolean
+  mergedSkillDir?: string
+  stagesRun?: MergeAcceptanceStage[]
   durationMs: number
 }
 
@@ -88,6 +116,12 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput): Pro
     }
     let mergedSkillDir = state.mergedSkillDir
 
+    const presetStages = input.acceptancePolicy?.stages ?? (input.repair?.enabled ? undefined : ["initial_replay"])
+    const stages = normalizeMergeAcceptanceStages({ raw: presetStages, preset: "repair_promote" })
+    const successCriterion = normalizeMergeAcceptanceSuccessCriterion(
+      input.acceptancePolicy?.successCriterion,
+      "all_pass",
+    )
     const validateRoot = validateDir(state.runRoot)
     await ensureDirectory(validateRoot)
 
@@ -96,22 +130,35 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput): Pro
     const filter = input.filter ?? defaultFilter
 
     const eligible = state.instances.filter(filter)
-    const inFlight = new Set<Promise<unknown>>()
-    const regressions: string[] = []
+    let initialReplay: ReplaySnapshot | undefined
+    let finalReplay: ReplaySnapshot | undefined
+    let acceptanceStatus: MergeAcceptanceStatus = "not_run"
+    let accepted = false
 
-    for (const instance of eligible) {
-      while (inFlight.size >= limit) {
-        await Promise.race(inFlight)
-      }
-      const job = runOneValidation(input.cwd, state, instance, mergedSkillDir, rounds, regressions)
-        .finally(() => inFlight.delete(job))
-      inFlight.add(job)
+    if (hasMergeAcceptanceStage(stages, "initial_replay")) {
+      const regressions: string[] = []
+      await runValidationBatch({
+        cwd: input.cwd,
+        state,
+        eligible,
+        mergedSkillDir,
+        rounds,
+        limit,
+        regressions,
+      })
+      initialReplay = replaySnapshot(state.instances, eligible, regressions)
+      acceptanceStatus = initialReplay.failed === 0 ? "replay_passed" : "replay_failed"
+    } else {
+      acceptanceStatus = "merge_only"
     }
-    await Promise.all(inFlight)
 
     let repairAttempts = 0
     let repairFixed = 0
-    if (input.repair?.enabled && input.repair.mode === "append_only") {
+    if (
+      hasMergeAcceptanceStage(stages, "repair_promote") &&
+      input.repair?.enabled &&
+      input.repair.mode === "append_only"
+    ) {
       state.phase = "phase4_repair"
       await saveCoordinatorState(state)
       const targets = eligible.filter((row) => row.role !== "test" && row.validateStatus === "failed")
@@ -130,28 +177,68 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput): Pro
           mergedSkillDir = state.mergedSkillDir ?? mergedSkillDir
         }
       }
+      if (repairAttempts > 0) acceptanceStatus = "repair_promoted"
     }
 
-    const total = eligible.length
-    const passed = eligible.filter((i) => i.validateStatus === "passed").length
-    const failed = eligible.filter((i) => i.validateStatus === "failed").length
-    const skipped = state.instances.length - total
+    if (hasMergeAcceptanceStage(stages, "final_full_replay")) {
+      state.phase = "phase3_validate"
+      await saveCoordinatorState(state)
+      resetValidationStatus(eligible)
+      const finalRegressions: string[] = []
+      await appendCoordinatorLog(
+        state,
+        "info",
+        `Phase 3 final full replay starting against promoted merged skill (${eligible.length} instances)`,
+      )
+      await runValidationBatch({
+        cwd: input.cwd,
+        state,
+        eligible,
+        mergedSkillDir,
+        rounds,
+        limit,
+        regressions: finalRegressions,
+        slotName: input.acceptancePolicy?.finalReplaySlotName ?? "final-full-replay",
+      })
+      finalReplay = replaySnapshot(state.instances, eligible, finalRegressions)
+      acceptanceStatus = finalReplay.failed === 0 ? "final_replay_passed" : "final_replay_failed"
+    }
+
+    const current = replaySnapshot(state.instances, eligible, finalReplay?.regressions ?? initialReplay?.regressions ?? [])
+    const decisive = finalReplay ?? current
+    if (hasMergeAcceptanceStage(stages, "strict_acceptance_gate")) {
+      accepted =
+        successCriterion === "report_only"
+          ? true
+          : successCriterion === "allow_partial"
+            ? decisive.passed > 0
+            : decisive.total > 0 && decisive.passed === decisive.total
+      acceptanceStatus = accepted ? "strict_success" : "strict_failed"
+    } else {
+      accepted = decisive.total > 0 && decisive.passed === decisive.total
+    }
 
     const summary: ValidateOutcome = {
-      total,
-      passed,
-      failed,
-      skipped,
-      regressions,
+      total: current.total,
+      passed: current.passed,
+      failed: current.failed,
+      skipped: current.skipped,
+      regressions: current.regressions,
       repairAttempts,
       repairFixed,
+      initialReplay,
+      finalReplay,
+      acceptanceStatus,
+      accepted,
+      mergedSkillDir,
+      stagesRun: stages,
       durationMs: Date.now() - startedAt,
     }
     await writeJsonFile(path.join(validateRoot, "summary.json"), summary)
     await appendCoordinatorLog(
       state,
       "info",
-      `Phase 3: ${passed}/${total} passed${regressions.length > 0 ? `, regressions: ${regressions.join(", ")}` : ""}`,
+      `Phase 3: ${current.passed}/${current.total} passed, acceptance=${acceptanceStatus}`,
     )
 
     state.phase = "completed"
@@ -162,6 +249,55 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput): Pro
   }
 }
 
+async function runValidationBatch(input: {
+  cwd: string
+  state: CoordinatorState
+  eligible: InstanceState[]
+  mergedSkillDir: string
+  rounds: number
+  limit: number
+  regressions: string[]
+  slotName?: string
+}) {
+  const inFlight = new Set<Promise<unknown>>()
+  for (const instance of input.eligible) {
+    while (inFlight.size >= input.limit) {
+      await Promise.race(inFlight)
+    }
+    const job = runOneValidation(
+      input.cwd,
+      input.state,
+      instance,
+      input.mergedSkillDir,
+      input.rounds,
+      input.regressions,
+      input.slotName,
+    ).finally(() => inFlight.delete(job))
+    inFlight.add(job)
+  }
+  await Promise.all(inFlight)
+}
+
+function replaySnapshot(allInstances: InstanceState[], eligible: InstanceState[], regressions: string[]): ReplaySnapshot {
+  const total = eligible.length
+  return {
+    total,
+    passed: eligible.filter((i) => i.validateStatus === "passed").length,
+    failed: eligible.filter((i) => i.validateStatus === "failed").length,
+    skipped: allInstances.length - total,
+    regressions: [...regressions],
+  }
+}
+
+function resetValidationStatus(instances: InstanceState[]) {
+  for (const instance of instances) {
+    instance.validateStatus = undefined
+    instance.validateCampaignDir = undefined
+    instance.validateRunRoot = undefined
+    instance.validateErrorMessage = undefined
+  }
+}
+
 async function runOneValidation(
   cwd: string,
   state: CoordinatorState,
@@ -169,12 +305,17 @@ async function runOneValidation(
   mergedSkillDir: string,
   rounds: number,
   regressions: string[],
+  slotName?: string,
 ) {
   instance.validateStatus = "running"
   await saveCoordinatorState(state)
-  await appendCoordinatorLog(state, "info", `[${instance.id}] phase3 validation starting`)
+  await appendCoordinatorLog(
+    state,
+    "info",
+    `[${instance.id}] ${slotName ? `${slotName} ` : ""}phase3 validation starting`,
+  )
 
-  const slotDir = path.join(validateDir(state.runRoot), instance.id)
+  const slotDir = path.join(validateDir(state.runRoot), instance.id, ...(slotName ? [slotName] : []))
   await ensureDirectory(slotDir)
 
   try {
@@ -270,6 +411,7 @@ async function runOneRepair(input: {
   const promptPath =
     input.repair.promptPath ??
     path.join(input.cwd, "auto-evolve", "methods", "recipes", "multi-instance", "prompts", "merge-repair.md")
+  let previousAppendOnlyFailure: unknown
 
   for (let i = 1; i <= max; i += 1) {
     const n = String(i).padStart(2, "0")
@@ -284,8 +426,10 @@ async function runOneRepair(input: {
       instance: input.instance,
       cls,
       promptPath,
+      contractPath: input.repair.contractPath,
       draft,
       base: input.mergedSkillDir,
+      previousAppendOnlyFailure,
     })
     const cfg = await loadConfig(input.cwd)
     const task = await runOpencodeTask({
@@ -293,7 +437,11 @@ async function runOneRepair(input: {
       config: cfg,
       title: `mi-append-repair-${input.instance.id}-${n}`,
       prompt,
-      permissionReadPaths: [input.instance.sourceTaskRoot, input.mergedSkillDir],
+      permissionReadPaths: [
+        input.instance.sourceTaskRoot,
+        input.mergedSkillDir,
+        ...(input.repair.contractPath ? [input.repair.contractPath] : []),
+      ],
       permissionEditPaths: [draft],
       concurrencyScope: `mi-repair:${input.state.id}`,
     })
@@ -304,6 +452,7 @@ async function runOneRepair(input: {
     const check = await runAppendOnlyCheck(input.cwd, input.mergedSkillDir, draft)
     await writeJsonFile(path.join(dir, "append-only-check.json"), check)
     if (!check.passed) {
+      previousAppendOnlyFailure = check
       await appendCoordinatorLog(
         input.state,
         "warn",
@@ -435,8 +584,12 @@ function uniqueRefs(items: LongTaskPathRef[]) {
 
 function mapInto(root: string, slotDir: string, target: string) {
   const resolved = path.resolve(target)
-  if (within(root, resolved)) return path.join(slotDir, "task-work", path.relative(root, resolved))
-  return path.join(slotDir, "task-work", "external", path.basename(resolved))
+  if (within(root, resolved)) {
+    const relative = path.relative(root, resolved)
+    if (relative === "workspace" || relative.startsWith(`workspace${path.sep}`)) return relative
+    return path.join("workspace", relative)
+  }
+  return path.join("workspace", "external", path.basename(resolved))
 }
 
 function isSkillish(spec: LongTaskSpec, target: string) {
@@ -734,8 +887,10 @@ async function buildRepairPrompt(input: {
   instance: InstanceState
   cls: string
   promptPath: string
+  contractPath?: string
   draft: string
   base: string
+  previousAppendOnlyFailure?: unknown
 }) {
   const fallback = [
     "You are append-only repair agent.",
@@ -743,14 +898,58 @@ async function buildRepairPrompt(input: {
     "Only edit CORE.md, INDEX.md, casebook/*, patches/*, open_observations.md under draft skill.",
   ].join("\n")
   const head = (await readTextFile(input.promptPath).catch(() => fallback)).trim()
+  const contractBody = input.contractPath
+    ? await readTextFile(input.contractPath).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        return JSON.stringify({ id: "unreadable-contract", error: message }, null, 2)
+      })
+    : JSON.stringify(
+        {
+          id: "inline.generic-fallback",
+          note: "No merge contract path was provided; use a conservative generic repair.",
+        },
+        null,
+        2,
+      )
   return [
     head,
+    "",
+    "# Merge Contract",
+    "",
+    input.contractPath ? `Merge contract path: ${input.contractPath}` : "Merge contract path: (inline generic fallback)",
+    "",
+    "```json",
+    contractBody.trim(),
+    "```",
     "",
     `Failed instance id: ${input.instance.id}`,
     `Failure class: ${input.cls}`,
     `Base merged skill path: ${input.base}`,
     `Draft merged skill path: ${input.draft}`,
     "",
+    "# Platform Append-Only Safety Reminder",
+    "",
+    "If the merge contract repairPolicy.mode is append_only:",
+    "- Existing CORE.md, INDEX.md, open_observations.md, and patches/* are append-only. Add text at the end only.",
+    "- Do not rewrite, reorder, reformat, or delete existing lines in append-only files.",
+    "- Use repairPolicy.patchLogPath when present; otherwise use patches/patch-log.jsonl.",
+    "- Append exactly one JSON object as a new JSONL line to the patch log; never rewrite previous lines.",
+    "- Do not create root-level patch-log.md, patches.md, repair.md, or other ad hoc repair logs unless the contract explicitly allows them.",
+    "- New or rewritten casebook files are allowed only when the contract allows casebook rewrite/addition.",
+    "",
+    ...(input.previousAppendOnlyFailure
+      ? [
+          "# Previous Append-Only Rejection",
+          "",
+          "The immediately previous repair attempt was rejected before blank-agent validation because it violated append-only policy.",
+          "You must not repeat that edit pattern. Use a narrower append/add-only operation this time.",
+          "Previous append-only check JSON:",
+          "```json",
+          JSON.stringify(input.previousAppendOnlyFailure, null, 2),
+          "```",
+          "",
+        ]
+      : []),
     "Write additive repairs into draft only.",
     "Do not touch files outside draft.",
     "Do not remove old content.",

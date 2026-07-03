@@ -27,3 +27,66 @@ export interface BlankEvalResult {
   resultPath: string
   validationStageResultPath?: string
 }
+
+export type BlankEvalPlanMode = "single" | "sequence" | "parallel"
+
+export type BlankEvalPlanSuccessCriterion = "all_pass" | "allow_partial" | "min_pass_rate"
+
+export interface BlankEvalPlanCase {
+  id: string
+  specPath: string
+  title?: string
+  sourceID?: string
+  mode?: BlankEvalMode
+  promptInlinePaths?: string[]
+}
+
+export interface BlankEvalPlanInput {
+  cwd: string
+  mode: BlankEvalPlanMode
+  skillRoots: string[]
+  cases: BlankEvalPlanCase[]
+  runRoot?: string
+  title?: string
+  concurrency?: number
+  stopOnFirstFailure?: boolean
+  successCriterion?: BlankEvalPlanSuccessCriterion
+  minPassRate?: number
+  runtimeScope?: string
+  concurrencyScope?: string
+}
+
+export interface BlankEvalPlanCaseResult {
+  id: string
+  specPath: string
+  title?: string
+  passed: boolean
+  skipped?: boolean
+  failureKind?: BlankEvalResult["failureKind"]
+  summary: string
+  runID?: string
+  runDir?: string
+  resultPath?: string
+  validatorResults?: BlankEvalResult["validatorResults"]
+}
+
+export interface BlankEvalPlanResult {
+  schema: "blank-eval-plan-result/v1"
+  runID: string
+  runDir: string
+  mode: BlankEvalPlanMode
+  passed: boolean
+  successCriterion: BlankEvalPlanSuccessCriterion
+  minPassRate?: number
+  total: number
+  passedCount: number
+  failedCount: number
+  skippedCount: number
+  score: number
+  failedCases: string[]
+  summary: string
+  caseResults: BlankEvalPlanCaseResult[]
+  resultPath: string
+  evidenceBundlePath: string
+  summaryPath: string
+}

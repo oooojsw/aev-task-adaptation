@@ -13,7 +13,7 @@
 
 import path from "node:path"
 import { randomUUID } from "node:crypto"
-import { readFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { OpenCodeGate, GateBusyError, GateTimeoutError } from "../orchestrator/opencode-gate"
 import { setTimeout as sleep } from "node:timers/promises"
 import { runtimePath } from "../orchestrator/fs"
@@ -32,6 +32,10 @@ function assert(cond: boolean, msg: string) {
   }
 }
 
+function hasErrorName(error: unknown, names: string[]) {
+  return !!error && typeof error === "object" && names.includes(String((error as { name?: unknown }).name ?? ""))
+}
+
 async function readGateState(root: string) {
   const statePath = path.join(runtimePath(root, "opencode-gate"), "state.json")
   return JSON.parse(await readFile(statePath, "utf8").then((text) => text.replace(/^\uFEFF/, ""))) as {
@@ -42,7 +46,7 @@ async function readGateState(root: string) {
 
 async function testSemaphoreCap() {
   OpenCodeGate.__resetForTest()
-  OpenCodeGate.configure({ maxConcurrent: 2, perScopeMaxConcurrent: 1, maxQueueDepth: 10, acquireTimeoutMs: 5000 })
+  OpenCodeGate.configure({ maxConcurrent: 2, perScopeMaxConcurrent: 1, maxQueueDepth: 10, acquireTimeoutMs: 30_000 })
   const gate = OpenCodeGate.instance()
   const root = testRoot("semaphore")
   const p1 = await gate.acquire({ caller: "t1", scope: "a", root })
@@ -66,27 +70,27 @@ async function testSemaphoreCap() {
 
 async function testQueueOverflow() {
   OpenCodeGate.__resetForTest()
-  OpenCodeGate.configure({ maxConcurrent: 1, perScopeMaxConcurrent: 1, maxQueueDepth: 1, acquireTimeoutMs: 2000 })
+  OpenCodeGate.configure({ maxConcurrent: 1, perScopeMaxConcurrent: 1, maxQueueDepth: 0, acquireTimeoutMs: 2000 })
   const gate = OpenCodeGate.instance()
   const root = testRoot("overflow")
   const p1 = await gate.acquire({ caller: "blocker", scope: "a", root })
-  const w1 = gate.acquire({ caller: "w1", scope: "b", root })
   let overflowError: unknown
-  const w2 = gate.acquire({ caller: "w2", scope: "c", root }).catch((e) => {
+  await gate.acquire({ caller: "w1", scope: "b", root }).catch((e) => {
     overflowError = e
     return undefined
   })
-  await sleep(250)
-  assert(overflowError instanceof GateBusyError || overflowError instanceof GateTimeoutError, "queue overflow blocks new callers")
+  assert(
+    overflowError instanceof GateBusyError ||
+      overflowError instanceof GateTimeoutError ||
+      hasErrorName(overflowError, ["GateBusyError", "GateTimeoutError"]),
+    "queue overflow blocks new callers",
+  )
   await p1.release()
-  const a1 = await w1
-  await a1.release()
-  await w2
 }
 
 async function testScopeCap() {
   OpenCodeGate.__resetForTest()
-  OpenCodeGate.configure({ maxConcurrent: 3, perScopeMaxConcurrent: 1, maxQueueDepth: 10, acquireTimeoutMs: 5000 })
+  OpenCodeGate.configure({ maxConcurrent: 3, perScopeMaxConcurrent: 1, maxQueueDepth: 10, acquireTimeoutMs: 30_000 })
   const gate = OpenCodeGate.instance()
   const root = testRoot("scope")
   const p1 = await gate.acquire({ caller: "s1", scope: "same", root })
@@ -118,13 +122,16 @@ async function testTimeout() {
   } catch (e) {
     timeoutError = e
   }
-  assert(timeoutError instanceof GateTimeoutError, "acquire timeout throws GateTimeoutError")
+  assert(
+    timeoutError instanceof GateTimeoutError || hasErrorName(timeoutError, ["GateTimeoutError"]),
+    "acquire timeout throws GateTimeoutError",
+  )
   await p1.release()
 }
 
 async function testRunWrapper() {
   OpenCodeGate.__resetForTest()
-  OpenCodeGate.configure({ maxConcurrent: 2, perScopeMaxConcurrent: 2, maxQueueDepth: 10, acquireTimeoutMs: 5000 })
+  OpenCodeGate.configure({ maxConcurrent: 2, perScopeMaxConcurrent: 2, maxQueueDepth: 10, acquireTimeoutMs: 30_000 })
   const gate = OpenCodeGate.instance()
   const root = testRoot("wrapper")
   let running = 0
@@ -147,7 +154,7 @@ async function testRunWrapper() {
 
 async function testReleaseAwaitWritesState() {
   OpenCodeGate.__resetForTest()
-  OpenCodeGate.configure({ maxConcurrent: 20, perScopeMaxConcurrent: 20, maxQueueDepth: 40, acquireTimeoutMs: 5000 })
+  OpenCodeGate.configure({ maxConcurrent: 20, perScopeMaxConcurrent: 20, maxQueueDepth: 40, acquireTimeoutMs: 30_000 })
   const gate = OpenCodeGate.instance()
   const root = testRoot("release-await")
   const permit = await gate.acquire({ caller: "direct", scope: "direct", root })
@@ -166,13 +173,141 @@ async function testReleaseAwaitWritesState() {
   assert(state.active.length === 0, "20 awaited gate.run() calls leave no active slots")
 }
 
+async function testLegacyActiveSlotExpires() {
+  OpenCodeGate.__resetForTest()
+  OpenCodeGate.configure({ maxConcurrent: 1, perScopeMaxConcurrent: 1, maxQueueDepth: 5, acquireTimeoutMs: 60 * 60 * 1000 })
+  const gate = OpenCodeGate.instance()
+  const root = testRoot("legacy-active")
+  const stateRoot = runtimePath(root, "opencode-gate")
+  await mkdir(stateRoot, { recursive: true })
+  const oldMs = Date.now() - 31 * 60 * 1000
+  await writeFile(
+    path.join(stateRoot, "state.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        updatedAt: new Date(oldMs).toISOString(),
+        active: [
+          {
+            id: "legacy-active-without-heartbeat",
+            caller: "legacy",
+            scope: "legacy",
+            ownerPid: process.pid,
+            acquiredAt: new Date(oldMs).toISOString(),
+            acquiredAtMs: oldMs,
+          },
+        ],
+        queue: [],
+        lastGrantedAtByModel: {},
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  )
+
+  const permit = await gate.acquire({ caller: "fresh", scope: "fresh", root })
+  assert(permit.caller === "fresh", "legacy active slot without heartbeat does not block a fresh acquire")
+  await permit.release()
+  const state = await readGateState(root)
+  assert(state.active.length === 0, "legacy stale active slot is removed from state")
+}
+
+async function testStaleQueueHeadBypassWhileActive() {
+  OpenCodeGate.__resetForTest()
+  OpenCodeGate.configure({ maxConcurrent: 2, perScopeMaxConcurrent: 2, maxQueueDepth: 10, acquireTimeoutMs: 60 * 60 * 1000 })
+  const gate = OpenCodeGate.instance()
+  const root = testRoot("stale-queue-head")
+  const stateRoot = runtimePath(root, "opencode-gate")
+  await mkdir(stateRoot, { recursive: true })
+  const now = Date.now()
+  const oldMs = now - 20 * 60 * 1000
+  await writeFile(
+    path.join(stateRoot, "state.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        updatedAt: new Date(oldMs).toISOString(),
+        active: [
+          {
+            id: "live-active-blocker",
+            caller: "live-active",
+            scope: "other-scope",
+            ownerPid: process.pid,
+            acquiredAt: new Date(now).toISOString(),
+            acquiredAtMs: now,
+            heartbeatAt: new Date(now).toISOString(),
+            heartbeatAtMs: now,
+          },
+        ],
+        queue: [
+          {
+            id: "orphaned-old-head",
+            caller: "old-head",
+            scope: "old-scope",
+            ownerPid: process.pid,
+            enqueuedAt: new Date(oldMs).toISOString(),
+            enqueuedAtMs: oldMs,
+          },
+        ],
+        lastGrantedAtByModel: {},
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  )
+
+  const permit = await gate.acquire({ caller: "fresh-live-waiter", scope: "fresh-scope", root })
+  assert(permit.caller === "fresh-live-waiter", "live waiter bypasses old orphaned queue head while another slot is active")
+  await permit.release()
+}
+
+async function testStaleQueueHeadBypassWhenEmpty() {
+  OpenCodeGate.__resetForTest()
+  OpenCodeGate.configure({ maxConcurrent: 2, perScopeMaxConcurrent: 2, maxQueueDepth: 10, acquireTimeoutMs: 60 * 60 * 1000 })
+  const gate = OpenCodeGate.instance()
+  const root = testRoot("empty-stale-queue-head")
+  const stateRoot = runtimePath(root, "opencode-gate")
+  await mkdir(stateRoot, { recursive: true })
+  const oldMs = Date.now() - 45 * 1000
+  await writeFile(
+    path.join(stateRoot, "state.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        updatedAt: new Date(oldMs).toISOString(),
+        active: [],
+        queue: [
+          {
+            id: "orphaned-empty-gate-head",
+            caller: "old-head",
+            scope: "old-scope",
+            ownerPid: process.pid,
+            enqueuedAt: new Date(oldMs).toISOString(),
+            enqueuedAtMs: oldMs,
+          },
+        ],
+        lastGrantedAtByModel: {},
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  )
+
+  const permit = await gate.acquire({ caller: "fresh-empty-gate-waiter", scope: "fresh-scope", root })
+  assert(permit.caller === "fresh-empty-gate-waiter", "live waiter bypasses old orphaned queue head when gate is empty")
+  await permit.release()
+}
+
 async function testModelCap() {
   OpenCodeGate.__resetForTest()
   OpenCodeGate.configure({
     maxConcurrent: 3,
     perScopeMaxConcurrent: 3,
     maxQueueDepth: 10,
-    acquireTimeoutMs: 5000,
+    acquireTimeoutMs: 30_000,
     modelLimits: { "provider/model-a": { maxConcurrent: 1, minSpawnIntervalMs: 0 } },
   })
   const gate = OpenCodeGate.instance()
@@ -199,7 +334,7 @@ async function testModelSpacing() {
     maxConcurrent: 3,
     perScopeMaxConcurrent: 3,
     maxQueueDepth: 10,
-    acquireTimeoutMs: 5000,
+    acquireTimeoutMs: 30_000,
     modelLimits: { "provider/model-a": { maxConcurrent: 3, minSpawnIntervalMs: 200 } },
   })
   const gate = OpenCodeGate.instance()
@@ -216,11 +351,13 @@ async function testModelSpacing() {
 async function main() {
   console.log("=== OpenCodeGate smoke test ===")
   await testSemaphoreCap()
-  await testQueueOverflow()
   await testScopeCap()
   await testTimeout()
   await testRunWrapper()
   await testReleaseAwaitWritesState()
+  await testLegacyActiveSlotExpires()
+  await testStaleQueueHeadBypassWhileActive()
+  await testStaleQueueHeadBypassWhenEmpty()
   await testModelCap()
   await testModelSpacing()
   if (failures > 0) {

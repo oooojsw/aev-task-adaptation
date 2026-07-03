@@ -49,6 +49,24 @@ function describeValidators(validators: LongTaskValidatorContract[]) {
           .join("\n")
       }
 
+      if (validator.type === "blank_eval_plan") {
+        return [
+          `- id: ${validator.id}`,
+          `  title: ${validator.title}`,
+          `  type: blank_eval_plan`,
+          `  placement: ${validator.placement ?? "completion_only"}`,
+          `  required: ${validator.required !== false}`,
+          `  blocking: ${validator.blocking === true}`,
+          `  plan_path: ${validator.planPath}`,
+          `  skill_root_path: ${validator.skillRootPath}`,
+          `  mode: ${validator.mode ?? "parallel"}`,
+          validator.concurrency ? `  concurrency: ${validator.concurrency}` : "",
+          `  success_criterion: ${validator.successCriterion ?? "all_pass"}`,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      }
+
       return [
         `- id: ${validator.id}`,
         `  title: ${validator.title}`,

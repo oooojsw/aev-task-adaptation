@@ -1,3 +1,35 @@
+## Merge Acceptance Pipeline 可拔插规则（2026-07-01）
+
+Multi-instance 合并现在分成两层：合并生成器和合并后验收流水线。
+
+- 合并生成器只负责产出 `mergedSkillDir`，可以是 flat merge、hierarchical merge 或未来的新合并器。
+- 数据集差异不再通过复制一份专用 merge prompt 解决，而是通过 `task-packs/merge-contracts/<dataset>/*.json` 注入“最终 skill 应该长什么样、哪些文件必须存在、哪些 casebook 命名规则必须遵守”。
+- 合并后验收由 `mergeAcceptancePreset` 控制，默认是 `repair_promote`，保持旧行为：初次训练集回撤，失败 case 单点 repair，repair 通过后把修复 skill 提升为新 baseline。
+
+总控配置位于 `config.json > mergeConfig`：
+
+```text
+merge_only       只合并，不回撤。
+replay_report    合并后只做初次回撤并记录失败。
+repair_promote   初次回撤 + 单点 repair/promote，兼容旧行为。
+final_replay     repair 后再对最终 skill 做一次完整训练集回撤。
+strict_all_pass  final replay 后要求全过，失败则标记 merge_acceptance_failed。
+```
+
+CLI 可覆盖：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts ... --merge-acceptance-preset strict_all_pass --merge-success-criterion all_pass
+```
+
+注意：`state.phase=completed` 只表示流程结束，不代表合并成功。真正结论看 `train-replay-output.json` 与 `orchestrator-state.json` 里的 `acceptanceStatus / accepted / initialReplay / finalReplay`。如果是 `strict_all_pass`，最终报告会明确写 `merge_acceptance_success` 或 `merge_acceptance_failed`，避免把 `5/6` 误读成成功。
+
+回归烟测：
+
+```powershell
+bun run auto-evolve/scripts/smoke-merge-acceptance-policy.ts
+```
+
 ## Git 推送主链规则（2026-06-26）
 
 以后本项目默认推送到干净主链仓库：
@@ -54,6 +86,57 @@ auto-evolve/runtime-state/benchmark-runs
 bun run auto-evolve/scripts/smoke-benchmark-supervisor.ts
 ```
 
+## 统一停止模块（2026-06-30）
+
+Auto-Evolve 现在新增统一 Stop Manager，用来替代“手动杀一堆进程”的粗暴停止方式。默认停止不是废弃实验，而是 `pause`：先保存现场，再把运行中的任务标成可断点续传，再释放 benchmark lease / OpenCodeGate 占位，最后只停止能证明属于本 run 的进程。
+
+常用命令：
+
+```powershell
+cd "C:\Users\ZhuanZ\Desktop\opencode re\opencode latest"
+bun run auto-evolve/scripts/stop-auto-evolve.ts --out "auto-evolve/runtime-state/benchmark-runs/<run-dir>" --mode pause
+```
+
+Windows 包装入口：
+
+```powershell
+.\script\stop-auto-evolve-sessions.ps1 -Out "auto-evolve/runtime-state/benchmark-runs/<run-dir>" -Mode pause
+```
+
+也可以只停单个 campaign：
+
+```powershell
+bun run auto-evolve/scripts/stop-auto-evolve.ts --campaign "<campaign-id-or-dir>" --mode pause
+```
+
+停止模块会写：
+
+```text
+<out>/STOP_REQUESTED.json
+<out>/run-manifest.json
+<out>/artifact-manifest.stop.json
+<out>/stop-transactions/<timestamp>/transaction.json
+<out>/stop-snapshots/<timestamp>/
+<out>/stop-reports/<timestamp>-stop-report.json
+<out>/stop-reports/<timestamp>-stop-report.md
+```
+
+重要规则：
+
+- 用户日常说“停止任务”，默认用 `pause`，不要用 `abort`。
+- `pause` 会保留 verified skill、round history、blank eval evidence、Direct Chat result.json、summary 和 cost 账本。
+- 对 benchmark 训练，running/watch/recovery 会被写回 `recovery_pending`；queued 保持 queued；verified_success 保持 verified_success。
+- 对 Direct Chat，续传依赖同一个 `--out-dir` 加 `--resume-existing`，已有每题 `result.json` 不会被改坏。
+- Stop Manager 的进程停止按身份分级：只有能通过 ownerPID、ownerCreationTick、campaignID、scope、outDir 等证明归属的进程才会停止；`unknown_owner` 只能警告，不能杀。
+
+回归烟测：
+
+```powershell
+bun run auto-evolve/scripts/smoke-stop-manager.ts
+```
+
+大白话：以后停止训练不要再“拔电源”。先让 Stop Manager 正规关机，它会把成果放好、座位释放、现场写清楚，下次才能稳定从原 `--out` 断点续传。
+
 ## Blank Eval 物理闭卷沙盒红线（2026-06-26）
 
 Blank Eval 现在必须按“物理闭卷考试”运行，而不是只靠提示词或元数据声明不能看答案。每次空白 agent 验收都会在 `runtime-state/blank-eval-runs/<run>/sandbox/` 下构建独立考场：
@@ -67,6 +150,35 @@ Blank Eval 现在必须按“物理闭卷考试”运行，而不是只靠提示
 
 清考场也必须 fail closed：Blank Eval 的 reset 只能备份、删除、重建 `sandbox/` 内的 `editablePaths/targetPaths`。如果 spec 写了绝对路径或 `../` 逃逸路径，系统必须在启动模型前报错停止，不能帮它清理宿主机上的真实文件。
 
+## Blank Eval Plan Runner（2026-07-03）
+
+`runBlankEval()` 仍然是“单题闭卷考试”：给一个 case spec 和一份 skill，让一个空白 agent 在独立 sandbox 里做题。
+
+新增 `runBlankEvalPlan()` 是它上面的一层“考试编排器”：同一份 skill 可以按计划跑一组 case，并把每题的闭卷结果汇总成一个总判决。它不替代单题 Blank Eval，只负责把多题 replay 变成可复用基础设施。
+
+当前支持三种模式：
+
+- `single`：只跑第一条 case，兼容旧的单题验收语义。
+- `sequence`：按顺序跑多条 case，可配置失败即停，适合省钱排查。
+- `parallel`：并行跑多条 case，适合合并后训练集回撤或测试集批量闭卷验收。
+
+可作为 long-task completion validator 使用：
+
+```json
+{
+  "id": "merged-skill-replay",
+  "type": "blank_eval_plan",
+  "placement": "completion_only",
+  "planPath": "materials/replay-plan.json",
+  "skillRootPath": "workspace/merged-skill",
+  "mode": "parallel",
+  "concurrency": 3,
+  "successCriterion": "all_pass"
+}
+```
+
+红线：Plan Runner 可以读取 replay plan 和 case 列表，但每个空白 agent 仍然只通过原有 Blank Eval 沙盒看到当前 case 的原始材料、clean skill 和自己的 workspace。`replay-plan`、其他 case workspace、private answers、训练轨迹、input skills 不能暴露给空白 agent。
+
 ## PID Owner 强身份判断补丁（2026-06-26）
 
 Windows 会复用 PID，所以 Auto-Evolve 不能只看“这个 PID 活着”或“命令行里出现 run-long-task-campaign”。现在 `process-identity.ts` 提供统一的 owner hint 分类：
@@ -77,6 +189,8 @@ Windows 会复用 PID，所以 Auto-Evolve 不能只看“这个 PID 活着”�
 run-health、benchmark 外层恢复、OpenCodeGate、campaign takeover 都必须使用这组 helper。泛用 hint 不能进入 `requiredAnyCommandHints`，否则旧状态可能把别的 campaign 进程误认成当前任务，造成看板假健康、断点续传不启动或错误 takeover。
 
 补充规则：campaign runner 内部也不能只看旧 `ownerCommandHint`。恢复、自愈和 takeover 必须带上 campaignID、campaign 目录名、baseSpecPath 或 runID 这类强上下文。`unknown_owner` 只能在心跳新鲜时短暂观察，不能长期阻止 stale recovery；更不能作为 `terminateProcessTree(...)` 的依据。只有 `ownership === "owned"` 才允许杀进程。
+
+OpenCodeGate 的 active slot 不能只看“持有 permit 的父进程还活着”。长任务 campaign 父进程可能还在，但某个 OpenCode worker 已经 `done`，如果 permit release 因 Windows 文件锁/状态竞争没写回，就会出现“座位牌没撤、后面全排队”的假满员。现在每个 gate permit 都带 `heartbeatAt/heartbeatAtMs`，`runOpencodeTask` 通过 managed-process pulse 刷新心跳；真实 `opencode.exe` 子进程结束后必须立刻释放 gate，后续 JSON 解析、报告写入和 worker suggestion 后处理不能继续占用 OpenCode 并发位。没有心跳的旧 active slot 超过 30 分钟会被 cleanup 当作 legacy stale slot 清掉。排查并发卡死时要同时看 `state.json.active[*].heartbeatAt` 和对应 worker 的 `run.json`，不能只看 ownerPID。队列也有同类问题：旧排队项的 campaign 父进程还活着，不代表当初等待 permit 的 acquire 协程还活着；如果 gate 是空的，队头超过 30 秒仍没拿到 permit，当前仍在真实轮询的请求可以越过旧队头；如果 gate 非空，队头超过 15 分钟仍没拿到 permit，也允许活请求绕行。这样避免一个孤儿队列项把整个 OpenCodeGate 压成单并发或零并发。
 
 这是一份为你和未来接手此项目的所有 AI 智能体量身定制的 **最高指导纲领（CRITICAL_ARCHITECTURE_MEMO.md）**。
 
@@ -1905,16 +2019,16 @@ bun run auto-evolve/scripts/smoke-validator-blank-agent-audience-guard.ts
 `auto-evolve/monitor-server.ts` 不能再用 2 秒高频刷新和无限深度递归扫描 `runtime-state`。默认刷新间隔改为 15 秒、默认 limit 改为 30，artifact/lifecycle 扫描结果缓存 15 秒，并对递归扫描加入最大深度、最大目录数和重目录跳过规则（workspace、materials、outputs、private-answers、blank-eval-runs、node_modules 等）。`orchestrator/monitor.ts` 已加入启动锁，同一端口看板启动中时其他 orchestrator 必须等待/复用，不能并发拉起多个 monitor-server。训练监控优先读 `orchestrator-state.json`、`run-dashboard` 和真实进程；不要为了持续监控反复启动看板。
 ## Skill Structure Profile Hard Gate
 
-AEV 现在支持把“专家经验 skill 必须长什么样”做成可拔插硬验证 profile。
+AEV supports a pluggable hard gate for generated skill / expert-workspace structure.
 
 - Validator script: `auto-evolve/scripts/validate-skill-structure-profile.ts`
 - Example validator profile: `auto-evolve/task-packs/validator-profiles/skill-surface/standard-hard-v1.json`
 - Example structure profile: `auto-evolve/task-packs/validator-profiles/skill-surface/profiles/standard-structure-v1.json`
 - Smoke test: `bun run auto-evolve/scripts/smoke-skill-structure-profile.ts`
 
-这层属于 surface/layout 硬门，默认在 blank agent 之前检查“待转正专家经验区”，用于约束必需文件、目录、Markdown 标题、JSON 字段、文件类型和是否允许额外文件。它不读取 private answers，也不验证空白 agent 产物；产物对错仍由 product validator 负责。软验证仍是未来独立模块，不和这个硬结构门混在一起。
+The hard gate is intended for objective structure checks only: required files, required directories, allowed file globs, Markdown headings, JSON parseability, and required JSON keys. It should be mounted through `validatorProfiles` with `validation.target = "layout"` and `validation.stage = "pre_blank"` so it runs after Lead writes the pending skill and before Blank Eval starts. Soft skill-quality review remains a separate future validator and should not be mixed into this hard gate.
 
-`auto-evolve/config.json` 现在也有总控级 `validationConfig`。验证模块集中放在 `task-packs/validator-profiles`，总控可以选择命名 profile set，不必逐个修改数据集 spec。默认配置已经定义 `skill-structure-standard`，但 `enabledProfileSets` 先保持为空，避免旧实验突然被新硬门卡住。要全局启用标准 skill 结构硬门，设置：
+`auto-evolve/config.json` also has a global `validationConfig` control plane. Validator modules stay under `task-packs/validator-profiles`, and the config can select named profile sets without editing every dataset spec. The default config defines `skill-structure-standard` but leaves `enabledProfileSets` empty to avoid suddenly blocking older experiments. To enable the standard skill structure hard gate globally, set:
 
 ```json
 "validationConfig": {
@@ -1923,11 +2037,129 @@ AEV 现在支持把“专家经验 skill 必须长什么样”做成可拔插硬
 }
 ```
 
-任务本地 `validatorProfiles` 仍然有效，会和总控 profile 合并。总控 profile 在 spec 加载时追加，不修改原始 task-pack 文件，也不改 campaign 的 `baseSpecPath`，因此不会破坏断点续传和历史血统匹配。
+Task-local `validatorProfiles` still work and are merged with global profiles. The global config is appended at spec load time, so original task-pack files remain clean and benchmark history/base spec paths are not rewritten.
 
-Smoke：
+### Paper-Review Surface Generalization Profile (2026-06-30)
+
+Paper-review now has a dataset-specific pluggable surface gate. The general rule is: the platform owns the slot, while each dataset owns its leak rules. Do not turn this into a universal regex validator for every benchmark.
+
+The paper-review module is:
+
+```text
+task-packs/validator-profiles/paper-review/surface-generalization-v1.json
+task-packs/validator-profiles/paper-review/profiles/surface-generalization-v1.json
+task-packs/validator-profiles/paper-review/surface-generalization-v2.json
+task-packs/validator-profiles/paper-review/profiles/surface-generalization-v2.json
+scripts/validate-paper-review-surface-generalization.ts
+```
+
+It is a `target = surface`, `stage = pre_blank`, `answerAccess = none`, blocking hard validator. It scans the formal skill surface, including file names and script/config files, before Blank Eval starts. It blocks paper-review task IDs, private/gold/oracle answer-source words, concrete final rating leaks, and obvious single-paper names/methods/datasets from the current paper-review learnbench. It does not block generic rating rubric text such as explaining what `Borderline` means.
+
+The no-surface baseline remains available through `paper-review/train-v1`. The surface-enabled local profile is `paper-review/train-v2`, which now adds `paper-review/surface-generalization-v2` before the existing hard/soft product validators. `surface-generalization-v1` is preserved only as a rollback/reference profile.
+
+Surface v2 accepted the useful part of the long-context design proposal: a fuller six-paper high-risk term list, explicit `forbiddenLiterals`, word-window contextual checks, and warning/block severity separation. It deliberately does **not** ban rating labels or generic output-format instructions. For example, "the final answer should include one Paper Rating selected from the standard rubric" is valid; "output Borderline as the final answer" is not. It also deliberately did **not** enable "warnings >= 3 means blocking" by default, because table/figure and baseline examples can be legitimate generic review guidance. Soft surface validation is not enabled yet; it is a later optional module because it costs model calls and needs separate result-routing discipline.
+
+The global config also defines an opt-in profile set:
+
+```json
+"paper-review-surface-generalization": {
+  "validatorProfiles": ["paper-review/surface-generalization-v2"],
+  "blankEvalValidatorProfiles": []
+}
+```
+
+It is intentionally not enabled by default. For a paper-review surface branch, enable that set in `validationConfig.enabledProfileSets` or with `AUTO_EVOLVE_VALIDATION_PROFILE_SETS=paper-review-surface-generalization`. Keep old no-surface runs as comparison baselines.
+
+Smoke:
 
 ```powershell
+bun run auto-evolve/scripts/smoke-paper-review-surface-validator.ts
 bun run auto-evolve/scripts/smoke-validation-config-profiles.ts
 bun run auto-evolve/scripts/smoke-skill-structure-profile.ts
 ```
+## 2026-07-01 可拔插 Merge Contract
+
+Multi-instance flat merge / train-replay repair 现在采用“通用 prompt + 可拔插 merge contract”的结构。默认 `methods/recipes/multi-instance/prompts/merge.md` 与 `merge-repair.md` 必须保持数据集无关，不能写死 audit-point、OfficeQA、SpreadsheetBench、paper-review 等专用输出路径或领域模板。
+
+任务差异通过 `auto-evolve/config.json > mergeConfig` 控制：
+
+```json
+"mergeConfig": {
+  "contractsRoot": "task-packs/merge-contracts",
+  "defaultContract": "generic/standard-skill-v1",
+  "taskPackContracts": {
+    "paper-review-learnbench": "paper-review/review-skill-v1"
+  }
+}
+```
+
+新增数据集时，优先新增小型 JSON contract，并在 `taskPackContracts` 中挂载；不要复制整份专用 merge prompt。Contract 负责说明 required files、文件职责、CORE headings、final product、repair policy 和禁止跨数据集污染词。合并器和修复器会把 contract 注入 prompt，并把 contract 文件加入只读权限。
+
+分层合并 `--merge-strategy hierarchical` 也走同一套 contract。`mergeConfig.defaultHierarchicalPrompt` 和 `defaultHierarchicalRepairPrompt` 只控制分层合并流程本身；每一层 group 应该产出哪些文件、哪些字段、哪些文件可 append-only 或 rewrite，都由同一个 `mergeContractPath` 决定。这样 flat merge 和 hierarchical merge 不会再分裂成两套任务专用 prompt。
+
+### Merge Acceptance Profile
+
+合并后验收现在也有可拔插 profile 层。三层职责必须分开：
+
+- `merge contract` 管最终 skill 长什么样。
+- `merge generator` 管 flat / hierarchical 怎么合并。
+- `merge acceptance profile` 管合并后验收到哪一步。
+
+总控位置：
+
+```json
+"mergeConfig": {
+  "defaultAcceptanceProfile": "repair_promote",
+  "acceptanceProfiles": {
+    "merge_only": {},
+    "replay_report": {},
+    "repair_promote": {},
+    "final_replay": {},
+    "strict_all_pass": {}
+  }
+}
+```
+
+CLI 可覆盖：
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts ... --merge-acceptance-profile strict_all_pass
+```
+
+优先级从高到低是：
+
+1. `--merge-acceptance-stages`
+2. `--merge-acceptance-preset`
+3. `--merge-acceptance-profile`
+4. `mergeConfig.defaultAcceptanceProfile`
+5. 旧字段 `mergeConfig.acceptancePreset`
+
+大白话：以后想“只合并”“回撤一次就停”“repair 后作为新基线”“最后必须全量回撤全过”，优先换 profile，不要再复制 prompt 或写一份数据集专用合并脚本。Scorecard / final report 会记录实际使用的 `mergeAcceptanceProfile`、`mergeAcceptanceStages` 和 `mergeAcceptanceSuccessCriterion`。
+## Blank Acceptance Diagnosis Profiles（2026-07-03）
+
+空白 agent 验收失败后的诊断器现在也纳入总控配置。总控入口是 `config.json > blankAcceptanceConfig`：
+
+```json
+"blankAcceptanceConfig": {
+  "enabled": true,
+  "defaultDiagnosisProfile": "auto",
+  "taskPackDiagnosisProfiles": {},
+  "diagnosisProfiles": {
+    "auto": { "mode": "auto", "enabledModules": ["single-case", "plan-replay", "infra-triage"] },
+    "single-case": { "mode": "single_case", "enabledModules": ["single-case"] },
+    "plan-replay": { "mode": "plan_replay", "enabledModules": ["plan-replay", "infra-triage"] }
+  }
+}
+```
+
+大白话：`blank_eval_plan` 控制“空白 agent 怎么验收”，`blankAcceptanceConfig` 控制“验收失败后诊断器怎么分析”。以前诊断器默认只像单题失败分析；现在它可以按 profile 识别多 case 回撤、合并后回撤、平台路径/validator 故障，并把这些区别明确反馈给 lead。
+
+证据包 `blank-agent-evidence` 也新增了 `plan-replay.compact.json`。当 final acceptance 里出现 `blank_eval_plan` 的 `plan-result.json` 时，系统会自动生成安全摘要：总 case 数、通过数、失败数、失败 case id、每个失败 case 的摘要与 failureKind。这个摘要不包含 private answer，也不会把标准答案暴露给 blank agent。
+
+新增烟测：
+
+```powershell
+bun run auto-evolve/scripts/smoke-blank-acceptance-diagnosis-profiles.ts
+```
+
+这个 smoke 不启动真实模型，只验证：总控 profile 可读取、诊断 prompt 会注入 plan-replay/infra-triage 规则、多 case 回撤证据能被压缩进可读证据包。

@@ -1,0 +1,46 @@
+{
+  "id": "spreadsheet.spreadsheet-skill-v1",
+  "description": "SpreadsheetBench merged skill contract.",
+  "skillPurpose": "Teach a blank agent to inspect spreadsheet materials, perform the required spreadsheet operation, and write the declared answer artifact without copying private answers.",
+  "requiredFiles": [
+    "INDEX.md",
+    "CORE.md",
+    "meta.json",
+    "surface_contract.json",
+    "casebook/",
+    "open_observations.md"
+  ],
+  "fileResponsibilities": {
+    "INDEX.md": "Entry point. Explain read order and final spreadsheet output discipline.",
+    "CORE.md": "Reusable workbook navigation, formula/data extraction, calculation/transformation, output writing, and failure lessons.",
+    "casebook/": "Scenario-specific spreadsheet operation patterns named by operation type and evidence route.",
+    "meta.json": "Provenance, contributing instance ids, confidence, and merge timestamp.",
+    "surface_contract.json": "Machine-readable summary of skill layout and final answer artifact contract.",
+    "open_observations.md": "Uncertain spreadsheet observations that should not be promoted to CORE."
+  },
+  "requiredCoreHeadings": [
+    "## Material Navigation Rules",
+    "## Extraction Rules",
+    "## Calculation Or Transformation Rules",
+    "## Output Discipline",
+    "## Failure Lessons"
+  ],
+  "finalProduct": {
+    "path": "workspace/answer.json",
+    "cardinality": "task_declared",
+    "description": "The answer artifact declared by the task spec, commonly workspace/answer.json for SpreadsheetBench tasks."
+  },
+  "casebookNamingPolicy": "Use spreadsheet operation names such as formula-recalc, lookup-table, aggregation, formatting, or cross-sheet-reference.",
+  "repairPolicy": {
+    "mode": "append_only",
+    "coreMayOnlyAppend": true,
+    "casebookMayRewrite": true,
+    "requiredPatchLog": true
+  },
+  "forbiddenCrossDatasetTerms": [
+    "audit-point-output.md",
+    "audit opinion",
+    "OfficeQA",
+    "workspace/review.md"
+  ]
+}

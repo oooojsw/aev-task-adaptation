@@ -3,6 +3,7 @@ import process from "node:process"
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile } from "node:fs/promises"
 import type {
+  LongTaskBlankEvalPlanValidatorContract,
   LongTaskPromptValidatorContract,
   LongTaskScriptValidatorContract,
   LongTaskSpec,
@@ -18,6 +19,8 @@ import { resolveModelSelection } from "../model-selection"
 import { runManagedProcess } from "../managed-process"
 import { runOpencodeTask } from "../opencode"
 import { writeTaskArtifacts } from "../task-artifacts"
+import { runBlankEvalPlan } from "../blank-eval/plan-runner"
+import type { BlankEvalPlanCase, BlankEvalPlanMode, BlankEvalPlanSuccessCriterion } from "../blank-eval/contract"
 import { buildValidationResultViews, writeValidationResultViews } from "./result-views"
 import { assertNoBlankAgentAudience } from "./registry"
 import type {
@@ -45,6 +48,8 @@ const FAILURE_CLASSES = new Set([
   "candidate_format_invalid",
   "score_below_threshold",
 ])
+
+const AUTO_EVOLVE_ROOT = path.resolve(import.meta.dir, "..", "..")
 
 function nowISO() {
   return new Date().toISOString()
@@ -128,6 +133,21 @@ function candidatePriority(filePath: string) {
 }
 
 async function inferPrivateAnswer(input: { spec: LongTaskSpec; contract: LongTaskPromptValidatorContract }) {
+  if (input.spec.taskFamily === "paper-review-learnbench") {
+    const id = input.spec.id ?? input.spec.title
+    const answerRoot = path.resolve(
+      AUTO_EVOLVE_ROOT,
+      "task-packs",
+      "real-long-tasks",
+      "paper-review-learnbench",
+      "private-answers",
+      id,
+    )
+    for (const name of ["gold-review.txt", "gold-review.md", "gold-review.docx"]) {
+      const answer = path.join(answerRoot, name)
+      if (await pathExists(answer)) return answer
+    }
+  }
   const human = input.contract.inputFiles?.humanGuidancePath
   if (!human) return undefined
   const id = input.spec.id ?? input.spec.title
@@ -138,6 +158,49 @@ async function inferPrivateAnswer(input: { spec: LongTaskSpec; contract: LongTas
   for (const name of ANSWER_FILE_NAMES) {
     const answer = path.join(answerRoot, name)
     if (await pathExists(answer)) return answer
+  }
+  return undefined
+}
+
+async function inferCandidateFromBundle(input: { bundle: unknown }) {
+  const pool: string[] = []
+  const collectPaths = (value: unknown) => {
+    if (typeof value === "string") {
+      pool.push(value)
+      return
+    }
+    if (Array.isArray(value)) {
+      value.forEach(collectPaths)
+      return
+    }
+    if (value && typeof value === "object") {
+      const maybe = value as Record<string, unknown>
+      if (typeof maybe.path === "string") pool.push(maybe.path)
+      Object.values(maybe).forEach(collectPaths)
+    }
+  }
+  if (input.bundle && typeof input.bundle === "object") {
+    const bundle = input.bundle as Record<string, unknown>
+    collectPaths(bundle.expectedArtifacts)
+    collectPaths(bundle.targetPaths)
+  }
+  const sorted = uniqueStrings(pool)
+    .filter((item) => !isPrivateAnswerPath(item))
+    .filter((item) => {
+      const base = path.basename(item).toLowerCase()
+      return (
+        base === "review.md" ||
+        base === "review.txt" ||
+        base === "review.docx" ||
+        base === "answer.txt" ||
+        base === "answer.json" ||
+        base.includes("candidate") ||
+        base.includes("output")
+      )
+    })
+    .sort((a, b) => candidatePriority(a) - candidatePriority(b))
+  for (const item of sorted) {
+    if (await pathExists(item)) return item
   }
   return undefined
 }
@@ -176,7 +239,7 @@ export async function buildPromptValidatorInput(input: {
   const candidate =
     explicit?.candidatePath && (await pathExists(explicit.candidatePath))
       ? explicit.candidatePath
-      : candidateLike[0]?.resolved
+      : candidateLike[0]?.resolved ?? (await inferCandidateFromBundle({ bundle }))
   const human =
     explicit?.humanGuidancePath && (await pathExists(explicit.humanGuidancePath))
       ? explicit.humanGuidancePath
@@ -336,7 +399,11 @@ function inferTargetKind(contract: LongTaskValidatorContract): ValidationTargetK
   const descriptor = [
     contract.id,
     contract.title,
-    contract.type === "script" ? contract.path : contract.prompt,
+    contract.type === "script"
+      ? contract.path
+      : contract.type === "prompt_json"
+        ? contract.prompt
+        : `${contract.planPath} ${contract.skillRootPath}`,
   ]
     .join(" ")
     .toLowerCase()
@@ -354,7 +421,8 @@ function inferStage(contract: LongTaskValidatorContract): ValidationStage {
 }
 
 function descriptorForLongTask(contract: LongTaskValidatorContract): ValidationModuleDescriptor {
-  const mechanism: ValidationMechanism = contract.type === "script" ? "hard_script" : "soft_llm"
+  const mechanism: ValidationMechanism =
+    contract.type === "script" ? "hard_script" : contract.type === "prompt_json" ? "soft_llm" : "engine"
   const target = contract.validation?.target ?? inferTargetKind(contract)
   const descriptor = {
     id: contract.id,
@@ -376,6 +444,251 @@ function descriptorForLongTask(contract: LongTaskValidatorContract): ValidationM
   }
   assertNoBlankAgentAudience(contract, descriptor.allowedAudiences)
   return descriptor
+}
+
+function isObject(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input)
+}
+
+function normalizeBlankEvalPlanMode(value: unknown): BlankEvalPlanMode {
+  return value === "single" || value === "sequence" || value === "parallel" ? value : "parallel"
+}
+
+function normalizeBlankEvalPlanCriterion(value: unknown): BlankEvalPlanSuccessCriterion {
+  return value === "all_pass" || value === "allow_partial" || value === "min_pass_rate" ? value : "all_pass"
+}
+
+function normalizeBlankEvalPlanConcurrency(value: unknown) {
+  if (typeof value !== "number") return 1
+  const normalized = Math.floor(value)
+  if (!Number.isFinite(normalized) || normalized < 1) return 1
+  return normalized
+}
+
+function normalizeBlankEvalPlanMinPassRate(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  return Math.max(0, Math.min(1, value))
+}
+
+function normalizeBlankEvalPlanCases(raw: unknown, planPath: string): BlankEvalPlanCase[] {
+  const rows = Array.isArray(raw) ? raw : isObject(raw) && Array.isArray(raw.cases) ? raw.cases : []
+  const baseDir = path.dirname(planPath)
+  return rows
+    .filter(isObject)
+    .filter((row) => {
+      const rawSpecPath = typeof row.specPath === "string" ? row.specPath : typeof row.spec === "string" ? row.spec : ""
+      return rawSpecPath.trim().length > 0
+    })
+    .map((row, index) => {
+      const rawSpecPath = (typeof row.specPath === "string" ? row.specPath : typeof row.spec === "string" ? row.spec : "").trim()
+      const id =
+        typeof row.id === "string" && row.id.trim()
+          ? row.id.trim()
+          : rawSpecPath
+            ? path.basename(path.dirname(rawSpecPath)) || `case-${index + 1}`
+            : `case-${index + 1}`
+      return {
+        id,
+        specPath: path.isAbsolute(rawSpecPath) ? path.resolve(rawSpecPath) : path.resolve(baseDir, rawSpecPath),
+        title: typeof row.title === "string" && row.title.trim() ? row.title.trim() : undefined,
+        sourceID: typeof row.sourceID === "string" && row.sourceID.trim() ? row.sourceID.trim() : id,
+        mode:
+          row.mode === "train-backtest" || row.mode === "test" || row.mode === "deployment" || row.mode === "smoke"
+            ? row.mode
+            : undefined,
+        promptInlinePaths: Array.isArray(row.promptInlinePaths)
+          ? row.promptInlinePaths.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          : undefined,
+      }
+    })
+    .filter((item) => item.specPath.trim().length > 0)
+}
+
+function blankEvalPlanInfrastructureFailure(input: {
+  contract: LongTaskBlankEvalPlanValidatorContract
+  runID: string
+  unitID: string
+  attempt: number
+  summary: string
+  details: string[]
+  evidenceRefs: string[]
+  raw?: Record<string, unknown>
+}) {
+  return {
+    result: {
+      id: `validator-${randomUUID().slice(0, 8)}`,
+      runID: input.runID,
+      unitID: input.unitID,
+      attempt: input.attempt,
+      validatorID: input.contract.id,
+      validatorType: "engine" as const,
+      createdAt: nowISO(),
+      passed: false,
+      blocking: input.contract.blocking === true,
+      failureKind: "validator_infrastructure" as const,
+      summary: input.summary,
+      details: input.details,
+      evidenceRefs: input.evidenceRefs,
+    },
+    raw: input.raw ?? {},
+  }
+}
+
+async function runBlankEvalPlanLongTaskValidation(input: {
+  cwd: string
+  contract: LongTaskBlankEvalPlanValidatorContract
+  spec: LongTaskSpec
+  unit: LongTaskWorkUnit
+  runID: string
+  attempt: number
+  validatorDir: string
+  runtimeScope?: string
+}) {
+  await mkdir(input.validatorDir, { recursive: true })
+  const planRaw = await readFile(input.contract.planPath, "utf8")
+  let parsedPlan: unknown
+  try {
+    parsedPlan = extractJsonObject(planRaw) ?? JSON.parse(planRaw)
+  } catch (error) {
+    return blankEvalPlanInfrastructureFailure({
+      contract: input.contract,
+      runID: input.runID,
+      unitID: input.unit.id,
+      attempt: input.attempt,
+      summary: `${input.contract.title} could not parse blank eval plan JSON.`,
+      details: [`planPath=${input.contract.planPath}`, error instanceof Error ? error.message : String(error)],
+      evidenceRefs: [input.contract.planPath],
+      raw: { planPath: input.contract.planPath, parseError: error instanceof Error ? error.message : String(error) },
+    })
+  }
+  const cases = normalizeBlankEvalPlanCases(parsedPlan, input.contract.planPath)
+  const mode = input.contract.mode ?? (isObject(parsedPlan) ? normalizeBlankEvalPlanMode(parsedPlan.mode) : "parallel")
+  const successCriterion =
+    input.contract.successCriterion ??
+    (isObject(parsedPlan) ? normalizeBlankEvalPlanCriterion(parsedPlan.successCriterion) : "all_pass")
+  const concurrency =
+    input.contract.concurrency ?? (isObject(parsedPlan) ? normalizeBlankEvalPlanConcurrency(parsedPlan.concurrency) : 1)
+  const minPassRate =
+    input.contract.minPassRate ?? (isObject(parsedPlan) ? normalizeBlankEvalPlanMinPassRate(parsedPlan.minPassRate) : undefined)
+
+  const inputPath = path.join(input.validatorDir, "blank-eval-plan-input.json")
+  await writeJsonFile(inputPath, {
+    schema: "blank-eval-plan-validator-input/v1",
+    validatorID: input.contract.id,
+    planPath: input.contract.planPath,
+    skillRootPath: input.contract.skillRootPath,
+    mode,
+    concurrency,
+    successCriterion,
+    minPassRate,
+    caseCount: cases.length,
+    cases: cases.map((item) => ({ id: item.id, specPath: item.specPath })),
+  })
+
+  if (!cases.length) {
+    return blankEvalPlanInfrastructureFailure({
+      contract: input.contract,
+      runID: input.runID,
+      unitID: input.unit.id,
+      attempt: input.attempt,
+      summary: `${input.contract.title} has no replay cases.`,
+      details: [`planPath=${input.contract.planPath}`],
+      evidenceRefs: [inputPath, input.contract.planPath],
+      raw: { inputPath, planPath: input.contract.planPath },
+    })
+  }
+
+  const missingSpecPaths: string[] = []
+  for (const item of cases) {
+    if (!(await pathExists(item.specPath))) missingSpecPaths.push(`${item.id}: ${item.specPath}`)
+  }
+  if (missingSpecPaths.length > 0) {
+    return blankEvalPlanInfrastructureFailure({
+      contract: input.contract,
+      runID: input.runID,
+      unitID: input.unit.id,
+      attempt: input.attempt,
+      summary: `${input.contract.title} references missing replay case spec(s).`,
+      details: missingSpecPaths,
+      evidenceRefs: [inputPath, input.contract.planPath],
+      raw: { inputPath, planPath: input.contract.planPath, missingSpecPaths },
+    })
+  }
+
+  if (!(await pathExists(input.contract.skillRootPath))) {
+    return {
+      result: {
+        id: `validator-${randomUUID().slice(0, 8)}`,
+        runID: input.runID,
+        unitID: input.unit.id,
+        attempt: input.attempt,
+        validatorID: input.contract.id,
+        validatorType: "engine" as const,
+        createdAt: nowISO(),
+        passed: false,
+        blocking: input.contract.blocking === true,
+        failureKind: "product_failure" as const,
+        summary: `${input.contract.title} could not find candidate skill root.`,
+        details: [`skillRootPath=${input.contract.skillRootPath}`],
+        evidenceRefs: [inputPath, input.contract.planPath],
+      },
+      raw: { inputPath, planPath: input.contract.planPath, missingSkillRoot: input.contract.skillRootPath },
+    }
+  }
+
+  const planResult = await runBlankEvalPlan({
+    cwd: input.cwd,
+    mode,
+    skillRoots: [input.contract.skillRootPath],
+    cases,
+    runRoot: path.join(input.validatorDir, "blank-eval-plan"),
+    title: input.contract.title,
+    concurrency,
+    stopOnFirstFailure: input.contract.stopOnFirstFailure,
+    successCriterion,
+    minPassRate,
+    runtimeScope: input.runtimeScope ? `${input.runtimeScope}:${input.contract.id}` : `blank-eval-plan:${input.runID}:${input.contract.id}`,
+    concurrencyScope: `blank-eval-plan:${input.spec.id ?? input.spec.taskFamily ?? input.spec.title}`,
+  })
+
+  return {
+    result: {
+      id: `validator-${randomUUID().slice(0, 8)}`,
+      runID: input.runID,
+      unitID: input.unit.id,
+      attempt: input.attempt,
+      validatorID: input.contract.id,
+      validatorType: "engine" as const,
+      createdAt: nowISO(),
+      passed: planResult.passed,
+      blocking: input.contract.blocking === true,
+      failureKind: planResult.passed ? undefined : ("product_failure" as const),
+      summary: planResult.summary,
+      details: [
+        `mode=${planResult.mode}`,
+        `score=${planResult.passedCount}/${planResult.total}`,
+        `successCriterion=${planResult.successCriterion}`,
+        ...(planResult.failedCases.length ? [`failedCases=${planResult.failedCases.join(",")}`] : []),
+      ],
+      evidenceRefs: [
+        inputPath,
+        input.contract.planPath,
+        planResult.resultPath,
+        planResult.evidenceBundlePath,
+        planResult.summaryPath,
+      ],
+      rawOutputPath: planResult.resultPath,
+    },
+    raw: {
+      inputPath,
+      planPath: input.contract.planPath,
+      skillRootPath: input.contract.skillRootPath,
+      planResultPath: planResult.resultPath,
+      evidenceBundlePath: planResult.evidenceBundlePath,
+      summaryPath: planResult.summaryPath,
+      caseResults: planResult.caseResults,
+    },
+  }
 }
 
 async function runScriptLongTaskValidation(input: {
@@ -444,6 +757,11 @@ async function runScriptLongTaskValidation(input: {
   const reportedPassed = readBooleanField(parsed, "passed", "ok", "success")
   const passed = infraOK && (reportedPassed ?? true)
   const reportedFailureKind = readStringField(parsed, "failureKind", "failure_kind")
+  const explicitProductFailure =
+    reportedPassed === false &&
+    (reportedFailureKind === "product_failure" ||
+      reportedFailureKind === "answer_mismatch" ||
+      reportedFailureKind === "quality_mismatch")
   const parsedSummary = readStringField(parsed, "summary", "message", "result_summary")
   const summary = parsedSummary
     ? parsedSummary
@@ -459,6 +777,8 @@ async function runScriptLongTaskValidation(input: {
     ? undefined
     : reportedFailureKind === "dataset_failure"
       ? ("dataset_failure" as const)
+      : explicitProductFailure
+        ? ("product_failure" as const)
       : !infraOK ||
         timedOut ||
         failureText.includes("validator crashed") ||
@@ -672,7 +992,18 @@ export async function runLongTaskValidatorViaValidationEngine(input: {
           onActivation: input.onActivation,
           onPulse: input.onPulse,
         })
-      : await runPromptLongTaskValidation({
+      : input.contract.type === "blank_eval_plan"
+        ? await runBlankEvalPlanLongTaskValidation({
+            cwd: input.cwd,
+            contract: input.contract,
+            spec: input.spec,
+            unit: input.unit,
+            runID: input.runID,
+            attempt: input.attempt,
+            validatorDir: input.validatorDir,
+            runtimeScope: input.runtimeScope,
+          })
+        : await runPromptLongTaskValidation({
           cwd: input.cwd,
           config: input.config,
           contract: input.contract,

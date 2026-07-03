@@ -33,6 +33,8 @@ export interface RunMergerInput {
   state: CoordinatorState
   /** Override the prompt path — defaults to methods/recipes/multi-instance/prompts/merge.md */
   promptPath?: string
+  /** Optional task-specific merge contract JSON path. */
+  contractPath?: string
 }
 
 export interface MergerOutcome {
@@ -99,10 +101,30 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
   // arguments can exceed process spawn limits on Windows.
   const promptPath = input.promptPath ?? path.join(input.cwd, "auto-evolve", DEFAULT_PROMPT_REL)
   const promptBody = await readTextFile(promptPath)
+  const contractPath = input.contractPath
+  const contractBody = contractPath
+    ? await readTextFile(contractPath)
+    : JSON.stringify(
+        {
+          id: "inline.generic-fallback",
+          note: "No merge contract path was provided; use a conservative generic skill layout.",
+          requiredFiles: ["INDEX.md", "CORE.md", "meta.json", "casebook/", "open_observations.md"],
+        },
+        null,
+        2,
+      )
   const lines = await buildInstanceIndex(contributingInstances)
   const manifestPath = path.join(mergerRoot, "input-manifest.json")
   const fullPrompt = [
     promptBody.trim(),
+    "",
+    "# Merge Contract",
+    "",
+    contractPath ? `Merge contract path: ${contractPath}` : "Merge contract path: (inline generic fallback)",
+    "",
+    "```json",
+    contractBody.trim(),
+    "```",
     "",
     "# Inputs",
     "",
@@ -120,7 +142,7 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
     "",
     "# Working instructions",
     "",
-    `Write the four output artifacts directly to: ${mergedSkillDir}`,
+    `Write the merged skill artifacts required by the merge contract directly to: ${mergedSkillDir}`,
     "Use file edits to create the files. Do not zip them or echo their content back to the user.",
   ].join("\n")
   await writeTextFile(path.join(mergerRoot, "prompt.txt"), fullPrompt)
@@ -132,6 +154,7 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
   const config = await loadConfig(input.cwd)
   const readPaths = [
     manifestPath,
+    ...(contractPath ? [contractPath] : []),
     ...contributingInstances.map((i) => i.harvestedSkillPath!).filter(Boolean),
   ]
   const editPaths = [mergedSkillDir]

@@ -1,0 +1,14 @@
+{
+  "id": "paper-review.train-v2",
+  "validators": [
+    {
+      "use": "paper-review/surface-generalization-v2"
+    },
+    {
+      "use": "paper-review/review-hard-v1"
+    },
+    {
+      "use": "paper-review/review-quality-soft-v1"
+    }
+  ]
+}

@@ -1,0 +1,375 @@
+{
+  "id": "paper-review.surface-generalization-v2",
+  "rootRoles": [
+    "experience-workspace"
+  ],
+  "rootLabels": [
+    "learned paper-review skill"
+  ],
+  "allowedExtensions": [
+    ".md",
+    ".txt",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml",
+    ".py",
+    ".ps1",
+    ".sh",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts"
+  ],
+  "ignorePathSubstrings": [
+    "node_modules",
+    ".git",
+    "__pycache__",
+    ".opencode",
+    "result.training.json",
+    "result.private.json",
+    "/workspace/",
+    "\\workspace\\"
+  ],
+  "maxDepth": 8,
+  "maxHitsPerFile": 8,
+  "maxTotalHits": 48,
+  "maxWarningsBeforeBlocking": 0,
+  "forbiddenLiterals": [
+    {
+      "value": "private answer",
+      "label": "oracle context leak"
+    },
+    {
+      "value": "gold review",
+      "label": "oracle context leak"
+    },
+    {
+      "value": "gold rating",
+      "label": "oracle context leak"
+    },
+    {
+      "value": "ground truth",
+      "label": "oracle context leak"
+    },
+    {
+      "value": "oracle answer",
+      "label": "oracle context leak"
+    },
+    {
+      "value": "hidden answer",
+      "label": "oracle context leak"
+    }
+  ],
+  "paperSpecificTermSeverity": "block",
+  "paperSpecificTerms": [
+    {
+      "value": "DMAIF",
+      "label": "paper-1333 method leak"
+    },
+    {
+      "value": "Dual-View Metaphor-Aware",
+      "label": "paper-1333 title leak"
+    },
+    {
+      "value": "Cross-modal Interaction Network",
+      "label": "paper-1333 module leak"
+    },
+    {
+      "value": "MAW",
+      "label": "paper-1333 module leak"
+    },
+    {
+      "value": "MultiMM",
+      "label": "paper-1333 dataset leak"
+    },
+    {
+      "value": "MET-Meme",
+      "label": "paper-1333 dataset leak"
+    },
+    {
+      "value": "single-seed reporting",
+      "label": "paper-1333 gold-review phrase leak"
+    },
+    {
+      "value": "LVLM-comparison framing",
+      "label": "paper-1333 gold-review phrase leak"
+    },
+    {
+      "value": "unswept tau_w",
+      "label": "paper-1333 gold-review phrase leak"
+    },
+    {
+      "value": "literal view",
+      "label": "paper-1333 risky viewpoint term",
+      "severity": "warn"
+    },
+    {
+      "value": "affective view",
+      "label": "paper-1333 risky viewpoint term",
+      "severity": "warn"
+    },
+    {
+      "value": "HOGD-IRSR",
+      "label": "paper-1334 method leak"
+    },
+    {
+      "value": "Higher-Order Gated Modeling",
+      "label": "paper-1334 title leak"
+    },
+    {
+      "value": "Degradation-Aware Infrared",
+      "label": "paper-1334 title leak"
+    },
+    {
+      "value": "InfraFFN",
+      "label": "paper-1334 module leak"
+    },
+    {
+      "value": "Infrared20",
+      "label": "paper-1334 dataset leak"
+    },
+    {
+      "value": "Anomalous comparator ordering",
+      "label": "paper-1334 gold-review phrase leak"
+    },
+    {
+      "value": "Ablation dataset inconsistency",
+      "label": "paper-1334 gold-review phrase leak"
+    },
+    {
+      "value": "IAF formula ambiguity",
+      "label": "paper-1334 gold-review phrase leak"
+    },
+    {
+      "value": "Real-ESRGAN",
+      "label": "paper-1334 risky baseline term",
+      "severity": "warn"
+    },
+    {
+      "value": "SFR-DETR",
+      "label": "paper-1335 method leak"
+    },
+    {
+      "value": "Structure-Fusion Robust Detection",
+      "label": "paper-1335 title leak"
+    },
+    {
+      "value": "Foggy Water-Surface",
+      "label": "paper-1335 title leak"
+    },
+    {
+      "value": "SeaDronesSee",
+      "label": "paper-1335 dataset leak"
+    },
+    {
+      "value": "SeaDronesSee-Fog",
+      "label": "paper-1335 dataset leak"
+    },
+    {
+      "value": "HRSB",
+      "label": "paper-1335 module leak"
+    },
+    {
+      "value": "SRGF",
+      "label": "paper-1335 module leak"
+    },
+    {
+      "value": "DPQI",
+      "label": "paper-1335 module leak"
+    },
+    {
+      "value": "DPQI contribution is marginal",
+      "label": "paper-1335 gold-review phrase leak"
+    },
+    {
+      "value": "Bound on SRGF gating",
+      "label": "paper-1335 gold-review phrase leak"
+    },
+    {
+      "value": "Foggy-specific comparator pool",
+      "label": "paper-1335 gold-review phrase leak"
+    },
+    {
+      "value": "RT-DETR",
+      "label": "paper-1335 risky baseline term",
+      "severity": "warn"
+    },
+    {
+      "value": "SDR-CLIP",
+      "label": "paper-1336 method leak"
+    },
+    {
+      "value": "Spatial-Semantic Distillation",
+      "label": "paper-1336 title leak"
+    },
+    {
+      "value": "Attention Reconstruction",
+      "label": "paper-1336 title leak"
+    },
+    {
+      "value": "GeoRSCLIP",
+      "label": "paper-1336 baseline leak"
+    },
+    {
+      "value": "RemoteCLIP",
+      "label": "paper-1336 risky baseline term",
+      "severity": "warn"
+    },
+    {
+      "value": "LoveDA",
+      "label": "paper-1336 risky dataset term",
+      "severity": "warn"
+    },
+    {
+      "value": "baseline naming",
+      "label": "paper-1336 risky gold-review phrase",
+      "severity": "warn"
+    },
+    {
+      "value": "efficiency advantage lacks direct quantitative evidence",
+      "label": "paper-1336 gold-review phrase leak"
+    },
+    {
+      "value": "MOPSO",
+      "label": "paper-1337 method leak"
+    },
+    {
+      "value": "ZDT1",
+      "label": "paper-1337 benchmark leak"
+    },
+    {
+      "value": "ZDT2",
+      "label": "paper-1337 benchmark leak"
+    },
+    {
+      "value": "Improved MOPSO",
+      "label": "paper-1337 title leak"
+    },
+    {
+      "value": "Multi-AUV Cooperative Task Allocation",
+      "label": "paper-1337 title leak"
+    },
+    {
+      "value": "weak fit with the computer vision",
+      "label": "paper-1337 gold-review phrase leak"
+    },
+    {
+      "value": "Random-key",
+      "label": "paper-1337 risky encoding term",
+      "severity": "warn"
+    },
+    {
+      "value": "Foot-End Adhesion",
+      "label": "paper-1338 title leak"
+    },
+    {
+      "value": "Underwater Foot-End Adhesion",
+      "label": "paper-1338 title leak"
+    },
+    {
+      "value": "bidirectional propeller",
+      "label": "paper-1338 mechanism leak"
+    },
+    {
+      "value": "flexible suction cup",
+      "label": "paper-1338 mechanism leak"
+    },
+    {
+      "value": "weak connection to computer vision",
+      "label": "paper-1338 gold-review phrase leak"
+    },
+    {
+      "value": "rigor of the model derivation",
+      "label": "paper-1338 gold-review phrase leak"
+    },
+    {
+      "value": "suction cup",
+      "label": "paper-1338 risky mechanism term",
+      "severity": "warn"
+    },
+    {
+      "value": "propeller",
+      "label": "paper-1338 risky mechanism term",
+      "severity": "warn"
+    }
+  ],
+  "forbiddenPatterns": [
+    {
+      "id": "paper-review-task-id",
+      "label": "paper-review task id",
+      "pattern": "\\bpaper[-_ ]?review[-_ ]?133[3-8]\\b|(?<!\\d)133[3-8](?!\\d)",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "severity": "block",
+      "message": "Formal skill must not contain a concrete paper-review task id."
+    },
+    {
+      "id": "answer-source-container",
+      "label": "gold/private answer source",
+      "pattern": "\\b(gold review|gold standard|gold rating|private answer|private oracle|ground[-_ ]?truth|official answer|hidden answer|reference answer|oracle answer)\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "severity": "block",
+      "message": "Formal skill must not mention private/gold answer containers."
+    },
+    {
+      "id": "private-answer-path",
+      "label": "private answer path",
+      "pattern": "\\bprivate-answers\\b|gold-review\\.(txt|md|docx)|rating\\.txt",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "severity": "block",
+      "message": "Formal skill must not point to private answer files."
+    },
+    {
+      "id": "direct-rating-assignment",
+      "label": "direct final rating assignment",
+      "pattern": "\\b(this paper|the paper|it|the submission|submission)\\s+(should be|must be|is|gets|receives)\\s+(rated|scored|evaluated as)?\\s*(Strong\\s+Accept|Accept|Weak\\s+Accept|Borderline|Marginally\\s+Accept|Weak\\s+Reject|Reject|Strong\\s+Reject)\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "severity": "block",
+      "message": "Formal skill may define the rating rubric, but must not assign a concrete rating to the current paper."
+    },
+    {
+      "id": "paper-rating-heading-with-label",
+      "label": "concrete Paper Rating heading",
+      "pattern": "\\bPaper\\s+Rating\\s*[:=]\\s*(Strong\\s+Accept|Accept|Weak\\s+Accept|Borderline|Marginally\\s+Accept|Weak\\s+Reject|Reject|Strong\\s+Reject)\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "severity": "block",
+      "message": "Formal skill may define the rating rubric, but must not include a concrete final Paper Rating value."
+    }
+  ],
+  "contextualForbidden": [
+    {
+      "id": "rating-forcing-via-context",
+      "label": "rating forcing via context",
+      "triggerPattern": "\\b(Strong\\s+Accept|Accept|Weak\\s+Accept|Borderline|Marginally\\s+Accept|Weak\\s+Reject|Reject|Strong\\s+Reject)\\b",
+      "contextPattern": "\\b(assign|give|predict|output|target\\s+rating|correct\\s+rating|expected\\s+rating|should\\s+be\\s+rated|must\\s+be\\s+rated)\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "windowWords": 10,
+      "severity": "block",
+      "message": "Concrete rating label appears in an answer-forcing context."
+    },
+    {
+      "id": "specific-table-figure-critique",
+      "label": "specific table/figure critique",
+      "triggerPattern": "\\b(Table|Figure|Fig\\.|Eq\\.|Equation)\\s*\\d+[A-Za-z]?\\b",
+      "contextPattern": "\\b(missing|outperforms|drops|anomalous|must\\s+cite|must\\s+mention|correct|gold|answer|rating|baseline)\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "windowWords": 10,
+      "severity": "warn",
+      "message": "Concrete table/figure references in reusable skill are risky; keep only generic table-checking procedures."
+    }
+  ]
+}

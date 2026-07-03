@@ -72,6 +72,7 @@ export interface Permit {
   id: string
   caller: string
   acquiredAt: Date
+  touch(): Promise<void>
   release(): Promise<void>
 }
 
@@ -85,6 +86,8 @@ interface ActiveSlot {
   ownerCreationTick?: string
   acquiredAt: string
   acquiredAtMs: number
+  heartbeatAt?: string
+  heartbeatAtMs?: number
 }
 
 interface QueueSlot {
@@ -122,7 +125,9 @@ const LOCK_POLL_MS = 50
 const LOCK_IO_RETRIES = 5
 const STATE_VERSION = 1
 const STATE_DIR = "opencode-gate"
+const EMPTY_GATE_HEAD_BYPASS_MS = 30 * 1000
 const HEAD_OF_LINE_BYPASS_MS = 15 * 60 * 1000
+const LEGACY_ACTIVE_SLOT_TIMEOUT_MS = 30 * 60 * 1000
 
 let _instance: OpenCodeGate | undefined
 
@@ -214,6 +219,7 @@ export class OpenCodeGate {
           return { granted: false as const }
         }
 
+        const now = Date.now()
         const next: GateState = {
           version: STATE_VERSION,
           updatedAt: new Date().toISOString(),
@@ -227,8 +233,10 @@ export class OpenCodeGate {
               ownerPid: request.ownerPid,
               ownerCommandHint: request.ownerCommandHint,
               ownerCreationTick: request.ownerCreationTick,
-              acquiredAt: new Date().toISOString(),
-              acquiredAtMs: Date.now(),
+              acquiredAt: new Date(now).toISOString(),
+              acquiredAtMs: now,
+              heartbeatAt: new Date(now).toISOString(),
+              heartbeatAtMs: now,
             },
           ],
           queue: queue.filter((item) => item.id !== request.id),
@@ -246,6 +254,7 @@ export class OpenCodeGate {
           id: result.id,
           caller: result.caller,
           acquiredAt: result.acquiredAt,
+          touch: () => this.touch(stateRoot, result.id),
           release: () => this.release(stateRoot, result.id),
         }
       }
@@ -302,6 +311,29 @@ export class OpenCodeGate {
       await writeState(stateRoot, next)
     })
   }
+
+  private async touch(stateRoot: string, id: string) {
+    await withGateLock(stateRoot, async () => {
+      const state = await readState(stateRoot)
+      const now = Date.now()
+      let changed = false
+      const active = state.active.map((item) => {
+        if (item.id !== id) return item
+        changed = true
+        return {
+          ...item,
+          heartbeatAt: new Date(now).toISOString(),
+          heartbeatAtMs: now,
+        }
+      })
+      if (!changed) return
+      await writeState(stateRoot, {
+        ...state,
+        updatedAt: new Date(now).toISOString(),
+        active,
+      })
+    })
+  }
 }
 
 function resolveStateRoot(root: string) {
@@ -347,10 +379,12 @@ function selectGrant(
   }
   const first = eligible[0]
   if (!first) return undefined
-  if (preferredID && activeTotal === 0 && first.id !== preferredID && Date.now() - first.enqueuedAtMs > HEAD_OF_LINE_BYPASS_MS) {
-    // If the head request has not acquired an entirely empty gate for a long time,
-    // its waiting coroutine is likely gone while the owner process is still alive.
-    // Let a later live waiter take the empty slot instead of deadlocking the queue.
+  const headWaitMs = Date.now() - first.enqueuedAtMs
+  const bypassMs = activeTotal === 0 ? EMPTY_GATE_HEAD_BYPASS_MS : HEAD_OF_LINE_BYPASS_MS
+  if (preferredID && first.id !== preferredID && headWaitMs > bypassMs) {
+    // If the head request has not acquired for a long time, its waiting coroutine
+    // is likely gone while the owner process is still alive. Let the currently
+    // polling live waiter take an eligible slot instead of deadlocking the queue.
     const preferred = eligible.find((item) => item.id === preferredID)
     if (preferred) return preferred
   }
@@ -434,7 +468,11 @@ async function cleanupState(state: GateState, acquireTimeoutMs: number) {
   const active: ActiveSlot[] = []
   const queue: QueueSlot[] = []
   for (const item of state.active) {
-    if (await shouldKeepGateOwner(item, acquireTimeoutMs * 2, item.acquiredAt, item.acquiredAtMs)) active.push(item)
+    const hasHeartbeat = typeof item.heartbeatAtMs === "number" && Number.isFinite(item.heartbeatAtMs)
+    const timeoutMs = hasHeartbeat ? acquireTimeoutMs * 2 : Math.min(acquireTimeoutMs * 2, LEGACY_ACTIVE_SLOT_TIMEOUT_MS)
+    const referenceAt = item.heartbeatAt ?? item.acquiredAt
+    const referenceAtMs = item.heartbeatAtMs ?? item.acquiredAtMs
+    if (await shouldKeepGateOwner(item, timeoutMs, referenceAt, referenceAtMs)) active.push(item)
   }
   for (const item of state.queue) {
     if (await shouldKeepGateOwner(item, acquireTimeoutMs, item.enqueuedAt, item.enqueuedAtMs)) queue.push(item)

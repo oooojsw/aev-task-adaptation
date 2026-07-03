@@ -31,6 +31,37 @@ function stamp(title: string) {
   return `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}${p(now.getMilliseconds(), 3)}-${randomUUID().slice(0, 8)}-${tag}`
 }
 
+const WINDOWS_BLANK_EVAL_PROJECTED_PATH_LIMIT = 220
+
+function compactStamp() {
+  const now = new Date()
+  const p = (value: number, width = 2) => String(value).padStart(width, "0")
+  return `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}-${randomUUID().slice(0, 8)}`
+}
+
+function blankEvalRunID(title: string) {
+  // Windows process launch can fail with ENAMETOOLONG when blank-eval runs are
+  // nested under campaign/round/final-acceptance/pass directories. Keep the
+  // physical sandbox path compact on Windows; the title is still recorded in
+  // surrounding acceptance artifacts.
+  if (process.platform === "win32") return `be-${compactStamp()}`
+  return `blank-eval-${stamp(title)}`
+}
+
+function resolveBlankEvalRoot(input: BlankEvalInput, runID: string) {
+  const requestedRoot = input.runRoot ?? autoEvolvePath(input.cwd, "runtime-state", "blank-eval-runs")
+  const projectedPath = path.join(requestedRoot, runID, "sandbox", "workspace", "answer.json")
+  if (process.platform === "win32" && projectedPath.length > WINDOWS_BLANK_EVAL_PROJECTED_PATH_LIMIT) {
+    return {
+      root: autoEvolvePath(input.cwd, "runtime-state", "blank-eval-runs-short"),
+      requestedRoot,
+      relocated: true,
+      reason: `projected sandbox path length ${projectedPath.length} exceeds ${WINDOWS_BLANK_EVAL_PROJECTED_PATH_LIMIT}`,
+    }
+  }
+  return { root: requestedRoot, requestedRoot, relocated: false, reason: undefined }
+}
+
 function short(text: string, limit = 260) {
   const norm = text.replace(/\s+/g, " ").trim()
   if (norm.length <= limit) return norm
@@ -510,8 +541,10 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
   const config = await loadConfig(input.cwd)
   const loaded = await loadLongTaskSpec(input.specPath, { allowMissingInitialExpertContextPaths: true })
   const title = input.title ?? loaded.spec.title
-  const runID = `blank-eval-${stamp(title)}`
-  const root = input.runRoot ?? autoEvolvePath(input.cwd, "runtime-state", "blank-eval-runs")
+  const runID = blankEvalRunID(title)
+  const rootSelection = resolveBlankEvalRoot(input, runID)
+  const root = rootSelection.root
+  const requestedRunDir = path.join(rootSelection.requestedRoot, runID)
   const runDir = path.join(root, runID)
   const sandboxRoot = path.join(runDir, "sandbox")
   const sandboxMaterialsRoot = path.join(sandboxRoot, "materials")
@@ -532,6 +565,17 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
 
   try {
     await ensureDirectory(runDir)
+    if (rootSelection.relocated) {
+      await ensureDirectory(requestedRunDir)
+      await writeJsonFile(path.join(requestedRunDir, "run-location.json"), {
+        schema: "blank-eval-run-location/v1",
+        runID,
+        requestedRunDir,
+        actualRunDir: runDir,
+        reason: rootSelection.reason,
+        createdAt: nowISO(),
+      })
+    }
     await ensureDirectory(sandboxRoot)
     await ensureDirectory(sandboxMaterialsRoot)
     await ensureDirectory(sandboxGuidanceRoot)
@@ -731,10 +775,13 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       (item) => !item.passed && item.failureKind === "validator_infrastructure",
     )
     const validatorDatasetFailure = required.some((item) => !item.passed && item.failureKind === "dataset_failure")
+    const validatorProductFailure = required.some((item) => !item.passed && item.failureKind === "product_failure")
     const failureKind = passed
       ? undefined
       : validatorDatasetFailure
         ? ("dataset_failure" as const)
+      : validatorProductFailure
+        ? ("product_failure" as const)
       : sessionInfrastructureFailure || validatorInfrastructureFailure
         ? ("validator_infrastructure" as const)
         : ("product_failure" as const)

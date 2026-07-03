@@ -1,0 +1,30 @@
+{
+  "id": "paper-review.review-hard-v1",
+  "validators": [
+    {
+      "id": "paper-review-hard-check",
+      "type": "script",
+      "title": "Paper review structure and rating hard check",
+      "path": "../../../scripts/validate-paper-review-output.py",
+      "runner": "python",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "timeoutMs": 60000,
+      "validation": {
+        "target": "product",
+        "stage": "post_blank",
+        "answerAccess": "private_oracle",
+        "allowedAudiences": [
+          "executor",
+          "worker",
+          "lead",
+          "reviewer",
+          "dashboard",
+          "memory",
+          "audit"
+        ]
+      }
+    }
+  ]
+}

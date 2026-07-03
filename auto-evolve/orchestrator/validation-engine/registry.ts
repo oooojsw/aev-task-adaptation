@@ -12,7 +12,11 @@ function inferredTarget(validator: LongTaskValidatorContract): ValidationTargetK
   const descriptor = [
     validator.id,
     validator.title,
-    validator.type === "script" ? validator.path : validator.prompt,
+    validator.type === "script"
+      ? validator.path
+      : validator.type === "prompt_json"
+        ? validator.prompt
+        : `${validator.planPath} ${validator.skillRootPath}`,
   ]
     .join(" ")
     .toLowerCase()

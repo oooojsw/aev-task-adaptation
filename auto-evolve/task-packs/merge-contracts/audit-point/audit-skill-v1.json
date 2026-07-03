@@ -1,0 +1,48 @@
+{
+  "id": "audit-point.audit-skill-v1",
+  "description": "Audit-point merged skill contract.",
+  "skillPurpose": "Teach a blank agent to locate an audit issue and write exactly one actionable audit opinion from the allowed materials.",
+  "requiredFiles": [
+    "INDEX.md",
+    "CORE.md",
+    "surface_contract.json",
+    "meta.json",
+    "casebook/",
+    "patches/training-backtest-patches.md",
+    "patches/patch-log.jsonl",
+    "open_observations.md"
+  ],
+  "fileResponsibilities": {
+    "INDEX.md": "Entry point. Tell the blank agent to read CORE first, use casebook only when scene features match, and write the final opinion to workspace/audit-point-output.md.",
+    "CORE.md": "Reusable audit material navigation, anomaly patterns, evidence localization workflow, opinion writing template, and failure lessons.",
+    "casebook/": "Scenario-specific audit issue patterns named by issue features rather than raw task ids.",
+    "surface_contract.json": "Strict JSON describing the entry files, casebook directory, patch files, and final output path.",
+    "meta.json": "Contributing instance ids, promoted rules with provenance, casebook map, and merge timestamp.",
+    "open_observations.md": "Short uncertain audit observations not stable enough for CORE."
+  },
+  "requiredCoreHeadings": [
+    "## Material Navigation Rules",
+    "## High-Value Anomaly Patterns",
+    "## Evidence Localization Workflow",
+    "## Audit Opinion Writing Template",
+    "## Failure Lessons And Anti-Patterns",
+    "## Optional Observations"
+  ],
+  "finalProduct": {
+    "path": "workspace/audit-point-output.md",
+    "cardinality": "exactly_one",
+    "description": "One actionable audit opinion containing object, location, abnormal fact, risk, and correction suggestion."
+  },
+  "casebookNamingPolicy": "Use issue/scenario names, not raw task ids, unless a replay repair needs a temporary case-specific note.",
+  "repairPolicy": {
+    "mode": "append_only",
+    "coreMayOnlyAppend": true,
+    "casebookMayRewrite": true,
+    "requiredPatchLog": true
+  },
+  "forbiddenCrossDatasetTerms": [
+    "workspace/review.md",
+    "OfficeQA",
+    "SpreadsheetBench"
+  ]
+}

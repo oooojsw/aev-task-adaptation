@@ -1,0 +1,11 @@
+{
+  "id": "paper-review.train-v1",
+  "validators": [
+    {
+      "use": "paper-review/review-hard-v1"
+    },
+    {
+      "use": "paper-review/review-quality-soft-v1"
+    }
+  ]
+}

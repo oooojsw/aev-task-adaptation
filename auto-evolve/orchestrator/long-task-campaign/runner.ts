@@ -2555,7 +2555,11 @@ function isSurfaceValidatorContract(validator: LongTaskValidatorContract) {
   const descriptor = [
     validator.id,
     validator.title,
-    validator.type === "script" ? validator.path : validator.prompt,
+    validator.type === "script"
+      ? validator.path
+      : validator.type === "prompt_json"
+        ? validator.prompt
+        : `${validator.planPath} ${validator.skillRootPath}`,
   ]
     .join(" ")
     .toLowerCase()
@@ -3764,6 +3768,20 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
   const role: LongTaskCampaignWorkerRole = "blank_acceptance_diagnostician"
   const stageDir = path.join(input.roundPaths.workersRoot, role, input.passID)
   const suggestionPath = path.join(stageDir, "suggestion.json")
+  const config = await loadConfig(input.cwd)
+  const blankAcceptanceConfig = config.blankAcceptanceConfig
+  if (!blankAcceptanceConfig.enabled) {
+    return undefined
+  }
+  const taskPackName = path.basename(path.dirname(input.campaignSpec.baseSpecPath))
+  const profileID =
+    blankAcceptanceConfig.taskPackDiagnosisProfiles[taskPackName] ??
+    blankAcceptanceConfig.taskPackDiagnosisProfiles[input.baseSpec.taskFamily ?? ""] ??
+    blankAcceptanceConfig.defaultDiagnosisProfile
+  const blankAcceptanceDiagnosisProfile =
+    blankAcceptanceConfig.diagnosisProfiles[profileID] ??
+    blankAcceptanceConfig.diagnosisProfiles[blankAcceptanceConfig.defaultDiagnosisProfile] ??
+    blankAcceptanceConfig.diagnosisProfiles.auto
   const prompt = buildCampaignWorkerPrompt({
     title: input.campaignSpec.title,
     roundNumber: input.roundNumber,
@@ -3780,6 +3798,8 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     finalAcceptanceFeedbackPath: input.finalAcceptanceFeedbackPath,
     reviewerSuggestionPath: input.reviewerSuggestionPath,
     blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
+    blankAgentEvidenceReadPaths: input.blankAgentEvidenceReadPaths,
+    blankAcceptanceDiagnosisProfile,
     expertOracleReadPaths: input.expertOracleReadPaths,
   })
   // Evidence paths are exact files only (no directories). Assert before granting read access.
@@ -4424,13 +4444,18 @@ async function runCampaignFinalAcceptance(input: {
   }
 
   const passed = validatorResults.every((result) => result.passed)
+  const hasDatasetFailure = validatorResults.some((result) => !result.passed && result.failureKind === "dataset_failure")
+  const hasProductFailure = validatorResults.some((result) => !result.passed && result.failureKind === "product_failure")
+  const hasInfrastructureFailure = validatorResults.some(
+    (result) => !result.passed && result.failureKind === "validator_infrastructure",
+  )
   const failureKind = passed
     ? undefined
-    : validatorResults.some((result) => !result.passed && result.failureKind === "dataset_failure")
+    : hasDatasetFailure
       ? ("dataset_failure" as const)
-    : validatorResults.some(
-          (result) => !result.passed && result.failureKind === "validator_infrastructure",
-        )
+    : hasProductFailure
+      ? ("product_failure" as const)
+    : hasInfrastructureFailure
       ? ("infrastructure_failure" as const)
       : ("product_failure" as const)
   const summary = passed

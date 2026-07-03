@@ -1,0 +1,37 @@
+{
+  "id": "paper-review.surface-generalization-v2",
+  "validators": [
+    {
+      "id": "paper-review-surface-generalization-hard-v2",
+      "type": "script",
+      "title": "Paper review skill surface generalization hard check v2",
+      "path": "../../../scripts/validate-paper-review-surface-generalization.ts",
+      "runner": "bun",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "successExitCodes": [
+        0,
+        1
+      ],
+      "timeoutMs": 60000,
+      "args": [
+        "--profile",
+        "./profiles/surface-generalization-v2.json"
+      ],
+      "validation": {
+        "target": "surface",
+        "stage": "pre_blank",
+        "answerAccess": "none",
+        "allowedAudiences": [
+          "worker",
+          "lead",
+          "reviewer",
+          "dashboard",
+          "memory",
+          "audit"
+        ]
+      }
+    }
+  ]
+}

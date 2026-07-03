@@ -1,0 +1,84 @@
+{
+  "id": "paper-review.review-skill-v1",
+  "description": "Paper-review merged skill contract.",
+  "skillPurpose": "Teach a blank agent to write a rigorous peer-review conclusion/report from paper materials, task guidance, and the learned expert skill.",
+  "requiredFiles": [
+    "INDEX.md",
+    "CORE.md",
+    "meta.json",
+    "surface_contract.json",
+    "casebook/",
+    "open_observations.md"
+  ],
+  "fileResponsibilities": {
+    "INDEX.md": "Entry point. Explain read order and tell the blank agent to write the final review to workspace/review.md.",
+    "CORE.md": "Stable cross-paper reviewing workflow, evidence discipline, critique structure, rating/risk reasoning, and failure lessons.",
+    "casebook/": "Scenario-specific paper review patterns named by paper/review feature, not by raw task id.",
+    "meta.json": "Provenance, contributing instance ids, confidence, and merge timestamp.",
+    "surface_contract.json": "Machine-readable summary of skill layout and final review output contract.",
+    "open_observations.md": "Uncertain observations that should not be promoted to CORE."
+  },
+  "requiredCoreHeadings": [
+    "## Material Navigation Rules",
+    "## Review Reasoning Workflow",
+    "## Rating Boundary Rules",
+    "## Evidence And Citation Discipline",
+    "## Output Discipline",
+    "## Failure Lessons"
+  ],
+  "finalProduct": {
+    "path": "workspace/review.md",
+    "cardinality": "one_report",
+    "description": "A complete peer-review conclusion/report matching the task guidance."
+  },
+  "casebookNamingPolicy": "Use simplified semantic names based on review scenario features. Do not use raw task ids as the primary naming scheme.",
+  "ratingBoundaryPolicy": {
+    "description": "The merged skill must teach reusable decision boundaries between adjacent ratings without exposing private answers or task IDs.",
+    "requiredBoundaries": [
+      "Accept vs Weak Accept: distinguish strong, well-supported novelty and complete evaluation from merely solid papers with remaining methodological or comparison gaps.",
+      "Weak Accept vs Borderline: distinguish papers that are still likely acceptable after manageable fixes from papers whose evidence, scope, or validation gaps make acceptance uncertain.",
+      "Borderline vs Weak Reject/Reject: distinguish fixable uncertainty from fundamental venue-scope mismatch, missing central evidence, invalid comparison, or unsupported deployment claims.",
+      "Reject vs Strong Reject: distinguish ordinary non-acceptance from severe factual inconsistency, missing evaluation, non-reproducibility, or off-scope work."
+    ],
+    "mandatoryDowngradeSignals": [
+      "Poor venue or track scope fit must dominate local technical positives.",
+      "A claimed full-system contribution supported only by component-level or toy validation must be downgraded.",
+      "Major internal numerical inconsistency, missing strongest baselines, or unsupported headline claims must cap the rating.",
+      "Strong experimental numbers do not justify Accept if the central claim is outside venue scope or lacks the right validation setting."
+    ],
+    "repairRule": "When train replay fails because the blank agent rating is too high or too low, add a semantic boundary rule explaining the evidence pattern that should change the rating. Do not write the failed case id, gold rating, hidden answer, or a lookup table."
+  },
+  "repairPolicy": {
+    "mode": "append_only",
+    "coreMayOnlyAppend": true,
+    "casebookMayRewrite": true,
+    "requiredPatchLog": true,
+    "patchLogPath": "patches/patch-log.jsonl",
+    "allowedAppendOnlyFiles": [
+      "CORE.md",
+      "INDEX.md",
+      "open_observations.md",
+      "patches/patch-log.jsonl",
+      "patches/training-backtest-patches.md"
+    ],
+    "allowedRewriteGlobs": [
+      "casebook/*.md",
+      "meta.json",
+      "surface_contract.json"
+    ],
+    "forbiddenRepairFiles": [
+      "patch-log.md",
+      "patches.md",
+      "repair.md"
+    ],
+    "appendOnlyInstructions": "In repair mode, preserve all existing shared files. Append to CORE.md only at the end, rewrite casebook files only when needed, and append exactly one JSON object line to patches/patch-log.jsonl for each repair attempt. Do not create root-level patch-log.md or other ad hoc repair logs."
+  },
+  "forbiddenCrossDatasetTerms": [
+    "audit-point-output.md",
+    "audit opinion",
+    "OfficeQA",
+    "SpreadsheetBench",
+    "workspace/answer.txt",
+    "workspace/answer.json"
+  ]
+}

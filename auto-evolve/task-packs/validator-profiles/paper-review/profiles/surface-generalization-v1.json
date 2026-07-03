@@ -1,0 +1,143 @@
+{
+  "id": "paper-review.surface-generalization-v1",
+  "rootRoles": [
+    "experience-workspace"
+  ],
+  "rootLabels": [
+    "learned paper-review skill"
+  ],
+  "allowedExtensions": [
+    ".md",
+    ".txt",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml",
+    ".py",
+    ".ps1",
+    ".sh",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts"
+  ],
+  "ignorePathSubstrings": [
+    "node_modules",
+    ".git",
+    "__pycache__",
+    "/workspace/",
+    "\\workspace\\"
+  ],
+  "maxDepth": 8,
+  "maxHitsPerFile": 8,
+  "maxTotalHits": 40,
+  "paperSpecificTermSeverity": "block",
+  "paperSpecificTerms": [
+    "DMAIF",
+    "Dual-View Metaphor-Aware Adaptive Interaction",
+    "MultiMM",
+    "MET-Meme",
+    "SEMD",
+    "CDGLT",
+    "Degradation-Aware Infrared Image Super-Resolution",
+    "Higher-Order Gated Modeling",
+    "HOGD",
+    "SFR-DETR",
+    "SeaDronesSee-Fog",
+    "HRSB",
+    "SRGF",
+    "DPQI",
+    "SDR-CLIP",
+    "Spatial-Semantic Distillation",
+    "Remote Sensing Open-Vocabulary Semantic Segmentation",
+    "RemoteCLIP",
+    "GeoRSCLIP",
+    "OEM",
+    "LoveDA",
+    "Zurich",
+    "WHDLD",
+    "MOPSO",
+    "Multi-AUV Cooperative Task Allocation",
+    "Underwater Foot-End Adhesion Structure",
+    "bidirectional propeller",
+    "flexible suction cup"
+  ],
+  "forbiddenPatterns": [
+    {
+      "id": "paper-review-task-id",
+      "label": "paper-review task id",
+      "pattern": "\\bpaper[-_ ]?review[-_ ]?13\\d{2}\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "severity": "block",
+      "message": "Formal skill must not contain a concrete paper-review task id."
+    },
+    {
+      "id": "paper-id-literal",
+      "label": "paper id literal",
+      "pattern": "\\bpaper\\s*(?:id\\s*)?[:#-]?\\s*13\\d{2}\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "severity": "block",
+      "message": "Formal skill must not contain a concrete paper id."
+    },
+    {
+      "id": "answer-source-container",
+      "label": "gold/private answer source",
+      "pattern": "\\b(gold review|gold standard|gold rating|private answer|private oracle|ground[-_ ]?truth|official answer|hidden answer|reference answer|oracle answer)\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "severity": "block",
+      "message": "Formal skill must not mention private/gold answer containers."
+    },
+    {
+      "id": "private-answer-path",
+      "label": "private answer path",
+      "pattern": "\\bprivate-answers\\b|gold-review\\.(txt|md|docx)|rating\\.txt",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "severity": "block",
+      "message": "Formal skill must not point to private answer files."
+    },
+    {
+      "id": "paper-rating-heading-with-label",
+      "label": "concrete Paper Rating heading",
+      "pattern": "\\bPaper\\s+Rating\\s*[:=]\\s*(Strong\\s+Accept|Accept|Weak\\s+Accept|Borderline|Marginally\\s+Accept|Weak\\s+Reject|Reject|Strong\\s+Reject)\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "severity": "block",
+      "message": "Formal skill may define the rating rubric, but must not include a concrete final Paper Rating value."
+    }
+  ],
+  "contextualForbidden": [
+    {
+      "id": "final-rating-leak",
+      "label": "final rating leak",
+      "triggerPattern": "\\b(Strong\\s+Accept|Accept|Weak\\s+Accept|Borderline|Marginally\\s+Accept|Weak\\s+Reject|Reject|Strong\\s+Reject)\\b",
+      "contextPattern": "\\b(this paper|current paper|gold|correct|expected|should be rated|must be rated|gold rating|assigned rating|target rating|rating is)\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "window": 140,
+      "severity": "block",
+      "message": "Concrete rating label appears in an answer-like context."
+    },
+    {
+      "id": "table-reference-with-specific-answer-context",
+      "label": "specific table reference",
+      "triggerPattern": "\\b(Table|Figure|Fig\\.)\\s*\\d+[A-Za-z]?\\b",
+      "contextPattern": "\\b(this paper|current paper|gold|answer|round-|paper\\s*13\\d{2}|rating|must cite|must mention)\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "window": 120,
+      "severity": "warn",
+      "message": "Concrete table/figure references in reusable skill are risky; keep only generic table-checking procedures."
+    }
+  ]
+}

@@ -96,6 +96,7 @@ function resolveRuntimeBudget(input?: OpencodeRuntimeBudget): Required<OpencodeR
 }
 const OPENCODE_PROMPT_INLINE_TEXT_FILE_MAX_BYTES = 256 * 1024
 const OPENCODE_PROMPT_INLINE_TEXT_EXTENSIONS = new Set([".md", ".txt", ".json", ".jsonl", ".yaml", ".yml"])
+const OPENCODE_PROMPT_STDIN_THRESHOLD_CHARS = 500
 
 export interface OpencodeEvent {
   type: string
@@ -171,6 +172,7 @@ export interface OpencodeTaskInput {
   recordAdaptiveConcurrency?: boolean
   onSpawn?: () => Promise<void> | void
   onPulse?: () => Promise<void> | void
+  onRuntimeProcessExit?: () => Promise<void> | void
   live?: TaskArtifactInput & {
     stageDir: string
   }
@@ -1108,7 +1110,9 @@ async function runOpencodeTaskOnce(
   const runtimeBudget = resolveRuntimeBudget(input.runtimeBudget)
   const startedAt = runStart.toISOString()
   const runtimePrompt = withRuntimeBudgetPrompt({ prompt: input.prompt, runStart, budget: runtimeBudget })
-  args.push("--", runtimePrompt)
+  const promptStdinText =
+    process.platform === "win32" && runtimePrompt.length > OPENCODE_PROMPT_STDIN_THRESHOLD_CHARS ? runtimePrompt : undefined
+  if (promptStdinText === undefined) args.push("--", runtimePrompt)
   let started = false
   let lastOutputAt: string | undefined
   let stdoutData = ""
@@ -1202,7 +1206,7 @@ async function runOpencodeTaskOnce(
             }
           : {}),
       },
-      stdinText: undefined,
+      stdinText: promptStdinText,
       runtimeScope: input.runtimeScope,
       timeoutMs: runtimeBudget.hardTimeoutMs,
       silentTimeoutMs: runtimeBudget.silentTimeoutMs,
@@ -1224,6 +1228,7 @@ async function runOpencodeTaskOnce(
         scheduleFlush()
       },
     })
+    await input.onRuntimeProcessExit?.()
   } finally {
     if (flushHandle) {
       clearTimeout(flushHandle)
@@ -1332,13 +1337,24 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
     root: input.cwd,
     model: selectedModel,
   })
+  const gatedInput: OpencodeTaskInput = {
+    ...effectiveInput,
+    onPulse: async () => {
+      await effectiveInput.onPulse?.()
+      await permit.touch()
+    },
+    onRuntimeProcessExit: async () => {
+      await effectiveInput.onRuntimeProcessExit?.()
+      await permit.release()
+    },
+  }
 
   try {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let current: OpencodeRunResult
       try {
         current = await runOpencodeTaskOnce(
-          effectiveInput,
+          gatedInput,
           selectedModel,
           selectedAgent,
           referencedPaths,

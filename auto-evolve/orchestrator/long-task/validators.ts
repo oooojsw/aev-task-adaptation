@@ -393,6 +393,11 @@ async function runScriptValidator(input: {
   const reportedPassed = readBooleanField(parsed, "passed", "ok", "success")
   const passed = infraOK && (reportedPassed ?? true)
   const reportedFailureKind = readStringField(parsed, "failureKind", "failure_kind")
+  const explicitProductFailure =
+    reportedPassed === false &&
+    (reportedFailureKind === "product_failure" ||
+      reportedFailureKind === "answer_mismatch" ||
+      reportedFailureKind === "quality_mismatch")
   const parsedSummary = readStringField(parsed, "summary", "message", "result_summary")
   const summary = parsedSummary
     ? parsedSummary
@@ -408,6 +413,8 @@ async function runScriptValidator(input: {
     ? undefined
     : reportedFailureKind === "dataset_failure"
       ? ("dataset_failure" as const)
+      : explicitProductFailure
+        ? ("product_failure" as const)
       : !infraOK ||
         timedOut ||
         failureText.includes("validator crashed") ||

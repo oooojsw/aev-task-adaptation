@@ -16,7 +16,7 @@ export type LongTaskWorkUnitStatus = "planned" | "active" | "verified" | "failed
 
 export type LongTaskRetryLevel = "tool_retry" | "work_unit_retry" | "subgraph_retry" | "run_retry"
 
-export type LongTaskValidatorType = "script" | "prompt_json"
+export type LongTaskValidatorType = "script" | "prompt_json" | "blank_eval_plan"
 
 export type LongTaskCapabilityKind = "inspect" | "transform" | "validate" | "compare" | "synthesize"
 
@@ -137,7 +137,27 @@ export interface LongTaskPromptValidatorContract {
   validation?: LongTaskValidatorEngineHints
 }
 
-export type LongTaskValidatorContract = LongTaskScriptValidatorContract | LongTaskPromptValidatorContract
+export interface LongTaskBlankEvalPlanValidatorContract {
+  id: string
+  type: "blank_eval_plan"
+  title: string
+  placement?: "unit" | "completion_only"
+  planPath: string
+  skillRootPath: string
+  mode?: "single" | "sequence" | "parallel"
+  concurrency?: number
+  stopOnFirstFailure?: boolean
+  successCriterion?: "all_pass" | "allow_partial" | "min_pass_rate"
+  minPassRate?: number
+  required?: boolean
+  blocking?: boolean
+  validation?: LongTaskValidatorEngineHints
+}
+
+export type LongTaskValidatorContract =
+  | LongTaskScriptValidatorContract
+  | LongTaskPromptValidatorContract
+  | LongTaskBlankEvalPlanValidatorContract
 
 export interface LongTaskValidatorEngineHints {
   target?: "surface" | "product" | "behavior" | "regression" | "transaction" | "layout"

@@ -5,6 +5,14 @@ import { experienceWorkspacePaths, resolveExperienceWorkspaceLayout, validateExp
 import { OpenCodeGate } from "./opencode-gate"
 import type { DirectChatModelsConfig } from "./direct-chat/contract"
 import type { LongTaskCampaignHistoryPolicy } from "./long-task-campaign/contract"
+import {
+  normalizeMergeAcceptancePreset,
+  normalizeMergeAcceptanceProfiles,
+  normalizeMergeAcceptanceSuccessCriterion,
+  type MergeAcceptanceProfile,
+  type MergeAcceptancePreset,
+  type MergeAcceptanceSuccessCriterion,
+} from "./multi-instance/merge-acceptance-policy"
 
 export type CompareMode = "text_exact" | "text_contains" | "json_exact"
 export type ModelPhase = "bootstrap" | "solve" | "refine" | "verify" | "regression"
@@ -109,6 +117,55 @@ export interface LoadedValidationConfig {
   profileSets: Record<string, LoadedValidationProfileSet>
 }
 
+export interface LoadedMergeConfig {
+  /** Master switch for config-level merge contract injection. */
+  enabled: boolean
+  /** Prompt used by the generic flat merger. */
+  defaultPrompt: string
+  /** Prompt used by append-only replay repair. */
+  defaultRepairPrompt: string
+  /** Prompt used by the hierarchical group merger. */
+  defaultHierarchicalPrompt: string
+  /** Prompt used by hierarchical local replay repair. */
+  defaultHierarchicalRepairPrompt: string
+  /** Shared folder for merge contract JSON modules. */
+  contractsRoot: string
+  /** Contract used when no task-pack-specific mapping exists. */
+  defaultContract: string
+  /** Map task-pack directory name to merge contract ref. */
+  taskPackContracts: Record<string, string>
+  /** Default named profile for post-merge replay/repair/final-gate behavior. */
+  defaultAcceptanceProfile: string
+  /** Reusable named merge acceptance profiles. */
+  acceptanceProfiles: Record<string, MergeAcceptanceProfile>
+  /** Default post-merge replay/repair/final-gate preset used by benchmark orchestrator. */
+  acceptancePreset: MergeAcceptancePreset
+  /** Default success criterion for strict merge acceptance gate. */
+  acceptanceSuccessCriterion: MergeAcceptanceSuccessCriterion
+}
+
+export type BlankAcceptanceDiagnosisMode = "auto" | "single_case" | "plan_replay" | "infra_only"
+
+export interface BlankAcceptanceDiagnosisProfile {
+  /** Human-readable note for dashboards and config readers. */
+  description?: string
+  /** Which diagnostic rule family is injected into blank_acceptance_diagnostician. */
+  mode: BlankAcceptanceDiagnosisMode
+  /** Fine-grained modules used by the prompt rules. */
+  enabledModules: string[]
+}
+
+export interface LoadedBlankAcceptanceConfig {
+  /** Master switch for blank acceptance diagnosis after a failed final acceptance gate. */
+  enabled: boolean
+  /** Default profile when no task-pack-specific mapping exists. */
+  defaultDiagnosisProfile: string
+  /** Map task-pack directory name or taskFamily to a diagnosis profile. */
+  taskPackDiagnosisProfiles: Record<string, string>
+  /** Reusable diagnosis profiles. */
+  diagnosisProfiles: Record<string, BlankAcceptanceDiagnosisProfile>
+}
+
 export type BenchmarkResumeMode = "fresh-non-verified" | "safe-non-terminal" | "manual-explicit-only"
 
 export interface LoadedHistoryConfig {
@@ -196,6 +253,8 @@ export interface AutoEvolveConfig {
   concurrencyConfig: LoadedConcurrencyConfig
   stageConcurrency: LoadedStageConcurrencyConfig
   validationConfig: LoadedValidationConfig
+  mergeConfig: LoadedMergeConfig
+  blankAcceptanceConfig: LoadedBlankAcceptanceConfig
   historyConfig: LoadedHistoryConfig
   directChatConfigFile: string
   directChatConfigPath: string
@@ -344,6 +403,72 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
         description: "Pre-blank hard gate for the standard generated skill file layout.",
         validatorProfiles: ["skill-surface/standard-hard-v1"],
         blankEvalValidatorProfiles: [],
+      },
+    },
+  },
+  mergeConfig: {
+    enabled: true,
+    defaultPrompt: "methods/recipes/multi-instance/prompts/merge.md",
+    defaultRepairPrompt: "methods/recipes/multi-instance/prompts/merge-repair.md",
+    defaultHierarchicalPrompt: "methods/recipes/multi-instance/prompts/hierarchical-merge-generic.md",
+    defaultHierarchicalRepairPrompt: "methods/recipes/multi-instance/prompts/hierarchical-merge-repair.md",
+    contractsRoot: "task-packs/merge-contracts",
+    defaultContract: "generic/standard-skill-v1",
+    taskPackContracts: {
+      "audit-point-learnbench": "audit-point/audit-skill-v1",
+      "paper-review-learnbench": "paper-review/review-skill-v1",
+      "spreadsheetbench-learnbench": "spreadsheet/spreadsheet-skill-v1",
+    },
+    defaultAcceptanceProfile: "repair_promote",
+    acceptanceProfiles: {
+      merge_only: {
+        description: "Only generate the merged skill; do not run train replay.",
+        preset: "merge_only",
+        successCriterion: "report_only",
+      },
+      replay_report: {
+        description: "Run initial train replay and report failures without repair.",
+        preset: "replay_report",
+        successCriterion: "report_only",
+      },
+      repair_promote: {
+        description: "Run initial train replay, repair failed successful train cases once, then promote fixed skill.",
+        preset: "repair_promote",
+        successCriterion: "all_pass",
+      },
+      final_replay: {
+        description: "Repair/promote, then run a final full train replay.",
+        preset: "final_replay",
+        successCriterion: "all_pass",
+      },
+      strict_all_pass: {
+        description: "Repair/promote, run final replay, and require every replay case to pass.",
+        preset: "strict_all_pass",
+        successCriterion: "all_pass",
+      },
+    },
+    acceptancePreset: "repair_promote",
+    acceptanceSuccessCriterion: "all_pass",
+  },
+  blankAcceptanceConfig: {
+    enabled: true,
+    defaultDiagnosisProfile: "auto",
+    taskPackDiagnosisProfiles: {},
+    diagnosisProfiles: {
+      auto: {
+        description: "Automatically choose single-case, plan-replay, and infrastructure triage guidance from evidence.",
+        mode: "auto",
+        enabledModules: ["single-case", "plan-replay", "infra-triage"],
+      },
+      "single-case": {
+        description: "Diagnose one blank agent acceptance run using execution and validator evidence.",
+        mode: "single_case",
+        enabledModules: ["single-case"],
+      },
+      "plan-replay": {
+        description: "Diagnose multi-case blank_eval_plan replay failures and cluster regressions.",
+        mode: "plan_replay",
+        enabledModules: ["plan-replay", "infra-triage"],
       },
     },
   },
@@ -683,6 +808,108 @@ function normalizeValidationConfig(
   }
 }
 
+function normalizeStringMap(input: unknown, fallback: Record<string, string> = {}) {
+  const out: Record<string, string> = { ...fallback }
+  if (!isObject(input)) return out
+  for (const [key, value] of Object.entries(input)) {
+    if (!key.trim() || typeof value !== "string" || !value.trim()) continue
+    out[key.trim()] = value.trim()
+  }
+  return out
+}
+
+function normalizeMergeConfig(
+  raw: unknown,
+  fallback: LoadedMergeConfig = DEFAULT_CONFIG.mergeConfig,
+): LoadedMergeConfig {
+  if (!isObject(raw)) {
+    return {
+      ...fallback,
+      taskPackContracts: { ...fallback.taskPackContracts },
+      acceptanceProfiles: normalizeMergeAcceptanceProfiles(undefined, fallback.acceptanceProfiles),
+    }
+  }
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    defaultPrompt: normalizeOptionalString(raw.defaultPrompt) ?? fallback.defaultPrompt,
+    defaultRepairPrompt: normalizeOptionalString(raw.defaultRepairPrompt) ?? fallback.defaultRepairPrompt,
+    defaultHierarchicalPrompt:
+      normalizeOptionalString(raw.defaultHierarchicalPrompt) ?? fallback.defaultHierarchicalPrompt,
+    defaultHierarchicalRepairPrompt:
+      normalizeOptionalString(raw.defaultHierarchicalRepairPrompt) ?? fallback.defaultHierarchicalRepairPrompt,
+    contractsRoot: normalizeOptionalString(raw.contractsRoot) ?? fallback.contractsRoot,
+    defaultContract: normalizeOptionalString(raw.defaultContract) ?? fallback.defaultContract,
+    taskPackContracts: normalizeStringMap(raw.taskPackContracts, fallback.taskPackContracts),
+    defaultAcceptanceProfile:
+      normalizeOptionalString(raw.defaultAcceptanceProfile) ?? fallback.defaultAcceptanceProfile,
+    acceptanceProfiles: normalizeMergeAcceptanceProfiles(raw.acceptanceProfiles, fallback.acceptanceProfiles),
+    acceptancePreset: normalizeMergeAcceptancePreset(raw.acceptancePreset, fallback.acceptancePreset),
+    acceptanceSuccessCriterion: normalizeMergeAcceptanceSuccessCriterion(
+      raw.acceptanceSuccessCriterion,
+      fallback.acceptanceSuccessCriterion,
+    ),
+  }
+}
+
+function normalizeBlankAcceptanceDiagnosisMode(input: unknown, fallback: BlankAcceptanceDiagnosisMode): BlankAcceptanceDiagnosisMode {
+  if (input === "auto" || input === "single_case" || input === "plan_replay" || input === "infra_only") return input
+  return fallback
+}
+
+function normalizeBlankAcceptanceDiagnosisProfile(
+  raw: unknown,
+  fallback: BlankAcceptanceDiagnosisProfile,
+): BlankAcceptanceDiagnosisProfile {
+  if (!isObject(raw)) {
+    return {
+      description: fallback.description,
+      mode: fallback.mode,
+      enabledModules: [...fallback.enabledModules],
+    }
+  }
+  return {
+    description: normalizeOptionalString(raw.description) ?? fallback.description,
+    mode: normalizeBlankAcceptanceDiagnosisMode(raw.mode, fallback.mode),
+    enabledModules: normalizeStringList(raw.enabledModules, fallback.enabledModules),
+  }
+}
+
+function normalizeBlankAcceptanceConfig(
+  raw: unknown,
+  fallback: LoadedBlankAcceptanceConfig = DEFAULT_CONFIG.blankAcceptanceConfig,
+): LoadedBlankAcceptanceConfig {
+  const fallbackProfiles: Record<string, BlankAcceptanceDiagnosisProfile> = Object.fromEntries(
+    Object.entries(fallback.diagnosisProfiles).map(([key, value]) => [
+      key,
+      normalizeBlankAcceptanceDiagnosisProfile(undefined, value),
+    ]),
+  )
+  if (!isObject(raw)) {
+    return {
+      enabled: fallback.enabled,
+      defaultDiagnosisProfile: fallback.defaultDiagnosisProfile,
+      taskPackDiagnosisProfiles: { ...fallback.taskPackDiagnosisProfiles },
+      diagnosisProfiles: fallbackProfiles,
+    }
+  }
+
+  const diagnosisProfiles = { ...fallbackProfiles }
+  const rawProfiles = isObject(raw.diagnosisProfiles) ? raw.diagnosisProfiles : {}
+  for (const [key, value] of Object.entries(rawProfiles)) {
+    if (!key.trim()) continue
+    const fallbackProfile = diagnosisProfiles[key] ?? fallbackProfiles.auto
+    diagnosisProfiles[key.trim()] = normalizeBlankAcceptanceDiagnosisProfile(value, fallbackProfile)
+  }
+
+  const defaultDiagnosisProfile = normalizeOptionalString(raw.defaultDiagnosisProfile) ?? fallback.defaultDiagnosisProfile
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    defaultDiagnosisProfile: diagnosisProfiles[defaultDiagnosisProfile] ? defaultDiagnosisProfile : fallback.defaultDiagnosisProfile,
+    taskPackDiagnosisProfiles: normalizeStringMap(raw.taskPackDiagnosisProfiles, fallback.taskPackDiagnosisProfiles),
+    diagnosisProfiles,
+  }
+}
+
 function normalizeHistoryConfig(
   raw: unknown,
   fallback: LoadedHistoryConfig = DEFAULT_CONFIG.historyConfig,
@@ -930,6 +1157,8 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
   concurrencyConfig = normalizeConcurrencyConfig(raw.concurrencyConfig, concurrencyConfig)
   const stageConcurrency = normalizeStageConcurrencyConfig(raw.stageConcurrency)
   const validationConfig = normalizeValidationConfig(raw.validationConfig)
+  const mergeConfig = normalizeMergeConfig(raw.mergeConfig)
+  const blankAcceptanceConfig = normalizeBlankAcceptanceConfig(raw.blankAcceptanceConfig)
   const historyConfig = normalizeHistoryConfig(raw.historyConfig)
   let directChatConfig = normalizeDirectChatConfig(undefined)
   if (await pathExists(directChatConfigPath)) {
@@ -1077,6 +1306,8 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
     concurrencyConfig,
     stageConcurrency,
     validationConfig,
+    mergeConfig,
+    blankAcceptanceConfig,
     historyConfig,
     directChatConfigFile,
     directChatConfigPath,

@@ -6,6 +6,7 @@ import { buildSkillBundle } from "../orchestrator/direct-chat/skill-bundler"
 import { runDirectChatEvaluation } from "../orchestrator/direct-chat/runner"
 import type { DirectChatModelsConfig } from "../orchestrator/direct-chat/contract"
 import { loadConfig } from "../orchestrator/schema"
+import { writeRunManifest } from "../orchestrator/stop-manager"
 
 function parseArgs(argv: string[]) {
   const result: Record<string, string | boolean> = {}
@@ -54,6 +55,14 @@ async function main() {
   }
   const outDir = path.resolve(String(args["out-dir"] || path.join(autoRoot, "runtime-state", "direct-chat-runs", new Date().toISOString().replace(/[:.]/g, "-"))))
   await ensureDirectory(outDir)
+  await writeRunManifest({
+    rootDir: outDir,
+    runKind: "direct-chat-eval",
+    runID: path.basename(outDir),
+    primaryStateFiles: ["config.snapshot.json", "summary.json"],
+    artifactRoots: ["results", "summary.json", "results.csv", "stop-reports"],
+    resumeCommand: `rerun run-direct-chat-eval with --out-dir "${outDir}" --resume-existing`,
+  })
 
   const skillBundlePath = typeof args["skill-bundle"] === "string"
     ? path.resolve(args["skill-bundle"])

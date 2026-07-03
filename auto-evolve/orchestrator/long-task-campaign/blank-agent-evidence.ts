@@ -29,6 +29,7 @@ export interface BlankAgentEvidenceBundle {
     toolCallsCompactPath: string
     validationTrainingCompactPath: string
     workspaceFilesManifestPath: string
+    planReplayCompactPath?: string
   }
 
   exactArtifacts: {
@@ -417,6 +418,33 @@ interface ValidationTrainingCompact {
   }>
 }
 
+interface PlanReplayCompact {
+  schema: "blank-eval-plan-compact/v1"
+  plans: Array<{
+    resultPath: string
+    evidenceBundlePath?: string
+    summaryPath?: string
+    mode?: string
+    passed: boolean
+    total: number
+    passedCount: number
+    failedCount: number
+    skippedCount: number
+    score?: number
+    failedCases: string[]
+    summary: string
+    caseResults: Array<{
+      id: string
+      title?: string
+      passed: boolean
+      skipped?: boolean
+      failureKind?: string
+      summary: string
+      resultPath?: string
+    }>
+  }>
+}
+
 async function buildValidationTrainingCompact(validatorResults: WriteBlankAgentEvidenceInput["finalAcceptance"]["validatorResults"]): Promise<ValidationTrainingCompact> {
   const views: ValidationTrainingCompact["views"] = []
 
@@ -452,6 +480,98 @@ async function buildValidationTrainingCompact(validatorResults: WriteBlankAgentE
   }
 
   return { schema: "validation-training-compact/v1", views }
+}
+
+function isPlanResultPath(filePath: string): boolean {
+  return filePath.replace(/\\/g, "/").toLowerCase().endsWith("/plan-result.json")
+}
+
+function isPlanEvidencePath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, "/").toLowerCase()
+  return normalized.endsWith("/evidence-bundle.json") || normalized.endsWith("/summary.md")
+}
+
+async function collectPlanReplayRefs(
+  validatorResults: WriteBlankAgentEvidenceInput["finalAcceptance"]["validatorResults"],
+  allowedRoots: string[],
+) {
+  const resultPaths: string[] = []
+  const auxiliaryPaths = new Set<string>()
+  for (const vr of validatorResults) {
+    for (const ref of (vr.evidenceRefs ?? [])) {
+      const absolute = path.resolve(ref)
+      if (isPlanResultPath(absolute) && await safeExactFile(absolute, allowedRoots)) {
+        resultPaths.push(absolute)
+      } else if (isPlanEvidencePath(absolute) && await safeExactFile(absolute, allowedRoots)) {
+        auxiliaryPaths.add(normalizeSlashes(absolute))
+      }
+    }
+    if (vr.rawOutputPath) {
+      const absolute = path.resolve(vr.rawOutputPath)
+      if (isPlanResultPath(absolute) && await safeExactFile(absolute, allowedRoots)) {
+        resultPaths.push(absolute)
+      }
+    }
+  }
+  return {
+    resultPaths: Array.from(new Set(resultPaths)),
+    auxiliaryPaths: Array.from(auxiliaryPaths),
+  }
+}
+
+async function buildPlanReplayCompact(
+  validatorResults: WriteBlankAgentEvidenceInput["finalAcceptance"]["validatorResults"],
+  allowedRoots: string[],
+): Promise<{ compact: PlanReplayCompact; auxiliaryPaths: string[] }> {
+  const refs = await collectPlanReplayRefs(validatorResults, allowedRoots)
+  const plans: PlanReplayCompact["plans"] = []
+
+  for (const resultPath of refs.resultPaths) {
+    let content: Record<string, unknown> = {}
+    try {
+      const raw = (await readFile(resultPath, "utf8")).toString().replace(/^\uFEFF/, "")
+      content = JSON.parse(raw)
+    } catch {
+      continue
+    }
+    if (content.schema !== "blank-eval-plan-result/v1") continue
+    const caseResultsRaw = Array.isArray(content.caseResults) ? content.caseResults : []
+    const caseResults = caseResultsRaw.slice(0, 100).map((item) => {
+      const row = typeof item === "object" && item ? item as Record<string, unknown> : {}
+      return {
+        id: String(row.id ?? ""),
+        title: typeof row.title === "string" ? row.title : undefined,
+        passed: row.passed === true,
+        skipped: row.skipped === true ? true : undefined,
+        failureKind: typeof row.failureKind === "string" ? row.failureKind : undefined,
+        summary: String(row.summary ?? "").slice(0, 800),
+        resultPath: typeof row.resultPath === "string" ? normalizeSlashes(row.resultPath) : undefined,
+      }
+    })
+    plans.push({
+      resultPath: normalizeSlashes(resultPath),
+      evidenceBundlePath: typeof content.evidenceBundlePath === "string" ? normalizeSlashes(content.evidenceBundlePath) : undefined,
+      summaryPath: typeof content.summaryPath === "string" ? normalizeSlashes(content.summaryPath) : undefined,
+      mode: typeof content.mode === "string" ? content.mode : undefined,
+      passed: content.passed === true,
+      total: typeof content.total === "number" ? content.total : caseResults.length,
+      passedCount: typeof content.passedCount === "number" ? content.passedCount : caseResults.filter((item) => item.passed).length,
+      failedCount: typeof content.failedCount === "number" ? content.failedCount : caseResults.filter((item) => !item.passed && !item.skipped).length,
+      skippedCount: typeof content.skippedCount === "number" ? content.skippedCount : caseResults.filter((item) => item.skipped).length,
+      score: typeof content.score === "number" ? content.score : undefined,
+      failedCases: Array.isArray(content.failedCases) ? content.failedCases.map((item) => String(item)).slice(0, 100) : [],
+      summary: String(content.summary ?? "").slice(0, 1000),
+      caseResults,
+    })
+  }
+
+  return {
+    compact: {
+      schema: "blank-eval-plan-compact/v1",
+      plans,
+    },
+    auxiliaryPaths: refs.auxiliaryPaths,
+  }
 }
 
 // ─── Workspace files manifest ────────────────────────────────────────────────
@@ -553,16 +673,22 @@ export async function writeBlankAgentEvidenceBundle(input: WriteBlankAgentEviden
 
   // 5. Build validation-training compact
   const trainingCompact = await buildValidationTrainingCompact(input.finalAcceptance.validatorResults)
+  const planReplayCompact = await buildPlanReplayCompact(input.finalAcceptance.validatorResults, allowedRootsForWorkspace)
 
   // 6. Write compact artifacts
   const executionCompactPath = path.join(roundEvidenceRoot, "execution.compact.md")
   const toolCallsCompactPath = path.join(roundEvidenceRoot, "tool-calls.compact.json")
   const validationTrainingCompactPath = path.join(roundEvidenceRoot, "validation-training.compact.json")
   const workspaceFilesManifestPath = path.join(roundEvidenceRoot, "workspace-files.manifest.json")
+  const planReplayCompactPath = path.join(roundEvidenceRoot, "plan-replay.compact.json")
 
   await writeFile(executionCompactPath, buildExecutionCompactMd(bundle, input.finalAcceptance), "utf8")
   await writeFile(toolCallsCompactPath, JSON.stringify(compactToolCalls, null, 2) + "\n", "utf8")
   await writeFile(validationTrainingCompactPath, JSON.stringify(trainingCompact, null, 2) + "\n", "utf8")
+  if (planReplayCompact.compact.plans.length > 0) {
+    await writeFile(planReplayCompactPath, JSON.stringify(planReplayCompact.compact, null, 2) + "\n", "utf8")
+    bundle.exactArtifacts.finalAcceptancePaths.push(...planReplayCompact.auxiliaryPaths)
+  }
 
   const manifest: WorkspaceFilesManifest = {
     schema: "workspace-files-manifest/v1",
@@ -583,6 +709,9 @@ export async function writeBlankAgentEvidenceBundle(input: WriteBlankAgentEviden
     toolCallsCompactPath: normalizeSlashes(toolCallsCompactPath),
     validationTrainingCompactPath: normalizeSlashes(validationTrainingCompactPath),
     workspaceFilesManifestPath: normalizeSlashes(workspaceFilesManifestPath),
+    ...(planReplayCompact.compact.plans.length > 0
+      ? { planReplayCompactPath: normalizeSlashes(planReplayCompactPath) }
+      : {}),
   }
 
   // 7. Build readablePaths
@@ -593,9 +722,11 @@ export async function writeBlankAgentEvidenceBundle(input: WriteBlankAgentEviden
   readable.add(bundle.compactArtifacts.toolCallsCompactPath)
   readable.add(bundle.compactArtifacts.validationTrainingCompactPath)
   readable.add(bundle.compactArtifacts.workspaceFilesManifestPath)
+  if (bundle.compactArtifacts.planReplayCompactPath) readable.add(bundle.compactArtifacts.planReplayCompactPath)
   for (const p of bundle.exactArtifacts.sessionArtifactPaths) readable.add(p)
   for (const p of bundle.exactArtifacts.validationTrainingViewPaths) readable.add(p)
   for (const p of bundle.exactArtifacts.workspaceTextFilePaths) readable.add(p)
+  for (const p of bundle.exactArtifacts.finalAcceptancePaths) readable.add(p)
 
   bundle.readablePaths = Array.from(readable)
 

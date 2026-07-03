@@ -9,24 +9,18 @@ The caller provides:
 
 Read the manifest first. Then read the input skills that exist on disk.
 
-## Required Output Structure
+## Merge Contract
 
-Write these files directly under the output directory:
+The runtime prompt will provide a `Merge Contract` JSON block.
+That contract is the authoritative source for:
+- required files and directories,
+- allowed or forbidden files,
+- required sections and metadata fields,
+- dataset-specific promotion rules,
+- any extra surface-safety constraints.
 
-```text
-INDEX.md
-CORE.md
-meta.json
-surface_contract.json
-casebook/
-  success-patterns.md
-  failure-antipatterns.md
-  unresolved-gaps.md
-evidence/
-  provenance-map.json
-  status-summary.json
-open_observations.md
-```
+Do not invent a different output layout.
+If this generic prompt and the contract disagree, follow the contract.
 
 ## Input Status Semantics
 
@@ -46,16 +40,7 @@ If a method appears only in failed inputs, do not put it in CORE as a recommende
 Only promote a rule to CORE when it is supported by successful inputs or by multiple higher-level merged skills.
 Do not copy answer values, exact ground-truth strings, private answer paths, or hidden-answer wording.
 
-`CORE.md` must include:
-
-```text
-## Material Navigation Rules
-## Extraction And Tool Rules
-## Calculation Or Transformation Rules
-## Output Discipline
-## Failure Lessons And Anti-Patterns
-## Unresolved Gaps
-```
+Use the contract to decide which sections `CORE.md` or equivalent core files must include.
 
 ## Casebook Rules
 
@@ -79,22 +64,9 @@ casebook/final-answer-0.187.md
 
 ## Metadata Requirements
 
-`meta.json` must include:
-- `mergeLevel`
-- `groupID`
-- `inputCount`
-- `statusCounts`
-- `successfulInstanceIDs`
-- `failedInstanceIDs`
-- `maxRoundFailedInstanceIDs`
-- `recoveryPendingInstanceIDs`
-- `sourceManifests`
-- `promotedCoreRules`
-- `failureLessons`
-
-`evidence/provenance-map.json` must map each major CORE rule and casebook note to source input ids.
-
-`surface_contract.json` must be strict JSON and must not contain forbidden answer literals, private answer paths, or ground-truth labels.
+Follow the contract for metadata filenames and required metadata fields.
+When the contract asks for provenance, map each major promoted rule and casebook note to source input ids.
+Any JSON files required by the contract must be strict JSON and must not contain forbidden answer literals, private answer paths, or ground-truth labels.
 
 ## Final Instruction
 

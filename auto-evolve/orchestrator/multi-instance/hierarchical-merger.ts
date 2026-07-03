@@ -27,6 +27,7 @@ export interface HierarchicalMergeOptions {
   localReplayConcurrency?: number
   promptPath?: string
   repairPromptPath?: string
+  contractPath?: string
   localReplay?: {
     enabled: boolean
     levels: HierarchicalReplayLevels
@@ -106,6 +107,19 @@ type HierarchicalPostMergeValidation = {
 
 const DEFAULT_PROMPT_REL = "methods/recipes/multi-instance/prompts/hierarchical-merge-generic.md"
 const DEFAULT_REPAIR_PROMPT_REL = "methods/recipes/multi-instance/prompts/hierarchical-merge-repair.md"
+const GENERIC_CONTRACT_FALLBACK = JSON.stringify(
+  {
+    id: "inline/generic-hierarchical-fallback",
+    requiredFiles: ["INDEX.md", "CORE.md", "meta.json"],
+    requiredDirectories: ["casebook"],
+    notes: [
+      "Use this only when no merge contract file was configured.",
+      "Keep CORE.md generic and place case-specific details under casebook/.",
+    ],
+  },
+  null,
+  2,
+)
 
 function nowISO() {
   return new Date().toISOString()
@@ -253,8 +267,20 @@ async function buildPrompt(input: {
 }) {
   const promptPath = input.options.promptPath ?? path.join(input.cwd, "auto-evolve", DEFAULT_PROMPT_REL)
   const base = await readTextFile(promptPath)
+  const contract = input.options.contractPath
+    ? await readTextFile(input.options.contractPath)
+    : GENERIC_CONTRACT_FALLBACK
   return [
     base.trim(),
+    "",
+    "# Merge Contract",
+    "",
+    "The following contract is authoritative for this dataset's merged skill file structure, allowed sections, and promotion rules.",
+    "If this contract conflicts with generic wording in the prompt, follow this contract.",
+    "",
+    "```json",
+    contract.trim(),
+    "```",
     "",
     "# Runtime Merge Assignment",
     "",
@@ -295,6 +321,7 @@ async function runMergeGroup(input: {
     mergeLevel: input.level,
     groupID,
     outputDir,
+    mergeContractPath: input.options.contractPath,
     statusCounts: statusCounts(input.items),
     inputs: input.items,
   }
@@ -312,6 +339,7 @@ async function runMergeGroup(input: {
   const config = await loadConfig(input.cwd)
   const readPaths = [
     manifestPath,
+    ...(input.options.contractPath ? [input.options.contractPath] : []),
     ...input.items.map((item) => item.skillPath).filter((item): item is string => !!item),
   ]
   const result = await runOpencodeTask({
@@ -436,6 +464,7 @@ async function runOneShotRepair(input: {
     sourceTaskRoot: input.item.sourceTaskRoot,
     failedReplayRunDir: input.failedRunDir,
     failedSummary: input.failedSummary,
+    mergeContractPath: input.options.contractPath,
     editPolicy: {
       "CORE.md": "append_only",
       "INDEX.md": "append_only",
@@ -449,8 +478,20 @@ async function runOneShotRepair(input: {
   }
   await writeJsonFile(manifestPath, manifest)
   const promptPath = input.options.repairPromptPath ?? path.join(input.cwd, "auto-evolve", DEFAULT_REPAIR_PROMPT_REL)
+  const contract = input.options.contractPath
+    ? await readTextFile(input.options.contractPath)
+    : GENERIC_CONTRACT_FALLBACK
   const prompt = [
     (await readTextFile(promptPath)).trim(),
+    "",
+    "# Merge Contract",
+    "",
+    "The following contract is authoritative for what the repaired group skill may contain and how it should be organized.",
+    "If this contract conflicts with generic wording in the repair prompt, follow this contract.",
+    "",
+    "```json",
+    contract.trim(),
+    "```",
     "",
     "# Repair Assignment",
     "",
@@ -470,6 +511,7 @@ async function runOneShotRepair(input: {
     prompt,
     permissionReadPaths: [
       manifestPath,
+      ...(input.options.contractPath ? [input.options.contractPath] : []),
       input.group.outputDir,
       ...(input.item.skillPath ? [input.item.skillPath] : []),
     ],

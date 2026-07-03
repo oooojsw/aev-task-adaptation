@@ -3,6 +3,7 @@ import type {
   LongTaskCampaignWorkerRole,
   LongTaskCampaignWorkerSuggestion,
 } from "./contract"
+import type { BlankAcceptanceDiagnosisProfile } from "../schema"
 
 function bullet(items: string[]) {
   return items.length ? items.map((item) => `- ${item}`).join("\n") : "- none"
@@ -80,6 +81,47 @@ function roleSpecificRules(role: LongTaskCampaignWorkerRole) {
   }
 }
 
+function blankAcceptanceDiagnosisProfileRules(profile?: BlankAcceptanceDiagnosisProfile) {
+  if (!profile) return [] as string[]
+  const modules = new Set(profile.enabledModules)
+  const rules = [
+    `- Active blank acceptance diagnosis profile: ${profile.mode}.`,
+    ...(profile.description ? [`- Profile description: ${profile.description}`] : []),
+  ]
+
+  if (profile.mode === "auto") {
+    rules.push(
+      "- Auto profile: first inspect whether the evidence is a single blank-agent run or a blank_eval_plan multi-case replay, then apply the matching rules below.",
+    )
+  }
+
+  if (profile.mode === "single_case" || profile.mode === "auto" || modules.has("single-case")) {
+    rules.push(
+      "- Single-case diagnosis: focus on the exact blank agent trajectory, its produced workspace files, and the product validator failure.",
+      "- Single-case diagnosis: explain what the skill failed to teach this blank agent, not what the open-book executor already knew.",
+    )
+  }
+
+  if (profile.mode === "plan_replay" || profile.mode === "auto" || modules.has("plan-replay")) {
+    rules.push(
+      "- Plan-replay diagnosis: if plan-replay.compact.json exists, read it before ordinary summaries.",
+      "- Plan-replay diagnosis: report pass/fail counts, then cluster failed cases by common cause.",
+      "- Plan-replay diagnosis: separate CORE-level missing guidance from casebook-level exceptions.",
+      "- Plan-replay diagnosis: when only a few cases fail, propose targeted casebook additions; when many cases share the same failure, propose a general workflow repair.",
+      "- Plan-replay diagnosis: do not ask the lead to overfit to every failed case if the evidence shows a shared validator/platform issue.",
+    )
+  }
+
+  if (profile.mode === "infra_only" || profile.mode === "auto" || profile.mode === "plan_replay" || modules.has("infra-triage")) {
+    rules.push(
+      "- Infrastructure triage: classify missing candidate files, missing spec paths, validator crashes, timeout, permission denial, stale owner, and path sandbox errors as platform/infra unless product evidence proves otherwise.",
+      "- Infrastructure triage: if the failure is platform/infra, do not tell lead to patch the skill as if the blank agent reasoned incorrectly; say which platform input, path, validator, or replay plan needs repair.",
+    )
+  }
+
+  return rules
+}
+
 export function buildCampaignWorkerPrompt(input: {
   title: string
   roundNumber: number
@@ -97,6 +139,7 @@ export function buildCampaignWorkerPrompt(input: {
   reviewerSuggestionPath?: string
   blankAgentEvidenceBundlePath?: string
   blankAgentEvidenceReadPaths?: string[]
+  blankAcceptanceDiagnosisProfile?: BlankAcceptanceDiagnosisProfile
   /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank workers. */
   expertOracleReadPaths?: string[]
 }) {
@@ -148,8 +191,12 @@ export function buildCampaignWorkerPrompt(input: {
     "- For non-drift_guard_synthesizer roles: if blank-agent execution hits system-level blockers (timeout/spawn/EPERM/path/encoding/runtime startup), propose BOTH package_advice and exploration_advice updates.",
     "- For non-drift_guard_synthesizer roles: for system blockers inside blank-agent execution, include bypass-oriented advice instead of diagnosis-only text.",
     "- If blank_agent_evidence_bundle exists, read it before making blank-agent acceptance suggestions.",
+    ...(input.blankAgentEvidenceReadPaths && input.blankAgentEvidenceReadPaths.length > 0
+      ? [`- Blank agent evidence readable exact files: ${input.blankAgentEvidenceReadPaths.join(", ")}`]
+      : []),
     "- Use validation-training.compact.json to understand what failed.",
     "- Use tool-calls.compact.json and execution.compact.md to understand how the blank agent actually failed.",
+    "- If plan-replay.compact.json exists, use it to understand multi-case replay failures before opening per-case artifacts.",
     "- If compact evidence lists workspace text files, open the exact files only when their contents are needed.",
     "- Do not infer blank-agent behavior only from validator summaries when execution evidence exists.",
     "- Treat pathRefs as complete paths even if surrounding previews are truncated.",
@@ -158,6 +205,7 @@ export function buildCampaignWorkerPrompt(input: {
     "- Never expose private/oracle files to blank_agent.",
     "- Never copy hidden answers, case-specific numeric targets, ground-truth literals, private paths, or validator-only truth into the pending expert package.",
     "- Translate private/oracle evidence into generalized source-location, derivation, filling, verification, and self-check guidance.",
+    ...blankAcceptanceDiagnosisProfileRules(input.blankAcceptanceDiagnosisProfile),
     ...roleSpecificRules(input.role),
     "",
     "Return JSON only, with this shape:",

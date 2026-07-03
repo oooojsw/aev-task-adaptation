@@ -259,6 +259,38 @@ function normalizeValidator(raw: unknown): LongTaskValidatorContract | undefined
       validation: normalizeValidatorEngineHints(raw.validation),
     }
   }
+  if (raw.type === "blank_eval_plan") {
+    if (typeof raw.planPath !== "string" || !raw.planPath.trim()) return undefined
+    if (typeof raw.skillRootPath !== "string" || !raw.skillRootPath.trim()) return undefined
+    return {
+      id: raw.id,
+      type: "blank_eval_plan",
+      title: raw.title,
+      placement: raw.placement === "unit" ? "unit" : "completion_only",
+      planPath: raw.planPath,
+      skillRootPath: raw.skillRootPath,
+      mode:
+        raw.mode === "single" || raw.mode === "sequence" || raw.mode === "parallel"
+          ? raw.mode
+          : undefined,
+      concurrency:
+        typeof raw.concurrency === "number" && raw.concurrency > 0 ? Math.floor(raw.concurrency) : undefined,
+      stopOnFirstFailure: typeof raw.stopOnFirstFailure === "boolean" ? raw.stopOnFirstFailure : undefined,
+      successCriterion:
+        raw.successCriterion === "all_pass" ||
+        raw.successCriterion === "allow_partial" ||
+        raw.successCriterion === "min_pass_rate"
+          ? raw.successCriterion
+          : undefined,
+      minPassRate:
+        typeof raw.minPassRate === "number" && raw.minPassRate >= 0 && raw.minPassRate <= 1
+          ? raw.minPassRate
+          : undefined,
+      required: typeof raw.required === "boolean" ? raw.required : true,
+      blocking: typeof raw.blocking === "boolean" ? raw.blocking : false,
+      validation: normalizeValidatorEngineHints(raw.validation),
+    }
+  }
   return undefined
 }
 
@@ -352,16 +384,36 @@ function isUseRef(raw: unknown): raw is { use: string } {
 
 async function resolveValidatorProfilePath(baseDir: string, profileRef: string, profilesRoot = DEFAULT_VALIDATOR_PROFILES_ROOT) {
   if (!profileRef.trim()) return undefined
+  const resolveFromProfilesRoot = async (rawRef: string) => {
+    const normalizedRef = rawRef
+      .replace(/\\/g, "/")
+      .replace(/^\/+/, "")
+      .replace(/^auto-evolve\/task-packs\/validator-profiles\//i, "")
+      .replace(/^task-packs\/validator-profiles\//i, "")
+    const fileRef = normalizedRef.endsWith(".json") ? normalizedRef : `${normalizedRef}.json`
+    const configuredCandidate = path.resolve(profilesRoot, fileRef)
+    if (await pathExists(configuredCandidate)) return configuredCandidate
+    const defaultCandidate = path.resolve(DEFAULT_VALIDATOR_PROFILES_ROOT, fileRef)
+    if (defaultCandidate !== configuredCandidate && (await pathExists(defaultCandidate))) return defaultCandidate
+    return configuredCandidate
+  }
   if (path.isAbsolute(profileRef)) {
-    return profileRef.endsWith(".json") ? profileRef : `${profileRef}.json`
+    const absoluteProfile = profileRef.endsWith(".json") ? profileRef : `${profileRef}.json`
+    if (await pathExists(absoluteProfile)) return absoluteProfile
+    const normalizedAbsolute = absoluteProfile.replace(/\\/g, "/")
+    const marker = "/task-packs/validator-profiles/"
+    const markerIndex = normalizedAbsolute.toLowerCase().lastIndexOf(marker)
+    if (markerIndex >= 0) {
+      return resolveFromProfilesRoot(normalizedAbsolute.slice(markerIndex + marker.length))
+    }
+    return absoluteProfile
   }
   if (profileRef.endsWith(".json") || profileRef.includes(path.sep) || profileRef.includes("/")) {
     const maybeLocal = resolveMaybePath(baseDir, profileRef)
     if (await pathExists(maybeLocal)) return maybeLocal
-    const normalizedRef = profileRef.replace(/\\/g, "/").replace(/^\/+/, "")
-    return path.resolve(profilesRoot, normalizedRef.endsWith(".json") ? normalizedRef : `${normalizedRef}.json`)
+    return resolveFromProfilesRoot(profileRef)
   }
-  return path.resolve(profilesRoot, `${profileRef}.json`)
+  return resolveFromProfilesRoot(profileRef)
 }
 
 async function materializePromptPath(baseDir: string, raw: Record<string, unknown>) {
@@ -569,34 +621,42 @@ export async function loadLongTaskSpec(
       }
     }
   }
-  const validators = mergeValidatorsKeepLast(normalizeValidators(mergedValidatorEntries)).map((validator) =>
-    validator.type === "script"
-      ? {
-          ...validator,
-          path: resolveMaybePath(baseDir, validator.path),
-          cwd: validator.cwd ? resolveMaybePath(baseDir, validator.cwd) : undefined,
-          args: resolveValidatorScriptArgs(baseDir, validator.args),
-        }
-      : {
-          ...validator,
-          inputFiles: validator.inputFiles
-            ? {
-                answerPath: validator.inputFiles.answerPath
-                  ? resolveMaybePath(baseDir, validator.inputFiles.answerPath)
-                  : undefined,
-                candidatePath: validator.inputFiles.candidatePath
-                  ? resolveMaybePath(baseDir, validator.inputFiles.candidatePath)
-                  : undefined,
-                humanGuidancePath: validator.inputFiles.humanGuidancePath
-                  ? resolveMaybePath(baseDir, validator.inputFiles.humanGuidancePath)
-                  : undefined,
-                contextPaths: (validator.inputFiles.contextPaths ?? []).map((item) => resolveMaybePath(baseDir, item)),
-              }
-            : undefined,
-          referencePaths: (validator.referencePaths ?? []).map((item) => resolveMaybePath(baseDir, item)),
-          attachedFiles: (validator.attachedFiles ?? []).map((item) => resolveMaybePath(baseDir, item)),
-        },
-  )
+  const validators = mergeValidatorsKeepLast(normalizeValidators(mergedValidatorEntries)).map((validator) => {
+    if (validator.type === "script") {
+      return {
+        ...validator,
+        path: resolveMaybePath(baseDir, validator.path),
+        cwd: validator.cwd ? resolveMaybePath(baseDir, validator.cwd) : undefined,
+        args: resolveValidatorScriptArgs(baseDir, validator.args),
+      }
+    }
+    if (validator.type === "blank_eval_plan") {
+      return {
+        ...validator,
+        planPath: resolveMaybePath(baseDir, validator.planPath),
+        skillRootPath: resolveMaybePath(baseDir, validator.skillRootPath),
+      }
+    }
+    return {
+      ...validator,
+      inputFiles: validator.inputFiles
+        ? {
+            answerPath: validator.inputFiles.answerPath
+              ? resolveMaybePath(baseDir, validator.inputFiles.answerPath)
+              : undefined,
+            candidatePath: validator.inputFiles.candidatePath
+              ? resolveMaybePath(baseDir, validator.inputFiles.candidatePath)
+              : undefined,
+            humanGuidancePath: validator.inputFiles.humanGuidancePath
+              ? resolveMaybePath(baseDir, validator.inputFiles.humanGuidancePath)
+              : undefined,
+            contextPaths: (validator.inputFiles.contextPaths ?? []).map((item) => resolveMaybePath(baseDir, item)),
+          }
+        : undefined,
+      referencePaths: (validator.referencePaths ?? []).map((item) => resolveMaybePath(baseDir, item)),
+      attachedFiles: (validator.attachedFiles ?? []).map((item) => resolveMaybePath(baseDir, item)),
+    }
+  })
   const capabilities = normalizeCapabilities(raw.capabilities).map((capability) => ({
     ...capability,
     referencePaths: (capability.referencePaths ?? []).map((item) => resolveMaybePath(baseDir, item)),
@@ -746,6 +806,9 @@ export async function loadLongTaskSpec(
   for (const validator of spec.validators) {
     if (validator.type === "script" && !(await pathExists(validator.path))) {
       throw new Error(`Long-task spec references a missing validator script: ${validator.path}`)
+    }
+    if (validator.type === "blank_eval_plan" && !(await pathExists(validator.planPath))) {
+      throw new Error(`Long-task spec references a missing blank eval plan: ${validator.planPath}`)
     }
   }
 

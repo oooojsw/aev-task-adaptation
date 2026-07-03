@@ -13,6 +13,18 @@ import {
   type HierarchicalReplayLevels,
 } from "../orchestrator/multi-instance/hierarchical-merger"
 import { runCoordinatorPhase3Validate } from "../orchestrator/multi-instance/validator"
+import {
+  mergeAcceptanceRunsReplay,
+  mergeAcceptanceUsesStrictGate,
+  normalizeMergeAcceptancePreset,
+  normalizeMergeAcceptanceStages,
+  normalizeMergeAcceptanceSuccessCriterion,
+  resolveMergeAcceptanceProfile,
+  type MergeAcceptancePreset,
+  type MergeAcceptanceStage,
+  type MergeAcceptanceStatus,
+  type MergeAcceptanceSuccessCriterion,
+} from "../orchestrator/multi-instance/merge-acceptance-policy"
 import { saveCoordinatorState } from "../orchestrator/multi-instance/repository"
 import { runBlankEval } from "../orchestrator/blank-eval/runner"
 import { pathExists, readJsonFile, writeJsonFile } from "../orchestrator/fs"
@@ -25,6 +37,7 @@ import { runDirectChatEvaluation } from "../orchestrator/direct-chat/runner"
 import type { DirectChatModelsConfig } from "../orchestrator/direct-chat/contract"
 import { loadConfig, type BenchmarkResumeMode } from "../orchestrator/schema"
 import { readAdaptiveModelRuntime } from "../orchestrator/adaptive-concurrency"
+import { writeRunManifest } from "../orchestrator/stop-manager"
 import {
   buildHistoryContext,
   hashFileIfExists,
@@ -162,6 +175,12 @@ type BenchmarkConfig = {
     }
   }
   runTrainReplay: boolean
+  mergeAcceptanceProfile: string
+  mergeAcceptanceProfileSource: "cli-profile" | "config-default-profile" | "legacy-config"
+  mergeAcceptanceProfileDescription?: string
+  mergeAcceptancePreset: MergeAcceptancePreset
+  mergeAcceptanceStages: MergeAcceptanceStage[]
+  mergeAcceptanceSuccessCriterion: MergeAcceptanceSuccessCriterion
   runTest: boolean
   evalRunner: EvalRunner
   directChat?: {
@@ -208,6 +227,11 @@ type BenchmarkConfig = {
   campaignRounds?: number
   validateRounds: number
   repairAttempts: number
+  mergePromptPath?: string
+  mergeRepairPromptPath?: string
+  hierarchicalMergePromptPath?: string
+  hierarchicalMergeRepairPromptPath?: string
+  mergeContractPath?: string
 }
 
 type BenchmarkSummary = {
@@ -223,6 +247,8 @@ type BenchmarkSummary = {
     | "training_incomplete"
     | "merge_complete"
     | "train_replay_failed"
+    | "merge_acceptance_success"
+    | "merge_acceptance_failed"
     | "completed"
   trainedTestPassed?: number
   trainedTestTotal?: number
@@ -266,6 +292,19 @@ type BenchmarkState = {
     failed: number
     repairAttempts?: number
     repairFixed?: number
+    acceptanceStatus?: MergeAcceptanceStatus
+    accepted?: boolean
+    stagesRun?: MergeAcceptanceStage[]
+    initialReplay?: {
+      passed: number
+      total: number
+      failed: number
+    }
+    finalReplay?: {
+      passed: number
+      total: number
+      failed: number
+    }
   }
   test?: {
     passed: number
@@ -277,6 +316,13 @@ type BenchmarkState = {
     total: number
   }
   finalReportPath?: string
+  stop?: {
+    status: string
+    requestedAt?: string
+    stoppedAt?: string
+    reason?: string
+    resumeInstruction?: string
+  }
 }
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..")
@@ -315,6 +361,52 @@ function resolveMaybeRelative(input: string | undefined, fallback?: string) {
   if (!value) return undefined
   if (path.isAbsolute(value)) return value
   return path.resolve(repoRoot, value)
+}
+
+function resolveAutoEvolvePath(input: string | undefined) {
+  const value = input?.trim()
+  if (!value) return undefined
+  if (path.isAbsolute(value)) return value
+  return path.resolve(autoRoot, value)
+}
+
+function withJsonExtension(input: string) {
+  return input.toLowerCase().endsWith(".json") ? input : `${input}.json`
+}
+
+function resolveMergeControl(input: {
+  args: string[]
+  projectConfig: Awaited<ReturnType<typeof loadConfig>>
+  taskPackRoot: string
+}) {
+  const explicitPrompt = resolveMaybeRelative(getOption(input.args, "--merge-prompt-path"))
+  const explicitRepairPrompt = resolveMaybeRelative(getOption(input.args, "--merge-repair-prompt-path"))
+  const explicitContract = resolveMaybeRelative(getOption(input.args, "--merge-contract-path"))
+
+  const mergeConfig = input.projectConfig.mergeConfig
+  if (!mergeConfig.enabled) {
+    return {
+      mergePromptPath: explicitPrompt,
+      mergeRepairPromptPath: explicitRepairPrompt,
+      hierarchicalMergePromptPath: explicitPrompt,
+      hierarchicalMergeRepairPromptPath: explicitRepairPrompt,
+      mergeContractPath: explicitContract,
+    }
+  }
+
+  const taskPackName = path.basename(input.taskPackRoot)
+  const contractRef = mergeConfig.taskPackContracts[taskPackName] ?? mergeConfig.defaultContract
+  const contractPath = explicitContract ?? resolveAutoEvolvePath(path.join(mergeConfig.contractsRoot, withJsonExtension(contractRef)))
+
+  return {
+    mergePromptPath: explicitPrompt ?? resolveAutoEvolvePath(mergeConfig.defaultPrompt),
+    mergeRepairPromptPath: explicitRepairPrompt ?? resolveAutoEvolvePath(mergeConfig.defaultRepairPrompt),
+    hierarchicalMergePromptPath:
+      explicitPrompt ?? resolveAutoEvolvePath(mergeConfig.defaultHierarchicalPrompt),
+    hierarchicalMergeRepairPromptPath:
+      explicitRepairPrompt ?? resolveAutoEvolvePath(mergeConfig.defaultHierarchicalRepairPrompt),
+    mergeContractPath: contractPath,
+  }
 }
 
 function score(row: CampaignRow) {
@@ -382,6 +474,16 @@ function parseBooleanOption(args: string[], name: string, fallback: boolean) {
 async function writeJson(file: string, value: unknown) {
   await mkdir(path.dirname(file), { recursive: true })
   await writeJsonFile(file, value)
+}
+
+async function readStopRequest(outDir: string) {
+  const target = path.join(outDir, "STOP_REQUESTED.json")
+  if (!(await pathExists(target))) return undefined
+  try {
+    return await readJsonFile<Record<string, unknown>>(target, { validatePaths: false })
+  } catch {
+    return { schema: "auto-evolve/stop-request/v1", reason: "Malformed STOP_REQUESTED.json" }
+  }
 }
 
 function benchmarkLeasePath(config: BenchmarkConfig, taskID: string) {
@@ -811,7 +913,14 @@ async function writeScorecard(file: string, state: BenchmarkState) {
     }),
   ]
   if (state.merge?.mergedSkillDir) {
-    lines.push("", "## Merge", `- mergedSkillDir: \`${state.merge.mergedSkillDir}\``)
+    lines.push(
+      "",
+      "## Merge",
+      `- mergedSkillDir: \`${state.merge.mergedSkillDir}\``,
+      `- acceptance profile: \`${state.config.mergeAcceptanceProfile}\` (${state.config.mergeAcceptanceProfileSource})`,
+      `- acceptance stages: \`${state.config.mergeAcceptanceStages.join(",") || "merge_only"}\``,
+      `- success criterion: \`${state.config.mergeAcceptanceSuccessCriterion}\``,
+    )
   }
   if (state.trainReplay) {
     lines.push(
@@ -1235,6 +1344,47 @@ async function queueTrain(
   }
 
   const queuedRecoveryKeys = new Set<string>()
+  async function pauseForStopRequest(stopRequest: Record<string, unknown>) {
+    const now = nowISO()
+    state.stop = {
+      status: "paused_by_user",
+      requestedAt: typeof stopRequest.requestedAt === "string" ? stopRequest.requestedAt : undefined,
+      stoppedAt: now,
+      reason:
+        typeof stopRequest.reason === "string"
+          ? stopRequest.reason
+          : "STOP_REQUESTED.json was detected by the benchmark supervisor.",
+      resumeInstruction: `Rerun this benchmark with the same --out ${config.outDir}.`,
+    }
+    for (const [id, watched] of Array.from(watch.entries())) {
+      await mark(id, { status: "recovery_pending", campaignDir: watched.campaignDir })
+      await updateCampaignAttemptStatus({
+        outDir: config.outDir,
+        taskID: id,
+        campaignID: watched.campaignID,
+        status: "recovery_pending",
+        reason: "paused_by_user",
+      })
+      await releaseBenchmarkTaskLease(config, id, leaseIDs.get(id))
+      leaseIDs.delete(id)
+      watch.delete(id)
+    }
+    for (const id of Array.from(activeIDs.keys())) {
+      const row = state.trainResults.find((item) => item.id === id)
+      await mark(id, { status: "recovery_pending", campaignDir: row?.campaignDir })
+      if (row?.campaignDir) {
+        await updateCampaignAttemptStatus({
+          outDir: config.outDir,
+          taskID: id,
+          campaignID: path.basename(row.campaignDir),
+          status: "recovery_pending",
+          reason: "paused_by_user",
+        })
+      }
+    }
+    await persistState(stateFile, scorecardFile, state)
+  }
+
   async function enqueueRecoveriesFromHealth() {
     const map = await campaigns(config.taskPackRoot, state.trainIDs, config.historyContext)
     for (const id of state.trainIDs) {
@@ -1278,6 +1428,17 @@ async function queueTrain(
   }
 
   while (true) {
+    const stopRequest = await readStopRequest(config.outDir)
+    if (stopRequest) {
+      await pauseForStopRequest(stopRequest)
+      if (active.size > 0) {
+        await Promise.race([Promise.race(active), sleep(Math.min(15_000, TRAIN_WATCHDOG_INTERVAL_MS))])
+        await writeJson(path.join(config.outDir, "train-queue-results.json"), rows)
+        await persistState(stateFile, scorecardFile, state)
+        continue
+      }
+      break
+    }
     await pollWatchedCampaigns()
     await enqueueRecoveriesFromHealth()
     await reconcileHistoryFromCampaignMap(config, state.trainIDs, await campaigns(config.taskPackRoot, state.trainIDs, config.historyContext))
@@ -1392,9 +1553,17 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
             localReplay: config.hierarchicalMerge.localReplay,
             concurrency: config.stageConcurrency.hierarchicalMerge,
             localReplayConcurrency: config.stageConcurrency.trainReplay,
+            promptPath: config.hierarchicalMergePromptPath,
+            repairPromptPath: config.hierarchicalMergeRepairPromptPath,
+            contractPath: config.mergeContractPath,
           },
         })
-      : await runCoordinatorPhase2Merge({ cwd: repoRoot, state: stateRun })
+      : await runCoordinatorPhase2Merge({
+          cwd: repoRoot,
+          state: stateRun,
+          promptPath: config.mergePromptPath,
+          contractPath: config.mergeContractPath,
+        })
   stateRun.mergedSkillDir = merge.mergedSkillDir
   await saveCoordinatorState(stateRun)
   state.merge = {
@@ -1431,8 +1600,14 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
               enabled: true,
               mode: "append_only",
               maxAttemptsPerCase: config.repairAttempts,
+              promptPath: config.mergeRepairPromptPath,
+              contractPath: config.mergeContractPath,
             }
           : undefined,
+      acceptancePolicy: {
+        stages: config.mergeAcceptanceStages,
+        successCriterion: config.mergeAcceptanceSuccessCriterion,
+      },
     })
     state.trainReplay = {
       passed: replay.passed,
@@ -1440,10 +1615,34 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
       failed: replay.failed,
       repairAttempts: replay.repairAttempts,
       repairFixed: replay.repairFixed,
+      acceptanceStatus: replay.acceptanceStatus,
+      accepted: replay.accepted,
+      stagesRun: replay.stagesRun,
+      initialReplay: replay.initialReplay
+        ? {
+            passed: replay.initialReplay.passed,
+            total: replay.initialReplay.total,
+            failed: replay.initialReplay.failed,
+          }
+        : undefined,
+      finalReplay: replay.finalReplay
+        ? {
+            passed: replay.finalReplay.passed,
+            total: replay.finalReplay.total,
+            failed: replay.finalReplay.failed,
+          }
+        : undefined,
     }
     await writeJson(path.join(config.outDir, "train-replay-output.json"), replay)
     await persistState(stateFile, scorecardFile, state)
-    if (replay.passed !== replay.total && !config.continueAfterTrainReplayFailure) return { merge, replay, test: undefined }
+    const strictFailed =
+      mergeAcceptanceUsesStrictGate(config.mergeAcceptanceStages) && replay.accepted === false
+    if (
+      (strictFailed || replay.passed !== replay.total) &&
+      !config.continueAfterTrainReplayFailure
+    ) {
+      return { merge, replay, test: undefined }
+    }
   }
 
   if (!config.runTest || testIDs.length === 0) return { merge, replay, test: undefined }
@@ -1565,6 +1764,12 @@ function shouldStopAfter(config: BenchmarkConfig, phase: NonNullable<BenchmarkCo
   return config.stopAfter === phase
 }
 
+function mergeAcceptanceFailed(config: BenchmarkConfig, replay: { passed: number; total: number; accepted?: boolean }) {
+  if (!config.runTrainReplay) return false
+  if (mergeAcceptanceUsesStrictGate(config.mergeAcceptanceStages)) return replay.accepted === false
+  return replay.passed !== replay.total
+}
+
 function parseChoice<T extends string>(input: {
   raw: string | undefined
   fallback: T
@@ -1675,6 +1880,16 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
   const stateFile = path.join(config.outDir, "orchestrator-state.json")
   const scorecardFile = path.join(config.outDir, "scorecard.md")
   await mkdir(config.outDir, { recursive: true })
+  await writeRunManifest({
+    rootDir: config.outDir,
+    runKind: "benchmark-long-task",
+    runID: path.basename(config.outDir),
+    taskPackRoot: config.taskPackRoot,
+    splitPath: config.trainSplit,
+    primaryStateFiles: ["orchestrator-state.json", "task-ledger.json", "train-plan.json"],
+    artifactRoots: ["verified-training.json", "merge-and-validate", "stop-reports", "cost-reports"],
+    resumeCommand: `rerun run-benchmark-orchestrator with the same --out "${config.outDir}"`,
+  })
   const previousState = await readState(stateFile)
   const trustedVerified =
     config.historyPolicy === "fresh-non-verified"
@@ -1935,14 +2150,16 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
     return report
   }
 
-  if (merged.replay.passed !== merged.replay.total) {
+  if (mergeAcceptanceFailed(config, merged.replay)) {
     const report: BenchmarkSummary = {
       config,
       trainIDs,
       testIDs,
       trainVerified: ok.size,
       trainTotal: trainIDs.length,
-      status: "train_replay_failed",
+      status: mergeAcceptanceUsesStrictGate(config.mergeAcceptanceStages)
+        ? "merge_acceptance_failed"
+        : "train_replay_failed",
       mergedSkillDir: merged.merge.mergedSkillDir,
       trainingIncompleteContinued: incompleteTraining,
     }
@@ -1961,7 +2178,9 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
       testIDs,
       trainVerified: ok.size,
       trainTotal: trainIDs.length,
-      status: "merge_complete",
+      status: mergeAcceptanceUsesStrictGate(config.mergeAcceptanceStages)
+        ? "merge_acceptance_success"
+        : "merge_complete",
       mergedSkillDir: merged.merge.mergedSkillDir,
       trainingIncompleteContinued: incompleteTraining,
     }
@@ -2006,7 +2225,9 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
       testIDs,
       trainVerified: ok.size,
       trainTotal: trainIDs.length,
-      status: "merge_complete",
+      status: mergeAcceptanceUsesStrictGate(config.mergeAcceptanceStages)
+        ? "merge_acceptance_success"
+        : "merge_complete",
       mergedSkillDir: merged.merge.mergedSkillDir,
       trainingIncompleteContinued: incompleteTraining,
     }
@@ -2129,6 +2350,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
   const projectConfig = await loadConfig(repoRoot)
   const taskPackRoot = resolveMaybeRelative(getOption(args, "--task-pack-root"))
   if (!taskPackRoot) throw new Error("Missing required option: --task-pack-root <path-to-task-pack-root>")
+  const mergeControl = resolveMergeControl({ args, projectConfig, taskPackRoot })
   const trainSplit = resolveMaybeRelative(getOption(args, "--train-split"), path.join(taskPackRoot, "splits", "train-selected.json"))
   if (!trainSplit) throw new Error("Missing train split path.")
   const testSplit = resolveMaybeRelative(getOption(args, "--test-split"))
@@ -2319,8 +2541,32 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
   if (campaignRoundsRaw && (!Number.isFinite(campaignRounds) || campaignRounds <= 0)) {
     throw new Error("Invalid --campaign-rounds/--rounds value. Use a positive integer.")
   }
+  const mergeAcceptanceProfile = resolveMergeAcceptanceProfile({
+    profiles: projectConfig.mergeConfig.acceptanceProfiles,
+    defaultProfile: projectConfig.mergeConfig.defaultAcceptanceProfile,
+    requestedProfile: getOption(args, "--merge-acceptance-profile") ?? getOption(args, "--merge-policy-profile"),
+    legacyPreset: projectConfig.mergeConfig.acceptancePreset,
+    legacySuccessCriterion: projectConfig.mergeConfig.acceptanceSuccessCriterion,
+  })
+  const explicitMergeAcceptancePreset = getOption(args, "--merge-acceptance-preset")
+  const explicitMergeAcceptanceStages = getOption(args, "--merge-acceptance-stages")
+  const mergeAcceptancePreset = normalizeMergeAcceptancePreset(
+    explicitMergeAcceptancePreset,
+    mergeAcceptanceProfile.preset,
+  )
+  const mergeAcceptanceStages = normalizeMergeAcceptanceStages({
+    raw: explicitMergeAcceptanceStages ?? (explicitMergeAcceptancePreset ? undefined : mergeAcceptanceProfile.stages),
+    preset: mergeAcceptancePreset,
+  })
+  const mergeAcceptanceSuccessCriterion = normalizeMergeAcceptanceSuccessCriterion(
+    getOption(args, "--merge-success-criterion"),
+    mergeAcceptanceProfile.successCriterion,
+  )
   const runMerge = !hasFlag(args, "--skip-merge") && modeOpt !== "campaign-only"
-  const runTrainReplay = !hasFlag(args, "--skip-train-replay") && modeOpt !== "campaign-only"
+  const runTrainReplay =
+    !hasFlag(args, "--skip-train-replay") &&
+    modeOpt !== "campaign-only" &&
+    mergeAcceptanceRunsReplay(mergeAcceptanceStages)
   const runTest = !hasFlag(args, "--skip-test") && modeOpt !== "campaign-only"
   let runBaseline = !hasFlag(args, "--skip-baseline") && modeOpt !== "campaign-only"
   const mergeConfig = parseHierarchicalMergeConfig(args)
@@ -2345,6 +2591,12 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       runMerge: false,
       ...mergeConfig,
       runTrainReplay: false,
+      mergeAcceptanceProfile: mergeAcceptanceProfile.profileName,
+      mergeAcceptanceProfileSource: mergeAcceptanceProfile.source,
+      mergeAcceptanceProfileDescription: mergeAcceptanceProfile.description,
+      mergeAcceptancePreset,
+      mergeAcceptanceStages,
+      mergeAcceptanceSuccessCriterion,
       runTest: false,
       evalRunner,
       directChat,
@@ -2366,6 +2618,11 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       campaignRounds,
       validateRounds,
       repairAttempts,
+      mergePromptPath: mergeControl.mergePromptPath,
+      mergeRepairPromptPath: mergeControl.mergeRepairPromptPath,
+      hierarchicalMergePromptPath: mergeControl.hierarchicalMergePromptPath,
+      hierarchicalMergeRepairPromptPath: mergeControl.hierarchicalMergeRepairPromptPath,
+      mergeContractPath: mergeControl.mergeContractPath,
     }
   }
   if (stopAfter === "merge") {
@@ -2388,6 +2645,12 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       runMerge: true,
       ...mergeConfig,
       runTrainReplay: false,
+      mergeAcceptanceProfile: mergeAcceptanceProfile.profileName,
+      mergeAcceptanceProfileSource: mergeAcceptanceProfile.source,
+      mergeAcceptanceProfileDescription: mergeAcceptanceProfile.description,
+      mergeAcceptancePreset,
+      mergeAcceptanceStages,
+      mergeAcceptanceSuccessCriterion,
       runTest: false,
       evalRunner,
       directChat,
@@ -2409,6 +2672,11 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       campaignRounds,
       validateRounds,
       repairAttempts,
+      mergePromptPath: mergeControl.mergePromptPath,
+      mergeRepairPromptPath: mergeControl.mergeRepairPromptPath,
+      hierarchicalMergePromptPath: mergeControl.hierarchicalMergePromptPath,
+      hierarchicalMergeRepairPromptPath: mergeControl.hierarchicalMergeRepairPromptPath,
+      mergeContractPath: mergeControl.mergeContractPath,
     }
   }
   if (stopAfter === "train-replay") {
@@ -2430,7 +2698,13 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       resumeRunning: !hasFlag(args, "--no-resume-running"),
       runMerge: true,
       ...mergeConfig,
-      runTrainReplay: true,
+      runTrainReplay: mergeAcceptanceRunsReplay(mergeAcceptanceStages),
+      mergeAcceptanceProfile: mergeAcceptanceProfile.profileName,
+      mergeAcceptanceProfileSource: mergeAcceptanceProfile.source,
+      mergeAcceptanceProfileDescription: mergeAcceptanceProfile.description,
+      mergeAcceptancePreset,
+      mergeAcceptanceStages,
+      mergeAcceptanceSuccessCriterion,
       runTest: false,
       evalRunner,
       directChat,
@@ -2452,6 +2726,11 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       campaignRounds,
       validateRounds,
       repairAttempts,
+      mergePromptPath: mergeControl.mergePromptPath,
+      mergeRepairPromptPath: mergeControl.mergeRepairPromptPath,
+      hierarchicalMergePromptPath: mergeControl.hierarchicalMergePromptPath,
+      hierarchicalMergeRepairPromptPath: mergeControl.hierarchicalMergeRepairPromptPath,
+      mergeContractPath: mergeControl.mergeContractPath,
     }
   }
   if (stopAfter === "test") {
@@ -2476,6 +2755,12 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
     runMerge,
     ...mergeConfig,
     runTrainReplay,
+    mergeAcceptanceProfile: mergeAcceptanceProfile.profileName,
+    mergeAcceptanceProfileSource: mergeAcceptanceProfile.source,
+    mergeAcceptanceProfileDescription: mergeAcceptanceProfile.description,
+    mergeAcceptancePreset,
+    mergeAcceptanceStages,
+    mergeAcceptanceSuccessCriterion,
     runTest,
     evalRunner,
     directChat,
@@ -2497,6 +2782,11 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
     campaignRounds,
     validateRounds,
     repairAttempts,
+    mergePromptPath: mergeControl.mergePromptPath,
+    mergeRepairPromptPath: mergeControl.mergeRepairPromptPath,
+    hierarchicalMergePromptPath: mergeControl.hierarchicalMergePromptPath,
+    hierarchicalMergeRepairPromptPath: mergeControl.hierarchicalMergeRepairPromptPath,
+    mergeContractPath: mergeControl.mergeContractPath,
   }
 }
 

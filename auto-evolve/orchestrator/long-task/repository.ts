@@ -304,22 +304,29 @@ export function isolateLongTaskRuntimePaths(input: { spec: LongTaskSpec; sourceS
     editablePaths: rewriteList(input.spec.editablePaths),
     preservePreseededEditablePaths: rewriteList(input.spec.preservePreseededEditablePaths),
     formalPackageRoots: rewriteList(input.spec.formalPackageRoots),
-    validators: input.spec.validators.map((validator) =>
-      validator.type === "script"
+    validators: input.spec.validators.map((validator) => {
+      if (validator.type === "script") {
+        return {
+          ...validator,
+          args: rewriteValidatorArgsToRuntime(specDir, runtimeRoot, validator.args),
+        }
+      }
+      if (validator.type === "blank_eval_plan") {
+        return {
+          ...validator,
+          skillRootPath: runtimeMirrorPath(specDir, runtimeRoot, validator.skillRootPath),
+        }
+      }
+      return validator.inputFiles?.candidatePath
         ? {
             ...validator,
-            args: rewriteValidatorArgsToRuntime(specDir, runtimeRoot, validator.args),
+            inputFiles: {
+              ...validator.inputFiles,
+              candidatePath: runtimeMirrorPath(specDir, runtimeRoot, validator.inputFiles.candidatePath),
+            },
           }
-        : validator.inputFiles?.candidatePath
-          ? {
-              ...validator,
-              inputFiles: {
-                ...validator.inputFiles,
-                candidatePath: runtimeMirrorPath(specDir, runtimeRoot, validator.inputFiles.candidatePath),
-              },
-            }
-          : validator,
-    ),
+        : validator
+    }),
     initialGraph: rewriteInitialGraphToRuntime(specDir, runtimeRoot, input.spec.initialGraph),
   }
 }

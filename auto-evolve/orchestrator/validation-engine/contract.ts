@@ -2,7 +2,7 @@ import type { OpencodeTaskInput } from "../opencode"
 
 export type ValidationTargetKind = "surface" | "product" | "behavior" | "regression" | "transaction" | "layout"
 
-export type ValidationMechanism = "hard_script" | "soft_llm"
+export type ValidationMechanism = "hard_script" | "soft_llm" | "engine"
 
 export type ValidationStage =
   | "local_training"

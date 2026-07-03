@@ -1,0 +1,41 @@
+{
+  "id": "generic.standard-skill-v1",
+  "description": "Generic merged skill contract for Auto-Evolve multi-instance merge.",
+  "skillPurpose": "Teach a blank agent to solve the task family using reusable procedures rather than memorized answers.",
+  "requiredFiles": [
+    "INDEX.md",
+    "CORE.md",
+    "meta.json",
+    "surface_contract.json",
+    "casebook/",
+    "open_observations.md"
+  ],
+  "fileResponsibilities": {
+    "INDEX.md": "Entry point. Explain read order, how to use CORE and casebook, and final output discipline.",
+    "CORE.md": "Stable cross-instance rules, procedures, anti-patterns, and reusable decision logic.",
+    "casebook/": "Scenario-specific guidance named by semantic task features, not raw task ids.",
+    "meta.json": "Provenance, contributing instance ids, merge timestamp, and confidence notes.",
+    "surface_contract.json": "Machine-readable summary of the skill layout and final product contract.",
+    "open_observations.md": "Uncertain or lower-confidence observations that should not be promoted to CORE."
+  },
+  "requiredCoreHeadings": [
+    "## Material Navigation Rules",
+    "## Extraction Rules",
+    "## Calculation Or Transformation Rules",
+    "## Output Discipline",
+    "## Failure Lessons"
+  ],
+  "casebookNamingPolicy": "Use short semantic names based on scenario features. Do not name casebook files by raw task id unless the validator explicitly requires it.",
+  "repairPolicy": {
+    "mode": "append_only",
+    "coreMayOnlyAppend": true,
+    "casebookMayRewrite": true,
+    "requiredPatchLog": true
+  },
+  "forbiddenCrossDatasetTerms": [
+    "audit-point-output.md",
+    "OfficeQA",
+    "SpreadsheetBench",
+    "paper-review-learnbench"
+  ]
+}
