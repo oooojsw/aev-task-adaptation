@@ -1,5 +1,5 @@
 import path from "node:path"
-import { rm } from "node:fs/promises"
+import { readdir, rm } from "node:fs/promises"
 import { autoEvolvePath, ensureDirectory, readJsonFile, writeJsonFile, writeTextFile } from "../orchestrator/fs"
 import { runHierarchicalMergeLongTask, type HierarchicalGroupRunner } from "./run-hierarchical-merge-long-task"
 
@@ -36,10 +36,16 @@ async function main() {
   const sourcePack = path.join(root, "source-pack")
   const runRoot = path.join(root, "runs")
   const outRoot = path.join(root, "live-out")
-  await rm(path.join(autoEvolvePath(cwd, "runtime-state", "long-task-campaigns"), "smoke-recovery-merge-group-001"), {
-    recursive: true,
-    force: true,
-  })
+  const campaignRoot = path.join(autoEvolvePath(cwd, "runtime-state", "long-task-campaigns"))
+  const campaignEntries = await readdir(campaignRoot, { withFileTypes: true }).catch(() => [])
+  for (const entry of campaignEntries) {
+    if (
+      entry.isDirectory() &&
+      (entry.name.startsWith("smoke-live-supervisor-") || entry.name.startsWith("smoke-recovery-"))
+    ) {
+      await rm(path.join(campaignRoot, entry.name), { recursive: true, force: true })
+    }
+  }
   const ids = Array.from({ length: 10 }, (_, index) => `case-${String(index + 1).padStart(3, "0")}`)
 
   for (const id of ids) {
@@ -76,7 +82,7 @@ async function main() {
     running -= 1
     if (!recoveryInjected && input.level === 1 && input.group.groupID === "merge-group-001") {
       recoveryInjected = true
-      const campaignID = "smoke-recovery-merge-group-001"
+      const campaignID = "smoke-live-supervisor-recovery-merge-group-001"
       const campaignDir = path.join(autoEvolvePath(cwd, "runtime-state", "long-task-campaigns"), campaignID)
       await ensureDirectory(campaignDir)
       await writeJsonFile(path.join(campaignDir, "campaign.json"), {
@@ -88,7 +94,7 @@ async function main() {
       })
       return { ok: true, exitCode: 0, summary: "fake recovery pending" }
     }
-    if (input.resume && input.campaignID === "smoke-recovery-merge-group-001") {
+    if (input.resume && input.campaignID === "smoke-live-supervisor-recovery-merge-group-001") {
       resumeObserved = true
       const campaignDir = path.join(autoEvolvePath(cwd, "runtime-state", "long-task-campaigns"), input.campaignID)
       await writeFakeSkill(path.join(campaignDir, "pending-expert-package", "current"), "recovered-merge-group-001")
@@ -101,6 +107,17 @@ async function main() {
       })
       return { ok: true, exitCode: 0, summary: "fake recovered" }
     }
+    const campaignID = `smoke-live-supervisor-level-${input.level}-${input.group.groupID}`
+    const campaignDir = path.join(autoEvolvePath(cwd, "runtime-state", "long-task-campaigns"), campaignID)
+    await ensureDirectory(campaignDir)
+    await writeFakeSkill(path.join(campaignDir, "pending-expert-package", "current"), `level-${input.level}-${input.group.groupID}`)
+    await writeJsonFile(path.join(campaignDir, "campaign.json"), {
+      id: campaignID,
+      status: "verified_success",
+      baseSpecPath: path.resolve(input.group.specPath),
+      updatedAt: new Date().toISOString(),
+      heartbeatAt: new Date().toISOString(),
+    })
     return { ok: true, exitCode: 0, summary: "fake ok" }
   }
 
@@ -127,9 +144,18 @@ async function main() {
   assert(maxRunning <= 2, `fake runner exceeded configured concurrency, maxRunning=${maxRunning}`)
   assert(recoveryInjected, "smoke did not inject recovery_pending group")
   assert(resumeObserved, "supervisor did not resume recovery_pending group")
+  assert(
+    String(report.finalSkillPath).includes("pending-expert-package/current"),
+    `finalSkillPath should prefer promoted pending package, got ${report.finalSkillPath}`,
+  )
 
   const state = await readJsonFile<any>(path.join(outRoot, "hierarchical-live-state.json"))
   assert(state.schema === "hierarchical-merge-long-task-live-state/v1", "live state schema missing")
+  assert(state.levels[0]?.groups[0]?.status, "live state group status missing")
+  assert(
+    state.levels.some((level: any) => level.groups.some((group: any) => group.outputSkillPath)),
+    "live state should record outputSkillPath for promoted groups",
+  )
 
   console.log(JSON.stringify({ ok: true, levels: report.levels.length, maxRunning, finalSkillPath: report.finalSkillPath }, null, 2))
 }

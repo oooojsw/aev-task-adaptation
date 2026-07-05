@@ -60,6 +60,8 @@ export type RunHierarchicalMergeLongTaskInput = {
   groupSize?: number
   groupConcurrency?: number
   replayConcurrency?: number
+  watchPollMs?: number
+  watchMaxPolls?: number
   levelPlanningMode?: "until_one" | "configured_levels"
   finalizationMode?: "require_single_final" | "merge_remaining_to_one" | "promote_best_effort"
   levels?: HierarchicalMergeLevelOverride[]
@@ -382,6 +384,40 @@ async function writeLevelInputs(inputDir: string, level: number, rows: any[]) {
   return { manifestPath, splitPath }
 }
 
+function groupStateRow(group: GeneratedGroup, result: any) {
+  const health = result?.health as CampaignHealth | undefined
+  const status = result?.skipped
+    ? "dry_run"
+    : result?.ok
+      ? "verified_success"
+      : health?.suggestedAction === "watch"
+        ? "watch_live"
+        : result?.status ?? "failed"
+  return {
+    groupID: group.groupID,
+    status,
+    ok: Boolean(result?.ok),
+    skipped: Boolean(result?.skipped),
+    specPath: normalizeSlash(path.resolve(group.specPath)),
+    caseCount: group.caseCount,
+    replayCaseCount: group.replayCaseCount,
+    campaignID: result?.campaignID,
+    campaignDir: result?.campaignDir ? normalizeSlash(result.campaignDir) : undefined,
+    outputSkillPath: result?.outputSkillPath ? normalizeSlash(result.outputSkillPath) : undefined,
+    health: health
+      ? {
+          health: health.health,
+          suggestedAction: health.suggestedAction,
+          currentRound: health.currentRound,
+          maxRounds: health.maxRounds,
+          ownerPID: health.ownerPID,
+          reason: health.reason,
+        }
+      : undefined,
+    summary: result?.summary,
+  }
+}
+
 export async function runHierarchicalMergeLongTask(input: RunHierarchicalMergeLongTaskInput) {
   const cwd = path.resolve(input.cwd)
   const config = await loadConfig(cwd)
@@ -395,6 +431,8 @@ export async function runHierarchicalMergeLongTask(input: RunHierarchicalMergeLo
   const defaultGroupSize = positiveInteger(input.groupSize, "hierarchical group size", hierarchical.groupSize)!
   const defaultGroupConcurrency = positiveInteger(input.groupConcurrency, "hierarchical group concurrency", hierarchical.groupConcurrency)!
   const defaultReplayConcurrency = positiveInteger(input.replayConcurrency, "hierarchical replay concurrency", hierarchical.blankReplayConcurrency)!
+  const watchPollMs = positiveInteger(input.watchPollMs, "hierarchical watch poll ms", hierarchical.watchPollMs)!
+  const watchMaxPolls = positiveInteger(input.watchMaxPolls, "hierarchical watch max polls", hierarchical.watchMaxPolls)!
   const levelPlanningMode = input.levelPlanningMode ?? hierarchical.levelPlanningMode
   const finalizationMode = input.finalizationMode ?? hierarchical.finalizationMode
   const levelOverrides = sortedLevels(input.levels ?? hierarchical.levels)
@@ -463,6 +501,8 @@ export async function runHierarchicalMergeLongTask(input: RunHierarchicalMergeLo
             campaignPath,
             logDir: path.join(outRoot, "logs", `level-${padLevel(level)}`, group.groupID),
             runner,
+            pollMs: watchPollMs,
+            maxPolls: watchMaxPolls,
           })
           return { groupID: group.groupID, ...runResult }
         })
@@ -473,6 +513,10 @@ export async function runHierarchicalMergeLongTask(input: RunHierarchicalMergeLo
         return { ...group, outputSkillPath: hit?.outputSkillPath }
       })
     const failedGroups = result.groups.filter((group) => !successfulGroups.some((item) => item.groupID === group.groupID))
+    const groupStateRows = result.groups.map((group) => {
+      const hit = groupResults.find((item: any) => item.groupID === group.groupID)
+      return groupStateRow(group, hit)
+    })
     levels.push({
       level,
       inputCount: currentIDs.length,
@@ -482,7 +526,7 @@ export async function runHierarchicalMergeLongTask(input: RunHierarchicalMergeLo
       successCount: successfulGroups.length,
       failedCount: failedGroups.length,
       outTaskPack: normalizeSlash(outTaskPack),
-      groups: groupResults,
+      groups: groupStateRows,
     })
     await writeJsonFile(statePath, {
       schema: "hierarchical-merge-long-task-live-state/v1",
@@ -494,7 +538,10 @@ export async function runHierarchicalMergeLongTask(input: RunHierarchicalMergeLo
     if (failedGroups.length) throw new Error(`Level ${level} has ${failedGroups.length} failed group(s); live hierarchy stops fail-closed`)
     if (successfulGroups.length <= 1) {
       const finalGroup = successfulGroups[0]
-      if (finalGroup) finalSkillPath = path.join(path.dirname(path.resolve(finalGroup.specPath)), "workspace", "merged-skill")
+      if (finalGroup) {
+        finalSkillPath =
+          finalGroup.outputSkillPath ?? path.join(path.dirname(path.resolve(finalGroup.specPath)), "workspace", "merged-skill")
+      }
       break
     }
     const rows = await buildNextLevelRowsFromSuccessfulGroups(level, successfulGroups)
@@ -513,6 +560,8 @@ export async function runHierarchicalMergeLongTask(input: RunHierarchicalMergeLo
     sourceCampaignManifestPath: normalizeSlash(path.resolve(input.campaignManifestPath)),
     levelPlanningMode,
     finalizationMode,
+    watchPollMs,
+    watchMaxPolls,
     levels,
     finalSkillPath: finalSkillPath ? normalizeSlash(finalSkillPath) : undefined,
     status: finalSkillPath ? "complete" : "no_final_skill",
@@ -544,6 +593,8 @@ async function main() {
     groupSize: readArg("--group-size") ? Number(readArg("--group-size")) : undefined,
     groupConcurrency: readArg("--group-concurrency") ? Number(readArg("--group-concurrency")) : undefined,
     replayConcurrency: readArg("--replay-concurrency") ? Number(readArg("--replay-concurrency")) : undefined,
+    watchPollMs: readArg("--watch-poll-ms") ? Number(readArg("--watch-poll-ms")) : undefined,
+    watchMaxPolls: readArg("--watch-max-polls") ? Number(readArg("--watch-max-polls")) : undefined,
     levelPlanningMode: readArg("--level-planning-mode") as RunHierarchicalMergeLongTaskInput["levelPlanningMode"],
     finalizationMode: readArg("--finalization-mode") as RunHierarchicalMergeLongTaskInput["finalizationMode"],
     levels,

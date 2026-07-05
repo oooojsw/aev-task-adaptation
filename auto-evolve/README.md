@@ -2260,6 +2260,8 @@ bun run auto-evolve/scripts/smoke-merge-as-long-task-pack.ts
       "levelPlanningMode": "until_one",
       "singleInputMode": "promote",
       "finalizationMode": "require_single_final",
+      "watchPollMs": 10000,
+      "watchMaxPolls": 720,
       "levels": []
     }
   }
@@ -2271,6 +2273,7 @@ bun run auto-evolve/scripts/smoke-merge-as-long-task-pack.ts
 - `levelPlanningMode=configured_levels`：只跑 `levels[]` 里列出的层；如果跑完还剩多个 skill，就按 `finalizationMode` 收尾或 fail closed。
 - `levels[]`：可以指定每层自己的 `groupSize`、`groupConcurrency`、`blankReplayConcurrency`、surface profile 和 blank acceptance scenario。
 - `groupConcurrency`：现在在 live supervisor 里真正控制“同一层同时跑几个 group campaign”，不再只是记录字段。
+- `watchPollMs / watchMaxPolls`：控制 supervisor 多久检查一次已经在跑的 group campaign、最多观察多少次；真实任务可以等久一点，smoke 可以调短。
 - `singleInputMode`：当输入只有一个 skill 时，默认 `promote`，不浪费模型再跑一次合并。
 
 新增脚本：
@@ -2291,6 +2294,7 @@ bun run auto-evolve/scripts/smoke-hierarchical-merge-live-supervisor.ts
 - 已实现：每层完成后把 group skill 变成下一层输入，并保留 `sourceCases/replayCases`，最终 replay 仍能展开回原始 cases。
 - 已实现：`run-benchmark-orchestrator.ts` 的 `mergeExecutionMode=long_task` 可选分支已经能调用分层/单层 merge long-task runner；默认仍是 `legacy_script`，旧合并链路不受影响。
 - 2026-07-06 增强：live supervisor 会按 `baseSpecPath` 识别已有 group campaign，健康运行只 watch，`recovery_pending/stale/takeover` 才 resume；子进程退出后如果 campaign 仍在 watch/recovery，不会被误当成已完成。
+- 2026-07-06 增强：`hierarchical-live-state.json` 和 `hierarchical-live-report.json` 会记录每个 group 的状态、campaignID、campaignDir、health、summary 和 `outputSkillPath`。最终 `finalSkillPath` 优先指向 campaign 转正后的 `pending-expert-package/current`，避免误指临时 workspace。
 - 当前边界：`long_task` 分支的 held-out test 仍优先支持 `direct-chat`；如果需要旧式 `blank-opencode` 测试集验收，继续用 `legacy_script`，或后续补 coordinator-state 桥接。
 
 ## Blank Eval Plan Guardrails (2026-07-04)

@@ -188,6 +188,10 @@ export interface LoadedMergeAsLongTaskHierarchicalConfig {
   maxLevels: number
   /** Number of group campaigns intended to run concurrently. */
   groupConcurrency: number
+  /** Milliseconds between live campaign health polls in the hierarchical supervisor. */
+  watchPollMs: number
+  /** Maximum live campaign health polls before the hierarchical supervisor fails closed. */
+  watchMaxPolls: number
   /** Which source skills enter the first hierarchical level. */
   inputSelection: "success_only" | "failed_only" | "success_and_failed"
   /** Replay scope for intermediate levels. */
@@ -599,6 +603,8 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
         groupSize: 5,
         maxLevels: 8,
         groupConcurrency: 2,
+        watchPollMs: 10_000,
+        watchMaxPolls: 720,
         inputSelection: "success_only",
         intermediateReplayScope: "group_cases",
         finalReplayScope: "union_source_cases",
@@ -1149,6 +1155,8 @@ function normalizeMergeAsLongTaskHierarchicalConfig(
     groupSize: positiveIntegerField(raw, "groupSize", fallback.groupSize),
     maxLevels: positiveIntegerField(raw, "maxLevels", fallback.maxLevels),
     groupConcurrency: positiveIntegerField(raw, "groupConcurrency", fallback.groupConcurrency),
+    watchPollMs: positiveIntegerField(raw, "watchPollMs", fallback.watchPollMs),
+    watchMaxPolls: positiveIntegerField(raw, "watchMaxPolls", fallback.watchMaxPolls),
     inputSelection: normalizeMergeInputSelection(raw.inputSelection, fallback.inputSelection),
     intermediateReplayScope: normalizeMergeReplayScope(raw.intermediateReplayScope, fallback.intermediateReplayScope),
     finalReplayScope: normalizeMergeReplayScope(raw.finalReplayScope, fallback.finalReplayScope),
