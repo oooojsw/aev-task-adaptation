@@ -2904,12 +2904,6 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
     focusedBlankAcceptanceMode: projectConfig.mergeConfig.asLongTask.focusedBlankAcceptanceMode,
     finalBlankAcceptanceMode: projectConfig.mergeConfig.asLongTask.finalBlankAcceptanceMode,
   }
-  if (mergeExecutionMode === "long_task") {
-    throw new Error(
-      "mergeConfig.mode=long_task is configured but automatic benchmark execution is not enabled yet. " +
-        "Use scripts/create-merge-long-task-pack.ts to generate the merge task-pack, or keep mergeExecutionMode=legacy_script.",
-    )
-  }
   if (stopAfter && stopAfter !== "baseline") runBaseline = false
   if (stopAfter === "training") {
     return {
