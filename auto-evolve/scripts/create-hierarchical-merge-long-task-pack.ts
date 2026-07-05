@@ -8,6 +8,7 @@ type GeneratedGroup = {
   specPath: string
   caseCount: number
   replayCaseCount?: number
+  outputSkillPath?: string
 }
 
 export type HierarchicalMergeLevelOverride = {
@@ -119,6 +120,9 @@ export async function buildNextLevelRows(level: number, groups: GeneratedGroup[]
   const rows = []
   for (const group of groups) {
     const taskDir = path.dirname(path.resolve(group.specPath))
+    const skillRoot = typeof (group as any).outputSkillPath === "string" && (group as any).outputSkillPath.trim()
+      ? path.resolve((group as any).outputSkillPath)
+      : path.join(taskDir, "workspace", "merged-skill")
     const materialsDir = path.join(taskDir, "materials")
     const inputManifest = await readJsonFile<any>(path.join(materialsDir, "input-manifest.json"))
     const replayPlan = await readJsonFile<any>(path.join(materialsDir, "replay-plan.json"))
@@ -144,7 +148,7 @@ export async function buildNextLevelRows(level: number, groups: GeneratedGroup[]
       status: "verified_success",
       verified: true,
       title: `Level ${level} merged skill ${group.groupID}`,
-      skillRoot: path.join(taskDir, "workspace", "merged-skill"),
+      skillRoot,
       sourceCases,
       replayCases,
       levelResultPath: path.join(taskDir, "campaign.json"),

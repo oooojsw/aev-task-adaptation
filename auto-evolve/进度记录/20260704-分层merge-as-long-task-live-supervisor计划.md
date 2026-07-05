@@ -858,3 +858,30 @@ live supervisor smoke：10 -> 2 -> 1，通过；fake runner 最大并发=2，未
 3. `replayScope` 目前进入 per-level plan 和 summary，但单组生成器仍沿用安全默认“组内原始 case 展开”；如果以后要真正支持 `sampled_source_cases/union_source_cases` 的差异行为，需要继续接入 `create-merge-long-task-pack.ts`。
 
 一句话复盘：本轮把“分层合并怎么分、每层并发多少、固定跑几层、只有一个输入怎么办”从纸面计划变成了可执行脚本和可验证 smoke；下一步主要是把这个独立执行器接进 benchmark 主流程，并增强真实运行中的 watch/resume。
+
+## 14. 2026-07-06 补丁：live supervisor 增强
+
+本轮在 `scripts/run-hierarchical-merge-long-task.ts` 里补了真正的 group campaign 生命周期判断：
+
+- 每个 group 先按 `baseSpecPath` 查找已有 runtime campaign。
+- 如果已有 campaign 是 `verified_success` 且有最终 skill，直接作为成功输入下一层，不重复启动。
+- 如果已有 campaign 仍是健康运行或启动宽限期，只进入 watch，不塞进 todo，也不调用 resume 秒退。
+- 如果已有 campaign 是 `recovery_pending`、stale 或 takeover，才用 `resume-long-task-campaign --campaign <id> --spec <campaign.json>` 恢复。
+- 如果子进程退出后 campaign 仍在 watch 状态，supervisor 会继续等终态；如果退出后变成 recovery/takeover，会继续恢复，而不是把这次子进程退出当成完成。
+- 下一层输入现在优先使用 campaign 的 `pending-expert-package/current`，fallback 才用 `taskDir/workspace/merged-skill`，避免把正式转正 skill 和临时 workspace skill 搞混。
+
+新增/增强 smoke：
+
+```powershell
+bun run auto-evolve/scripts/smoke-hierarchical-merge-live-supervisor.ts
+bun run auto-evolve/scripts/smoke-hierarchical-merge-as-long-task-pack.ts
+```
+
+验证结果：
+
+- 10 个 fake source skill 按 5 -> 2 -> 1 完成。
+- `groupConcurrency=2` 没有被突破。
+- smoke 人工注入 `recovery_pending` group 后，supervisor 能二次调用 runner，并且第二次带上 `resume=true` 和正确 campaignID。
+- 25 个输入的生成器 smoke 仍然保持 5 -> 2 -> 1，最终 replay 覆盖 25 个原始 case。
+
+一句话总结：现在分层 merge-as-long-task 不再只是“并发跑子进程”，而是已经具备最基础的 watch/resume supervisor 行为，能避免健康 campaign 被重复 resume 秒退后从生命周期里消失。

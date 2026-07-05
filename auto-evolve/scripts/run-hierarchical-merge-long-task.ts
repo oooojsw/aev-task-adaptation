@@ -1,5 +1,7 @@
 import path from "node:path"
-import { ensureDirectory, readJsonFile, writeJsonFile } from "../orchestrator/fs"
+import { readdir, readFile } from "node:fs/promises"
+import { autoEvolvePath, ensureDirectory, pathExists, readJsonFile, writeJsonFile } from "../orchestrator/fs"
+import { readCampaignHealth, type CampaignHealth } from "../orchestrator/run-health"
 import { loadConfig } from "../orchestrator/schema"
 import { createMergeLongTaskPack } from "./create-merge-long-task-pack"
 import {
@@ -20,6 +22,7 @@ type GeneratedGroup = {
   specPath: string
   caseCount: number
   replayCaseCount?: number
+  outputSkillPath?: string
 }
 
 export type HierarchicalGroupRunnerInput = {
@@ -27,6 +30,7 @@ export type HierarchicalGroupRunnerInput = {
   level: number
   group: GeneratedGroup
   campaignPath: string
+  campaignID?: string
   logDir: string
   resume: boolean
 }
@@ -35,6 +39,11 @@ export type HierarchicalGroupRunnerResult = {
   ok: boolean
   exitCode?: number
   summary?: string
+  campaignID?: string
+  campaignDir?: string
+  status?: string
+  outputSkillPath?: string
+  health?: CampaignHealth
 }
 
 export type HierarchicalGroupRunner = (input: HierarchicalGroupRunnerInput) => Promise<HierarchicalGroupRunnerResult>
@@ -134,8 +143,9 @@ async function defaultRunner(input: HierarchicalGroupRunnerInput): Promise<Hiera
   await ensureDirectory(input.logDir)
   const command = input.resume ? "resume-long-task-campaign" : "run-long-task-campaign"
   const args = input.resume
-    ? ["run", "auto-evolve/cli.ts", command, "--spec", input.campaignPath]
+    ? ["run", "auto-evolve/cli.ts", command, "--campaign", input.campaignID ?? "", "--spec", input.campaignPath]
     : ["run", "auto-evolve/cli.ts", command, "--spec", input.campaignPath]
+  if (input.resume && !input.campaignID) throw new Error(`Cannot resume merge group without campaignID: ${input.group.groupID}`)
   const child = Bun.spawn(["bun", ...args], {
     cwd: input.cwd,
     stdout: Bun.file(path.join(input.logDir, "stdout.log")),
@@ -146,6 +156,201 @@ async function defaultRunner(input: HierarchicalGroupRunnerInput): Promise<Hiera
     ok: exitCode === 0,
     exitCode,
     summary: `campaign ${path.basename(path.dirname(input.campaignPath))} exited ${exitCode}`,
+  }
+}
+
+type GroupCampaignRow = {
+  campaignID: string
+  campaignDir: string
+  status: string
+  baseSpecPath?: string
+  updatedAt?: string
+  heartbeatAt?: string
+  pendingSkillPath: string
+  taskWorkspaceSkillPath: string
+  health?: CampaignHealth
+}
+
+function parseDateRank(input: string | undefined) {
+  const parsed = typeof input === "string" ? Date.parse(input) : Number.NaN
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+async function readJsonLenient(file: string) {
+  try {
+    const raw = await readFile(file, "utf8")
+    if (!raw.trim()) return undefined
+    return JSON.parse(raw.replace(/^\uFEFF/, "")) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+}
+
+async function findCampaignForGroup(cwd: string, group: GeneratedGroup): Promise<GroupCampaignRow | undefined> {
+  const specPath = path.resolve(group.specPath)
+  const taskWorkspaceSkillPath = path.join(path.dirname(specPath), "workspace", "merged-skill")
+  const campaignRoot = autoEvolvePath(cwd, "runtime-state", "long-task-campaigns")
+  const entries = await readdir(campaignRoot, { withFileTypes: true }).catch(() => [])
+  const matches: GroupCampaignRow[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const campaignDir = path.join(campaignRoot, entry.name)
+    const state = await readJsonLenient(path.join(campaignDir, "campaign.json"))
+    if (!state) continue
+    const baseSpecPath = typeof state.baseSpecPath === "string" ? path.resolve(state.baseSpecPath) : ""
+    if (baseSpecPath !== specPath) continue
+    const health = await readCampaignHealth(campaignDir)
+    matches.push({
+      campaignID: String(state.id ?? entry.name),
+      campaignDir,
+      status: String(state.status ?? ""),
+      baseSpecPath: typeof state.baseSpecPath === "string" ? state.baseSpecPath : undefined,
+      updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : undefined,
+      heartbeatAt: typeof state.heartbeatAt === "string" ? state.heartbeatAt : undefined,
+      pendingSkillPath: path.join(campaignDir, "pending-expert-package", "current"),
+      taskWorkspaceSkillPath,
+      health,
+    })
+  }
+  return matches.sort((left, right) => {
+    const byScore = campaignStatusScore(right.status) - campaignStatusScore(left.status)
+    if (byScore !== 0) return byScore
+    return parseDateRank(right.updatedAt ?? right.heartbeatAt) - parseDateRank(left.updatedAt ?? left.heartbeatAt)
+  })[0]
+}
+
+function campaignStatusScore(status: string) {
+  if (status === "verified_success") return 100
+  if (status === "running" || status === "bootstrapping") return 80
+  if (status === "recovery_pending") return 70
+  if (status === "round_limit_reached" || status === "failed" || status === "blocked_failure" || status === "stagnation_failure") {
+    return 50
+  }
+  return 0
+}
+
+function isTerminalFailureStatus(status: string) {
+  return (
+    status === "round_limit_reached" ||
+    status === "failed" ||
+    status === "blocked_failure" ||
+    status === "stagnation_failure" ||
+    status === "aborted" ||
+    status === "exhausted_failure"
+  )
+}
+
+async function outputSkillPath(row: GroupCampaignRow | undefined, group: GeneratedGroup) {
+  if (row && (await pathExists(row.pendingSkillPath))) return row.pendingSkillPath
+  const taskWorkspaceSkillPath = path.join(path.dirname(path.resolve(group.specPath)), "workspace", "merged-skill")
+  if (await pathExists(taskWorkspaceSkillPath)) return taskWorkspaceSkillPath
+  return undefined
+}
+
+async function runOneGroupWithSupervisor(input: {
+  cwd: string
+  level: number
+  group: GeneratedGroup
+  campaignPath: string
+  logDir: string
+  runner: HierarchicalGroupRunner
+  pollMs?: number
+  maxPolls?: number
+}): Promise<HierarchicalGroupRunnerResult> {
+  const pollMs = input.pollMs ?? 10_000
+  const maxPolls = input.maxPolls ?? 720
+  let polls = 0
+  let lastSummary = ""
+
+  while (true) {
+    const row = await findCampaignForGroup(input.cwd, input.group)
+    const health = row?.health
+    const skillPath = await outputSkillPath(row, input.group)
+    if (row?.status === "verified_success" && skillPath) {
+      return {
+        ok: true,
+        campaignID: row.campaignID,
+        campaignDir: row.campaignDir,
+        status: row.status,
+        outputSkillPath: skillPath,
+        health,
+        summary: `group ${input.group.groupID} verified_success`,
+      }
+    }
+    if (row && isTerminalFailureStatus(row.status)) {
+      return {
+        ok: false,
+        campaignID: row.campaignID,
+        campaignDir: row.campaignDir,
+        status: row.status,
+        outputSkillPath: skillPath,
+        health,
+        summary: `group ${input.group.groupID} terminal ${row.status}`,
+      }
+    }
+    if (health?.suggestedAction === "watch") {
+      if (polls++ >= maxPolls) {
+        return {
+          ok: false,
+          campaignID: row?.campaignID,
+          campaignDir: row?.campaignDir,
+          status: row?.status ?? "watch_timeout",
+          health,
+          summary: `group ${input.group.groupID} remained watch_live after ${maxPolls} polls`,
+        }
+      }
+      lastSummary = `watch ${input.group.groupID}: ${health.health} ${health.currentRound ?? ""}/${health.maxRounds ?? ""}`
+      await new Promise((resolve) => setTimeout(resolve, pollMs))
+      continue
+    }
+
+    const resume = Boolean(row && (health?.suggestedAction === "resume" || health?.suggestedAction === "takeover"))
+    const runResult = await input.runner({
+      cwd: input.cwd,
+      level: input.level,
+      group: input.group,
+      campaignPath: input.campaignPath,
+      campaignID: row?.campaignID,
+      logDir: input.logDir,
+      resume,
+    })
+    const after = await findCampaignForGroup(input.cwd, input.group)
+    const afterSkillPath = await outputSkillPath(after, input.group)
+    if (after?.status === "verified_success" && afterSkillPath) {
+      return {
+        ...runResult,
+        ok: true,
+        campaignID: after.campaignID,
+        campaignDir: after.campaignDir,
+        status: after.status,
+        outputSkillPath: afterSkillPath,
+        health: after.health,
+        summary: runResult.summary ?? `group ${input.group.groupID} verified_success`,
+      }
+    }
+    if (after && after.health?.suggestedAction === "watch") {
+      lastSummary = runResult.summary ?? lastSummary
+      await new Promise((resolve) => setTimeout(resolve, pollMs))
+      continue
+    }
+    if (after && (after.health?.suggestedAction === "resume" || after.health?.suggestedAction === "takeover")) {
+      lastSummary = runResult.summary ?? lastSummary
+      continue
+    }
+    if (after && isTerminalFailureStatus(after.status)) {
+      return {
+        ...runResult,
+        ok: false,
+        campaignID: after.campaignID,
+        campaignDir: after.campaignDir,
+        status: after.status,
+        outputSkillPath: afterSkillPath,
+        health: after.health,
+        summary: runResult.summary ?? `group ${input.group.groupID} terminal ${after.status}`,
+      }
+    }
+    if (!runResult.ok) return { ...runResult, summary: runResult.summary ?? lastSummary }
+    if (!after) return runResult
   }
 }
 
@@ -251,17 +456,22 @@ export async function runHierarchicalMergeLongTask(input: RunHierarchicalMergeLo
       : await runWithConcurrency(result.groups, groupConcurrency, async (group) => {
           const taskDir = path.dirname(path.resolve(group.specPath))
           const campaignPath = path.join(taskDir, "campaign.json")
-          const runResult = await runner({
+          const runResult = await runOneGroupWithSupervisor({
             cwd,
             level,
             group,
             campaignPath,
             logDir: path.join(outRoot, "logs", `level-${padLevel(level)}`, group.groupID),
-            resume: false,
+            runner,
           })
           return { groupID: group.groupID, ...runResult }
         })
-    const successfulGroups = result.groups.filter((group) => groupResults.some((item: any) => item.groupID === group.groupID && item.ok))
+    const successfulGroups = result.groups
+      .filter((group) => groupResults.some((item: any) => item.groupID === group.groupID && item.ok))
+      .map((group) => {
+        const hit = groupResults.find((item: any) => item.groupID === group.groupID) as any
+        return { ...group, outputSkillPath: hit?.outputSkillPath }
+      })
     const failedGroups = result.groups.filter((group) => !successfulGroups.some((item) => item.groupID === group.groupID))
     levels.push({
       level,

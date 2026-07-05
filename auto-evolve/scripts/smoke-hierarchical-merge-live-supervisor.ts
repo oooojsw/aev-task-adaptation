@@ -1,6 +1,6 @@
 import path from "node:path"
 import { rm } from "node:fs/promises"
-import { ensureDirectory, readJsonFile, writeJsonFile, writeTextFile } from "../orchestrator/fs"
+import { autoEvolvePath, ensureDirectory, readJsonFile, writeJsonFile, writeTextFile } from "../orchestrator/fs"
 import { runHierarchicalMergeLongTask, type HierarchicalGroupRunner } from "./run-hierarchical-merge-long-task"
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -36,6 +36,10 @@ async function main() {
   const sourcePack = path.join(root, "source-pack")
   const runRoot = path.join(root, "runs")
   const outRoot = path.join(root, "live-out")
+  await rm(path.join(autoEvolvePath(cwd, "runtime-state", "long-task-campaigns"), "smoke-recovery-merge-group-001"), {
+    recursive: true,
+    force: true,
+  })
   const ids = Array.from({ length: 10 }, (_, index) => `case-${String(index + 1).padStart(3, "0")}`)
 
   for (const id of ids) {
@@ -57,6 +61,8 @@ async function main() {
 
   let running = 0
   let maxRunning = 0
+  let recoveryInjected = false
+  let resumeObserved = false
   const fakeRunner: HierarchicalGroupRunner = async (input) => {
     running += 1
     maxRunning = Math.max(maxRunning, running)
@@ -68,6 +74,33 @@ async function main() {
     })
     await new Promise((resolve) => setTimeout(resolve, 20))
     running -= 1
+    if (!recoveryInjected && input.level === 1 && input.group.groupID === "merge-group-001") {
+      recoveryInjected = true
+      const campaignID = "smoke-recovery-merge-group-001"
+      const campaignDir = path.join(autoEvolvePath(cwd, "runtime-state", "long-task-campaigns"), campaignID)
+      await ensureDirectory(campaignDir)
+      await writeJsonFile(path.join(campaignDir, "campaign.json"), {
+        id: campaignID,
+        status: "recovery_pending",
+        baseSpecPath: path.resolve(input.group.specPath),
+        updatedAt: new Date().toISOString(),
+        heartbeatAt: new Date().toISOString(),
+      })
+      return { ok: true, exitCode: 0, summary: "fake recovery pending" }
+    }
+    if (input.resume && input.campaignID === "smoke-recovery-merge-group-001") {
+      resumeObserved = true
+      const campaignDir = path.join(autoEvolvePath(cwd, "runtime-state", "long-task-campaigns"), input.campaignID)
+      await writeFakeSkill(path.join(campaignDir, "pending-expert-package", "current"), "recovered-merge-group-001")
+      await writeJsonFile(path.join(campaignDir, "campaign.json"), {
+        id: input.campaignID,
+        status: "verified_success",
+        baseSpecPath: path.resolve(input.group.specPath),
+        updatedAt: new Date().toISOString(),
+        heartbeatAt: new Date().toISOString(),
+      })
+      return { ok: true, exitCode: 0, summary: "fake recovered" }
+    }
     return { ok: true, exitCode: 0, summary: "fake ok" }
   }
 
@@ -92,6 +125,8 @@ async function main() {
   assert(report.levels[0]?.groupCount === 2, "level 1 should have 2 groups")
   assert(report.levels[1]?.groupCount === 1, "level 2 should have 1 final group")
   assert(maxRunning <= 2, `fake runner exceeded configured concurrency, maxRunning=${maxRunning}`)
+  assert(recoveryInjected, "smoke did not inject recovery_pending group")
+  assert(resumeObserved, "supervisor did not resume recovery_pending group")
 
   const state = await readJsonFile<any>(path.join(outRoot, "hierarchical-live-state.json"))
   assert(state.schema === "hierarchical-merge-long-task-live-state/v1", "live state schema missing")
