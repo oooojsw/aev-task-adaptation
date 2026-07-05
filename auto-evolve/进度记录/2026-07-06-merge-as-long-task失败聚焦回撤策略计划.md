@@ -37,6 +37,12 @@
 - 在 `validation-engine/long-task-adapter.ts` 的 `blank_eval_plan` validator 外层增加 replay policy。
 - `create-merge-long-task-pack.ts` 生成的 `merged-skill-blank-eval-plan` validator 默认挂载该策略。
 
+路径安全补强：
+
+- `replayPolicy.statePath` 只能写在 `replay-plan.json` 所在目录内部。
+- 如果配置成 `../outside.json` 或逃逸到任意绝对外部路径，系统必须在读写状态前直接失败。
+- 这样可以防止手写 spec 把回撤策略状态写到任务包外面，避免污染宿主目录或其他实验。
+
 ## 状态保存
 
 状态文件放在 replay plan 同目录下的稳定位置：

@@ -11,7 +11,7 @@ function assert(condition: unknown, message: string): asserts condition {
 
 async function main() {
   const cwd = path.resolve(import.meta.dir, "..", "..")
-  const root = path.join(cwd, "auto-evolve", ".tmp-smoke", "merge-replay-policy")
+  const root = path.join(cwd, "auto-evolve", ".tmp-smoke", "merge-replay-policy-中文 路径")
   await rm(root, { recursive: true, force: true })
   await ensureDirectory(root)
   const statePath = path.join(root, "policy-state.json")
@@ -119,6 +119,31 @@ async function main() {
   state = await readJsonFile<any>(statePath)
   assert(state.phase === "stable", "state should become stable")
   assert(state.failedCaseIDs.length === 0, "stable state should have no failed cases")
+
+  const unsafeContract: LongTaskBlankEvalPlanValidatorContract = {
+    ...contract,
+    replayPolicy: {
+      strategy: "failures_then_regression",
+      statePath: path.join(root, "..", "outside-policy-state.json"),
+    },
+  }
+  let unsafeRejected = false
+  try {
+    await runBlankEvalPlanWithReplayPolicy({
+      cwd,
+      contract: unsafeContract,
+      spec,
+      cases,
+      mode: "parallel",
+      concurrency: 3,
+      successCriterion: "all_pass",
+      validatorDir,
+      caseRunner: runner,
+    })
+  } catch (error) {
+    unsafeRejected = String(error instanceof Error ? error.message : error).includes("Unsafe blank eval replayPolicy.statePath")
+  }
+  assert(unsafeRejected, "unsafe replayPolicy.statePath outside the plan directory should be rejected")
 
   console.log(JSON.stringify({ ok: true, calls, state }, null, 2))
 }

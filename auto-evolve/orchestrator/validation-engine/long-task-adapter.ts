@@ -528,6 +528,27 @@ function uniqueStrings(items: string[]) {
   return Array.from(new Set(items.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim())))
 }
 
+function isPathInside(parent: string, child: string) {
+  const rel = path.relative(path.resolve(parent), path.resolve(child))
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
+}
+
+function resolveReplayPolicyStatePath(input: {
+  contract: LongTaskBlankEvalPlanValidatorContract
+}) {
+  const planDir = path.dirname(path.resolve(input.contract.planPath))
+  const statePath = path.resolve(
+    input.contract.replayPolicy?.statePath ??
+      path.join(planDir, ".blank-eval-replay-policy", `${input.contract.id}.json`),
+  )
+  if (!isPathInside(planDir, statePath)) {
+    throw new Error(
+      `Unsafe blank eval replayPolicy.statePath for ${input.contract.id}: ${statePath} is outside replay plan directory ${planDir}`,
+    )
+  }
+  return statePath
+}
+
 async function readReplayPolicyState(statePath: string): Promise<BlankEvalReplayPolicyState | undefined> {
   try {
     const raw = await readFile(statePath, "utf8")
@@ -622,9 +643,7 @@ export async function runBlankEvalPlanWithReplayPolicy(input: {
     }
   }
 
-  const statePath =
-    policy.statePath ??
-    path.join(path.dirname(input.contract.planPath), ".blank-eval-replay-policy", `${input.contract.id}.json`)
+  const statePath = resolveReplayPolicyStatePath({ contract: input.contract })
   const prior = await readReplayPolicyState(statePath)
   const allCaseIDs = input.cases.map((item) => item.id)
   const knownProtected = uniqueStrings(prior?.protectedCaseIDs ?? []).filter((item) => allCaseIDs.includes(item))

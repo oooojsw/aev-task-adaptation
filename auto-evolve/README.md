@@ -2353,6 +2353,8 @@ Plain meaning:
 
 This keeps the expensive blank-agent replay focused during repair, without losing the guarantee that previously successful cases were not broken.
 
+The replay policy state must stay under the replay plan directory. Paths such as `../outside.json` or absolute paths that escape the plan directory are rejected before any state file is read or written.
+
 Smoke:
 
 ```powershell
