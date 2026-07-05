@@ -149,6 +149,10 @@ export interface LongTaskBlankEvalPlanValidatorContract {
   stopOnFirstFailure?: boolean
   successCriterion?: "all_pass" | "allow_partial" | "min_pass_rate"
   minPassRate?: number
+  replayPolicy?: {
+    strategy?: "full" | "failures_then_regression"
+    statePath?: string
+  }
   required?: boolean
   blocking?: boolean
   validation?: LongTaskValidatorEngineHints

@@ -123,6 +123,11 @@ async function main() {
   assert(validatorIDs.includes("merge-surface-generalization-hard"), "missing merge surface validator")
   const blankPlan = spec.validators.find((item) => item.type === "blank_eval_plan")
   assert(blankPlan, "missing blank eval plan validator")
+  assert(blankPlan.replayPolicy?.strategy === "failures_then_regression", "blank eval plan should mount focused replay policy")
+  assert(
+    String(blankPlan.replayPolicy?.statePath ?? "").includes(".blank-eval-replay-policy"),
+    "blank eval replay policy state should live under materials",
+  )
   assert(blankPlan.validation?.allowedAudiences?.includes("blank_agent") !== true, "blank_agent must not see validators")
   assert(spec.targetPaths?.some((item) => item.role === "experience-workspace"), "missing experience-workspace target")
   const graphCompletionIDs = spec.initialGraph?.completion_validator_ids ?? []

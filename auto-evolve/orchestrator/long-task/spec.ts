@@ -277,6 +277,18 @@ function normalizeValidator(raw: unknown): LongTaskValidatorContract | undefined
   if (raw.type === "blank_eval_plan") {
     if (typeof raw.planPath !== "string" || !raw.planPath.trim()) return undefined
     if (typeof raw.skillRootPath !== "string" || !raw.skillRootPath.trim()) return undefined
+    const replayPolicy = isObject(raw.replayPolicy)
+      ? {
+          strategy:
+            raw.replayPolicy.strategy === "full" || raw.replayPolicy.strategy === "failures_then_regression"
+              ? raw.replayPolicy.strategy
+              : undefined,
+          statePath:
+            typeof raw.replayPolicy.statePath === "string" && raw.replayPolicy.statePath.trim()
+              ? raw.replayPolicy.statePath
+              : undefined,
+        }
+      : undefined
     return {
       id: raw.id,
       type: "blank_eval_plan",
@@ -301,6 +313,7 @@ function normalizeValidator(raw: unknown): LongTaskValidatorContract | undefined
         typeof raw.minPassRate === "number" && raw.minPassRate >= 0 && raw.minPassRate <= 1
           ? raw.minPassRate
           : undefined,
+      replayPolicy,
       required: typeof raw.required === "boolean" ? raw.required : true,
       blocking: typeof raw.blocking === "boolean" ? raw.blocking : false,
       validation: normalizeValidatorEngineHints(raw.validation),
@@ -651,6 +664,14 @@ export async function loadLongTaskSpec(
         ...validator,
         planPath: resolveMaybePath(baseDir, validator.planPath),
         skillRootPath: resolveMaybePath(baseDir, validator.skillRootPath),
+        replayPolicy: validator.replayPolicy
+          ? {
+              ...validator.replayPolicy,
+              statePath: validator.replayPolicy.statePath
+                ? resolveMaybePath(baseDir, validator.replayPolicy.statePath)
+                : undefined,
+            }
+          : undefined,
       }
     }
     return {

@@ -32,6 +32,8 @@ export type BlankEvalPlanMode = "single" | "sequence" | "parallel"
 
 export type BlankEvalPlanSuccessCriterion = "all_pass" | "allow_partial" | "min_pass_rate"
 
+export type BlankEvalPlanReplayPolicyStrategy = "full" | "failures_then_regression"
+
 export interface BlankEvalPlanCase {
   id: string
   specPath: string
@@ -54,6 +56,11 @@ export interface BlankEvalPlanInput {
   minPassRate?: number
   runtimeScope?: string
   concurrencyScope?: string
+}
+
+export interface BlankEvalPlanReplayPolicy {
+  strategy: BlankEvalPlanReplayPolicyStrategy
+  statePath?: string
 }
 
 export interface BlankEvalPlanCaseResult {

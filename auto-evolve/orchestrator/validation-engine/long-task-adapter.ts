@@ -19,8 +19,13 @@ import { resolveModelSelection } from "../model-selection"
 import { runManagedProcess } from "../managed-process"
 import { runOpencodeTask } from "../opencode"
 import { writeTaskArtifacts } from "../task-artifacts"
-import { runBlankEvalPlan } from "../blank-eval/plan-runner"
-import type { BlankEvalPlanCase, BlankEvalPlanMode, BlankEvalPlanSuccessCriterion } from "../blank-eval/contract"
+import { runBlankEvalPlan, type BlankEvalCaseRunner } from "../blank-eval/plan-runner"
+import type {
+  BlankEvalPlanCase,
+  BlankEvalPlanMode,
+  BlankEvalPlanResult,
+  BlankEvalPlanSuccessCriterion,
+} from "../blank-eval/contract"
 import { buildValidationResultViews, writeValidationResultViews } from "./result-views"
 import { assertNoBlankAgentAudience } from "./registry"
 import type {
@@ -507,6 +512,243 @@ function normalizeBlankEvalPlanCases(raw: unknown, planPath: string): BlankEvalP
     .filter((item) => item.specPath.trim().length > 0)
 }
 
+type BlankEvalReplayPolicyPhase = "initial_full" | "focused_failures" | "stable"
+
+type BlankEvalReplayPolicyState = {
+  schema: "blank-eval-replay-policy-state/v1"
+  strategy: "failures_then_regression"
+  phase: BlankEvalReplayPolicyPhase
+  failedCaseIDs: string[]
+  protectedCaseIDs: string[]
+  lastRunID?: string
+  updatedAt: string
+}
+
+function uniqueStrings(items: string[]) {
+  return Array.from(new Set(items.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim())))
+}
+
+async function readReplayPolicyState(statePath: string): Promise<BlankEvalReplayPolicyState | undefined> {
+  try {
+    const raw = await readFile(statePath, "utf8")
+    const parsed = JSON.parse(raw.replace(/^\uFEFF/, ""))
+    if (!isObject(parsed)) return undefined
+    if (parsed.schema !== "blank-eval-replay-policy-state/v1") return undefined
+    if (parsed.strategy !== "failures_then_regression") return undefined
+    return {
+      schema: "blank-eval-replay-policy-state/v1",
+      strategy: "failures_then_regression",
+      phase:
+        parsed.phase === "focused_failures" || parsed.phase === "stable" || parsed.phase === "initial_full"
+          ? parsed.phase
+          : "initial_full",
+      failedCaseIDs: Array.isArray(parsed.failedCaseIDs) ? uniqueStrings(parsed.failedCaseIDs.map(String)) : [],
+      protectedCaseIDs: Array.isArray(parsed.protectedCaseIDs) ? uniqueStrings(parsed.protectedCaseIDs.map(String)) : [],
+      lastRunID: typeof parsed.lastRunID === "string" ? parsed.lastRunID : undefined,
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : nowISO(),
+    }
+  } catch {
+    return undefined
+  }
+}
+
+async function writeReplayPolicyState(statePath: string, state: Omit<BlankEvalReplayPolicyState, "updatedAt">) {
+  await mkdir(path.dirname(statePath), { recursive: true })
+  await writeJsonFile(statePath, {
+    ...state,
+    failedCaseIDs: uniqueStrings(state.failedCaseIDs),
+    protectedCaseIDs: uniqueStrings(state.protectedCaseIDs),
+    updatedAt: nowISO(),
+  })
+}
+
+function casesByID(cases: BlankEvalPlanCase[], ids: string[]) {
+  const wanted = new Set(ids)
+  return cases.filter((item) => wanted.has(item.id))
+}
+
+function passedCaseIDs(result: BlankEvalPlanResult) {
+  return result.caseResults.filter((item) => item.passed).map((item) => item.id)
+}
+
+function failedCaseIDs(result: BlankEvalPlanResult) {
+  return result.caseResults.filter((item) => !item.passed && !item.skipped).map((item) => item.id)
+}
+
+function mergeProtectedCases(previous: string[], newlyPassed: string[], newlyFailed: string[]) {
+  const failed = new Set(newlyFailed)
+  return uniqueStrings([...previous, ...newlyPassed]).filter((item) => !failed.has(item))
+}
+
+export async function runBlankEvalPlanWithReplayPolicy(input: {
+  cwd: string
+  contract: LongTaskBlankEvalPlanValidatorContract
+  spec: LongTaskSpec
+  cases: BlankEvalPlanCase[]
+  mode: BlankEvalPlanMode
+  concurrency: number
+  successCriterion: BlankEvalPlanSuccessCriterion
+  minPassRate?: number
+  stopOnFirstFailure?: boolean
+  runtimeScope?: string
+  validatorDir: string
+  caseRunner?: BlankEvalCaseRunner
+}) {
+  const runOne = async (label: string, selectedCases: BlankEvalPlanCase[]) =>
+    await runBlankEvalPlan({
+      cwd: input.cwd,
+      mode: input.mode,
+      skillRoots: [input.contract.skillRootPath],
+      cases: selectedCases,
+      runRoot: path.join(input.validatorDir, "blank-eval-plan", label),
+      title: `${input.contract.title} (${label})`,
+      concurrency: input.concurrency,
+      stopOnFirstFailure: input.stopOnFirstFailure,
+      successCriterion: input.successCriterion,
+      minPassRate: input.minPassRate,
+      runtimeScope: input.runtimeScope ? `${input.runtimeScope}:${input.contract.id}:${label}` : `blank-eval-plan:${input.contract.id}:${label}`,
+      concurrencyScope: `blank-eval-plan:${input.spec.id ?? input.spec.taskFamily ?? input.spec.title}`,
+    }, input.caseRunner ? { runner: input.caseRunner } : undefined)
+
+  const policy = input.contract.replayPolicy
+  if (policy?.strategy !== "failures_then_regression") {
+    const result = await runOne("full", input.cases)
+    return {
+      passed: result.passed,
+      summary: result.summary,
+      finalResult: result,
+      allResults: [result],
+      policySummary: "policy=full",
+    }
+  }
+
+  const statePath =
+    policy.statePath ??
+    path.join(path.dirname(input.contract.planPath), ".blank-eval-replay-policy", `${input.contract.id}.json`)
+  const prior = await readReplayPolicyState(statePath)
+  const allCaseIDs = input.cases.map((item) => item.id)
+  const knownProtected = uniqueStrings(prior?.protectedCaseIDs ?? []).filter((item) => allCaseIDs.includes(item))
+  const knownFailed = uniqueStrings(prior?.failedCaseIDs ?? []).filter((item) => allCaseIDs.includes(item))
+
+  if (!prior || prior.phase === "initial_full" || !knownFailed.length) {
+    const full = await runOne("initial-full", input.cases)
+    const failed = failedCaseIDs(full)
+    const passed = passedCaseIDs(full)
+    if (failed.length) {
+      await writeReplayPolicyState(statePath, {
+        schema: "blank-eval-replay-policy-state/v1",
+        strategy: "failures_then_regression",
+        phase: "focused_failures",
+        failedCaseIDs: failed,
+        protectedCaseIDs: passed,
+        lastRunID: full.runID,
+      })
+    } else {
+      await writeReplayPolicyState(statePath, {
+        schema: "blank-eval-replay-policy-state/v1",
+        strategy: "failures_then_regression",
+        phase: "stable",
+        failedCaseIDs: [],
+        protectedCaseIDs: passed,
+        lastRunID: full.runID,
+      })
+    }
+    return {
+      passed: full.passed,
+      summary: full.summary,
+      finalResult: full,
+      allResults: [full],
+      policySummary: failed.length
+        ? `policy=failures_then_regression initial_full failed=${failed.join(",")} protected=${passed.join(",")}`
+        : "policy=failures_then_regression initial_full all_passed",
+      statePath,
+    }
+  }
+
+  const focusedCases = casesByID(input.cases, knownFailed)
+  const focused = await runOne("focused-failures", focusedCases)
+  const focusedFailed = failedCaseIDs(focused)
+  const focusedPassed = passedCaseIDs(focused)
+  const protectedAfterFocused = mergeProtectedCases(knownProtected, focusedPassed, focusedFailed)
+  if (focusedFailed.length) {
+    await writeReplayPolicyState(statePath, {
+      schema: "blank-eval-replay-policy-state/v1",
+      strategy: "failures_then_regression",
+      phase: "focused_failures",
+      failedCaseIDs: focusedFailed,
+      protectedCaseIDs: protectedAfterFocused,
+      lastRunID: focused.runID,
+    })
+    return {
+      passed: false,
+      summary: `Focused failed-case replay still has failures: ${focusedFailed.join(",")}.`,
+      finalResult: focused,
+      allResults: [focused],
+      policySummary: `policy=failures_then_regression focused_failed=${focusedFailed.join(",")} protected=${protectedAfterFocused.join(",")}`,
+      statePath,
+    }
+  }
+
+  const regressionCases = casesByID(input.cases, knownProtected)
+  if (!regressionCases.length) {
+    await writeReplayPolicyState(statePath, {
+      schema: "blank-eval-replay-policy-state/v1",
+      strategy: "failures_then_regression",
+      phase: "stable",
+      failedCaseIDs: [],
+      protectedCaseIDs: protectedAfterFocused,
+      lastRunID: focused.runID,
+    })
+    return {
+      passed: true,
+      summary: "Focused failed-case replay passed and there were no protected cases to regression-test.",
+      finalResult: focused,
+      allResults: [focused],
+      policySummary: "policy=failures_then_regression focused_passed no_regression_cases",
+      statePath,
+    }
+  }
+
+  const regression = await runOne("protected-regression", regressionCases)
+  const regressionFailed = failedCaseIDs(regression)
+  const regressionPassed = passedCaseIDs(regression)
+  if (regressionFailed.length) {
+    await writeReplayPolicyState(statePath, {
+      schema: "blank-eval-replay-policy-state/v1",
+      strategy: "failures_then_regression",
+      phase: "focused_failures",
+      failedCaseIDs: regressionFailed,
+      protectedCaseIDs: mergeProtectedCases([...regressionPassed, ...focusedPassed], [], regressionFailed),
+      lastRunID: regression.runID,
+    })
+    return {
+      passed: false,
+      summary: `Failed cases were fixed, but protected regression failed: ${regressionFailed.join(",")}.`,
+      finalResult: regression,
+      allResults: [focused, regression],
+      policySummary: `policy=failures_then_regression regression_failed=${regressionFailed.join(",")}`,
+      statePath,
+    }
+  }
+
+  await writeReplayPolicyState(statePath, {
+    schema: "blank-eval-replay-policy-state/v1",
+    strategy: "failures_then_regression",
+    phase: "stable",
+    failedCaseIDs: [],
+    protectedCaseIDs: uniqueStrings([...protectedAfterFocused, ...regressionPassed]),
+    lastRunID: regression.runID,
+  })
+  return {
+    passed: true,
+    summary: "Focused failed-case replay passed and protected regression also passed.",
+    finalResult: regression,
+    allResults: [focused, regression],
+    policySummary: "policy=failures_then_regression focused_passed regression_passed",
+    statePath,
+  }
+}
+
 function blankEvalPlanInfrastructureFailure(input: {
   contract: LongTaskBlankEvalPlanValidatorContract
   runID: string
@@ -643,20 +885,20 @@ async function runBlankEvalPlanLongTaskValidation(input: {
     }
   }
 
-  const planResult = await runBlankEvalPlan({
+  const policyResult = await runBlankEvalPlanWithReplayPolicy({
     cwd: input.cwd,
-    mode,
-    skillRoots: [input.contract.skillRootPath],
+    contract: input.contract,
+    spec: input.spec,
     cases,
-    runRoot: path.join(input.validatorDir, "blank-eval-plan"),
-    title: input.contract.title,
+    mode,
     concurrency,
-    stopOnFirstFailure,
     successCriterion,
     minPassRate,
+    stopOnFirstFailure,
     runtimeScope: input.runtimeScope ? `${input.runtimeScope}:${input.contract.id}` : `blank-eval-plan:${input.runID}:${input.contract.id}`,
-    concurrencyScope: `blank-eval-plan:${input.spec.id ?? input.spec.taskFamily ?? input.spec.title}`,
+    validatorDir: input.validatorDir,
   })
+  const planResult = policyResult.finalResult
 
   return {
     result: {
@@ -667,22 +909,24 @@ async function runBlankEvalPlanLongTaskValidation(input: {
       validatorID: input.contract.id,
       validatorType: "engine" as const,
       createdAt: nowISO(),
-      passed: planResult.passed,
+      passed: policyResult.passed,
       blocking: input.contract.blocking === true,
-      failureKind: planResult.passed ? undefined : ("product_failure" as const),
-      summary: planResult.summary,
+      failureKind: policyResult.passed ? undefined : ("product_failure" as const),
+      summary: policyResult.summary,
       details: [
+        policyResult.policySummary,
         `mode=${planResult.mode}`,
         `score=${planResult.passedCount}/${planResult.total}`,
         `successCriterion=${planResult.successCriterion}`,
+        ...(policyResult.statePath ? [`replayPolicyState=${policyResult.statePath}`] : []),
+        ...policyResult.allResults.map((item, index) => `subReplay${index + 1}=${item.resultPath}`),
         ...(planResult.failedCases.length ? [`failedCases=${planResult.failedCases.join(",")}`] : []),
       ],
       evidenceRefs: [
         inputPath,
         input.contract.planPath,
-        planResult.resultPath,
-        planResult.evidenceBundlePath,
-        planResult.summaryPath,
+        ...(policyResult.statePath ? [policyResult.statePath] : []),
+        ...policyResult.allResults.flatMap((item) => [item.resultPath, item.evidenceBundlePath, item.summaryPath]),
       ],
       rawOutputPath: planResult.resultPath,
     },
@@ -693,6 +937,17 @@ async function runBlankEvalPlanLongTaskValidation(input: {
       planResultPath: planResult.resultPath,
       evidenceBundlePath: planResult.evidenceBundlePath,
       summaryPath: planResult.summaryPath,
+      replayPolicyStatePath: policyResult.statePath,
+      replayPolicySummary: policyResult.policySummary,
+      subReplayResults: policyResult.allResults.map((item) => ({
+        runID: item.runID,
+        mode: item.mode,
+        passed: item.passed,
+        total: item.total,
+        passedCount: item.passedCount,
+        failedCases: item.failedCases,
+        resultPath: item.resultPath,
+      })),
       caseResults: planResult.caseResults,
     },
   }

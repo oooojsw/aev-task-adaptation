@@ -2330,6 +2330,35 @@ bun run auto-evolve/scripts/smoke-blank-eval-plan.ts
 bun run auto-evolve/scripts/smoke-blank-eval-plan-spec.ts
 ```
 
+## Merge Replay Policy (2026-07-06)
+
+`single / sequence / parallel` are execution modes only. They decide how a selected batch of blank-agent cases runs, but they do not decide which cases should be tested next.
+
+`merge-as-long-task` now mounts a replay policy above `blank_eval_plan`:
+
+```json
+"replayPolicy": {
+  "strategy": "failures_then_regression",
+  "statePath": "./materials/.blank-eval-replay-policy/merged-skill-blank-eval-plan.json"
+}
+```
+
+Plain meaning:
+
+- First pass tests the full replay set covered by the current merge group.
+- If some cases fail, the next final-acceptance round tests only those failed cases.
+- Once those failed cases pass, the same validator immediately regression-tests the previously passed/protected cases.
+- If protected cases regress, those regressed cases become the next focused failed set.
+- A merge group is accepted only when the focused failures pass and the protected regression set also passes.
+
+This keeps the expensive blank-agent replay focused during repair, without losing the guarantee that previously successful cases were not broken.
+
+Smoke:
+
+```powershell
+bun run auto-evolve/scripts/smoke-merge-replay-policy.ts
+```
+
 ## Benchmark CLI Argument Guard (2026-07-04)
 
 `run-benchmark-orchestrator.ts` now refuses unexpected bare command-line arguments.

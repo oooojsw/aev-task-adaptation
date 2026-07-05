@@ -661,6 +661,10 @@ export async function createMergeLongTaskPack(input: CreateMergeLongTaskPackInpu
           stopOnFirstFailure: mode.stopOnFirstFailure ?? false,
           successCriterion: blankEvalCriterion(mode),
           minPassRate: mode.minPassRate,
+          replayPolicy: {
+            strategy: "failures_then_regression",
+            statePath: "./materials/.blank-eval-replay-policy/merged-skill-blank-eval-plan.json",
+          },
           required: true,
           blocking: mode.successCriterion !== "report_only",
           validation: {
