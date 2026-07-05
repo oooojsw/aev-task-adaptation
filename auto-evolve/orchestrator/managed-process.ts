@@ -85,6 +85,72 @@ function processRegistryTimeoutMs() {
   return 5_000
 }
 
+function isBrokenStdinPipe(error: unknown) {
+  const code = typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : ""
+  const message = error instanceof Error ? error.message : String(error)
+  return code === "EPIPE" || code === "ERR_STREAM_DESTROYED" || /broken pipe|stream.*destroyed|write after end/i.test(message)
+}
+
+async function writeStdinAndEnd(
+  stdin: NodeJS.WritableStream | null | undefined,
+  text: string | undefined,
+): Promise<{ ok: boolean; message?: string }> {
+  if (!stdin) {
+    if (typeof text === "string" && text.length > 0) {
+      return { ok: false, message: "stdin pipe was unavailable before payload could be written" }
+    }
+    return { ok: true }
+  }
+  try {
+    stdin.setDefaultEncoding("utf8")
+    if (typeof text !== "string") {
+      stdin.end()
+      return { ok: true }
+    }
+    return await new Promise((resolve) => {
+      let settled = false
+      const finish = (result: { ok: boolean; message?: string }) => {
+        if (settled) return
+        settled = true
+        stdin.off?.("error", onError)
+        resolve(result)
+      }
+      const onError = (error: unknown) => {
+        const detail = error instanceof Error ? error.message : String(error)
+        if (isBrokenStdinPipe(error)) {
+          finish({ ok: false, message: `stdin pipe closed while writing payload: ${detail}` })
+          return
+        }
+        finish({ ok: false, message: `stdin write failed: ${detail}` })
+      }
+      stdin.once?.("error", onError)
+      try {
+        stdin.write(text, (error?: Error | null) => {
+          if (error) {
+            onError(error)
+            return
+          }
+          try {
+            stdin.end()
+          } catch (endError) {
+            onError(endError)
+            return
+          }
+          finish({ ok: true })
+        })
+      } catch (error) {
+        onError(error)
+      }
+    })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    if (isBrokenStdinPipe(error)) {
+      return { ok: false, message: `stdin pipe closed before payload could be written: ${detail}` }
+    }
+    return { ok: false, message: `stdin setup failed: ${detail}` }
+  }
+}
+
 async function waitRegistry(promise: Promise<void>, ms: number) {
   let handle: ReturnType<typeof setTimeout> | undefined
   try {
@@ -143,14 +209,14 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
   const backend = resolveBackend(input.backend)
   const child =
     backend === "python_subprocess"
-      ? nodeSpawn("cmd.exe", ["/c", "python"], {
-          cwd: input.cwd,
+      ? nodeSpawn("python", ["-c", buildPythonWrapperCode()], {
+          cwd: ensureValidCwd(input.cwd),
           env: {
             ...process.env,
             ...input.env,
           },
           stdio: ["pipe", "pipe", "pipe"],
-          shell: true,
+          shell: false,
         })
       : nodeSpawn(normalizePathForSpawn(input.command[0] ?? ""), input.command.slice(1).map(normalizeArgForSpawn), {
           cwd: ensureValidCwd(input.cwd),
@@ -259,22 +325,18 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
       stderrData += `[managed-process] process registry did not finish within ${ms}ms; continuing task execution.\n`
     }
 
-    if (backend === "python_subprocess") {
-      const wrapperPayload = JSON.stringify({
-        command: input.command,
-        cwd: input.cwd,
-        env: input.env ?? {},
-        stdin_text: input.stdinText,
-      })
-      child.stdin?.setDefaultEncoding("utf8")
-      child.stdin?.write(wrapperPayload)
-      child.stdin?.end()
-    } else if (typeof input.stdinText === "string") {
-      child.stdin?.setDefaultEncoding("utf8")
-      child.stdin?.write(input.stdinText)
-      child.stdin?.end()
-    } else {
-      child.stdin?.end()
+    const stdinPayload =
+      backend === "python_subprocess"
+        ? JSON.stringify({
+            command: input.command,
+            cwd: input.cwd,
+            env: input.env ?? {},
+            stdin_text: input.stdinText,
+          })
+        : input.stdinText
+    const stdinWrite = await writeStdinAndEnd(child.stdin, stdinPayload)
+    if (!stdinWrite.ok) {
+      stderrData += `[managed-process] ${stdinWrite.message}. Treating child as a controlled process failure instead of crashing orchestrator.\n`
     }
 
     await input.onSpawn?.()

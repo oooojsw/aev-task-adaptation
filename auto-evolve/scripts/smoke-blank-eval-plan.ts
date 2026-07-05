@@ -13,6 +13,9 @@ async function main() {
   const calls: string[] = []
   const fakeRunner: BlankEvalCaseRunner = async ({ caseItem, runRoot }) => {
     calls.push(caseItem.id)
+    const rel = path.relative(root, runRoot)
+    assert(!rel.startsWith("..") && !path.isAbsolute(rel), `case runRoot escaped smoke root: ${runRoot}`)
+    assert(!/[<>:"|?*\r\n]/.test(path.basename(runRoot)), `case runRoot contains unsafe filename characters: ${runRoot}`)
     return {
       id: caseItem.id,
       specPath: caseItem.specPath,
@@ -43,9 +46,43 @@ async function main() {
     },
     { runner: fakeRunner },
   )
-  assert(single.passed === true, "single should pass when first case passes")
-  assert(single.total === 1, "single should execute exactly one case")
-  assert(calls.join(",") === "case-a", "single should not execute later cases")
+  assert(single.passed === false, "single should fail closed when more than one case is provided")
+  assert(single.total === 2, "invalid single should report every provided case")
+  assert(single.failedCount === 2, "invalid single should mark both cases failed")
+  assert(single.caseResults.every((item) => item.failureKind === "validator_infrastructure"), "invalid single should be infrastructure failure")
+  assert(calls.join(",") === "", "invalid single should not execute any case")
+
+  calls.length = 0
+  const duplicate = await runBlankEvalPlan(
+    {
+      ...base,
+      mode: "parallel",
+      cases: [
+        { id: "dup", specPath: path.join(root, "dup-a.json") },
+        { id: "dup", specPath: path.join(root, "dup-b.json") },
+      ],
+    },
+    { runner: fakeRunner },
+  )
+  assert(duplicate.passed === false, "duplicate case IDs should fail closed")
+  assert(duplicate.failedCount === 2, "duplicate IDs should mark all duplicated plan rows failed")
+  assert(calls.join(",") === "", "duplicate ID plan should not execute any case")
+
+  calls.length = 0
+  const weirdNames = await runBlankEvalPlan(
+    {
+      ...base,
+      mode: "parallel",
+      concurrency: 2,
+      cases: [
+        { id: "../CON\r\nbad:name", specPath: path.join(root, "weird-a.json") },
+        { id: "AUX. ", specPath: path.join(root, "weird-b.json") },
+      ],
+    },
+    { runner: fakeRunner },
+  )
+  assert(weirdNames.passed === true, "weird-but-unique IDs should be sanitized and still run")
+  assert(calls.length === 2, "weird IDs should both execute after sanitization")
 
   calls.length = 0
   const sequence = await runBlankEvalPlan(

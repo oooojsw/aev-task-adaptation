@@ -49,6 +49,8 @@ import {
 import {
   collectExpertOracleReadPaths,
   assertExpertOracleReadPaths,
+  assertNoOracleLeakageInBlankAgentChannel,
+  writeExpertOracleBundle,
   type OracleValidatorResult,
 } from "./expert-oracle-evidence"
 import type {
@@ -1963,10 +1965,59 @@ async function resetPath(target: string) {
   await rm(target, { recursive: true, force: true })
 }
 
-async function copyExperienceWorkspaceRoot(sourceRoot: string, targetRoot: string) {
+function surfaceContractDeclaredPaths(contract: Record<string, unknown> | undefined) {
+  if (!contract) return []
+  const out: string[] = []
+  const add = (value: unknown) => {
+    if (typeof value !== "string") return
+    const normalized = value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/").trim()
+    if (!normalized || normalized.startsWith("../") || path.posix.isAbsolute(normalized)) return
+    out.push(normalized)
+  }
+  add(contract.entry)
+  add(contract.changeLog)
+  for (const item of Array.isArray(contract.documents) ? contract.documents : []) {
+    if (typeof item === "string") add(item)
+    else if (item && typeof item === "object") add((item as Record<string, unknown>).path)
+  }
+  return uniqueStrings(out)
+}
+
+async function copySurfaceContractRequiredPaths(sourceRoot: string, targetRoot: string) {
+  const contractPath = path.join(sourceRoot, "surface_contract.json")
+  if (!(await pathExists(contractPath))) return
+  let contract: Record<string, unknown> | undefined
+  try {
+    contract = await readJsonFile<Record<string, unknown>>(contractPath)
+  } catch {
+    return
+  }
+  for (const relative of surfaceContractDeclaredPaths(contract)) {
+    const source = path.join(sourceRoot, ...relative.split("/"))
+    const target = path.join(targetRoot, ...relative.split("/"))
+    if (await pathExists(target)) continue
+    if (!(await pathExists(source))) continue
+    const stats = await lstat(source)
+    if (stats.isDirectory()) {
+      await cp(source, target, { recursive: true, force: true })
+    } else {
+      await ensureParentDirForPath(target)
+      await cp(source, target, { force: true })
+    }
+  }
+}
+
+async function copyExperienceWorkspaceRoot(
+  sourceRoot: string,
+  targetRoot: string,
+  options: { includeSurfaceContractRequiredPaths?: boolean } = {},
+) {
   const snapshot = await readExperienceWorkspace(experienceSnapshotFromRoot(sourceRoot))
   await resetPath(targetRoot)
   await writeExperienceWorkspaceSnapshot(targetRoot, snapshot)
+  if (options.includeSurfaceContractRequiredPaths) {
+    await copySurfaceContractRequiredPaths(sourceRoot, targetRoot)
+  }
 }
 
 async function copyPathIntoTarget(sourcePath: string, targetPath: string) {
@@ -2029,7 +2080,10 @@ async function seedCampaignCurrentPendingPackage(input: {
   seedTarget: LongTaskCampaignSeedTarget | undefined
 }) {
   if (!input.seedTarget) return
-  if (await pathExists(path.join(input.currentRoot, "manifest.md"))) return
+  const entryCandidates = ["manifest.md", "INDEX.md", "README.md", "index.md", "ENTRY.md"]
+  for (const candidate of entryCandidates) {
+    if (await pathExists(path.join(input.currentRoot, candidate))) return
+  }
   if ((input.seedTarget.kind ?? "experience_workspace") === "experience_workspace") {
     await copyExperienceWorkspaceRoot(input.seedTarget.seedPath, input.currentRoot)
     return
@@ -3631,6 +3685,7 @@ async function runCampaignWorkers(input: {
   reviewerSuggestionPath?: string
   blankAgentEvidenceBundlePath?: string
   blankAgentEvidenceReadPaths?: string[]
+  expertOracleBundlePath?: string
   /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank workers. */
   expertOracleReadPaths?: string[]
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
@@ -3661,10 +3716,16 @@ async function runCampaignWorkers(input: {
         finalAcceptanceFeedbackPath: input.finalAcceptanceFeedbackPath,
         reviewerSuggestionPath: input.reviewerSuggestionPath,
         blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
+        blankAgentEvidenceReadPaths: input.blankAgentEvidenceReadPaths,
+        expertOracleBundlePath: input.expertOracleBundlePath,
         expertOracleReadPaths: input.expertOracleReadPaths,
       })
       if (input.blankAgentEvidenceReadPaths?.length) {
         assertNoDirectoryReadPaths(input.blankAgentEvidenceReadPaths, "campaign-worker blank-agent-evidence read paths")
+        assertNoOracleLeakageInBlankAgentChannel(
+          input.blankAgentEvidenceReadPaths,
+          "campaign-worker blank-agent-evidence read paths",
+        )
       }
       if (input.expertOracleReadPaths?.length) {
         await assertExpertOracleReadPaths(input.expertOracleReadPaths, "campaign-worker expert-oracle read paths")
@@ -3691,6 +3752,7 @@ async function runCampaignWorkers(input: {
           ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
           ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
           ...(input.blankAgentEvidenceReadPaths ?? []),
+          ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
           ...(input.expertOracleReadPaths ?? []),
           ...(input.carryoverFiles ?? []),
         ],
@@ -3709,6 +3771,7 @@ async function runCampaignWorkers(input: {
           ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
           ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
           ...(input.blankAgentEvidenceReadPaths ?? []),
+          ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
           ...(input.expertOracleReadPaths ?? []),
           ...(input.carryoverFiles ?? []),
         ],
@@ -3758,6 +3821,7 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
   reviewerSuggestionPath?: string
   blankAgentEvidenceBundlePath?: string
   blankAgentEvidenceReadPaths?: string[]
+  expertOracleBundlePath?: string
   /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank workers. */
   expertOracleReadPaths?: string[]
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
@@ -3800,11 +3864,13 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
     blankAgentEvidenceReadPaths: input.blankAgentEvidenceReadPaths,
     blankAcceptanceDiagnosisProfile,
+    expertOracleBundlePath: input.expertOracleBundlePath,
     expertOracleReadPaths: input.expertOracleReadPaths,
   })
   // Evidence paths are exact files only (no directories). Assert before granting read access.
   if (input.blankAgentEvidenceReadPaths?.length) {
     assertNoDirectoryReadPaths(input.blankAgentEvidenceReadPaths, "blank-agent-evidence read paths")
+    assertNoOracleLeakageInBlankAgentChannel(input.blankAgentEvidenceReadPaths, "blank-agent-evidence read paths")
   }
   if (input.expertOracleReadPaths?.length) {
     await assertExpertOracleReadPaths(input.expertOracleReadPaths, "blank-agent-acceptance-diagnosis expert-oracle read paths")
@@ -3824,6 +3890,7 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
     ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
     ...(input.blankAgentEvidenceReadPaths ?? []),
+    ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
     ...(input.expertOracleReadPaths ?? []),
   ]
   const result = await runCampaignSuggestionTask({
@@ -3876,6 +3943,43 @@ function buildRepairChecklistFromFinalAcceptance(
   return items
 }
 
+function oracleResultsFromValidatorResults(
+  validatorResults: Array<Record<string, unknown>>,
+): OracleValidatorResult[] {
+  return validatorResults.map((vr) => ({
+    validatorID: String(vr.validatorID ?? "unknown"),
+    passed: Boolean(vr.passed),
+    evidenceRefs: Array.isArray(vr.evidenceRefs) ? (vr.evidenceRefs as string[]) : undefined,
+    rawOutputPath: typeof vr.rawOutputPath === "string" ? vr.rawOutputPath : undefined,
+  }))
+}
+
+async function writeExpertOracleBundleFromValidatorResults(input: {
+  outPath: string
+  campaignID?: string
+  roundNumber?: number
+  passID?: string
+  resultPath?: string
+  validatorResults: Array<Record<string, unknown>>
+}) {
+  const oracle = await collectExpertOracleReadPaths({
+    validatorResults: oracleResultsFromValidatorResults(input.validatorResults),
+  })
+  const written = await writeExpertOracleBundle({
+    outPath: input.outPath,
+    campaignID: input.campaignID,
+    roundNumber: input.roundNumber,
+    passID: input.passID,
+    resultPath: input.resultPath,
+    oracle,
+  })
+  return {
+    bundlePath: written.bundlePath,
+    oraclePaths: oracle.paths,
+    oracleSources: oracle.sources,
+  }
+}
+
 function validatorRepairHint(validatorID: string, details: string[]): string {
   if (validatorID === "workspace-layout") {
     if (details.some((d) => d.includes("missing: manifest.md") || d.includes("entry file is missing"))) {
@@ -3925,6 +4029,7 @@ async function runCampaignLead(input: {
   repairChecklist?: string[]
   blankAgentEvidenceBundlePath?: string
   blankAgentEvidenceReadPaths?: string[]
+  expertOracleBundlePath?: string
   /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank lead. */
   expertOracleReadPaths?: string[]
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
@@ -3956,10 +4061,15 @@ async function runCampaignLead(input: {
     finalAcceptanceFeedbackPath: input.finalAcceptanceFeedbackPath,
     repairChecklist: input.repairChecklist,
     blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
+    expertOracleBundlePath: input.expertOracleBundlePath,
     expertOracleReadPaths: input.expertOracleReadPaths,
   })
   if (input.blankAgentEvidenceReadPaths?.length) {
     assertNoDirectoryReadPaths(input.blankAgentEvidenceReadPaths, "campaign-lead blank-agent-evidence read paths")
+    assertNoOracleLeakageInBlankAgentChannel(
+      input.blankAgentEvidenceReadPaths,
+      "campaign-lead blank-agent-evidence read paths",
+    )
   }
   if (input.expertOracleReadPaths?.length) {
     await assertExpertOracleReadPaths(input.expertOracleReadPaths, "campaign-lead expert-oracle read paths")
@@ -3986,6 +4096,7 @@ async function runCampaignLead(input: {
       ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
       ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
       ...(input.blankAgentEvidenceReadPaths ?? []),
+      ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
       ...(input.expertOracleReadPaths ?? []),
     ],
     permissionReadPaths: [
@@ -4003,6 +4114,7 @@ async function runCampaignLead(input: {
       ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
       ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
       ...(input.blankAgentEvidenceReadPaths ?? []),
+      ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
       ...(input.expertOracleReadPaths ?? []),
     ],
     permissionEditPaths: [input.nextPendingPackageRoot, input.nextExplorationTreePath, input.nextRoutingControlPath],
@@ -4030,6 +4142,7 @@ async function runCampaignReviewer(input: {
   acceptanceExperienceJsonlPath?: string
   blankAgentEvidenceBundlePath?: string
   blankAgentEvidenceReadPaths?: string[]
+  expertOracleBundlePath?: string
   /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank reviewer. */
   expertOracleReadPaths?: string[]
   stageDir?: string
@@ -4052,10 +4165,15 @@ async function runCampaignReviewer(input: {
     blankAgentAcceptanceDiagnosisPath: input.blankAgentAcceptanceDiagnosisPath,
     acceptanceExperiencePath: input.acceptanceExperiencePath,
     blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
+    expertOracleBundlePath: input.expertOracleBundlePath,
     expertOracleReadPaths: input.expertOracleReadPaths,
   })
   if (input.blankAgentEvidenceReadPaths?.length) {
     assertNoDirectoryReadPaths(input.blankAgentEvidenceReadPaths, "campaign-reviewer blank-agent-evidence read paths")
+    assertNoOracleLeakageInBlankAgentChannel(
+      input.blankAgentEvidenceReadPaths,
+      "campaign-reviewer blank-agent-evidence read paths",
+    )
   }
   if (input.expertOracleReadPaths?.length) {
     await assertExpertOracleReadPaths(input.expertOracleReadPaths, "campaign-reviewer expert-oracle read paths")
@@ -4079,6 +4197,7 @@ async function runCampaignReviewer(input: {
       ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
       ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
       ...(input.blankAgentEvidenceReadPaths ?? []),
+      ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
       ...(input.expertOracleReadPaths ?? []),
     ],
     permissionReadPaths: [
@@ -4093,6 +4212,7 @@ async function runCampaignReviewer(input: {
       ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
       ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
       ...(input.blankAgentEvidenceReadPaths ?? []),
+      ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
       ...(input.expertOracleReadPaths ?? []),
     ],
     stageDir,
@@ -4262,7 +4382,9 @@ async function runCampaignFinalAcceptance(input: {
 
   await ensureDirectory(acceptanceRoot)
   const validationPackageRoot = path.join(acceptanceRoot, "validation-expert-workspace")
-  await copyExperienceWorkspaceRoot(input.pendingPackageRoot, validationPackageRoot)
+  await copyExperienceWorkspaceRoot(input.pendingPackageRoot, validationPackageRoot, {
+    includeSurfaceContractRequiredPaths: true,
+  })
   const acceptanceSpec = buildCampaignFinalAcceptanceSpec(input.baseSpec, validationPackageRoot)
   const syntheticUnit = syntheticCampaignFinalAcceptanceUnit(input.baseSpec, validationPackageRoot)
   const bundlePath = path.join(acceptanceRoot, "final-acceptance-bundle.json")
@@ -4436,6 +4558,7 @@ async function runCampaignFinalAcceptance(input: {
     validatorResults.push(
       blankEvalValidatorResult({
         passed: false,
+        failureKind: "product_failure",
         summary: "Blank-agent acceptance was skipped because the pending skill failed surface validation.",
         details: validatorResults.filter((result) => !result.passed).map((result) => result.summary),
         evidenceRefs: [bundlePath, validationPackageRoot],
@@ -4484,6 +4607,22 @@ async function runCampaignFinalAcceptance(input: {
       productValidatorIDs: validatorPartitions.productValidators.map((item) => item.id),
     },
     createdAt: nowISO(),
+  }
+
+  try {
+    const oracleBundle = await writeExpertOracleBundleFromValidatorResults({
+      outPath: path.join(acceptanceRoot, "expert-oracle-bundle.json"),
+      campaignID: input.campaignID,
+      roundNumber: input.roundNumber,
+      passID: input.passID,
+      resultPath: acceptanceResultPath,
+      validatorResults: validatorResults as unknown as Array<Record<string, unknown>>,
+    })
+    ;(finalAcceptance as Record<string, unknown>).expertOracleBundlePath = oracleBundle.bundlePath
+    ;(finalAcceptance as Record<string, unknown>).expertOracleReadPaths = oracleBundle.oraclePaths
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error("[runCampaignFinalAcceptance] expert oracle bundle generation failed:", message)
   }
 
   // Step 8: generate blank agent evidence bundle (for downstream workers/lead/reviewer/diagnosis)
@@ -4644,6 +4783,7 @@ async function promoteRoundPendingAndTreeToCurrent(input: {
     await copyExperienceWorkspaceRoot(
       input.roundPaths.pendingPackageSnapshotRoot,
       input.campaignPaths.pendingCurrentRoot,
+      { includeSurfaceContractRequiredPaths: true },
     )
   }
   const currentTree = await readLongTaskCampaignExplorationTree(input.campaignPaths)
@@ -5040,6 +5180,7 @@ export async function runLongTaskCampaign(input: {
         // Step 10b: workers may also read oracle paths from the latest final acceptance.
         // Read directly from round paths to get exact private view files etc.
         let latestFinalAcceptanceOraclePaths: string[] = []
+        let latestFinalAcceptanceOracleBundlePath: string | undefined
         const latestFinalAcceptancePath = path.join(
           campaignPaths.root,
           "rounds",
@@ -5050,15 +5191,25 @@ export async function runLongTaskCampaign(input: {
         if (await pathExists(latestFinalAcceptancePath)) {
           try {
             const prev = await readJsonFile<Record<string, unknown>>(latestFinalAcceptancePath)
+            if (typeof prev.expertOracleBundlePath === "string") {
+              latestFinalAcceptanceOracleBundlePath = prev.expertOracleBundlePath
+            }
+            if (Array.isArray(prev.expertOracleReadPaths)) {
+              latestFinalAcceptanceOraclePaths = prev.expertOracleReadPaths as string[]
+            }
             const vrs = Array.isArray(prev.validatorResults) ? (prev.validatorResults as Array<Record<string, unknown>>) : []
-            const oracleResults: OracleValidatorResult[] = vrs.map((vr) => ({
-              validatorID: String(vr.validatorID ?? "unknown"),
-              passed: Boolean(vr.passed),
-              evidenceRefs: Array.isArray(vr.evidenceRefs) ? (vr.evidenceRefs as string[]) : undefined,
-              rawOutputPath: typeof vr.rawOutputPath === "string" ? vr.rawOutputPath : undefined,
-            }))
-            const oracle = await collectExpertOracleReadPaths({ validatorResults: oracleResults })
-            latestFinalAcceptanceOraclePaths = oracle.paths
+            if ((!latestFinalAcceptanceOracleBundlePath || latestFinalAcceptanceOraclePaths.length === 0) && vrs.length) {
+              const oracleBundle = await writeExpertOracleBundleFromValidatorResults({
+                outPath: path.join(path.dirname(latestFinalAcceptancePath), "expert-oracle-bundle.json"),
+                campaignID,
+                roundNumber: roundNumber - 1,
+                passID: "latest",
+                resultPath: latestFinalAcceptancePath,
+                validatorResults: vrs,
+              })
+              latestFinalAcceptanceOracleBundlePath = oracleBundle.bundlePath
+              latestFinalAcceptanceOraclePaths = oracleBundle.oraclePaths
+            }
           } catch {
             // ignore: previous round may not have final-acceptance yet
           }
@@ -5091,6 +5242,7 @@ export async function runLongTaskCampaign(input: {
               reviewerSuggestionPath: latestReviewerSuggestionPath,
               blankAgentEvidenceBundlePath: latestBlankEvidence,
               blankAgentEvidenceReadPaths: latestBlankEvidenceReadPaths,
+              expertOracleBundlePath: latestFinalAcceptanceOracleBundlePath,
               expertOracleReadPaths: latestFinalAcceptanceOraclePaths,
               campaignPaths,
               roundPaths,
@@ -5125,6 +5277,7 @@ export async function runLongTaskCampaign(input: {
           let currentEvidenceBundlePath: string | undefined = latestBlankEvidence
           let currentEvidenceReadPaths: string[] = latestBlankEvidenceReadPaths
           let currentOracleReadPaths: string[] = []
+          let currentOracleBundlePath: string | undefined = latestFinalAcceptanceOracleBundlePath
           if (finalAcceptance) {
             const fa = finalAcceptance as Record<string, unknown>
             if (typeof fa.blankAgentEvidenceBundlePath === "string") {
@@ -5141,17 +5294,26 @@ export async function runLongTaskCampaign(input: {
             // Compute expert oracle read paths from the current finalAcceptance.
             // These are exact-file oracle paths (result.private.json, etc.) and
             // are only granted to non-Blank working nodes (worker/lead/reviewer).
+            if (typeof fa.expertOracleBundlePath === "string") {
+              currentOracleBundlePath = fa.expertOracleBundlePath
+            }
+            if (Array.isArray(fa.expertOracleReadPaths)) {
+              currentOracleReadPaths = fa.expertOracleReadPaths as string[]
+            }
             if (Array.isArray(fa.validatorResults)) {
-              const oracleResults: OracleValidatorResult[] = (
-                fa.validatorResults as Array<Record<string, unknown>>
-              ).map((vr) => ({
-                validatorID: String(vr.validatorID ?? "unknown"),
-                passed: Boolean(vr.passed),
-                evidenceRefs: Array.isArray(vr.evidenceRefs) ? (vr.evidenceRefs as string[]) : undefined,
-                rawOutputPath: typeof vr.rawOutputPath === "string" ? vr.rawOutputPath : undefined,
-              }))
-              const oracle = await collectExpertOracleReadPaths({ validatorResults: oracleResults })
-              currentOracleReadPaths = oracle.paths
+              const vrs = fa.validatorResults as Array<Record<string, unknown>>
+              if (!currentOracleBundlePath || currentOracleReadPaths.length === 0) {
+                const oracleBundle = await writeExpertOracleBundleFromValidatorResults({
+                  outPath: path.join(acceptancePassRoot, "expert-oracle-bundle.json"),
+                  campaignID,
+                  roundNumber,
+                  passID,
+                  resultPath: finalAcceptanceFeedbackPath,
+                  validatorResults: vrs,
+                })
+                currentOracleBundlePath = oracleBundle.bundlePath
+                currentOracleReadPaths = oracleBundle.oraclePaths
+              }
             }
           }
 
@@ -5190,6 +5352,7 @@ export async function runLongTaskCampaign(input: {
             repairChecklist,
             blankAgentEvidenceBundlePath: currentEvidenceBundlePath,
             blankAgentEvidenceReadPaths: currentEvidenceReadPaths,
+            expertOracleBundlePath: currentOracleBundlePath,
             expertOracleReadPaths: currentOracleReadPaths,
             campaignPaths,
             roundPaths,
@@ -5260,6 +5423,7 @@ export async function runLongTaskCampaign(input: {
                 acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
                 blankAgentEvidenceBundlePath: currentEvidenceBundlePath,
                 blankAgentEvidenceReadPaths: currentEvidenceReadPaths,
+                expertOracleBundlePath: currentOracleBundlePath,
                 expertOracleReadPaths: currentOracleReadPaths,
                 stageDir: reviewerPassRoot,
                 suggestionPath: reviewerPassSuggestionPath,
@@ -5358,6 +5522,8 @@ export async function runLongTaskCampaign(input: {
               reviewerSuggestionPath: reviewerPassSuggestionPath,
               blankAgentEvidenceBundlePath: (finalAcceptance as Record<string, unknown>).blankAgentEvidenceBundlePath as string | undefined,
               blankAgentEvidenceReadPaths: (finalAcceptance as Record<string, unknown>).blankAgentEvidenceReadPaths as string[] | undefined,
+              expertOracleBundlePath: (finalAcceptance as Record<string, unknown>).expertOracleBundlePath as string | undefined,
+              expertOracleReadPaths: (finalAcceptance as Record<string, unknown>).expertOracleReadPaths as string[] | undefined,
               roundPaths,
               runtimeScope: roundRuntimeScope,
               onActivation: activateCampaignRound,
@@ -5980,6 +6146,7 @@ export async function resumeLongTaskCampaign(input: {
           : []
         // Collect oracle read paths from the latest final acceptance (replay-style campaign).
         let latestFinalAcceptanceOraclePaths: string[] = []
+        let latestFinalAcceptanceOracleBundlePath: string | undefined
         const latestFinalAcceptancePath = path.join(
           campaignPaths.root,
           "rounds",
@@ -5990,15 +6157,25 @@ export async function resumeLongTaskCampaign(input: {
         if (await pathExists(latestFinalAcceptancePath)) {
           try {
             const prev = await readJsonFile<Record<string, unknown>>(latestFinalAcceptancePath)
+            if (typeof prev.expertOracleBundlePath === "string") {
+              latestFinalAcceptanceOracleBundlePath = prev.expertOracleBundlePath
+            }
+            if (Array.isArray(prev.expertOracleReadPaths)) {
+              latestFinalAcceptanceOraclePaths = prev.expertOracleReadPaths as string[]
+            }
             const vrs = Array.isArray(prev.validatorResults) ? (prev.validatorResults as Array<Record<string, unknown>>) : []
-            const oracleResults: OracleValidatorResult[] = vrs.map((vr) => ({
-              validatorID: String(vr.validatorID ?? "unknown"),
-              passed: Boolean(vr.passed),
-              evidenceRefs: Array.isArray(vr.evidenceRefs) ? (vr.evidenceRefs as string[]) : undefined,
-              rawOutputPath: typeof vr.rawOutputPath === "string" ? vr.rawOutputPath : undefined,
-            }))
-            const oracle = await collectExpertOracleReadPaths({ validatorResults: oracleResults })
-            latestFinalAcceptanceOraclePaths = oracle.paths
+            if ((!latestFinalAcceptanceOracleBundlePath || latestFinalAcceptanceOraclePaths.length === 0) && vrs.length) {
+              const oracleBundle = await writeExpertOracleBundleFromValidatorResults({
+                outPath: path.join(path.dirname(latestFinalAcceptancePath), "expert-oracle-bundle.json"),
+                campaignID: input.campaignID,
+                roundNumber: roundNumber - 1,
+                passID: "latest",
+                resultPath: latestFinalAcceptancePath,
+                validatorResults: vrs,
+              })
+              latestFinalAcceptanceOracleBundlePath = oracleBundle.bundlePath
+              latestFinalAcceptanceOraclePaths = oracleBundle.oraclePaths
+            }
           } catch {
             // ignore: previous round may not have final-acceptance yet
           }
@@ -6031,6 +6208,7 @@ export async function resumeLongTaskCampaign(input: {
               reviewerSuggestionPath: latestReviewerSuggestionPath,
               blankAgentEvidenceBundlePath: latestBlankEvidence,
               blankAgentEvidenceReadPaths: latestBlankEvidenceReadPaths,
+              expertOracleBundlePath: latestFinalAcceptanceOracleBundlePath,
               expertOracleReadPaths: latestFinalAcceptanceOraclePaths,
               campaignPaths,
               roundPaths,
@@ -6064,6 +6242,7 @@ export async function resumeLongTaskCampaign(input: {
           let currentEvidenceBundlePath: string | undefined = latestBlankEvidence
           let currentEvidenceReadPaths: string[] = latestBlankEvidenceReadPaths
           let currentOracleReadPaths: string[] = []
+          let currentOracleBundlePath: string | undefined = latestFinalAcceptanceOracleBundlePath
 
           if (finalAcceptance) {
             const fa = finalAcceptance as Record<string, unknown>
@@ -6081,17 +6260,26 @@ export async function resumeLongTaskCampaign(input: {
             }
 
             // Collect expert oracle read paths from this pass's final acceptance.
+            if (typeof fa.expertOracleBundlePath === "string") {
+              currentOracleBundlePath = fa.expertOracleBundlePath
+            }
+            if (Array.isArray(fa.expertOracleReadPaths)) {
+              currentOracleReadPaths = fa.expertOracleReadPaths as string[]
+            }
             if (Array.isArray(fa.validatorResults)) {
-              const oracleResults: OracleValidatorResult[] = (
-                fa.validatorResults as Array<Record<string, unknown>>
-              ).map((vr) => ({
-                validatorID: String(vr.validatorID ?? "unknown"),
-                passed: Boolean(vr.passed),
-                evidenceRefs: Array.isArray(vr.evidenceRefs) ? (vr.evidenceRefs as string[]) : undefined,
-                rawOutputPath: typeof vr.rawOutputPath === "string" ? vr.rawOutputPath : undefined,
-              }))
-              const oracle = await collectExpertOracleReadPaths({ validatorResults: oracleResults })
-              currentOracleReadPaths = oracle.paths
+              const vrs = fa.validatorResults as Array<Record<string, unknown>>
+              if (!currentOracleBundlePath || currentOracleReadPaths.length === 0) {
+                const oracleBundle = await writeExpertOracleBundleFromValidatorResults({
+                  outPath: path.join(acceptancePassRoot, "expert-oracle-bundle.json"),
+                  campaignID: input.campaignID,
+                  roundNumber,
+                  passID,
+                  resultPath: finalAcceptanceFeedbackPath,
+                  validatorResults: vrs,
+                })
+                currentOracleBundlePath = oracleBundle.bundlePath
+                currentOracleReadPaths = oracleBundle.oraclePaths
+              }
             }
           }
 
@@ -6130,6 +6318,7 @@ export async function resumeLongTaskCampaign(input: {
             repairChecklist,
             blankAgentEvidenceBundlePath: currentEvidenceBundlePath,
             blankAgentEvidenceReadPaths: currentEvidenceReadPaths,
+            expertOracleBundlePath: currentOracleBundlePath,
             expertOracleReadPaths: currentOracleReadPaths,
             campaignPaths,
             roundPaths,
@@ -6174,6 +6363,7 @@ export async function resumeLongTaskCampaign(input: {
                 acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
                 blankAgentEvidenceBundlePath: currentEvidenceBundlePath,
                 blankAgentEvidenceReadPaths: currentEvidenceReadPaths,
+                expertOracleBundlePath: currentOracleBundlePath,
                 expertOracleReadPaths: currentOracleReadPaths,
                 stageDir: reviewerPassRoot,
                 suggestionPath: reviewerPassSuggestionPath,
@@ -6272,6 +6462,8 @@ export async function resumeLongTaskCampaign(input: {
               reviewerSuggestionPath: reviewerPassSuggestionPath,
               blankAgentEvidenceBundlePath: (finalAcceptance as Record<string, unknown>).blankAgentEvidenceBundlePath as string | undefined,
               blankAgentEvidenceReadPaths: (finalAcceptance as Record<string, unknown>).blankAgentEvidenceReadPaths as string[] | undefined,
+              expertOracleBundlePath: (finalAcceptance as Record<string, unknown>).expertOracleBundlePath as string | undefined,
+              expertOracleReadPaths: (finalAcceptance as Record<string, unknown>).expertOracleReadPaths as string[] | undefined,
               roundPaths,
               runtimeScope: roundRuntimeScope,
               onActivation: activateCampaignRound,

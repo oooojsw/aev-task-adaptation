@@ -1,0 +1,70 @@
+{
+  "id": "merge-surface-standard-v1",
+  "rootRoles": [
+    "experience-workspace"
+  ],
+  "allowedExtensions": [
+    ".md",
+    ".txt",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml",
+    ".py",
+    ".ps1",
+    ".sh",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts"
+  ],
+  "ignorePathSubstrings": [
+    "/.opencode/",
+    "/.runtime/",
+    "/node_modules/",
+    "/cache/",
+    "/temp/",
+    "/tmp/"
+  ],
+  "requiredFiles": [
+    "INDEX.md",
+    "CORE.md",
+    "meta.json",
+    "surface_contract.json"
+  ],
+  "requiredDirs": [
+    "casebook"
+  ],
+  "forbiddenPatterns": [
+    {
+      "label": "private answer or oracle wording",
+      "pattern": "private[-_ ]?answers?|answer[-_ ]?keys?|ground[-_ ]?truth|gold[-_ ]?answers?|oracle[-_ ]?answers?",
+      "flags": [
+        "IGNORECASE"
+      ]
+    },
+    {
+      "label": "validator private artifacts",
+      "pattern": "validator_input\\.json|result\\.private\\.json|private\\.json",
+      "flags": [
+        "IGNORECASE"
+      ]
+    },
+    {
+      "label": "absolute runtime or answer path",
+      "pattern": "[A-Za-z]:[\\\\/].*(runtime-state|private-answers|long-task-campaigns|blank-eval-runs)",
+      "flags": [
+        "IGNORECASE"
+      ]
+    },
+    {
+      "label": "direct final-answer phrase",
+      "pattern": "(final|correct|official)\\s+(answer|value)\\s*(is|=|:)",
+      "flags": [
+        "IGNORECASE"
+      ]
+    }
+  ],
+  "maxHitsPerFile": 4,
+  "maxTotalHits": 20
+}

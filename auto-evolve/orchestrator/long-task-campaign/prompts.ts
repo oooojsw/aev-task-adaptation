@@ -139,6 +139,7 @@ export function buildCampaignWorkerPrompt(input: {
   reviewerSuggestionPath?: string
   blankAgentEvidenceBundlePath?: string
   blankAgentEvidenceReadPaths?: string[]
+  expertOracleBundlePath?: string
   blankAcceptanceDiagnosisProfile?: BlankAcceptanceDiagnosisProfile
   /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank workers. */
   expertOracleReadPaths?: string[]
@@ -171,6 +172,7 @@ export function buildCampaignWorkerPrompt(input: {
       ...(input.blankAgentEvidenceBundlePath
         ? [`blank_agent_evidence_bundle: ${input.blankAgentEvidenceBundlePath}`]
         : []),
+      ...(input.expertOracleBundlePath ? [`expert_oracle_bundle: ${input.expertOracleBundlePath}`] : []),
       ...(input.expertOracleReadPaths && input.expertOracleReadPaths.length > 0
         ? [`expert_oracle_paths: ${input.expertOracleReadPaths.join(", ")}`]
         : []),
@@ -200,6 +202,7 @@ export function buildCampaignWorkerPrompt(input: {
     "- If compact evidence lists workspace text files, open the exact files only when their contents are needed.",
     "- Do not infer blank-agent behavior only from validator summaries when execution evidence exists.",
     "- Treat pathRefs as complete paths even if surrounding previews are truncated.",
+    "- If expert_oracle_bundle exists, read it before making expected-vs-actual claims. It is the open-book evidence index for non-blank roles.",
     "- You may inspect expert_oracle_paths, result.private.json, private-answers, ground-truth, answer-key, or hidden validator files ONLY when they are explicitly listed in your readable paths for this non-blank worker role.",
     "- These private/oracle files are for open-book diagnosis and repair only.",
     "- Never expose private/oracle files to blank_agent.",
@@ -241,6 +244,7 @@ export function buildCampaignLeadPrompt(input: {
   repairChecklist?: string[]
   blankAgentEvidenceBundlePath?: string
   blankAgentEvidenceReadPaths?: string[]
+  expertOracleBundlePath?: string
   /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank lead. */
   expertOracleReadPaths?: string[]
 }) {
@@ -288,6 +292,7 @@ export function buildCampaignLeadPrompt(input: {
       ...(input.blankAgentEvidenceBundlePath
         ? [`blank_agent_evidence_bundle: ${input.blankAgentEvidenceBundlePath}`]
         : []),
+      ...(input.expertOracleBundlePath ? [`expert_oracle_bundle: ${input.expertOracleBundlePath}`] : []),
       ...(input.expertOracleReadPaths && input.expertOracleReadPaths.length > 0
         ? [`expert_oracle_paths: ${input.expertOracleReadPaths.join(", ")}`]
         : []),
@@ -346,6 +351,7 @@ export function buildCampaignLeadPrompt(input: {
     "- Do not copy tentative runtime-stall narratives into routing_control.blockedBy as hard blockers unless supported by hard evidence in run trace.",
     "- Do not put round-specific command directives into the package if they belong in routing control instead.",
     "- If a worker suggestion includes memory_advice, treat it as rescue guidance for durable lessons that might otherwise stay trapped in unit-local memory.",
+    "- If expert_oracle_bundle exists, read it before editing. It is the explicit open-book evidence index for non-blank roles and should be used to verify task, answer, candidate, and validator mismatch facts.",
     "- You may use expert_oracle_paths / private validation views (result.private.json, private-answers, ground-truth, answer-key) as open-book evidence, but their contents MUST be transformed into generalized executable guidance before entering the package.",
     "- Never bake private answer values, hidden answer-key content, or exact oracle literals into the pending expert package, tree notes, or routing control.",
     "- Do not leak hidden validator answers or protected reference-only truth.",
@@ -377,6 +383,7 @@ export function buildCampaignReviewerPrompt(input: {
   acceptanceExperiencePath?: string
   blankAgentEvidenceBundlePath?: string
   blankAgentEvidenceReadPaths?: string[]
+  expertOracleBundlePath?: string
   /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank reviewer. */
   expertOracleReadPaths?: string[]
 }) {
@@ -401,6 +408,7 @@ export function buildCampaignReviewerPrompt(input: {
       ...(input.blankAgentEvidenceBundlePath
         ? [`blank_agent_evidence_bundle: ${input.blankAgentEvidenceBundlePath}`]
         : []),
+      ...(input.expertOracleBundlePath ? [`expert_oracle_bundle: ${input.expertOracleBundlePath}`] : []),
       ...(input.expertOracleReadPaths && input.expertOracleReadPaths.length > 0
         ? [`expert_oracle_paths: ${input.expertOracleReadPaths.join(", ")}`]
         : []),
@@ -416,6 +424,7 @@ export function buildCampaignReviewerPrompt(input: {
     "- If blank_agent_acceptance_diagnosis exists, verify that the lead actually addressed its package_advice and planner-facing repair requirements.",
     "- If blank_agent_evidence_bundle exists, verify whether the pending package actually addresses the blank agent failure path shown there.",
     "- Prefer concrete mismatch evidence from tool-calls.compact.json over vague diagnosis prose.",
+    "- If expert_oracle_bundle exists, read it before judging expected-vs-actual mismatch claims.",
     "- You only assess whether this package looks likely to pass the final blank-agent acceptance.",
     "- Mark not ready if the package hardcodes final task answers instead of teaching blank-agent how to derive them from the provided materials.",
     "- Mark not ready if the same operational rule is copied across many files without a clear canonical home.",

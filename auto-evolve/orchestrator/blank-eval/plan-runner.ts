@@ -29,12 +29,73 @@ function compactStamp() {
 }
 
 function safeName(input: string, fallback: string) {
-  return (
-    input
+  const cleaned = input
+      .replace(/[\u0000-\u001F\u007F]+/g, "-")
       .replace(/[^a-zA-Z0-9._-]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, 80) || fallback
-  )
+      .replace(/[. ]+$/g, "")
+      .slice(0, 80)
+  const candidate = cleaned || fallback
+  const upper = candidate.toUpperCase()
+  if (
+    upper === "CON" ||
+    upper === "PRN" ||
+    upper === "AUX" ||
+    upper === "NUL" ||
+    /^COM[1-9]$/.test(upper) ||
+    /^LPT[1-9]$/.test(upper)
+  ) {
+    return `${fallback}-${candidate}`
+  }
+  return candidate
+}
+
+function oneLine(input: string) {
+  return input.replace(/[\r\n\t]+/g, " ").slice(0, 300)
+}
+
+function isPathInside(parent: string, child: string) {
+  const rel = path.relative(path.resolve(parent), path.resolve(child))
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
+}
+
+function caseRootFor(runDir: string, caseItem: BlankEvalPlanCase, index: number) {
+  const root = path.join(runDir, "cases", `${String(index + 1).padStart(3, "0")}-${safeName(caseItem.id, "case")}`)
+  if (!isPathInside(path.join(runDir, "cases"), root)) {
+    throw new Error(`Unsafe blank eval case root computed for case id: ${caseItem.id}`)
+  }
+  return root
+}
+
+function scopeSegment(input: string) {
+  return safeName(input, "case")
+}
+
+function invalidPlanCaseResults(input: { cases: BlankEvalPlanCase[]; message: string }): BlankEvalPlanCaseResult[] {
+  return input.cases.map((caseItem, index) => ({
+    id: caseItem.id || `case-${index + 1}`,
+    specPath: caseItem.specPath || "",
+    title: caseItem.title,
+    passed: false,
+    failureKind: "validator_infrastructure",
+    summary: input.message,
+  }))
+}
+
+function validatePlanInput(input: BlankEvalPlanInput): string | undefined {
+  if (!input.cases.length) return "Invalid blank eval plan: at least one case is required."
+  const seen = new Set<string>()
+  const duplicates = new Set<string>()
+  for (const [index, caseItem] of input.cases.entries()) {
+    if (!caseItem.id || !caseItem.id.trim()) return `Invalid blank eval plan: case ${index + 1} is missing id.`
+    if (!caseItem.specPath || !caseItem.specPath.trim()) return `Invalid blank eval plan: case ${caseItem.id} is missing specPath.`
+    if (seen.has(caseItem.id)) duplicates.add(caseItem.id)
+    seen.add(caseItem.id)
+  }
+  if (duplicates.size) {
+    return `Invalid blank eval plan: duplicate case id(s): ${Array.from(duplicates).map(oneLine).join(", ")}.`
+  }
+  return undefined
 }
 
 function resolveCriterion(input: BlankEvalPlanInput): BlankEvalPlanSuccessCriterion {
@@ -82,6 +143,85 @@ function summarize(input: {
   if (input.passed) return `${base}; criterion ${input.criterion} satisfied.`
   const failed = input.failedCases.length ? ` Failed cases: ${input.failedCases.join(", ")}.` : ""
   return `${base}; criterion ${input.criterion} not satisfied.${failed}`
+}
+
+async function writePlanResult(input: {
+  runID: string
+  runDir: string
+  mode: ReturnType<typeof resolveMode>
+  criterion: BlankEvalPlanSuccessCriterion
+  minPassRate?: number
+  total: number
+  passedCount: number
+  skippedCount: number
+  failedCases: string[]
+  caseResults: BlankEvalPlanCaseResult[]
+  passed: boolean
+  summary: string
+}) {
+  const evidenceBundlePath = path.join(input.runDir, "evidence-bundle.json")
+  const resultPath = path.join(input.runDir, "plan-result.json")
+  const summaryPath = path.join(input.runDir, "summary.md")
+  const failedCount = input.total - input.passedCount - input.skippedCount
+  const result: BlankEvalPlanResult = {
+    schema: "blank-eval-plan-result/v1",
+    runID: input.runID,
+    runDir: input.runDir,
+    mode: input.mode,
+    passed: input.passed,
+    successCriterion: input.criterion,
+    minPassRate: input.minPassRate,
+    total: input.total,
+    passedCount: input.passedCount,
+    failedCount,
+    skippedCount: input.skippedCount,
+    score: input.total > 0 ? input.passedCount / input.total : 0,
+    failedCases: input.failedCases,
+    summary: input.summary,
+    caseResults: input.caseResults,
+    resultPath,
+    evidenceBundlePath,
+    summaryPath,
+  }
+  await writeJsonFile(evidenceBundlePath, {
+    schema: "blank-eval-plan-evidence/v1",
+    runID: input.runID,
+    summary: input.summary,
+    failedCases: input.failedCases,
+    caseEvidence: input.caseResults.map((item) => ({
+      id: item.id,
+      passed: item.passed,
+      skipped: item.skipped,
+      failureKind: item.failureKind,
+      summary: item.summary,
+      runDir: item.runDir,
+      resultPath: item.resultPath,
+      validatorResults: item.validatorResults?.map((validator) => ({
+        validatorID: validator.validatorID,
+        passed: validator.passed,
+        failureKind: validator.failureKind,
+        summary: validator.summary,
+      })),
+    })),
+  })
+  await writeJsonFile(resultPath, result)
+  await writeTextFile(
+    summaryPath,
+    [
+      `# Blank Eval Plan ${input.runID}`,
+      "",
+      `- mode: ${input.mode}`,
+      `- passed: ${input.passed}`,
+      `- score: ${input.passedCount}/${input.total}`,
+      `- criterion: ${input.criterion}`,
+      `- failed_cases: ${input.failedCases.join(", ") || "none"}`,
+      "",
+      "## Cases",
+      ...input.caseResults.map((item) => `- ${oneLine(item.id)}: ${item.passed ? "passed" : item.skipped ? "skipped" : "failed"} - ${oneLine(item.summary)}`),
+      "",
+    ].join("\n"),
+  )
+  return result
 }
 
 async function defaultRunCase(input: {
@@ -167,12 +307,12 @@ async function runSequence(input: {
 }) {
   const results: BlankEvalPlanCaseResult[] = []
   for (const [index, caseItem] of input.plan.cases.entries()) {
-    const caseRoot = path.join(input.runDir, "cases", `${String(index + 1).padStart(3, "0")}-${safeName(caseItem.id, "case")}`)
+    const caseRoot = caseRootFor(input.runDir, caseItem, index)
     const caseResult = await runCaseSafely({
       plan: input.plan,
       caseItem,
       runRoot: caseRoot,
-      runtimeScope: `${input.plan.runtimeScope ?? "blank-eval-plan"}:${caseItem.id}`,
+      runtimeScope: `${input.plan.runtimeScope ?? "blank-eval-plan"}:${scopeSegment(caseItem.id)}`,
       concurrencyScope: input.plan.concurrencyScope,
       runner: input.runner,
     })
@@ -203,12 +343,12 @@ async function runParallel(input: {
   const results: BlankEvalPlanCaseResult[] = []
   const inFlight = new Set<Promise<void>>()
   const runOne = async (caseItem: BlankEvalPlanCase, index: number) => {
-    const caseRoot = path.join(input.runDir, "cases", `${String(index + 1).padStart(3, "0")}-${safeName(caseItem.id, "case")}`)
+    const caseRoot = caseRootFor(input.runDir, caseItem, index)
     const caseResult = await runCaseSafely({
       plan: input.plan,
       caseItem,
       runRoot: caseRoot,
-      runtimeScope: `${input.plan.runtimeScope ?? "blank-eval-plan"}:${caseItem.id}`,
+      runtimeScope: `${input.plan.runtimeScope ?? "blank-eval-plan"}:${scopeSegment(caseItem.id)}`,
       concurrencyScope: input.plan.concurrencyScope,
       runner: input.runner,
     })
@@ -235,6 +375,52 @@ export async function runBlankEvalPlan(
   const concurrency = resolveConcurrency(input)
   await ensureDirectory(runDir)
   await ensureDirectory(path.join(runDir, "cases"))
+
+  const invalidPlanMessage = validatePlanInput(input)
+  if (invalidPlanMessage) {
+    const caseResults = invalidPlanCaseResults({ cases: input.cases, message: invalidPlanMessage })
+    return await writePlanResult({
+      runID,
+      runDir,
+      mode,
+      criterion,
+      minPassRate: input.minPassRate,
+      total: input.cases.length,
+      passedCount: 0,
+      skippedCount: 0,
+      failedCases: caseResults.map((item) => item.id),
+      caseResults,
+      passed: false,
+      summary: invalidPlanMessage,
+    })
+  }
+
+  if (mode === "single" && input.cases.length !== 1) {
+    const caseResults: BlankEvalPlanCaseResult[] = input.cases.map((caseItem) => ({
+      id: caseItem.id,
+      specPath: caseItem.specPath,
+      title: caseItem.title,
+      passed: false,
+      failureKind: "validator_infrastructure",
+      summary:
+        "Invalid blank eval plan: mode=single requires exactly one case. " +
+        "Use mode=sequence or mode=parallel for multi-case replay.",
+    }))
+    return await writePlanResult({
+      runID,
+      runDir,
+      mode,
+      criterion,
+      minPassRate: input.minPassRate,
+      total: input.cases.length,
+      passedCount: 0,
+      skippedCount: 0,
+      failedCases: input.cases.map((item) => item.id),
+      caseResults,
+      passed: false,
+      summary: `Invalid blank eval plan: mode=single received ${input.cases.length} cases.`,
+    })
+  }
 
   await writeJsonFile(path.join(runDir, "plan-input.json"), {
     schema: "blank-eval-plan-input/v1",
@@ -265,63 +451,20 @@ export async function runBlankEvalPlan(
   const passedCount = caseResults.filter((item) => item.passed).length
   const skippedCount = caseResults.filter((item) => item.skipped).length
   const failedCases = caseResults.filter((item) => !item.passed && !item.skipped).map((item) => item.id)
-  const failedCount = total - passedCount - skippedCount
-  const score = total > 0 ? passedCount / total : 0
   const passed = evaluatePlan({ criterion, minPassRate: input.minPassRate, total, passedCount })
   const summary = summarize({ passed, passedCount, total, failedCases, criterion })
-  const evidenceBundlePath = path.join(runDir, "evidence-bundle.json")
-  const resultPath = path.join(runDir, "plan-result.json")
-  const summaryPath = path.join(runDir, "summary.md")
-  const result: BlankEvalPlanResult = {
-    schema: "blank-eval-plan-result/v1",
+  return await writePlanResult({
     runID,
     runDir,
     mode,
-    passed,
-    successCriterion: criterion,
+    criterion,
     minPassRate: input.minPassRate,
     total,
     passedCount,
-    failedCount,
     skippedCount,
-    score,
     failedCases,
-    summary,
     caseResults,
-    resultPath,
-    evidenceBundlePath,
-    summaryPath,
-  }
-  await writeJsonFile(evidenceBundlePath, {
-    schema: "blank-eval-plan-evidence/v1",
-    runID,
+    passed,
     summary,
-    failedCases,
-    caseEvidence: caseResults.map((item) => ({
-      id: item.id,
-      passed: item.passed,
-      skipped: item.skipped,
-      summary: item.summary,
-      runDir: item.runDir,
-      resultPath: item.resultPath,
-    })),
   })
-  await writeJsonFile(resultPath, result)
-  await writeTextFile(
-    summaryPath,
-    [
-      `# Blank Eval Plan ${runID}`,
-      "",
-      `- mode: ${mode}`,
-      `- passed: ${passed}`,
-      `- score: ${passedCount}/${total}`,
-      `- criterion: ${criterion}`,
-      `- failed_cases: ${failedCases.join(", ") || "none"}`,
-      "",
-      "## Cases",
-      ...caseResults.map((item) => `- ${item.id}: ${item.passed ? "passed" : item.skipped ? "skipped" : "failed"} - ${item.summary}`),
-      "",
-    ].join("\n"),
-  )
-  return result
 }

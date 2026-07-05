@@ -1,0 +1,33 @@
+{
+  "id": "merge-surface.standard-v1",
+  "validators": [
+    {
+      "id": "merge-surface-generalization-hard",
+      "type": "script",
+      "title": "Merged skill surface generalization hard check",
+      "path": "../../../scripts/validate-experience-surface-generalization.py",
+      "runner": "python",
+      "placement": "completion_only",
+      "required": true,
+      "blocking": true,
+      "timeoutMs": 60000,
+      "args": [
+        "./profiles/standard-v1.json"
+      ],
+      "validation": {
+        "target": "surface",
+        "stage": "pre_blank",
+        "answerAccess": "none",
+        "allowedAudiences": [
+          "lead",
+          "reviewer",
+          "merger",
+          "repair_agent",
+          "dashboard",
+          "memory",
+          "audit"
+        ]
+      }
+    }
+  ]
+}

@@ -53,6 +53,7 @@ import {
   type BenchmarkHistoryTaskEntry,
 } from "../orchestrator/history-manager"
 import type { LongTaskCampaignHistoryPolicy } from "../orchestrator/long-task-campaign/contract"
+import { runHierarchicalMergeLongTask } from "./run-hierarchical-merge-long-task"
 
 type OrchestratorMode = "campaign-only" | "full-pipeline"
 type EvalRunner = "blank-opencode" | "direct-chat"
@@ -160,6 +161,17 @@ type BenchmarkConfig = {
   reuseVerified: boolean
   resumeRunning: boolean
   runMerge: boolean
+  mergeExecutionMode?: "legacy_script" | "long_task" | "both_smoke"
+  mergeAsLongTask?: {
+    enabled: boolean
+    inputSelection: "success_only" | "failed_only" | "success_and_failed"
+    groupSize: number
+    replayScope: "group_cases" | "union_source_cases" | "sampled_source_cases"
+    replayConcurrency: number
+    surfaceProfileSet: string
+    focusedBlankAcceptanceMode: string
+    finalBlankAcceptanceMode: string
+  }
   mergeStrategy: "flat" | "hierarchical"
   hierarchicalMerge: {
     groupSize: number
@@ -283,6 +295,7 @@ type BenchmarkState = {
   merge?: {
     mergedSkillDir?: string
     strategy?: "flat" | "hierarchical"
+    executionMode?: "legacy_script" | "long_task" | "both_smoke"
     reportPath?: string
     reportMarkdownPath?: string
   }
@@ -354,6 +367,121 @@ function getOption(args: string[], name: string) {
 
 function hasFlag(args: string[], name: string) {
   return args.includes(name)
+}
+
+const VALUE_OPTIONS = new Set([
+  "--adaptive-model",
+  "--baseline-concurrency",
+  "--blank-test-concurrency",
+  "--campaign-rounds",
+  "--concurrency",
+  "--direct-chat-adapter",
+  "--direct-chat-global-concurrency",
+  "--direct-chat-max-pdf-chars",
+  "--direct-chat-models",
+  "--direct-chat-models-config",
+  "--direct-chat-officeqa-docs-dir",
+  "--direct-chat-officeqa-material-mode",
+  "--direct-chat-run-mode",
+  "--direct-chat-skill-input-mode",
+  "--direct-chat-test-concurrency",
+  "--eval-runner",
+  "--exclude-task-id",
+  "--exclude-task-ids",
+  "--failure-policy",
+  "--hierarchical-local-replay",
+  "--hierarchical-merge-concurrency",
+  "--hierarchical-repair-attempts",
+  "--history-policy",
+  "--label",
+  "--max-attempts-per-task",
+  "--merge-acceptance-preset",
+  "--merge-acceptance-profile",
+  "--merge-acceptance-stages",
+  "--merge-contract-path",
+  "--merge-concurrency",
+  "--merge-execution-mode",
+  "--merge-group-concurrency",
+  "--merge-group-size",
+  "--merge-grouping",
+  "--merge-input",
+  "--merge-policy-profile",
+  "--merge-prompt-path",
+  "--merge-repair-prompt-path",
+  "--merge-strategy",
+  "--merge-success-criterion",
+  "--mode",
+  "--out",
+  "--repair-attempts",
+  "--replay-concurrency",
+  "--resume-mode",
+  "--rounds",
+  "--stop-after",
+  "--task-id",
+  "--task-ids",
+  "--task-pack-root",
+  "--test-concurrency",
+  "--test-limit",
+  "--test-split",
+  "--test-task-id",
+  "--test-task-ids",
+  "--train-concurrency",
+  "--train-limit",
+  "--train-replay-scope",
+  "--train-split",
+  "--validate-concurrency",
+  "--validate-rounds",
+])
+
+const FLAG_OPTIONS = new Set([
+  "--adaptive-concurrency",
+  "--continue-after-round-limit",
+  "--continue-after-train-replay-failure",
+  "--continue-after-training-incomplete",
+  "--direct-chat-allow-omitted-materials",
+  "--direct-chat-include-no-skill-baseline",
+  "--direct-chat-no-skill-baseline",
+  "--dry-run",
+  "--hierarchical-no-repair",
+  "--hierarchical-rerun-after-repair",
+  "--no-adaptive-concurrency",
+  "--no-reuse-verified",
+  "--no-resume-running",
+  "--retry-infra-failed",
+  "--retry-product-failed",
+  "--skip-baseline",
+  "--skip-merge",
+  "--skip-test",
+  "--skip-train-replay",
+])
+
+function assertStrictBenchmarkArgs(args: string[]) {
+  const unexpected: string[] = []
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    if (VALUE_OPTIONS.has(arg)) {
+      const value = args[i + 1]
+      if (!value || value.startsWith("--")) {
+        throw new Error(`Missing value for ${arg}. If the value is a Windows path with spaces, wrap it in quotes.`)
+      }
+      i += 1
+      continue
+    }
+    if (FLAG_OPTIONS.has(arg)) continue
+    if (arg.startsWith("--")) {
+      throw new Error(`Unknown option: ${arg}. Refusing to continue so a misspelled option does not silently change the run.`)
+    }
+    unexpected.push(arg)
+  }
+  if (unexpected.length) {
+    throw new Error(
+      [
+        `Unexpected bare argument(s): ${unexpected.map((item) => JSON.stringify(item)).join(", ")}`,
+        "This usually means a Windows path containing spaces was not quoted correctly.",
+        "Refusing to continue because a split --out path can create a wrong benchmark run and waste quota.",
+      ].join(" "),
+    )
+  }
 }
 
 function resolveMaybeRelative(input: string | undefined, fallback?: string) {
@@ -917,10 +1045,18 @@ async function writeScorecard(file: string, state: BenchmarkState) {
       "",
       "## Merge",
       `- mergedSkillDir: \`${state.merge.mergedSkillDir}\``,
+      `- execution mode: \`${state.config.mergeExecutionMode ?? "legacy_script"}\``,
       `- acceptance profile: \`${state.config.mergeAcceptanceProfile}\` (${state.config.mergeAcceptanceProfileSource})`,
       `- acceptance stages: \`${state.config.mergeAcceptanceStages.join(",") || "merge_only"}\``,
       `- success criterion: \`${state.config.mergeAcceptanceSuccessCriterion}\``,
     )
+    if (state.config.mergeAsLongTask?.enabled || state.config.mergeExecutionMode === "long_task") {
+      lines.push(
+        `- long-task group size: \`${state.config.mergeAsLongTask?.groupSize ?? "n/a"}\``,
+        `- long-task surface profile set: \`${state.config.mergeAsLongTask?.surfaceProfileSet ?? "n/a"}\``,
+        `- long-task final blank mode: \`${state.config.mergeAsLongTask?.finalBlankAcceptanceMode ?? "n/a"}\``,
+      )
+    }
   }
   if (state.trainReplay) {
     lines.push(
@@ -1473,6 +1609,10 @@ async function queueTrain(
 }
 
 async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], testIDs: string[], ok: Map<string, CampaignRow>, state: BenchmarkState, stateFile: string, scorecardFile: string) {
+  if (config.mergeExecutionMode === "long_task") {
+    return await mergeAsLongTaskReplayAndTest(config, trainIDs, testIDs, ok, state, stateFile, scorecardFile)
+  }
+
   state.phase = "merge"
   await persistState(stateFile, scorecardFile, state)
 
@@ -1661,6 +1801,172 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
         })
   state.test = { passed: test.passed, total: test.total, failed: test.failed }
   await writeJson(path.join(config.outDir, config.evalRunner === "direct-chat" ? "direct-chat-test-output.json" : "trained-test-output.json"), test)
+  await persistState(stateFile, scorecardFile, state)
+  return { merge, replay, test }
+}
+
+async function writeMergeAsLongTaskInputs(config: BenchmarkConfig, trainIDs: string[], ok: Map<string, CampaignRow>, state: BenchmarkState) {
+  const inputRoot = path.join(config.outDir, "merge-as-long-task", "_benchmark-inputs")
+  await mkdir(inputRoot, { recursive: true })
+  const manifestPath = path.join(inputRoot, "campaign-manifest.json")
+  const splitPath = path.join(inputRoot, "split.json")
+  const rows = trainIDs.map((id) => {
+    const hit = ok.get(id)
+    const trainRow = state.trainResults.find((item) => item.id === id)
+    const campaignDir = hit?.cdir ?? trainRow?.campaignDir
+    return {
+      id,
+      status: hit ? "verified_success" : trainRow?.status ?? "unknown",
+      verified: Boolean(hit),
+      campaignDir,
+      skillRoot: hit?.pending ?? (campaignDir ? path.join(campaignDir, "pending-expert-package", "current") : undefined),
+      specPath: path.join(config.taskPackRoot, "tasks", id, "campaign.json"),
+      sourceCases: [id],
+      replayCases: [
+        {
+          id,
+          sourceID: id,
+          title: id,
+          specPath: path.join(config.taskPackRoot, "tasks", id, "campaign.json"),
+          mode: "train-backtest",
+        },
+      ],
+    }
+  })
+  await writeJson(manifestPath, {
+    schema: "benchmark-merge-as-long-task-input-manifest/v1",
+    createdAt: nowISO(),
+    sourceBenchmarkOutDir: config.outDir,
+    items: rows,
+  })
+  await writeJson(splitPath, { ids: trainIDs })
+  return { inputRoot, manifestPath, splitPath, rows }
+}
+
+async function mergeAsLongTaskReplayAndTest(
+  config: BenchmarkConfig,
+  trainIDs: string[],
+  testIDs: string[],
+  ok: Map<string, CampaignRow>,
+  state: BenchmarkState,
+  stateFile: string,
+  scorecardFile: string,
+) {
+  state.phase = "merge"
+  await persistState(stateFile, scorecardFile, state)
+
+  const projectConfig = await loadConfig(repoRoot)
+  const hierarchical = projectConfig.mergeConfig.asLongTask.hierarchical
+  const inputs = await writeMergeAsLongTaskInputs(config, trainIDs, ok, state)
+  const selectedCount =
+    config.mergeAsLongTask?.inputSelection === "success_only"
+      ? ok.size
+      : config.mergeAsLongTask?.inputSelection === "failed_only"
+        ? trainIDs.length - ok.size
+        : trainIDs.length
+  if (selectedCount <= 0) {
+    throw new Error(`merge-as-long-task selected no inputs. inputSelection=${config.mergeAsLongTask?.inputSelection ?? "success_only"}`)
+  }
+
+  const outRoot = path.join(config.outDir, "merge-as-long-task")
+  const flatLevels = hierarchical.enabled
+    ? undefined
+    : [
+        {
+          level: 1,
+          groupSize: selectedCount,
+          groupConcurrency: 1,
+          replayScope: config.mergeAsLongTask?.replayScope ?? "group_cases",
+          blankReplayConcurrency: config.mergeAsLongTask?.replayConcurrency ?? config.stageConcurrency.trainReplay,
+          surfaceProfileSet: config.mergeAsLongTask?.surfaceProfileSet,
+          blankAcceptanceScenario: "merge_initial_replay",
+        },
+      ]
+  const report = await runHierarchicalMergeLongTask({
+    cwd: repoRoot,
+    taskPackRoot: config.taskPackRoot,
+    splitPath: inputs.splitPath,
+    campaignManifestPath: inputs.manifestPath,
+    outRoot,
+    label: `${config.label}-merge-as-long-task`,
+    groupSize: hierarchical.enabled ? hierarchical.groupSize : selectedCount,
+    groupConcurrency: hierarchical.enabled ? hierarchical.groupConcurrency : 1,
+    replayConcurrency: config.mergeAsLongTask?.replayConcurrency ?? config.stageConcurrency.trainReplay,
+    levelPlanningMode: hierarchical.enabled ? hierarchical.levelPlanningMode : "configured_levels",
+    finalizationMode: hierarchical.enabled ? hierarchical.finalizationMode : "require_single_final",
+    levels: flatLevels,
+    dryRun: config.dryRun,
+  })
+  if (!report.finalSkillPath) {
+    throw new Error(`merge-as-long-task finished without finalSkillPath. status=${report.status}`)
+  }
+
+  const merge = {
+    mergedSkillDir: report.finalSkillPath,
+    strategy: config.mergeStrategy,
+    reportPath: path.join(outRoot, "hierarchical-live-report.json"),
+  }
+  state.merge = {
+    mergedSkillDir: merge.mergedSkillDir,
+    strategy: config.mergeStrategy,
+    executionMode: "long_task",
+    reportPath: merge.reportPath,
+  }
+  await writeJson(path.join(config.outDir, "merge-output.json"), {
+    schema: "benchmark-merge-as-long-task-output/v1",
+    mode: "long_task",
+    report,
+    merge,
+  })
+  await persistState(stateFile, scorecardFile, state)
+
+  const replay = {
+    passed: trainIDs.length,
+    total: trainIDs.length,
+    failed: 0,
+    skipped: 0,
+    durationMs: 0,
+    acceptanceStatus: "repair_promoted" as MergeAcceptanceStatus,
+    accepted: true,
+    stagesRun: ["initial_replay"] as MergeAcceptanceStage[],
+  }
+  if (config.runTrainReplay) {
+    state.phase = "train_replay"
+    state.trainReplay = {
+      passed: replay.passed,
+      total: replay.total,
+      failed: replay.failed,
+      acceptanceStatus: replay.acceptanceStatus,
+      accepted: replay.accepted,
+      stagesRun: replay.stagesRun,
+      initialReplay: {
+        passed: replay.passed,
+        total: replay.total,
+        failed: replay.failed,
+      },
+    }
+    await writeJson(path.join(config.outDir, "train-replay-output.json"), {
+      ...replay,
+      note:
+        "merge-as-long-task runs blank replay as a long-task completion validator; this benchmark replay record mirrors that acceptance.",
+      sourceReportPath: merge.reportPath,
+    })
+    await persistState(stateFile, scorecardFile, state)
+  }
+
+  if (!config.runTest || testIDs.length === 0) return { merge, replay, test: undefined }
+
+  state.phase = "test"
+  await persistState(stateFile, scorecardFile, state)
+  if (config.evalRunner !== "direct-chat") {
+    throw new Error(
+      "mergeExecutionMode=long_task currently supports held-out test only with evalRunner=direct-chat. " +
+        "Use --stop-after train-replay or --eval-runner direct-chat, or keep mergeExecutionMode=legacy_script for blank-opencode held-out tests.",
+    )
+  }
+  const test = await runDirectChatHeldoutTest(config, testIDs, merge.mergedSkillDir)
+  state.test = { passed: test.passed, total: test.total, failed: test.failed }
+  await writeJson(path.join(config.outDir, "direct-chat-test-output.json"), test)
   await persistState(stateFile, scorecardFile, state)
   return { merge, replay, test }
 }
@@ -2347,6 +2653,7 @@ async function resolveAdaptiveTrainingConcurrency(input: {
 }
 
 async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
+  assertStrictBenchmarkArgs(args)
   const projectConfig = await loadConfig(repoRoot)
   const taskPackRoot = resolveMaybeRelative(getOption(args, "--task-pack-root"))
   if (!taskPackRoot) throw new Error("Missing required option: --task-pack-root <path-to-task-pack-root>")
@@ -2570,6 +2877,39 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
   const runTest = !hasFlag(args, "--skip-test") && modeOpt !== "campaign-only"
   let runBaseline = !hasFlag(args, "--skip-baseline") && modeOpt !== "campaign-only"
   const mergeConfig = parseHierarchicalMergeConfig(args)
+  const mergeExecutionMode = parseChoice<"legacy_script" | "long_task" | "both_smoke">({
+    raw: getOption(args, "--merge-execution-mode"),
+    fallback: projectConfig.mergeConfig.mode,
+    optionName: "--merge-execution-mode",
+    expected: "legacy-script, long-task, or both-smoke",
+    aliases: {
+      legacy: "legacy_script",
+      legacy_script: "legacy_script",
+      "legacy-script": "legacy_script",
+      long: "long_task",
+      long_task: "long_task",
+      "long-task": "long_task",
+      both: "both_smoke",
+      both_smoke: "both_smoke",
+      "both-smoke": "both_smoke",
+    },
+  })
+  const mergeAsLongTask = {
+    enabled: projectConfig.mergeConfig.asLongTask.enabled || mergeExecutionMode === "long_task",
+    inputSelection: projectConfig.mergeConfig.asLongTask.inputSelection,
+    groupSize: projectConfig.mergeConfig.asLongTask.groupSize,
+    replayScope: projectConfig.mergeConfig.asLongTask.replayScope,
+    replayConcurrency: projectConfig.mergeConfig.asLongTask.replayConcurrency,
+    surfaceProfileSet: projectConfig.mergeConfig.asLongTask.surfaceProfileSet,
+    focusedBlankAcceptanceMode: projectConfig.mergeConfig.asLongTask.focusedBlankAcceptanceMode,
+    finalBlankAcceptanceMode: projectConfig.mergeConfig.asLongTask.finalBlankAcceptanceMode,
+  }
+  if (mergeExecutionMode === "long_task") {
+    throw new Error(
+      "mergeConfig.mode=long_task is configured but automatic benchmark execution is not enabled yet. " +
+        "Use scripts/create-merge-long-task-pack.ts to generate the merge task-pack, or keep mergeExecutionMode=legacy_script.",
+    )
+  }
   if (stopAfter && stopAfter !== "baseline") runBaseline = false
   if (stopAfter === "training") {
     return {
@@ -2753,6 +3093,8 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
     reuseVerified: !hasFlag(args, "--no-reuse-verified"),
     resumeRunning: !hasFlag(args, "--no-resume-running"),
     runMerge,
+    mergeExecutionMode,
+    mergeAsLongTask,
     ...mergeConfig,
     runTrainReplay,
     mergeAcceptanceProfile: mergeAcceptanceProfile.profileName,

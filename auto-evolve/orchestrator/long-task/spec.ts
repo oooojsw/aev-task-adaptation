@@ -72,12 +72,27 @@ const VALIDATOR_FILE_ARG_FLAGS = new Set([
   "--profile-path",
 ])
 
-function resolveValidatorScriptArgs(baseDir: string, args: string[] | undefined) {
+function looksLikeRelativeFileArg(arg: string) {
+  if (!arg.trim() || arg.startsWith("--") || path.isAbsolute(arg)) return false
+  const normalized = arg.replace(/\\/g, "/")
+  return normalized.startsWith("./") || normalized.startsWith("../") || normalized.includes("/")
+}
+
+function resolveValidatorScriptArgs(
+  baseDir: string,
+  args: string[] | undefined,
+  options: { resolvePositionalFileArgs?: boolean } = {},
+) {
   if (!args?.length) return args
   const resolved: string[] = []
   let previousFlag: string | undefined
   for (const arg of args) {
     if (previousFlag && VALIDATOR_FILE_ARG_FLAGS.has(previousFlag)) {
+      resolved.push(resolveMaybePath(baseDir, arg))
+      previousFlag = undefined
+      continue
+    }
+    if (options.resolvePositionalFileArgs && looksLikeRelativeFileArg(arg)) {
       resolved.push(resolveMaybePath(baseDir, arg))
       previousFlag = undefined
       continue
@@ -444,6 +459,7 @@ function materializeValidatorEntryPaths(baseDir: string, raw: Record<string, unk
       out.args = resolveValidatorScriptArgs(
         baseDir,
         out.args.filter((item): item is string => typeof item === "string" && item.trim().length > 0),
+        { resolvePositionalFileArgs: true },
       )
     }
   }

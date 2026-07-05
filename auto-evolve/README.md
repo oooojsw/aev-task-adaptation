@@ -30,6 +30,66 @@ bun run auto-evolve/scripts/run-benchmark-orchestrator.ts ... --merge-acceptance
 bun run auto-evolve/scripts/smoke-merge-acceptance-policy.ts
 ```
 
+## Merge-as-Long-Task 可选路径（2026-07-03）
+
+旧合并流程仍然完整保留，默认仍走 `config.json > mergeConfig.mode = legacy_script`。
+
+新增路径是：把一批已经训练出来的单 case skill 打包成一个新的 long-task 数据集，让“合并 skill”本身也像普通长程任务一样被执行、被表面检查、被空白 agent 回撤验证。
+
+大白话流程：
+
+1. `scripts/create-merge-long-task-pack.ts` 读取 split、已有 campaign/skill 清单，把单 case skill 复制到一个新的 merge task-pack。
+2. 生成的 merge task 要求 agent 把多个 source skill 合成 `workspace/merged-skill`。
+3. 合并完成后先跑表面硬门：标准 skill 文件结构 + merged skill 防泄漏检查。
+4. 表面检查通过后，再跑 `blank_eval_plan`：同一份 merged skill 发给多道训练 case 的空白 agent 做闭卷回撤。
+5. 回撤结果会变成这个 long-task 的完成验证结果，后续可以进入普通 campaign 的下一轮修复。
+
+总控开关：
+
+```text
+mergeConfig.mode
+  legacy_script  保留旧合并脚本。
+  long_task      后续接入后，合并走 long-task task-pack。
+  both_smoke     只用于对照烟测。
+
+mergeConfig.asLongTask.surfaceProfileSet
+  控制合并后、空白回撤前挂哪组表面验证器，默认 merge-surface-standard。
+
+blankAcceptanceConfig.modes
+  single-case                 旧单题空白验收。
+  merge-final-full-replay     合并后全量多题回撤。
+  merge-focused-failures      后续 repair 用，只回撤上一轮失败案例。
+  merge-replay-report         只报告，不作为硬门。
+```
+
+无模型烟测：
+
+```powershell
+bun run auto-evolve/scripts/smoke-merge-as-long-task-pack.ts
+```
+
+2026-07-05 接入状态：
+
+- `run-benchmark-orchestrator.ts` 已经把 `mergeConfig.mode = long_task` 从“直接报未实现”改成可选执行分支。
+- 默认仍是 `legacy_script`，不会影响原有合并、回撤、测试链路。
+- `long_task` 分支会从当前 benchmark 训练结果生成 `merge-as-long-task/_benchmark-inputs`，再调用现有分层/单层 merge long-task runner，最终把 `finalSkillPath` 写回 benchmark 的 `state.merge.mergedSkillDir`。
+- 非分层模式会强制包装成单个 merge group，避免静默产出多个半成品；真正多组多层应开启 `mergeConfig.asLongTask.hierarchical.enabled`。
+- 当前 `long_task` 分支的训练集回撤结果来自 merge long-task 内部的 `blank_eval_plan` completion validator；外层 `train-replay-output.json` 只是镜像这次验收结果，不再重复跑旧 replay。
+- 当前 `long_task` 分支的 held-out test 只支持 `evalRunner=direct-chat`；如果需要 `blank-opencode` 测试集验收，仍应使用 `legacy_script`，或后续补 coordinator-state 桥接。
+
+2026-07-03 鲁棒性补强：
+
+- `create-merge-long-task-pack.ts` 现在会在启动前拒绝危险输出目录，只有空目录或带 `merge-long-task-pack-summary/v1` 标记的旧生成目录才允许覆盖，避免误删真实数据集或人工目录。
+- split / manifest 会做强校验：重复 ID、manifest 缺行、manifest 重复行、非法 `inputSelection`、非法 `groupSize`、非法 `replayConcurrency` 都会直接失败，不再静默生成错误训练血统。
+- 合并 long-task 的 `completion_validator_ids` 不再写死，而是从实际挂载的 validator profile JSON 展开得到；以后切换 surface 模块时，初始图会跟着真实验证器走。
+- `smoke-merge-as-long-task-pack.ts` 已覆盖成功路径和 8 类负向错误，确保“错配置先炸，不烧模型额度”。
+
+2026-07-03 自动挂载补强：
+
+- `blankAcceptanceConfig.autoMount.rules` 现在负责把场景名映射到空白验收模式。调用方可以只说 `merge_initial_replay`、`merge_repair_replay`、`merge_report_only`、`single_long_task_final`、`heldout_test` 或 `smoke`，不用手动选择 `single / sequence / parallel`。
+- `create-merge-long-task-pack.ts` 默认使用 `merge_initial_replay`，自动挂到 `merge-final-full-replay`。如果传 `--blank-acceptance-scenario merge_report_only`，会自动挂到非阻塞报告模式。只有显式传 `--blank-acceptance-mode` 时才覆盖自动路由。
+- 未知 scenario 会 fail closed，防止拼错场景名后静默回退到错误模式。
+
 ## Git 推送主链规则（2026-06-26）
 
 以后本项目默认推送到干净主链仓库：
@@ -2163,3 +2223,192 @@ bun run auto-evolve/scripts/smoke-blank-acceptance-diagnosis-profiles.ts
 ```
 
 这个 smoke 不启动真实模型，只验证：总控 profile 可读取、诊断 prompt 会注入 plan-replay/infra-triage 规则、多 case 回撤证据能被压缩进可读证据包。
+
+## Hierarchical Merge-As-Long-Task Pack Generation (2026-07-03)
+
+`merge-as-long-task` now has a hierarchical pack-generation path controlled by `config.json > mergeConfig.asLongTask.hierarchical`.
+
+Plain meaning: many single-case skills can be packed into level-01 merge long-tasks, those level-01 group skills can then be packed into level-02 merge long-tasks, and this repeats until one final merge task remains. A next-level row carries both `sourceCases` and `replayCases`, so a group skill can be one merge input while its blank replay still expands back to all original cases.
+
+Current implemented boundary:
+- Implemented: dataset/task-pack generation and no-model smoke tests.
+- Not yet implemented: a live supervisor that starts all group campaigns, waits for real completions, then resumes the next level from actual completed outputs.
+
+Key scripts:
+```powershell
+bun run auto-evolve/scripts/create-hierarchical-merge-long-task-pack.ts --task-pack-root <pack> --split <split.json> --campaign-manifest <manifest.json> --out-root <out>
+bun run auto-evolve/scripts/smoke-hierarchical-merge-as-long-task-pack.ts
+```
+
+Validated smoke:
+```powershell
+bun --check auto-evolve/orchestrator/schema.ts auto-evolve/scripts/create-merge-long-task-pack.ts auto-evolve/scripts/create-hierarchical-merge-long-task-pack.ts auto-evolve/scripts/smoke-hierarchical-merge-as-long-task-pack.ts
+bun run auto-evolve/scripts/smoke-hierarchical-merge-as-long-task-pack.ts
+bun run auto-evolve/scripts/smoke-merge-as-long-task-pack.ts
+```
+
+## Hierarchical Merge-As-Long-Task Live Supervisor (2026-07-04)
+
+分层 merge-as-long-task 现在从“只生成任务包”升级为“可独立执行的 live supervisor”第一版。
+
+总控入口：
+
+```json
+"mergeConfig": {
+  "asLongTask": {
+    "hierarchical": {
+      "levelPlanningMode": "until_one",
+      "singleInputMode": "promote",
+      "finalizationMode": "require_single_final",
+      "levels": []
+    }
+  }
+}
+```
+
+大白话：
+- `levelPlanningMode=until_one`：一直按配置合并，直到只剩 1 个 final skill。
+- `levelPlanningMode=configured_levels`：只跑 `levels[]` 里列出的层；如果跑完还剩多个 skill，就按 `finalizationMode` 收尾或 fail closed。
+- `levels[]`：可以指定每层自己的 `groupSize`、`groupConcurrency`、`blankReplayConcurrency`、surface profile 和 blank acceptance scenario。
+- `groupConcurrency`：现在在 live supervisor 里真正控制“同一层同时跑几个 group campaign”，不再只是记录字段。
+- `singleInputMode`：当输入只有一个 skill 时，默认 `promote`，不浪费模型再跑一次合并。
+
+新增脚本：
+
+```powershell
+bun run auto-evolve/scripts/run-hierarchical-merge-long-task.ts --task-pack-root <pack> --split <split.json> --campaign-manifest <manifest.json> --out-root <out>
+```
+
+新增 smoke：
+
+```powershell
+bun run auto-evolve/scripts/smoke-hierarchical-merge-as-long-task-pack.ts
+bun run auto-evolve/scripts/smoke-hierarchical-merge-live-supervisor.ts
+```
+
+当前边界：
+- 已实现：per-level groupSize、fixed/configured levels、single-input promote/wrap/fail、live supervisor 并发队列、fake runner smoke。
+- 已实现：每层完成后把 group skill 变成下一层输入，并保留 `sourceCases/replayCases`，最终 replay 仍能展开回原始 cases。
+- 暂未完全接入：`run-benchmark-orchestrator.ts` 的 `mergeExecutionMode=long_task` 主流程入口仍需要后续把独立 supervisor 接进去。
+
+## Blank Eval Plan Guardrails (2026-07-04)
+
+Blank agent acceptance now has two execution families:
+
+- `runBlankEval`: original single-case closed-book test.
+- `runBlankEvalPlan`: multi-case closed-book replay with `single`, `sequence`, or `parallel` mode.
+
+Important rule:
+
+```text
+mode=single must receive exactly one case.
+multi-case replay must use mode=sequence or mode=parallel.
+```
+
+If `mode=single` receives multiple cases, the plan now fails closed and writes a normal `plan-result.json` / `evidence-bundle.json` instead of silently testing only the first case. This prevents a dangerous false pass where a "full replay" accidentally validates only one item.
+
+The long-task `blank_eval_plan` adapter also preserves `stopOnFirstFailure` from either the validator contract or the plan JSON, so sequence replay can stop after the first real failure when that is the intended mode.
+
+Path and filename guardrails:
+
+- Duplicate replay case IDs fail closed before any blank agent runs.
+- Empty case IDs or empty `specPath` fail closed with normal evidence files.
+- Case run directories are always composed as `cases/<index>-<safe-case-id>` and verified to stay inside the plan run directory.
+- Windows-reserved names such as `CON`, `AUX`, `NUL`, `COM1`, and `LPT1`, plus newlines and unsafe filename characters, are sanitized before directory creation.
+- Relative `promptInlinePaths` in replay plans are resolved relative to the replay-plan file, not the terminal cwd.
+
+Smoke:
+
+```powershell
+bun run auto-evolve/scripts/smoke-blank-eval-plan.ts
+bun run auto-evolve/scripts/smoke-blank-eval-plan-spec.ts
+```
+
+## Benchmark CLI Argument Guard (2026-07-04)
+
+`run-benchmark-orchestrator.ts` now refuses unexpected bare command-line arguments.
+
+Why this exists:
+
+- On Windows, paths like `C:\Users\ZhuanZ\Desktop\opencode re\...` are easy to split accidentally if `--out` is not quoted correctly.
+- Before this guard, a split `--out` could silently become `C:\Users\ZhuanZ\Desktop\opencode`, creating the wrong run folder and wasting model quota.
+- Now the orchestrator fails closed with a clear error if it sees leftover path fragments such as `re\opencode`.
+
+Safe launch rule:
+
+```powershell
+bun run auto-evolve/scripts/run-benchmark-orchestrator.ts --out "C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\runtime-state\benchmark-runs\<run-id>" ...
+```
+
+For background PowerShell launchers, pass arguments as an array inside a `.ps1` file, or quote the `-File` script path explicitly. Do not build one long unquoted command string for paths containing spaces.
+
+## Managed Process Stdin Guard (2026-07-04)
+
+`runManagedProcess` now treats stdin `EPIPE` / closed-pipe errors as controlled child-process failures instead of throwing through the orchestrator.
+
+Why this matters:
+
+- OpenCode or a wrapper process may exit before the parent finishes writing a large prompt through stdin.
+- Before this guard, the parent Bun process could crash with `EPIPE: broken pipe, write`, leaving `campaign.json` stuck in `running` even though the owner PID was dead.
+- Now the stderr includes a `[managed-process]` note and the caller receives a normal process result, so campaign/benchmark recovery can classify and resume instead of losing control.
+
+Smoke:
+
+```powershell
+bun run auto-evolve/scripts/smoke-managed-process-stdin-epipe.ts
+```
+
+## Windows Process Identity Query Guard (2026-07-04)
+
+`process-identity.ts` uses a short PowerShell probe to read Windows command lines and process creation ticks. That probe must stay bounded.
+
+Why this matters:
+
+- Health checks, gate checks, and benchmark supervisor polling may ask for process identity many times per minute under concurrency.
+- If a PowerShell probe hangs or the same PID is queried repeatedly without caching, the monitor itself can accumulate helper processes and steal CPU/memory from real OpenCode sessions.
+- The identity probe now has a hard timeout, stdout cap, and short per-PID cache. If the probe cannot answer quickly, ownership becomes `unknown_owner` / stale according to heartbeat rules instead of blocking the supervisor.
+
+Smoke:
+
+```powershell
+# Start a short hidden PowerShell Start-Sleep process, then call identifyProcessOwner
+# with requiredAnyCommandHints = ["Start-Sleep"]. It should return ownership = owned
+# with command line and creation tick present.
+```
+
+## Non-Blank Open-Book Oracle Evidence (2026-07-05)
+
+Only the blank agent is closed-book. Non-blank learning roles such as campaign
+workers, lead, reviewer, merger, repair agent, and blank acceptance diagnostician
+may use oracle evidence to diagnose failures and repair the skill.
+
+Campaign final acceptance now writes an explicit `expert-oracle-bundle.json`.
+The bundle is an index, not a copied answer dump. It points to exact allowed files
+such as `result.private.json`, `result.training.json`, and private answer files
+discovered from validator private/training views. These paths are added to both
+the prompt and `permissionReadPaths`; a role does not merely see the path, it also
+has permission to read it.
+
+The oracle channel is for open-book learning only. The blank-eval sandbox never
+receives this bundle or private answer paths. Surface validators remain the guard
+that prevents hidden answers, private paths, and case-specific oracle literals from
+entering the final skill.
+
+Robustness rules:
+
+- Embedded oracle paths discovered inside `result.private.json` / `result.training.json`
+  must look like real paths and must resolve to existing exact files.
+- The collector ignores directory-level private-answer roots, missing files, normal
+  prose strings, `.runtime`, `.opencode`, `node_modules`, and non-view files under
+  validator directories.
+- The oracle bundle has a bounded path list and bounded JSON traversal so a huge
+  private view cannot explode the campaign prompt/permission surface.
+- Any blank-agent evidence channel is defensively checked again; if a private answer,
+  `result.private.json`, ground-truth, or answer-key path is accidentally routed there,
+  the campaign fails closed instead of leaking it to blank evaluation.
+
+Smoke:
+
+```powershell
+bun run auto-evolve/scripts/smoke-expert-oracle-bundle.ts
+```

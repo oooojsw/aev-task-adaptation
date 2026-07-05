@@ -393,6 +393,7 @@ async function runScriptValidator(input: {
   const reportedPassed = readBooleanField(parsed, "passed", "ok", "success")
   const passed = infraOK && (reportedPassed ?? true)
   const reportedFailureKind = readStringField(parsed, "failureKind", "failure_kind")
+  const hasStructuredFailure = parsed !== undefined && reportedPassed === false
   const explicitProductFailure =
     reportedPassed === false &&
     (reportedFailureKind === "product_failure" ||
@@ -413,7 +414,7 @@ async function runScriptValidator(input: {
     ? undefined
     : reportedFailureKind === "dataset_failure"
       ? ("dataset_failure" as const)
-      : explicitProductFailure
+      : explicitProductFailure || hasStructuredFailure
         ? ("product_failure" as const)
       : !infraOK ||
         timedOut ||
@@ -434,7 +435,8 @@ async function runScriptValidator(input: {
     validatorType: "script",
     createdAt: nowISO(),
     passed,
-    blocking: readBooleanField(parsed, "blocking", "is_blocking") ?? input.contract.blocking === true,
+    blocking:
+      input.contract.blocking === true ? true : readBooleanField(parsed, "blocking", "is_blocking") ?? false,
     failureKind,
     summary,
     details: [

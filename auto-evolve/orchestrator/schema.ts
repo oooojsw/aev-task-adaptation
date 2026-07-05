@@ -118,6 +118,8 @@ export interface LoadedValidationConfig {
 }
 
 export interface LoadedMergeConfig {
+  /** Which merge path the benchmark orchestrator should prefer. */
+  mode: "legacy_script" | "long_task" | "both_smoke"
   /** Master switch for config-level merge contract injection. */
   enabled: boolean
   /** Prompt used by the generic flat merger. */
@@ -142,9 +144,97 @@ export interface LoadedMergeConfig {
   acceptancePreset: MergeAcceptancePreset
   /** Default success criterion for strict merge acceptance gate. */
   acceptanceSuccessCriterion: MergeAcceptanceSuccessCriterion
+  /** Controls packaging legacy merged skills into a real long-task campaign. */
+  asLongTask: LoadedMergeAsLongTaskConfig
+}
+
+export interface LoadedMergeAsLongTaskConfig {
+  /** Master switch for generating/running merge-as-long-task task packs. */
+  enabled: boolean
+  /** Which source skills from a benchmark run become merge inputs. */
+  inputSelection: "success_only" | "failed_only" | "success_and_failed"
+  /** Number of source skills per merge long-task. */
+  groupSize: number
+  /** Grouping strategy for source skills. */
+  grouping: "sequential"
+  /** Which original cases the replay plan should contain. */
+  replayScope: "group_cases" | "union_source_cases" | "sampled_source_cases"
+  /** Blank eval fan-out used by generated replay validators. */
+  replayConcurrency: number
+  /** Validation profile set name used for the merge surface gate. */
+  surfaceProfileSet: string
+  /** Additional explicit validator profile refs added to generated merge specs. */
+  surfaceValidatorProfiles: string[]
+  /** Blank acceptance mode used for intermediate focused replay. */
+  focusedBlankAcceptanceMode: string
+  /** Blank acceptance mode used for the final full replay. */
+  finalBlankAcceptanceMode: string
+  /** Recursive scheduler defaults for hierarchical merge-as-long-task. */
+  hierarchical: LoadedMergeAsLongTaskHierarchicalConfig
+}
+
+export interface LoadedMergeAsLongTaskHierarchicalConfig {
+  /** Master switch for hierarchical merge-as-long-task orchestration. */
+  enabled: boolean
+  /** Whether levels are generated until one skill remains, or only from explicit level configs. */
+  levelPlanningMode: "until_one" | "configured_levels"
+  /** What to do when hierarchy receives exactly one input skill. */
+  singleInputMode: "promote" | "wrap" | "fail"
+  /** What to do if configured levels end while multiple skills remain. */
+  finalizationMode: "require_single_final" | "merge_remaining_to_one" | "promote_best_effort"
+  /** Number of input skills per group at each level. */
+  groupSize: number
+  /** Maximum number of recursive merge levels before failing closed. */
+  maxLevels: number
+  /** Number of group campaigns intended to run concurrently. */
+  groupConcurrency: number
+  /** Which source skills enter the first hierarchical level. */
+  inputSelection: "success_only" | "failed_only" | "success_and_failed"
+  /** Replay scope for intermediate levels. */
+  intermediateReplayScope: "group_cases" | "union_source_cases" | "sampled_source_cases"
+  /** Replay scope for the final level. */
+  finalReplayScope: "group_cases" | "union_source_cases" | "sampled_source_cases"
+  /** Blank eval fan-out used by generated replay validators. */
+  blankReplayConcurrency: number
+  /** Validation profile set used by generated hierarchical merge tasks. */
+  surfaceProfileSet: string
+  /** Extra validator profile refs for generated hierarchical merge tasks. */
+  surfaceValidatorProfiles: string[]
+  /** Auto-mounted blank acceptance scenario used before the final level. */
+  intermediateBlankAcceptanceScenario: string
+  /** Auto-mounted blank acceptance scenario used for the final level. */
+  finalBlankAcceptanceScenario: string
+  /** Merge acceptance profile name recorded into generated summaries. */
+  acceptanceProfile: string
+  /** What to do if a group fails and cannot become a next-level input. */
+  failedGroupPolicy: "fail_fast" | "exclude_failed_group" | "negative_evidence"
+  /** Optional per-level overrides. Empty means all levels use the defaults above. */
+  levels: LoadedMergeAsLongTaskHierarchicalLevelConfig[]
+}
+
+export interface LoadedMergeAsLongTaskHierarchicalLevelConfig {
+  /** One-based hierarchy level. */
+  level: number
+  /** Number of input skills merged by each group at this level. */
+  groupSize: number
+  /** Number of group campaigns the live supervisor may run at this level. */
+  groupConcurrency: number
+  /** Replay scope for this level. */
+  replayScope: "group_cases" | "union_source_cases" | "sampled_source_cases"
+  /** Blank eval fan-out used by generated replay validators at this level. */
+  blankReplayConcurrency: number
+  /** Validation profile set mounted for this level. */
+  surfaceProfileSet?: string
+  /** Extra validator profile refs mounted for this level. */
+  surfaceValidatorProfiles: string[]
+  /** Blank acceptance scenario mounted for this level. */
+  blankAcceptanceScenario: string
 }
 
 export type BlankAcceptanceDiagnosisMode = "auto" | "single_case" | "plan_replay" | "infra_only"
+export type BlankAcceptanceRunner = "single" | "blank_eval_plan"
+export type BlankAcceptancePlanMode = "single" | "sequence" | "parallel"
+export type BlankAcceptanceCaseSelection = "single_case" | "all_cases" | "previous_failed_only"
 
 export interface BlankAcceptanceDiagnosisProfile {
   /** Human-readable note for dashboards and config readers. */
@@ -155,9 +245,49 @@ export interface BlankAcceptanceDiagnosisProfile {
   enabledModules: string[]
 }
 
+export interface BlankAcceptanceModeProfile {
+  /** Human-readable note for config files and dashboards. */
+  description?: string
+  /** Execution family. Single delegates to one runBlankEval; blank_eval_plan handles multi-case replay. */
+  runner: BlankAcceptanceRunner
+  /** Plan runner mode when runner is blank_eval_plan. */
+  mode?: BlankAcceptancePlanMode
+  /** Which cases should be placed into the replay plan. */
+  caseSelection: BlankAcceptanceCaseSelection
+  /** Success rule for the plan result. */
+  successCriterion: "all_pass" | "allow_partial" | "min_pass_rate" | "report_only"
+  /** Required score when successCriterion is min_pass_rate. */
+  minPassRate?: number
+  /** Stop sequence mode on the first failing case. */
+  stopOnFirstFailure?: boolean
+  /** Optional per-plan concurrency override. */
+  concurrency?: number
+}
+
+export type BlankAcceptanceAutoMountScenario =
+  | "single_long_task_final"
+  | "merge_initial_replay"
+  | "merge_repair_replay"
+  | "merge_report_only"
+  | "heldout_test"
+  | "smoke"
+
+export interface BlankAcceptanceAutoMountConfig {
+  /** If enabled, callers can pass a scenario and get a mode without hard-coding mode IDs. */
+  enabled: boolean
+  /** Scenario -> blankAcceptanceConfig.modes key. */
+  rules: Record<string, string>
+}
+
 export interface LoadedBlankAcceptanceConfig {
   /** Master switch for blank acceptance diagnosis after a failed final acceptance gate. */
   enabled: boolean
+  /** Default executable blank acceptance mode for new generated specs. */
+  defaultMode: string
+  /** Reusable executable blank acceptance modes. */
+  modes: Record<string, BlankAcceptanceModeProfile>
+  /** Scenario-based automatic mode routing. */
+  autoMount: BlankAcceptanceAutoMountConfig
   /** Default profile when no task-pack-specific mapping exists. */
   defaultDiagnosisProfile: string
   /** Map task-pack directory name or taskFamily to a diagnosis profile. */
@@ -407,6 +537,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
     },
   },
   mergeConfig: {
+    mode: "legacy_script",
     enabled: true,
     defaultPrompt: "methods/recipes/multi-instance/prompts/merge.md",
     defaultRepairPrompt: "methods/recipes/multi-instance/prompts/merge-repair.md",
@@ -449,9 +580,83 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
     },
     acceptancePreset: "repair_promote",
     acceptanceSuccessCriterion: "all_pass",
+    asLongTask: {
+      enabled: false,
+      inputSelection: "success_only",
+      groupSize: 25,
+      grouping: "sequential",
+      replayScope: "group_cases",
+      replayConcurrency: 5,
+      surfaceProfileSet: "skill-structure-standard",
+      surfaceValidatorProfiles: [],
+      focusedBlankAcceptanceMode: "merge-focused-failures",
+      finalBlankAcceptanceMode: "merge-final-full-replay",
+      hierarchical: {
+        enabled: false,
+        levelPlanningMode: "until_one",
+        singleInputMode: "promote",
+        finalizationMode: "require_single_final",
+        groupSize: 5,
+        maxLevels: 8,
+        groupConcurrency: 2,
+        inputSelection: "success_only",
+        intermediateReplayScope: "group_cases",
+        finalReplayScope: "union_source_cases",
+        blankReplayConcurrency: 5,
+        surfaceProfileSet: "merge-surface-standard",
+        surfaceValidatorProfiles: [],
+        intermediateBlankAcceptanceScenario: "merge_initial_replay",
+        finalBlankAcceptanceScenario: "merge_initial_replay",
+        acceptanceProfile: "repair_promote",
+        failedGroupPolicy: "fail_fast",
+        levels: [],
+      },
+    },
   },
   blankAcceptanceConfig: {
     enabled: true,
+    defaultMode: "single-case",
+    modes: {
+      "single-case": {
+        description: "One blank agent acceptance run for one case.",
+        runner: "single",
+        mode: "single",
+        caseSelection: "single_case",
+        successCriterion: "all_pass",
+      },
+      "merge-focused-failures": {
+        description: "Replay only the previous failed cases during merge-as-long-task refinement.",
+        runner: "blank_eval_plan",
+        mode: "parallel",
+        caseSelection: "previous_failed_only",
+        successCriterion: "all_pass",
+      },
+      "merge-final-full-replay": {
+        description: "Strict full train replay for a merged skill.",
+        runner: "blank_eval_plan",
+        mode: "parallel",
+        caseSelection: "all_cases",
+        successCriterion: "all_pass",
+      },
+      "merge-replay-report": {
+        description: "Report-only multi-case replay; useful for smoke and diagnosis without claiming success.",
+        runner: "blank_eval_plan",
+        mode: "parallel",
+        caseSelection: "all_cases",
+        successCriterion: "report_only",
+      },
+    },
+    autoMount: {
+      enabled: true,
+      rules: {
+        single_long_task_final: "single-case",
+        merge_initial_replay: "merge-final-full-replay",
+        merge_repair_replay: "merge-focused-failures",
+        merge_report_only: "merge-replay-report",
+        heldout_test: "merge-final-full-replay",
+        smoke: "merge-replay-report",
+      },
+    },
     defaultDiagnosisProfile: "auto",
     taskPackDiagnosisProfiles: {},
     diagnosisProfiles: {
@@ -818,6 +1023,175 @@ function normalizeStringMap(input: unknown, fallback: Record<string, string> = {
   return out
 }
 
+function normalizeMergeMode(input: unknown, fallback: LoadedMergeConfig["mode"]): LoadedMergeConfig["mode"] {
+  if (input === "legacy_script" || input === "long_task" || input === "both_smoke") return input
+  return fallback
+}
+
+function normalizeMergeInputSelection(
+  input: unknown,
+  fallback: LoadedMergeAsLongTaskConfig["inputSelection"],
+): LoadedMergeAsLongTaskConfig["inputSelection"] {
+  if (input === "success_only" || input === "failed_only" || input === "success_and_failed") return input
+  return fallback
+}
+
+function normalizeMergeGrouping(
+  input: unknown,
+  fallback: LoadedMergeAsLongTaskConfig["grouping"],
+): LoadedMergeAsLongTaskConfig["grouping"] {
+  if (input === "sequential") return input
+  return fallback
+}
+
+function normalizeMergeReplayScope(
+  input: unknown,
+  fallback: LoadedMergeAsLongTaskConfig["replayScope"],
+): LoadedMergeAsLongTaskConfig["replayScope"] {
+  if (input === "group_cases" || input === "union_source_cases" || input === "sampled_source_cases") return input
+  return fallback
+}
+
+function normalizeMergeFailedGroupPolicy(
+  input: unknown,
+  fallback: LoadedMergeAsLongTaskHierarchicalConfig["failedGroupPolicy"],
+): LoadedMergeAsLongTaskHierarchicalConfig["failedGroupPolicy"] {
+  if (input === "fail_fast" || input === "exclude_failed_group" || input === "negative_evidence") return input
+  return fallback
+}
+
+function normalizeMergeHierarchicalPlanningMode(
+  input: unknown,
+  fallback: LoadedMergeAsLongTaskHierarchicalConfig["levelPlanningMode"],
+): LoadedMergeAsLongTaskHierarchicalConfig["levelPlanningMode"] {
+  if (input === "until_one" || input === "configured_levels") return input
+  return fallback
+}
+
+function normalizeMergeSingleInputMode(
+  input: unknown,
+  fallback: LoadedMergeAsLongTaskHierarchicalConfig["singleInputMode"],
+): LoadedMergeAsLongTaskHierarchicalConfig["singleInputMode"] {
+  if (input === "promote" || input === "wrap" || input === "fail") return input
+  return fallback
+}
+
+function normalizeMergeFinalizationMode(
+  input: unknown,
+  fallback: LoadedMergeAsLongTaskHierarchicalConfig["finalizationMode"],
+): LoadedMergeAsLongTaskHierarchicalConfig["finalizationMode"] {
+  if (input === "require_single_final" || input === "merge_remaining_to_one" || input === "promote_best_effort") return input
+  return fallback
+}
+
+function normalizeMergeHierarchicalLevelConfig(
+  raw: unknown,
+  fallback: LoadedMergeAsLongTaskHierarchicalConfig,
+): LoadedMergeAsLongTaskHierarchicalLevelConfig | undefined {
+  if (!isObject(raw)) return undefined
+  const level = positiveIntegerField(raw, "level", 0)
+  if (level < 1) return undefined
+  return {
+    level,
+    groupSize: positiveIntegerField(raw, "groupSize", fallback.groupSize),
+    groupConcurrency: positiveIntegerField(raw, "groupConcurrency", fallback.groupConcurrency),
+    replayScope: normalizeMergeReplayScope(raw.replayScope, level === 1 ? fallback.intermediateReplayScope : fallback.finalReplayScope),
+    blankReplayConcurrency: positiveIntegerField(raw, "blankReplayConcurrency", fallback.blankReplayConcurrency),
+    surfaceProfileSet: normalizeOptionalString(raw.surfaceProfileSet) ?? fallback.surfaceProfileSet,
+    surfaceValidatorProfiles: normalizeStringList(raw.surfaceValidatorProfiles, fallback.surfaceValidatorProfiles),
+    blankAcceptanceScenario:
+      normalizeOptionalString(raw.blankAcceptanceScenario) ??
+      (level === 1 ? fallback.intermediateBlankAcceptanceScenario : fallback.finalBlankAcceptanceScenario),
+  }
+}
+
+function normalizeMergeHierarchicalLevels(
+  raw: unknown,
+  fallback: LoadedMergeAsLongTaskHierarchicalConfig,
+): LoadedMergeAsLongTaskHierarchicalLevelConfig[] {
+  const source = Array.isArray(raw) ? raw : fallback.levels
+  const normalized = source
+    .map((item) => normalizeMergeHierarchicalLevelConfig(item, fallback))
+    .filter((item): item is LoadedMergeAsLongTaskHierarchicalLevelConfig => Boolean(item))
+    .sort((a, b) => a.level - b.level)
+  const seen = new Set<number>()
+  const out: LoadedMergeAsLongTaskHierarchicalLevelConfig[] = []
+  for (const item of normalized) {
+    if (seen.has(item.level)) continue
+    seen.add(item.level)
+    out.push({
+      ...item,
+      surfaceValidatorProfiles: [...item.surfaceValidatorProfiles],
+    })
+  }
+  return out
+}
+
+function normalizeMergeAsLongTaskHierarchicalConfig(
+  raw: unknown,
+  fallback: LoadedMergeAsLongTaskHierarchicalConfig,
+): LoadedMergeAsLongTaskHierarchicalConfig {
+  if (!isObject(raw)) {
+    return {
+      ...fallback,
+      surfaceValidatorProfiles: [...fallback.surfaceValidatorProfiles],
+      levels: fallback.levels.map((level) => ({
+        ...level,
+        surfaceValidatorProfiles: [...level.surfaceValidatorProfiles],
+      })),
+    }
+  }
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    levelPlanningMode: normalizeMergeHierarchicalPlanningMode(raw.levelPlanningMode, fallback.levelPlanningMode),
+    singleInputMode: normalizeMergeSingleInputMode(raw.singleInputMode, fallback.singleInputMode),
+    finalizationMode: normalizeMergeFinalizationMode(raw.finalizationMode, fallback.finalizationMode),
+    groupSize: positiveIntegerField(raw, "groupSize", fallback.groupSize),
+    maxLevels: positiveIntegerField(raw, "maxLevels", fallback.maxLevels),
+    groupConcurrency: positiveIntegerField(raw, "groupConcurrency", fallback.groupConcurrency),
+    inputSelection: normalizeMergeInputSelection(raw.inputSelection, fallback.inputSelection),
+    intermediateReplayScope: normalizeMergeReplayScope(raw.intermediateReplayScope, fallback.intermediateReplayScope),
+    finalReplayScope: normalizeMergeReplayScope(raw.finalReplayScope, fallback.finalReplayScope),
+    blankReplayConcurrency: positiveIntegerField(raw, "blankReplayConcurrency", fallback.blankReplayConcurrency),
+    surfaceProfileSet: normalizeOptionalString(raw.surfaceProfileSet) ?? fallback.surfaceProfileSet,
+    surfaceValidatorProfiles: normalizeStringList(raw.surfaceValidatorProfiles, fallback.surfaceValidatorProfiles),
+    intermediateBlankAcceptanceScenario:
+      normalizeOptionalString(raw.intermediateBlankAcceptanceScenario) ?? fallback.intermediateBlankAcceptanceScenario,
+    finalBlankAcceptanceScenario:
+      normalizeOptionalString(raw.finalBlankAcceptanceScenario) ?? fallback.finalBlankAcceptanceScenario,
+    acceptanceProfile: normalizeOptionalString(raw.acceptanceProfile) ?? fallback.acceptanceProfile,
+    failedGroupPolicy: normalizeMergeFailedGroupPolicy(raw.failedGroupPolicy, fallback.failedGroupPolicy),
+    levels: normalizeMergeHierarchicalLevels(raw.levels, fallback),
+  }
+}
+
+function normalizeMergeAsLongTaskConfig(
+  raw: unknown,
+  fallback: LoadedMergeAsLongTaskConfig,
+): LoadedMergeAsLongTaskConfig {
+  if (!isObject(raw)) {
+    return {
+      ...fallback,
+      surfaceValidatorProfiles: [...fallback.surfaceValidatorProfiles],
+      hierarchical: normalizeMergeAsLongTaskHierarchicalConfig(undefined, fallback.hierarchical),
+    }
+  }
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    inputSelection: normalizeMergeInputSelection(raw.inputSelection, fallback.inputSelection),
+    groupSize: positiveIntegerField(raw, "groupSize", fallback.groupSize),
+    grouping: normalizeMergeGrouping(raw.grouping, fallback.grouping),
+    replayScope: normalizeMergeReplayScope(raw.replayScope, fallback.replayScope),
+    replayConcurrency: positiveIntegerField(raw, "replayConcurrency", fallback.replayConcurrency),
+    surfaceProfileSet: normalizeOptionalString(raw.surfaceProfileSet) ?? fallback.surfaceProfileSet,
+    surfaceValidatorProfiles: normalizeStringList(raw.surfaceValidatorProfiles, fallback.surfaceValidatorProfiles),
+    focusedBlankAcceptanceMode:
+      normalizeOptionalString(raw.focusedBlankAcceptanceMode) ?? fallback.focusedBlankAcceptanceMode,
+    finalBlankAcceptanceMode: normalizeOptionalString(raw.finalBlankAcceptanceMode) ?? fallback.finalBlankAcceptanceMode,
+    hierarchical: normalizeMergeAsLongTaskHierarchicalConfig(raw.hierarchical, fallback.hierarchical),
+  }
+}
+
 function normalizeMergeConfig(
   raw: unknown,
   fallback: LoadedMergeConfig = DEFAULT_CONFIG.mergeConfig,
@@ -827,10 +1201,12 @@ function normalizeMergeConfig(
       ...fallback,
       taskPackContracts: { ...fallback.taskPackContracts },
       acceptanceProfiles: normalizeMergeAcceptanceProfiles(undefined, fallback.acceptanceProfiles),
+      asLongTask: normalizeMergeAsLongTaskConfig(undefined, fallback.asLongTask),
     }
   }
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    mode: normalizeMergeMode(raw.mode, fallback.mode),
     defaultPrompt: normalizeOptionalString(raw.defaultPrompt) ?? fallback.defaultPrompt,
     defaultRepairPrompt: normalizeOptionalString(raw.defaultRepairPrompt) ?? fallback.defaultRepairPrompt,
     defaultHierarchicalPrompt:
@@ -848,12 +1224,70 @@ function normalizeMergeConfig(
       raw.acceptanceSuccessCriterion,
       fallback.acceptanceSuccessCriterion,
     ),
+    asLongTask: normalizeMergeAsLongTaskConfig(raw.asLongTask, fallback.asLongTask),
   }
 }
 
 function normalizeBlankAcceptanceDiagnosisMode(input: unknown, fallback: BlankAcceptanceDiagnosisMode): BlankAcceptanceDiagnosisMode {
   if (input === "auto" || input === "single_case" || input === "plan_replay" || input === "infra_only") return input
   return fallback
+}
+
+function normalizeBlankAcceptanceRunner(
+  input: unknown,
+  fallback: BlankAcceptanceRunner,
+): BlankAcceptanceRunner {
+  if (input === "single" || input === "blank_eval_plan") return input
+  return fallback
+}
+
+function normalizeBlankAcceptancePlanMode(
+  input: unknown,
+  fallback: BlankAcceptancePlanMode,
+): BlankAcceptancePlanMode {
+  if (input === "single" || input === "sequence" || input === "parallel") return input
+  return fallback
+}
+
+function normalizeBlankAcceptanceCaseSelection(
+  input: unknown,
+  fallback: BlankAcceptanceCaseSelection,
+): BlankAcceptanceCaseSelection {
+  if (input === "single_case" || input === "all_cases" || input === "previous_failed_only") return input
+  return fallback
+}
+
+function normalizeBlankAcceptanceSuccessCriterion(
+  input: unknown,
+  fallback: BlankAcceptanceModeProfile["successCriterion"],
+): BlankAcceptanceModeProfile["successCriterion"] {
+  if (input === "all_pass" || input === "allow_partial" || input === "min_pass_rate" || input === "report_only") {
+    return input
+  }
+  return fallback
+}
+
+function normalizeBlankAcceptanceModeProfile(
+  raw: unknown,
+  fallback: BlankAcceptanceModeProfile,
+): BlankAcceptanceModeProfile {
+  if (!isObject(raw)) {
+    return { ...fallback }
+  }
+  return {
+    description: normalizeOptionalString(raw.description) ?? fallback.description,
+    runner: normalizeBlankAcceptanceRunner(raw.runner, fallback.runner),
+    mode: normalizeBlankAcceptancePlanMode(raw.mode, fallback.mode ?? "single"),
+    caseSelection: normalizeBlankAcceptanceCaseSelection(raw.caseSelection, fallback.caseSelection),
+    successCriterion: normalizeBlankAcceptanceSuccessCriterion(raw.successCriterion, fallback.successCriterion),
+    minPassRate:
+      typeof raw.minPassRate === "number" && Number.isFinite(raw.minPassRate)
+        ? Math.max(0, Math.min(1, raw.minPassRate))
+        : fallback.minPassRate,
+    stopOnFirstFailure:
+      typeof raw.stopOnFirstFailure === "boolean" ? raw.stopOnFirstFailure : fallback.stopOnFirstFailure,
+    concurrency: positiveIntegerField(raw, "concurrency", fallback.concurrency ?? 1),
+  }
 }
 
 function normalizeBlankAcceptanceDiagnosisProfile(
@@ -874,10 +1308,43 @@ function normalizeBlankAcceptanceDiagnosisProfile(
   }
 }
 
+function normalizeBlankAcceptanceAutoMountConfig(
+  raw: unknown,
+  fallback: BlankAcceptanceAutoMountConfig,
+  modes: Record<string, BlankAcceptanceModeProfile>,
+): BlankAcceptanceAutoMountConfig {
+  const fallbackRules = { ...fallback.rules }
+  if (!isObject(raw)) return { enabled: fallback.enabled, rules: fallbackRules }
+  const rules = { ...fallbackRules }
+  const rawRules = isObject(raw.rules) ? raw.rules : {}
+  for (const [key, value] of Object.entries(rawRules)) {
+    const scenario = key.trim()
+    if (!scenario) continue
+    const modeID = normalizeOptionalString(value)
+    if (!modeID) continue
+    if (!modes[modeID]) {
+      throw new Error(`blankAcceptanceConfig.autoMount.rules.${scenario} references unknown mode: ${modeID}`)
+    }
+    rules[scenario] = modeID
+  }
+  for (const [scenario, modeID] of Object.entries(rules)) {
+    if (!modes[modeID]) {
+      throw new Error(`blankAcceptanceConfig.autoMount.rules.${scenario} references unknown mode: ${modeID}`)
+    }
+  }
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    rules,
+  }
+}
+
 function normalizeBlankAcceptanceConfig(
   raw: unknown,
   fallback: LoadedBlankAcceptanceConfig = DEFAULT_CONFIG.blankAcceptanceConfig,
 ): LoadedBlankAcceptanceConfig {
+  const fallbackModes: Record<string, BlankAcceptanceModeProfile> = Object.fromEntries(
+    Object.entries(fallback.modes).map(([key, value]) => [key, normalizeBlankAcceptanceModeProfile(undefined, value)]),
+  )
   const fallbackProfiles: Record<string, BlankAcceptanceDiagnosisProfile> = Object.fromEntries(
     Object.entries(fallback.diagnosisProfiles).map(([key, value]) => [
       key,
@@ -887,10 +1354,21 @@ function normalizeBlankAcceptanceConfig(
   if (!isObject(raw)) {
     return {
       enabled: fallback.enabled,
+      defaultMode: fallback.defaultMode,
+      modes: fallbackModes,
+      autoMount: normalizeBlankAcceptanceAutoMountConfig(undefined, fallback.autoMount, fallbackModes),
       defaultDiagnosisProfile: fallback.defaultDiagnosisProfile,
       taskPackDiagnosisProfiles: { ...fallback.taskPackDiagnosisProfiles },
       diagnosisProfiles: fallbackProfiles,
     }
+  }
+
+  const modes = { ...fallbackModes }
+  const rawModes = isObject(raw.modes) ? raw.modes : {}
+  for (const [key, value] of Object.entries(rawModes)) {
+    if (!key.trim()) continue
+    const fallbackMode = modes[key] ?? fallbackModes["single-case"]
+    modes[key.trim()] = normalizeBlankAcceptanceModeProfile(value, fallbackMode)
   }
 
   const diagnosisProfiles = { ...fallbackProfiles }
@@ -902,8 +1380,13 @@ function normalizeBlankAcceptanceConfig(
   }
 
   const defaultDiagnosisProfile = normalizeOptionalString(raw.defaultDiagnosisProfile) ?? fallback.defaultDiagnosisProfile
+  const defaultMode = normalizeOptionalString(raw.defaultMode) ?? fallback.defaultMode
+  const autoMount = normalizeBlankAcceptanceAutoMountConfig(raw.autoMount, fallback.autoMount, modes)
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    defaultMode: modes[defaultMode] ? defaultMode : fallback.defaultMode,
+    modes,
+    autoMount,
     defaultDiagnosisProfile: diagnosisProfiles[defaultDiagnosisProfile] ? defaultDiagnosisProfile : fallback.defaultDiagnosisProfile,
     taskPackDiagnosisProfiles: normalizeStringMap(raw.taskPackDiagnosisProfiles, fallback.taskPackDiagnosisProfiles),
     diagnosisProfiles,

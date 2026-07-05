@@ -20,6 +20,60 @@
 
 全局有多个角色，他们都是工作节点，只有空白agent节点无法看到答案任何相关内容，其他的任何节点都可以完全或者部分看到答案内容，因为专家经验区就是他们在写，只有空白agent是完全利用专家经验区进行任务，以此来考验专家经验区写的是不是没有过拟合以及泛化，整个系统的目的是产出一份泛化的（不过拟合任何案例）、完备的（可以让空白agent通过大量测试集）的专家经验区（skill）。
 
+## 0.1 停止与续传专区（最高优先级）
+
+停止和续传是同一个运行血统的两个动作，不能当成“杀掉以后重新开一个实验”。
+
+### 停止训练时
+
+1. 默认使用项目停止脚本：
+   `C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/script/stop-auto-evolve-sessions.ps1`
+2. 停止 benchmark 时必须传原始 `-Out <run目录>`，不要只按进程名乱杀。
+3. 默认模式是 `pause`，含义是保存现场、把 running/watch/bootstrapping 标成可恢复、释放 lease/gate、再停止可证明属于本 run 的进程。
+4. 停止脚本会写：
+   - `STOP_REQUESTED.json`
+   - `run-manifest.json`
+   - `artifact-manifest.stop.json`
+   - `stop-reports/`
+   - `stop-snapshots/`
+   - `stop-transactions/`
+5. 这些是恢复证据，不是垃圾。不要删除 `campaign`、`rounds`、`pending-expert-package`、`workspace`、验证结果、训练出的 skill 或任何真实产物。
+
+### 续传训练时
+
+1. 用户说“继续训练 / 断点续传 / 续传 / 重启外层 orchestrator / 恢复训练”时，必须继续已有最高进度 run，禁止新建新的 `--out`。
+2. 续传前必须枚举历史 run，确认选中的是同 task-pack、同 split、同 label 或同 runID 的最高进度主线。
+3. 对 benchmark，真正的续传入口是重新运行：
+   `auto-evolve/scripts/run-benchmark-orchestrator.ts`
+   并且必须使用同一个 `--out`。
+4. 对单个 campaign，续传入口是：
+   `bun run auto-evolve/cli.ts resume-long-task-campaign --campaign <campaignID> --spec <spec>`
+5. 对 Direct Chat，续传入口是同一个 out-dir 加 `--resume-existing`，已有 `result.json` 的 case 不应重跑。
+6. 续传不是恢复旧 OpenCode 对话 session，而是磁盘断点续跑：读取 `campaign.json`、round history、long-task progress、task-ledger 和已有产物后继续。
+
+### 续传前必须处理的坑
+
+1. `STOP_REQUESTED.json` 如果还留在 run 根目录，外层 orchestrator 会一启动就再次暂停。续传前必须把它移动到 `stop-reports/cleared-stop-requests/` 归档，不能直接丢失证据。
+2. `benchmark-leases/*.json` 只是外层任务认领票，不是训练产物。可以清理过期或属于当前 out 的旧 lease，但不能清别的 run 的 lease。
+3. OpenCodeGate 残留只能按 scope / caller / ownerCommandHint / campaignID 明确匹配当前 run 后清理，禁止全量清 gate。
+4. `running` 状态不能凭状态文件相信。必须用 run-dashboard、真实进程、ownerPID、ownerCreationTick、heartbeat、campaign.json 交叉确认。
+5. 看到 `healthy_running` 但成功数长期不涨时，必须做“长任务轮次卡住专项检查”，不能只说还在跑。
+6. Windows 路径有空格，启动续传命令时优先使用参数数组或真实 exe 路径，避免 PowerShell 把 `C:/Users/.../opencode re/...` 撕裂。
+7. 禁止为了续传去删除真实训练成果。续传最多归档暂停标记、释放过期锁票、清当前 run 的 gate 残留、把假 running 改回 recovery_pending。
+
+### 判断续传是否真的成功
+
+续传启动后必须立刻检查：
+
+1. 外层 `run-benchmark-orchestrator` 真实进程存在。
+2. `STOP_REQUESTED.json` 不在 run 根目录。
+3. `orchestrator-state.json` 或 `train-plan.json` 的更新时间变新。
+4. `benchmark-leases/` 出现当前任务认领票。
+5. 能看到 `run-long-task-campaign` / `resume-long-task-campaign` 子进程，或 watch 列表确实有健康运行的 campaign。
+6. 若只有外层进程、没有 active/watch/todo 变化，要检查是否被旧停止标记、坏 lease、gate 残留或 train-plan 分类 bug 卡住。
+
+大白话：停止是“正规关机”，续传是“按同一台机器继续开机”。不要换机器、不要重装系统、不要把硬盘里的训练成果删掉。
+
 这份文件只描述 `auto-evolve` 子项目的当前真实情况。根目录的 `AGENTS.md` 仍然是全仓级规则，这里主要补充：
 
 - 当前长程/短程运行机制

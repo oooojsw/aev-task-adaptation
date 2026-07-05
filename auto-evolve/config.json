@@ -97,6 +97,14 @@
         ],
         "blankEvalValidatorProfiles": []
       },
+      "merge-surface-standard": {
+        "description": "Merged skill pre-blank hard gates: standard skill layout plus generic merge anti-leak surface checks.",
+        "validatorProfiles": [
+          "skill-surface/standard-hard-v1",
+          "merge-surface/standard-v1"
+        ],
+        "blankEvalValidatorProfiles": []
+      },
       "paper-review-surface-generalization": {
           "description": "Paper-review 专用表面泛化硬验证：检查正式 skill 是否泄漏任务编号、gold/private answer、最终评分或单篇论文专名；用于 pre_blank 阶段，默认不启用，按实验分支选择。",
           "validatorProfiles": [
@@ -109,6 +117,8 @@
   "mergeConfig": {
     "enabled": true,
     "enabledNote": "控制 multi-instance flat merge / replay repair 是否注入可拔插 merge contract；开启后合并 prompt 保持通用，任务差异由 contract 提供。",
+    "mode": "legacy_script",
+    "modeNote": "Controls the default merge route: legacy_script keeps the old merge pipeline; long_task wraps merge as a normal long-task; both_smoke is for side-by-side smoke only.",
     "defaultPrompt": "methods/recipes/multi-instance/prompts/merge.md",
     "defaultPromptNote": "控制通用平面合并 prompt；该文件必须保持数据集无关，不允许写死 audit / paper / spreadsheet 等任务专用输出。",
     "defaultRepairPrompt": "methods/recipes/multi-instance/prompts/merge-repair.md",
@@ -160,11 +170,125 @@
     "acceptancePreset": "repair_promote",
     "acceptancePresetNote": "旧兼容字段：控制合并后验收流水线跑到哪一步；新实验优先使用 defaultAcceptanceProfile / --merge-acceptance-profile。",
     "acceptanceSuccessCriterion": "all_pass",
-    "acceptanceSuccessCriterionNote": "控制 strict_all_pass 的成功标准；all_pass 表示最终回撤必须全过，allow_partial/report_only 只适合探索实验。"
+    "acceptanceSuccessCriterionNote": "控制 strict_all_pass 的成功标准；all_pass 表示最终回撤必须全过，allow_partial/report_only 只适合探索实验。",
+    "asLongTask": {
+      "enabled": false,
+      "enabledNote": "Controls whether merge can be generated as a normal long-task dataset instead of only using the legacy merge script.",
+      "inputSelection": "success_only",
+      "inputSelectionNote": "Controls which source case skills enter the merge long-task: success_only, failed_only, or success_and_failed.",
+      "groupSize": 25,
+      "groupSizeNote": "Controls how many source skills are packed into one merge long-task case.",
+      "grouping": "sequential",
+      "groupingNote": "Controls grouping strategy. Only sequential is enabled now to avoid hidden random splits.",
+      "replayScope": "group_cases",
+      "replayScopeNote": "Controls which blank replay cases validate a generated merged skill.",
+      "replayConcurrency": 5,
+      "replayConcurrencyNote": "Controls blank-eval-plan concurrency inside merge-as-long-task completion validation.",
+      "surfaceProfileSet": "merge-surface-standard",
+      "surfaceProfileSetNote": "Controls which validator profile set is mounted before blank replay for merged skills.",
+      "surfaceValidatorProfiles": [],
+      "surfaceValidatorProfilesNote": "Extra merge-as-long-task surface validators appended to the selected profile set.",
+      "focusedBlankAcceptanceMode": "merge-focused-failures",
+      "focusedBlankAcceptanceModeNote": "Controls the blank acceptance mode for focused repair rounds after replay failures.",
+      "finalBlankAcceptanceMode": "merge-final-full-replay",
+      "finalBlankAcceptanceModeNote": "Controls the blank acceptance mode for final merged-skill replay.",
+      "hierarchical": {
+        "enabled": false,
+        "enabledNote": "Controls whether merge-as-long-task is recursively scheduled as level-01, level-02 ... until one final skill remains.",
+        "levelPlanningMode": "until_one",
+        "levelPlanningModeNote": "Controls hierarchy planning: until_one keeps merging until one skill remains; configured_levels only runs explicitly listed levels.",
+        "singleInputMode": "promote",
+        "singleInputModeNote": "Controls one-input hierarchy behavior: promote reuses the skill, wrap runs a one-item merge task, fail stops.",
+        "finalizationMode": "require_single_final",
+        "finalizationModeNote": "Controls configured_levels ending with multiple skills: require_single_final fails, merge_remaining_to_one adds one final merge, promote_best_effort records unfinished outputs.",
+        "groupSize": 5,
+        "groupSizeNote": "Controls how many input skills are merged into each group at each hierarchical level.",
+        "maxLevels": 8,
+        "maxLevelsNote": "Safety cap for recursive hierarchical levels; prevents accidental infinite regrouping.",
+        "groupConcurrency": 2,
+        "groupConcurrencyNote": "Controls intended concurrent group campaigns per hierarchical level; OpenCodeGate still enforces the real lower-level session cap.",
+        "inputSelection": "success_only",
+        "inputSelectionNote": "Controls first-level source skill selection: success_only, failed_only, or success_and_failed.",
+        "intermediateReplayScope": "group_cases",
+        "intermediateReplayScopeNote": "Intermediate levels replay only the original cases covered by that group.",
+        "finalReplayScope": "union_source_cases",
+        "finalReplayScopeNote": "Final level replay expands all lower-level group skills back to their original source cases.",
+        "blankReplayConcurrency": 5,
+        "blankReplayConcurrencyNote": "Controls blank-eval-plan concurrency inside generated hierarchical merge tasks.",
+        "surfaceProfileSet": "merge-surface-standard",
+        "surfaceProfileSetNote": "Controls surface validator profile set mounted on every hierarchical merge task.",
+        "surfaceValidatorProfiles": [],
+        "surfaceValidatorProfilesNote": "Extra validator profiles appended to each hierarchical merge task.",
+        "intermediateBlankAcceptanceScenario": "merge_initial_replay",
+        "intermediateBlankAcceptanceScenarioNote": "Auto-mount scenario for non-final hierarchical levels.",
+        "finalBlankAcceptanceScenario": "merge_initial_replay",
+        "finalBlankAcceptanceScenarioNote": "Auto-mount scenario for the final hierarchical level.",
+        "acceptanceProfile": "repair_promote",
+        "acceptanceProfileNote": "Records the intended replay/repair policy for hierarchical merge runs.",
+        "failedGroupPolicy": "fail_fast",
+        "failedGroupPolicyNote": "Controls what a real supervisor should do if a lower-level group cannot produce a promotable skill.",
+        "levels": [],
+        "levelsNote": "Optional per-level overrides. Example: [{\"level\":1,\"groupSize\":5,\"groupConcurrency\":5},{\"level\":2,\"groupSize\":3,\"groupConcurrency\":2}]. Empty means use the defaults above for every level."
+      }
+    }
   },
   "blankAcceptanceConfig": {
     "enabled": true,
     "enabledNote": "控制空白 agent 最终验收失败后是否启动可拔插诊断器。",
+    "defaultMode": "single-case",
+    "defaultModeNote": "Controls the default executable blank acceptance mode. single-case keeps the original one-task blank eval behavior.",
+    "modes": {
+      "single-case": {
+        "description": "Original behavior: one blank agent solves one task spec.",
+        "runner": "single",
+        "mode": "single",
+        "caseSelection": "single_case",
+        "successCriterion": "all_pass",
+        "stopOnFirstFailure": true,
+        "concurrency": 1
+      },
+      "merge-focused-failures": {
+        "description": "Focused replay after merge repair: only previous failed cases are replayed by blank agents.",
+        "runner": "blank_eval_plan",
+        "mode": "parallel",
+        "caseSelection": "previous_failed_only",
+        "successCriterion": "all_pass",
+        "stopOnFirstFailure": false,
+        "concurrency": 5
+      },
+      "merge-final-full-replay": {
+        "description": "Final merged-skill replay: all selected source cases must pass.",
+        "runner": "blank_eval_plan",
+        "mode": "parallel",
+        "caseSelection": "all_cases",
+        "successCriterion": "all_pass",
+        "stopOnFirstFailure": false,
+        "concurrency": 5
+      },
+      "merge-replay-report": {
+        "description": "Exploration mode: run blank replay and report results without making it a blocking gate.",
+        "runner": "blank_eval_plan",
+        "mode": "parallel",
+        "caseSelection": "all_cases",
+        "successCriterion": "report_only",
+        "stopOnFirstFailure": false,
+        "concurrency": 5
+      }
+    },
+    "modesNote": "Controls executable blank acceptance variants. Merge modes use blank_eval_plan; single-case keeps the old blank agent final acceptance.",
+    "autoMount": {
+      "enabled": true,
+      "enabledNote": "Controls scenario-based automatic blank acceptance mode selection. Callers pass a scenario like merge_initial_replay instead of hard-coding single/sequence/parallel.",
+      "rules": {
+        "single_long_task_final": "single-case",
+        "merge_initial_replay": "merge-final-full-replay",
+        "merge_repair_replay": "merge-focused-failures",
+        "merge_report_only": "merge-replay-report",
+        "heldout_test": "merge-final-full-replay",
+        "smoke": "merge-replay-report"
+      },
+      "rulesNote": "Scenario to blankAcceptanceConfig.modes mapping. Override here when a dataset/stage should use sequence instead of parallel or report_only instead of blocking."
+    },
     "defaultDiagnosisProfile": "auto",
     "defaultDiagnosisProfileNote": "默认诊断 profile；auto 会根据证据自动兼容单题 blank eval 和多 case blank_eval_plan。",
     "taskPackDiagnosisProfiles": {},

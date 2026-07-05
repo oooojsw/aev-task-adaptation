@@ -34,6 +34,10 @@ interface WindowsProcessIdentity {
 }
 
 let currentProcessCreationTick: Promise<string | undefined> | undefined
+const WINDOWS_IDENTITY_CACHE_TTL_MS = 1500
+const WINDOWS_IDENTITY_TIMEOUT_MS = 2500
+const WINDOWS_IDENTITY_STDOUT_LIMIT = 64 * 1024
+const windowsIdentityCache = new Map<number, { readAt: number; value: Promise<WindowsProcessIdentity | undefined> }>()
 
 function parsePID(pid: unknown) {
   if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) return undefined
@@ -110,7 +114,7 @@ function evaluateCommandHints(commandLine: string | undefined, input: ProcessIde
   return legacyHints.every((hint) => commandContains(normalized, hint))
 }
 
-async function readWindowsProcessIdentity(pid: number): Promise<WindowsProcessIdentity | undefined> {
+async function readWindowsProcessIdentityUncached(pid: number): Promise<WindowsProcessIdentity | undefined> {
   if (process.platform !== "win32") return undefined
   const script = [
     "$ErrorActionPreference = 'SilentlyContinue'",
@@ -135,14 +139,24 @@ async function readWindowsProcessIdentity(pid: number): Promise<WindowsProcessId
     return undefined
   }
   let stdout = ""
+  let timedOut = false
+  const timeout = setTimeout(() => {
+    timedOut = true
+    try {
+      child.kill()
+    } catch {}
+  }, WINDOWS_IDENTITY_TIMEOUT_MS)
+  timeout.unref?.()
   child.stdout?.setEncoding("utf8")
   child.stdout?.on("data", (chunk) => {
-    stdout += String(chunk)
+    if (stdout.length < WINDOWS_IDENTITY_STDOUT_LIMIT) stdout += String(chunk)
   })
   const exitCode = await new Promise<number>((resolve) => {
     child.on("error", () => resolve(1))
     child.on("exit", (code) => resolve(code ?? 1))
   })
+  clearTimeout(timeout)
+  if (timedOut) return undefined
   if (exitCode !== 0) return undefined
   const out = stdout.trim()
   if (!out) return undefined
@@ -156,6 +170,21 @@ async function readWindowsProcessIdentity(pid: number): Promise<WindowsProcessId
   } catch {
     return { commandLine: out }
   }
+}
+
+async function readWindowsProcessIdentity(pid: number): Promise<WindowsProcessIdentity | undefined> {
+  if (process.platform !== "win32") return undefined
+  const now = Date.now()
+  const cached = windowsIdentityCache.get(pid)
+  if (cached && now - cached.readAt <= WINDOWS_IDENTITY_CACHE_TTL_MS) return cached.value
+  if (windowsIdentityCache.size > 256) {
+    for (const [cachedPid, entry] of windowsIdentityCache) {
+      if (now - entry.readAt > WINDOWS_IDENTITY_CACHE_TTL_MS) windowsIdentityCache.delete(cachedPid)
+    }
+  }
+  const value = readWindowsProcessIdentityUncached(pid)
+  windowsIdentityCache.set(pid, { readAt: now, value })
+  return value
 }
 
 export async function readCurrentProcessCreationTick() {

@@ -497,7 +497,10 @@ function normalizeBlankEvalPlanCases(raw: unknown, planPath: string): BlankEvalP
             ? row.mode
             : undefined,
         promptInlinePaths: Array.isArray(row.promptInlinePaths)
-          ? row.promptInlinePaths.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          ? row.promptInlinePaths
+              .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+              .map((item) => item.trim())
+              .map((item) => path.isAbsolute(item) ? path.resolve(item) : path.resolve(baseDir, item))
           : undefined,
       }
     })
@@ -570,6 +573,9 @@ async function runBlankEvalPlanLongTaskValidation(input: {
     input.contract.concurrency ?? (isObject(parsedPlan) ? normalizeBlankEvalPlanConcurrency(parsedPlan.concurrency) : 1)
   const minPassRate =
     input.contract.minPassRate ?? (isObject(parsedPlan) ? normalizeBlankEvalPlanMinPassRate(parsedPlan.minPassRate) : undefined)
+  const stopOnFirstFailure =
+    input.contract.stopOnFirstFailure ??
+    (isObject(parsedPlan) && typeof parsedPlan.stopOnFirstFailure === "boolean" ? parsedPlan.stopOnFirstFailure : undefined)
 
   const inputPath = path.join(input.validatorDir, "blank-eval-plan-input.json")
   await writeJsonFile(inputPath, {
@@ -581,6 +587,7 @@ async function runBlankEvalPlanLongTaskValidation(input: {
     concurrency,
     successCriterion,
     minPassRate,
+    stopOnFirstFailure,
     caseCount: cases.length,
     cases: cases.map((item) => ({ id: item.id, specPath: item.specPath })),
   })
@@ -644,7 +651,7 @@ async function runBlankEvalPlanLongTaskValidation(input: {
     runRoot: path.join(input.validatorDir, "blank-eval-plan"),
     title: input.contract.title,
     concurrency,
-    stopOnFirstFailure: input.contract.stopOnFirstFailure,
+    stopOnFirstFailure,
     successCriterion,
     minPassRate,
     runtimeScope: input.runtimeScope ? `${input.runtimeScope}:${input.contract.id}` : `blank-eval-plan:${input.runID}:${input.contract.id}`,
@@ -757,6 +764,7 @@ async function runScriptLongTaskValidation(input: {
   const reportedPassed = readBooleanField(parsed, "passed", "ok", "success")
   const passed = infraOK && (reportedPassed ?? true)
   const reportedFailureKind = readStringField(parsed, "failureKind", "failure_kind")
+  const hasStructuredFailure = parsed !== undefined && reportedPassed === false
   const explicitProductFailure =
     reportedPassed === false &&
     (reportedFailureKind === "product_failure" ||
@@ -777,7 +785,7 @@ async function runScriptLongTaskValidation(input: {
     ? undefined
     : reportedFailureKind === "dataset_failure"
       ? ("dataset_failure" as const)
-      : explicitProductFailure
+      : explicitProductFailure || hasStructuredFailure
         ? ("product_failure" as const)
       : !infraOK ||
         timedOut ||
@@ -799,7 +807,7 @@ async function runScriptLongTaskValidation(input: {
       validatorType: "script" as const,
       createdAt: nowISO(),
       passed,
-      blocking: readBooleanField(parsed, "blocking", "is_blocking") ?? input.contract.blocking === true,
+      blocking: input.contract.blocking === true || (readBooleanField(parsed, "blocking", "is_blocking") ?? false),
       failureKind,
       summary,
       details: [
@@ -816,6 +824,8 @@ async function runScriptLongTaskValidation(input: {
     },
     raw: {
       parsed,
+      command,
+      payload: input.payload,
       exitCode,
       timedOut,
       stdoutPath,

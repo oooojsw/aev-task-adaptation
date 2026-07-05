@@ -859,11 +859,18 @@ async function commandRunLongTaskCampaign(args: string[]) {
     process.exit(1)
   }
   const forceNew = args.includes("--force-new")
+  const historyPayload = process.env.AUTO_EVOLVE_HISTORY_SCOPE
+    ? JSON.parse(process.env.AUTO_EVOLVE_HISTORY_SCOPE)
+    : undefined
 
   const result = await runLongTaskCampaign({
     cwd,
     specPath,
     forceNew,
+    historyContext: historyPayload?.context,
+    taskID: historyPayload?.taskID,
+    attemptID: historyPayload?.attemptID,
+    specHash: historyPayload?.specHash,
   })
   console.log(`Long-task campaign: ${result.campaignID}`)
   console.log(`Campaign dir: ${result.campaignDir}`)
@@ -923,11 +930,16 @@ async function commandResumeLongTaskCampaign(args: string[]) {
     console.error("Missing required option: --spec <path-to-long-task-campaign-spec>")
     process.exit(1)
   }
+  const historyPayload = process.env.AUTO_EVOLVE_HISTORY_SCOPE
+    ? JSON.parse(process.env.AUTO_EVOLVE_HISTORY_SCOPE)
+    : undefined
 
   const result = await resumeLongTaskCampaign({
     cwd,
     campaignID,
     specPath,
+    historyContext: historyPayload?.context,
+    taskID: historyPayload?.taskID,
   })
   console.log(`Long-task campaign: ${result.campaignID}`)
   console.log(`Campaign dir: ${result.campaignDir}`)
