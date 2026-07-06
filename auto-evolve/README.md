@@ -122,6 +122,45 @@ auto-evolve/runtime-state/benchmark-runs
 
 大白话：如果旧 run 已经是 `27/80`，就不能因为修了代码或重启 orchestrator 又开一个 `6/80` 的新 run。修复后的代码应该接到旧账本上继续跑；新 run 只会重复烧模型额度、污染实验血统，并让后续接手 AI 误判真实进度。
 
+## 统一断点续传入口（2026-07-06）
+
+Auto-Evolve 现在新增 benchmark 续传薄封装：
+
+```powershell
+bun run auto-evolve/scripts/resume-auto-evolve-run.ts --auto
+```
+
+这个脚本不替代 `run-benchmark-orchestrator.ts`，而是在它外面做安全准备：
+
+- 扫描 `runtime-state/benchmark-runs`，默认选择最高进度主线。
+- 支持 `--out <run-dir>`、`--run-id <run-id>`、`--task-pack <name>`，因此可以明确续传非最高进度 run。
+- 支持 `--list` 只列候选，不启动。
+- 支持 `--dry-run` 只生成计划和 launcher，不启动。
+- 自动归档 `<out>/STOP_REQUESTED.json` 到 `stop-reports/cleared-stop-requests/`。
+- 自动把 `<out>/benchmark-leases/*.json` 移到 `stop-reports/cleared-benchmark-leases/`，避免旧认领票卡住新外层。
+- 从 `benchmark-plan.json`、`orchestrator-state.json`、`run-manifest.json` 恢复 task-pack、split、并发、rounds、stopAfter、merge/test 跳过策略等参数。
+- 在 `<out>/resume-logs/resume-*/launcher.mjs` 写入文件化启动器，再由 launcher 调用真实 `bun.exe`，避免 Windows 把 `opencode re/opencode latest` 这种带空格路径撕裂。
+- 启动后等待约 12 秒，检查外层 PID 是否仍存活、stderr 是否出现严格参数错误、状态文件是否被触碰，并写 `launch-result.json`。
+- launcher 会用 detached 后台子进程启动真实 benchmark，并避免在子进程仍活着时主动关闭日志句柄；这是为了防止 Windows/Bun 下出现“自检通过但训练控制面无声退出”的假成功。
+
+常用方式：
+
+```powershell
+# 只看候选
+bun run auto-evolve/scripts/resume-auto-evolve-run.ts --list
+
+# 自动续传最高进度 run
+bun run auto-evolve/scripts/resume-auto-evolve-run.ts --auto
+
+# 只在某个数据集里自动选
+bun run auto-evolve/scripts/resume-auto-evolve-run.ts --task-pack spreadsheetbench
+
+# 精确指定，不让系统自动选择
+bun run auto-evolve/scripts/resume-auto-evolve-run.ts --out "auto-evolve/runtime-state/benchmark-runs/<run-id>"
+```
+
+大白话：以后 benchmark 断点续传不要手写一长串 `run-benchmark-orchestrator.ts --task-pack-root ... --train-split ... --out ...`。先用统一入口，让它选 run、清暂停标记、写 launcher、启动后自检。只有这个入口坏了，才手工调用底层 orchestrator。
+
 ## Benchmark 训练 Supervisor 调度红线（2026-06-26）
 
 `scripts/run-benchmark-orchestrator.ts` 的训练阶段不是单一 todo 队列，而是小型 supervisor，必须同时管理：
@@ -2448,4 +2487,53 @@ Smoke:
 
 ```powershell
 bun run auto-evolve/scripts/smoke-expert-oracle-bundle.ts
+```
+## Benchmark Campaign Rounds Resume Guard (2026-07-06)
+
+When resuming an existing benchmark run, `run-benchmark-orchestrator.ts` must not silently fall back to the task-pack's original `tasks/<id>/campaign.json` round count. Existing runs may contain run-local `campaign-spec-overrides/<id>.campaign.json` files, and those overrides are the run's active training contract.
+
+Current rule:
+
+- Explicit `--campaign-rounds` / `--rounds` wins.
+- If not provided, the orchestrator infers the round count from existing `<out>/campaign-spec-overrides/*.campaign.json`.
+- If no override exists, the benchmark default campaign round count is `7`.
+
+Plain-language reason: if a run previously trained with 7 rounds, a later breakpoint resume must continue with 7 rounds. It must not start new fill-in campaigns with the raw task-pack default of 3 rounds, because that creates a split bloodline and wastes model quota.
+
+Smoke:
+
+```powershell
+bun --check auto-evolve/scripts/run-benchmark-orchestrator.ts auto-evolve/scripts/smoke-benchmark-supervisor.ts
+bun run auto-evolve/scripts/smoke-benchmark-supervisor.ts
+```
+
+## Blank Eval Public Task Spec (2026-07-06)
+
+Blank Eval is physically closed-book: the blank agent must not see private
+answers, validator private views, campaign traces, worker notes, or historical
+runtime folders. However, a closed-book run still needs a public task contract.
+
+Current rule:
+
+- Every Blank Eval sandbox materializes `sandbox/materials/spec.json`.
+- This is a redacted public spec, not the original task-pack spec.
+- It may include task goal, public materials, output targets, editable paths,
+  and public output constraints such as SpreadsheetBench ranges.
+- It must not include `private-answers`, answer workbook paths, `--answer`,
+  ground-truth fields, validator private input files, or campaign/runtime paths.
+- Candidate output paths in the public spec are rewritten from sandbox
+  `targetPaths`, not copied from original validator args.
+
+Plain-language reason: the blank agent should not know the answer, but it must
+know the exam instructions. SpreadsheetBench case `30930` exposed this gap: the
+skill told the blank agent to read `spec.json`, but the sandbox did not provide a
+safe spec. The model guessed the output range from the workbook and repeatedly
+wrote `C1:C66` or other off-by-one outputs while the private validator expected
+`C2:C66`.
+
+Smoke:
+
+```powershell
+bun --check auto-evolve/orchestrator/blank-eval/runner.ts auto-evolve/scripts/smoke-blank-eval-public-spec.ts
+bun run auto-evolve/scripts/smoke-blank-eval-public-spec.ts
 ```

@@ -113,6 +113,7 @@ async function readWindowsCreation(pid: number) {
     const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
       stdout: "pipe",
       stderr: "pipe",
+      windowsHide: true,
     })
     const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
     if (exitCode === 0) {
@@ -146,6 +147,7 @@ async function batchQueryWindowsProcesses(pids: number[]) {
   const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
     stdout: "pipe",
     stderr: "pipe",
+    windowsHide: true,
   })
   const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
   if (exitCode !== 0) return map
@@ -221,6 +223,7 @@ async function readWindowsProcessLineage(pid: number) {
   const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
     stdout: "pipe",
     stderr: "pipe",
+    windowsHide: true,
   })
   const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
   if (exitCode !== 0) return rows
@@ -275,6 +278,7 @@ export async function terminateProcessTree(pid: number | undefined | null) {
     const child = Bun.spawn(["taskkill", "/PID", String(pid), "/T", "/F"], {
       stdout: "pipe",
       stderr: "pipe",
+      windowsHide: true,
     })
     await child.exited.catch(() => 1)
     await sleep(150)

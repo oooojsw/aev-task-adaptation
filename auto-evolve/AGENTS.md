@@ -20,6 +20,18 @@
 
 全局有多个角色，他们都是工作节点，只有空白agent节点无法看到答案任何相关内容，其他的任何节点都可以完全或者部分看到答案内容，因为专家经验区就是他们在写，只有空白agent是完全利用专家经验区进行任务，以此来考验专家经验区写的是不是没有过拟合以及泛化，整个系统的目的是产出一份泛化的（不过拟合任何案例）、完备的（可以让空白agent通过大量测试集）的专家经验区（skill）。
 
+## 0.0 Blank Eval 公开任务合同规则（最高优先级）
+
+空白 agent 是闭卷，但不能“无题可做”。Blank Eval sandbox 必须固定提供一个去答案版 `materials/spec.json`，作为公开任务合同。这个文件只能包含任务目标、材料列表、输出目标、可编辑路径、公开输出约束（例如 SpreadsheetBench 的 `--range C2:C66` 和 sandbox 内 candidate 路径），绝不能包含 `private-answers`、`answer.xlsx`、`--answer`、`ground-truth`、`validator_input.json`、`result.private` 或任何历史 campaign/worker 路径。
+
+如果 skill 要求“先读 spec.json”，必须读 sandbox 内这个公开 spec，而不是原始 task-pack 的 spec。任何修改 Blank Eval 材料复制、权限白名单、validator 参数重写时，都必须跑：
+
+```powershell
+bun run auto-evolve/scripts/smoke-blank-eval-public-spec.ts
+```
+
+大白话：闭卷考试不能给答案，但必须给题目要求。否则空白 agent 会猜输出范围/行数，造成 30930 这类反复错一行、跑满 7 轮的无效烧钱。
+
 ## 0.1 停止与续传专区（最高优先级）
 
 停止和续传是同一个运行血统的两个动作，不能当成“杀掉以后重新开一个实验”。
@@ -41,15 +53,20 @@
 
 ### 续传训练时
 
-1. 用户说“继续训练 / 断点续传 / 续传 / 重启外层 orchestrator / 恢复训练”时，必须继续已有最高进度 run，禁止新建新的 `--out`。
-2. 续传前必须枚举历史 run，确认选中的是同 task-pack、同 split、同 label 或同 runID 的最高进度主线。
-3. 对 benchmark，真正的续传入口是重新运行：
+1. 用户说“继续训练 / 断点续传 / 续传 / 重启外层 orchestrator / 恢复训练”时，必须继续已有 run，禁止新建新的 `--out`。
+2. 对 benchmark，默认优先使用统一续传入口：
+   `bun run auto-evolve/scripts/resume-auto-evolve-run.ts --auto`
+   或显式指定：
+   `bun run auto-evolve/scripts/resume-auto-evolve-run.ts --out <benchmark-run-dir>`
+3. 统一续传入口会自动枚举历史 run、选择最高进度主线或使用显式 `--out/--run-id`、归档 `STOP_REQUESTED.json`、清当前 run 的旧 lease、生成文件化 launcher、启动后自检。除非脚本本身坏了，否则不要手工拼一长串 `run-benchmark-orchestrator.ts` 参数。
+4. 手工续传前必须枚举历史 run，确认选中的是同 task-pack、同 split、同 label 或同 runID 的正确主线。
+5. 对 benchmark，底层续传入口是重新运行：
    `auto-evolve/scripts/run-benchmark-orchestrator.ts`
    并且必须使用同一个 `--out`。
-4. 对单个 campaign，续传入口是：
+6. 对单个 campaign，续传入口是：
    `bun run auto-evolve/cli.ts resume-long-task-campaign --campaign <campaignID> --spec <spec>`
-5. 对 Direct Chat，续传入口是同一个 out-dir 加 `--resume-existing`，已有 `result.json` 的 case 不应重跑。
-6. 续传不是恢复旧 OpenCode 对话 session，而是磁盘断点续跑：读取 `campaign.json`、round history、long-task progress、task-ledger 和已有产物后继续。
+7. 对 Direct Chat，续传入口是同一个 out-dir 加 `--resume-existing`，已有 `result.json` 的 case 不应重跑。
+8. 续传不是恢复旧 OpenCode 对话 session，而是磁盘断点续跑：读取 `campaign.json`、round history、long-task progress、task-ledger 和已有产物后继续。
 
 ### 续传前必须处理的坑
 
@@ -58,8 +75,15 @@
 3. OpenCodeGate 残留只能按 scope / caller / ownerCommandHint / campaignID 明确匹配当前 run 后清理，禁止全量清 gate。
 4. `running` 状态不能凭状态文件相信。必须用 run-dashboard、真实进程、ownerPID、ownerCreationTick、heartbeat、campaign.json 交叉确认。
 5. 看到 `healthy_running` 但成功数长期不涨时，必须做“长任务轮次卡住专项检查”，不能只说还在跑。
-6. Windows 路径有空格，启动续传命令时优先使用参数数组或真实 exe 路径，避免 PowerShell 把 `C:/Users/.../opencode re/...` 撕裂。
-7. 禁止为了续传去删除真实训练成果。续传最多归档暂停标记、释放过期锁票、清当前 run 的 gate 残留、把假 running 改回 recovery_pending。
+6. Windows 路径有空格，启动续传命令时**禁止**直接在聊天命令里用 `Start-Process -ArgumentList` 拼一长串路径参数，也不能只从 `bun.cmd` 换成 `bun.exe` 就认为安全。`C:/Users/.../opencode re/opencode latest/...` 这类路径已经多次被拆成 `re/opencode`、`latest/auto-evolve...`，会触发严格参数保护，甚至可能误开新 run。
+7. 续传 benchmark 的正确启动方式必须“文件化”：先在当前 run 的 `resume-logs/` 或 `runtime-state/tmp-launchers/` 里写一个临时 `.ps1` 或 `.mjs` 启动器，把 `$BunExe`、`$ProjectRoot`、`$OutDir`、`$TaskPackRoot`、`$TrainSplit` 等变量写进文件，再在文件内部用参数数组调用真实 `bun.exe`。聊天工具只执行这个启动器路径，不直接承载长路径参数。
+8. 启动器必须在启动前打印/记录最终参数数组，并做三项预检查：`$OutDir` 已存在、`STOP_REQUESTED.json` 已归档、`$TrainSplit` 和 `$TaskPackRoot` 存在。任何一项不满足直接失败，不允许自动新建 out。
+9. 第一次续传启动失败后，禁止用“换 exe / 手动加引号 / 再试一次同类命令”硬碰硬。必须先读 `stderr.log` 的真实错误；如果出现 `Unexpected bare argument(s)`、`path containing spaces was not quoted correctly` 或 `Unknown option`，立刻切换到文件化启动器。
+10. 续传启动成功的最低确认不是“Start-Process 返回 PID”，而是：8-15 秒后该 PID 仍存在，`orchestrator-state.json` 更新时间变新，且 `stderr.log` 没有严格参数保护错误。
+11. 文件化 launcher 必须把 benchmark 子进程作为 `detached` 后台进程启动；短 launcher 自己退出不能带走真实训练控制面。子进程仍活着时也不要主动关闭 stdout/stderr 日志句柄，否则 Windows/Bun 下可能出现“12 秒自检活着、随后无声退出、日志为空”的假成功。
+12. 禁止为了续传去删除真实训练成果。续传最多归档暂停标记、释放过期锁票、清当前 run 的 gate 残留、把假 running 改回 recovery_pending。
+
+大白话：续传命令不是“在终端打一长串路径”。路径里有空格时，必须先写一个启动器文件，让文件自己拿变量启动。否则就是重复犯路径撕裂错误。
 
 ### 判断续传是否真的成功
 

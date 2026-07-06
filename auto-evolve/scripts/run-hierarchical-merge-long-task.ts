@@ -152,6 +152,7 @@ async function defaultRunner(input: HierarchicalGroupRunnerInput): Promise<Hiera
     cwd: input.cwd,
     stdout: Bun.file(path.join(input.logDir, "stdout.log")),
     stderr: Bun.file(path.join(input.logDir, "stderr.log")),
+    windowsHide: true,
   })
   const exitCode = await child.exited
   return {

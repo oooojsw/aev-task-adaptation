@@ -216,6 +216,157 @@ function refs(refs: { path: string; label?: string; role?: string }[]) {
     .join("\n")
 }
 
+const PUBLIC_SPEC_FILENAME = "spec.json"
+
+const PRIVATE_VALIDATOR_ARG_FLAGS = new Set([
+  "--answer",
+  "--answer-path",
+  "--answers",
+  "--answers-path",
+  "--expected",
+  "--expected-path",
+  "--gold",
+  "--gold-path",
+  "--ground-truth",
+  "--ground-truth-path",
+  "--oracle",
+  "--oracle-path",
+  "--private",
+  "--private-answer",
+  "--private-answer-path",
+])
+
+const PUBLIC_VALIDATOR_ARG_FLAGS = new Set([
+  "--candidate",
+  "--candidate-path",
+  "--output",
+  "--output-path",
+  "--range",
+  "--sheet",
+  "--target",
+  "--target-path",
+  "--tolerance",
+])
+
+function isPrivateValidatorFlag(flag: string) {
+  const normalized = flag.trim().toLowerCase()
+  return PRIVATE_VALIDATOR_ARG_FLAGS.has(normalized)
+}
+
+function isPublicValidatorFlag(flag: string) {
+  const normalized = flag.trim().toLowerCase()
+  return PUBLIC_VALIDATOR_ARG_FLAGS.has(normalized)
+}
+
+function isSensitivePublicSpecValue(value: string) {
+  const normalized = value.replace(/\\/g, "/").replace(/^\.\/+/, "").toLowerCase()
+  return (
+    isSensitiveSandboxInputPath(normalized) ||
+    normalized.includes("private-answer") ||
+    normalized.includes("private_answers") ||
+    normalized.includes("private-answers") ||
+    normalized.includes("ground-truth") ||
+    normalized.includes("ground_truth") ||
+    normalized.includes("answer.xlsx") ||
+    normalized.includes("gold.xlsx") ||
+    normalized.includes("oracle")
+  )
+}
+
+function publicValidatorArgs(args: string[] | undefined) {
+  const out: Record<string, string | boolean> = {}
+  const values = args ?? []
+  for (let index = 0; index < values.length; index++) {
+    const item = values[index]
+    if (!item.startsWith("--")) continue
+    const flag = item.toLowerCase()
+    const next = values[index + 1]
+    if (isPrivateValidatorFlag(flag)) {
+      if (next && !next.startsWith("--")) index += 1
+      continue
+    }
+    if (!isPublicValidatorFlag(flag)) {
+      if (next && !next.startsWith("--")) index += 1
+      continue
+    }
+    if (!next || next.startsWith("--")) {
+      out[flag.replace(/^--/, "")] = true
+      continue
+    }
+    if (!isSensitivePublicSpecValue(next)) out[flag.replace(/^--/, "")] = next
+    index += 1
+  }
+  return out
+}
+
+export function buildBlankEvalPublicTaskSpec(spec: LongTaskSpec) {
+  const targetPaths = (spec.targetPaths ?? []).map((item) => ({ path: item.path, label: item.label, role: item.role }))
+  const primaryTargetPath = targetPaths[0]?.path
+  const scriptPublicOutputContract = (args: string[] | undefined) => {
+    const contract = publicValidatorArgs(args)
+    if (primaryTargetPath && contract.candidate === undefined && contract["candidate-path"] === undefined) {
+      contract.candidate = primaryTargetPath
+    }
+    return contract
+  }
+  return {
+    schema: "blank-eval-public-task-spec/v1",
+    note:
+      "Public task contract for the blank agent. Private answer paths, hidden answers, validator private inputs, and run history are intentionally omitted.",
+    id: spec.id,
+    title: spec.title,
+    goal: spec.goal,
+    taskFamily: spec.taskFamily,
+    domainTags: spec.domainTags ?? [],
+    materials: spec.materials.map((item) => ({ path: item.path, label: item.label, role: item.role })),
+    targetPaths,
+    editablePaths: resolveLongTaskEditablePaths(spec),
+    validators: spec.validators.map((validator) => ({
+      id: validator.id,
+      title: validator.title,
+      type: validator.type,
+      placement: validator.placement,
+      required: validator.required !== false,
+      publicOutputContract:
+        validator.type === "script"
+          ? scriptPublicOutputContract(validator.args)
+          : validator.type === "blank_eval_plan"
+            ? {
+                mode: validator.mode ?? "single",
+                successCriterion: validator.successCriterion ?? "all_pass",
+              }
+            : undefined,
+      validation: validator.validation
+        ? {
+            target: validator.validation.target,
+            stage: validator.validation.stage,
+          }
+        : undefined,
+    })),
+  }
+}
+
+function assertPublicTaskSpecSafe(publicSpec: unknown) {
+  const text = JSON.stringify(publicSpec)
+  const forbidden = [
+    "private-answers",
+    "private_answers",
+    "private-answer",
+    "--answer",
+    "--ground-truth",
+    "ground_truth",
+    "ground-truth",
+    "answer.xlsx",
+    "gold.xlsx",
+    "oracle",
+    "validator_input.json",
+    "result.private",
+  ]
+  const lower = text.toLowerCase()
+  const hit = forbidden.find((item) => lower.includes(item))
+  if (hit) throw new Error(`Blank Eval public task spec leaked forbidden private marker: ${hit}`)
+}
+
 function caps(spec: LongTaskSpec) {
   if (!spec.capabilities?.length) return "- none"
   return spec.capabilities
@@ -275,6 +426,76 @@ function isSandboxExcludedPath(item: string, sandboxRoot: string): boolean {
 
 function filterSandboxExcludedPaths(items: string[], sandboxRoot: string): string[] {
   return items.filter((item) => !isSandboxExcludedPath(item, sandboxRoot))
+}
+
+function isInsidePath(parent: string, child: string) {
+  const relative = path.relative(path.resolve(parent), path.resolve(child))
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
+}
+
+function sandboxOutputPath(input: {
+  originalPath: string
+  sourceSpecPath: string
+  sandboxRoot: string
+  index: number
+}) {
+  const specDir = path.dirname(path.resolve(input.sourceSpecPath))
+  const resolved = path.resolve(input.originalPath)
+  if (isInsidePath(input.sandboxRoot, resolved)) return resolved
+  const relativeToSpec = path.relative(specDir, resolved)
+  const rawName =
+    relativeToSpec && !relativeToSpec.startsWith("..") && !path.isAbsolute(relativeToSpec)
+      ? relativeToSpec
+      : path.basename(resolved) || `output-${input.index + 1}`
+  const safeRelative = rawName
+    .split(/[\\/]+/)
+    .map((part, partIndex) => safeName(part, partIndex === 0 ? "output" : "part"))
+    .filter(Boolean)
+    .join(path.sep)
+  return path.join(input.sandboxRoot, "workspace", safeRelative || `output-${input.index + 1}`)
+}
+
+function remapBlankEvalOutputPaths(input: {
+  spec: LongTaskSpec
+  sourceSpecPath: string
+  sandboxRoot: string
+}) {
+  const remap = new Map<string, string>()
+  const remapPath = (item: string, index: number) => {
+    const resolved = path.resolve(item)
+    const mapped = sandboxOutputPath({
+      originalPath: resolved,
+      sourceSpecPath: input.sourceSpecPath,
+      sandboxRoot: input.sandboxRoot,
+      index,
+    })
+    remap.set(resolved.toLowerCase(), mapped)
+    return mapped
+  }
+  const targetPaths = (input.spec.targetPaths ?? []).map((item, index) => ({
+    ...item,
+    path: remapPath(item.path, index),
+  }))
+  const editablePaths = resolveLongTaskEditablePaths(input.spec).map((item, index) => remapPath(item, index))
+  const fallbackTarget = targetPaths[0]?.path
+  const validators = input.spec.validators.map((validator) => {
+    if (validator.type !== "script") return validator
+    const args = validator.args?.map((arg, index, all) => {
+      const prev = all[index - 1]?.toLowerCase()
+      if (prev !== "--candidate" && prev !== "--candidate-path" && prev !== "--output" && prev !== "--output-path") {
+        return arg
+      }
+      const resolved = path.resolve(arg)
+      return remap.get(resolved.toLowerCase()) ?? fallbackTarget ?? arg
+    })
+    return { ...validator, args }
+  })
+  return {
+    ...input.spec,
+    targetPaths,
+    editablePaths: unique(editablePaths),
+    validators,
+  }
 }
 
 async function entrypoints(roots: string[]) {
@@ -343,6 +564,7 @@ async function winpath(input: string) {
   const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
     stdout: "pipe",
     stderr: "pipe",
+    windowsHide: true,
   })
   const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
   if (code === 0) return stdout.trim()
@@ -405,6 +627,7 @@ function prompt(input: {
     "",
     "Working rules:",
     "- Use the listed reference guidance, materials, helper assets, and declared workspace/output paths to complete the task.",
+    "- If materials include a public task spec named spec.json, treat it as the authoritative output contract for paths, ranges, and target files. It is intentionally redacted and does not contain private answers.",
     "- Do not browse unrelated project, runtime, cache, history, private answer, or old output folders.",
     "- Do not create or repair the reference guidance unless the requested output explicitly asks for that.",
     "- Treat the reference guidance as practical task guidance. It may be incomplete, so use the materials to resolve details.",
@@ -551,10 +774,14 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
   const sandboxGuidanceRoot = path.join(sandboxRoot, "guidance")
   const sandboxCapabilityRoot = path.join(sandboxRoot, "capabilities")
   const sandboxWorkspaceRoot = path.join(sandboxRoot, "workspace")
-  const baseRuntimeSpec = isolateLongTaskRuntimePaths({
-    spec: loaded.spec,
+  const baseRuntimeSpec = remapBlankEvalOutputPaths({
+    spec: isolateLongTaskRuntimePaths({
+      spec: loaded.spec,
+      sourceSpecPath: loaded.specPath,
+      runtimeRoot: sandboxRoot,
+    }),
     sourceSpecPath: loaded.specPath,
-    runtimeRoot: sandboxRoot,
+    sandboxRoot,
   })
   const bundlePath = path.join(sandboxRoot, "bundle.json")
   const validatorRoot = path.join(runDir, "validators")
@@ -592,7 +819,7 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       true,
     )
     const derivedSandboxMaterials = await materializeSpreadsheetRefsForBlankEval(copiedSandboxMaterials, input.cwd)
-    const sandboxMaterials = [...copiedSandboxMaterials, ...derivedSandboxMaterials]
+    let sandboxMaterials = [...copiedSandboxMaterials, ...derivedSandboxMaterials]
     const sandboxGuides = await copyStringPathsToSandbox(
       [...(input.promptInlinePaths ?? []), ...guidance(loaded.spec, loaded.specPath)],
       sandboxGuidanceRoot,
@@ -613,7 +840,7 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       const copied = sandboxCapabilityFiles[index]
       if (copied) capabilityFileMap.set(resolvedPathKey(loaded.specPath, source), copied)
     }
-    const spec: LongTaskSpec = {
+    const specBeforePublicContract: LongTaskSpec = {
       ...baseRuntimeSpec,
       materials: sandboxMaterials,
       capabilities: baseRuntimeSpec.capabilities?.map((item) => ({
@@ -626,12 +853,21 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
           .filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0),
       })),
     }
+    const publicSpec = buildBlankEvalPublicTaskSpec(specBeforePublicContract)
+    assertPublicTaskSpecSafe(publicSpec)
+    const publicSpecPath = path.join(sandboxMaterialsRoot, PUBLIC_SPEC_FILENAME)
+    await writeJsonFile(publicSpecPath, publicSpec)
+    sandboxMaterials = [{ path: publicSpecPath, label: "public task spec", role: "task-spec" }, ...sandboxMaterials]
+    const spec: LongTaskSpec = {
+      ...specBeforePublicContract,
+      materials: sandboxMaterials,
+    }
     const entries = await entrypoints(skillRoots)
     const cRefs = capRefs(spec)
     const cFiles = capFiles(spec)
     const edits = unique([...resolveLongTaskEditablePaths(spec), ...(spec.targetPaths ?? []).map((item) => item.path)])
     const derivedMaterialPaths = derivedSandboxMaterials.map((item) => item.path)
-    const inlineFiles = unique([...sandboxGuides, ...derivedMaterialPaths])
+    const inlineFiles = unique([publicSpecPath, ...sandboxGuides, ...derivedMaterialPaths])
     const reads = unique([
       bundlePath,
       ...skillRoots,

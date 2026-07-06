@@ -270,7 +270,7 @@ type BenchmarkSummary = {
   trainingIncompleteContinued?: boolean
 }
 
-type BenchmarkState = {
+export type BenchmarkState = {
   runID: string
   phase:
     | "plan"
@@ -338,10 +338,17 @@ type BenchmarkState = {
   }
 }
 
+export function clearPausedStopMarkerForResume(state: Pick<BenchmarkState, "stop">) {
+  if (state.stop?.status !== "paused_by_user") return false
+  delete state.stop
+  return true
+}
+
 const repoRoot = path.resolve(import.meta.dir, "..", "..")
 const autoRoot = path.join(repoRoot, "auto-evolve")
 const runtimeCampaignRoot = path.join(autoRoot, "runtime-state", "long-task-campaigns")
 const dashboardRoot = path.join(autoRoot, "runtime-state", "run-dashboard")
+const DEFAULT_CAMPAIGN_ROUNDS = 7
 const TRAIN_WATCHDOG_INTERVAL_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_TRAIN_WATCHDOG_INTERVAL_MS ?? "", 10)
   if (Number.isFinite(value) && value > 0) return value
@@ -1131,6 +1138,7 @@ async function runOneCampaign(config: BenchmarkConfig, pick: TrainPick) {
       env: historyPayload ? { ...process.env, AUTO_EVOLVE_HISTORY_SCOPE: historyPayload } : { ...process.env },
       stdout: "pipe",
       stderr: "pipe",
+      windowsHide: true,
     })
     const [stdout, stderr, code] = await Promise.all([
       new Response(child.stdout).text(),
@@ -2270,6 +2278,10 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
       row.updatedAt = nowISO()
     }
   }
+  const pendingStopRequest = await readStopRequest(config.outDir)
+  if (!config.dryRun && !pendingStopRequest) {
+    clearPausedStopMarkerForResume(state)
+  }
   await persistState(stateFile, scorecardFile, state)
   await syncLatestTrainTerminals(config, state, trainIDs)
   await persistState(stateFile, scorecardFile, state)
@@ -2577,6 +2589,36 @@ function parsePositiveIntOption(args: string[], names: string[], fallback: numbe
   return fallback
 }
 
+async function inferCampaignRoundsFromExistingOverrides(outDir: string) {
+  const overrideDir = path.join(outDir, "campaign-spec-overrides")
+  const entries = await readdir(overrideDir, { withFileTypes: true }).catch(() => [])
+  let inferred: number | undefined
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".campaign.json")) continue
+    try {
+      const raw = await readJsonFile<Record<string, unknown>>(path.join(overrideDir, entry.name))
+      const maxRounds = typeof raw.maxRounds === "number" ? Math.floor(raw.maxRounds) : undefined
+      if (!maxRounds || maxRounds <= 0) continue
+      inferred = Math.max(inferred ?? maxRounds, maxRounds)
+    } catch {
+      continue
+    }
+  }
+  return inferred
+}
+
+async function resolveCampaignRounds(args: string[], outDir: string) {
+  const raw = getOption(args, "--campaign-rounds") ?? getOption(args, "--rounds")
+  if (raw) {
+    const parsed = Math.max(1, Number.parseInt(raw, 10))
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error("Invalid --campaign-rounds/--rounds value. Use a positive integer.")
+    }
+    return parsed
+  }
+  return (await inferCampaignRoundsFromExistingOverrides(outDir)) ?? DEFAULT_CAMPAIGN_ROUNDS
+}
+
 async function resolveAdaptiveTrainingConcurrency(input: {
   args: string[]
   requested: number
@@ -2843,11 +2885,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
   }
   const trainLimitRaw = getOption(args, "--train-limit")
   const testLimitRaw = getOption(args, "--test-limit")
-  const campaignRoundsRaw = getOption(args, "--campaign-rounds") ?? getOption(args, "--rounds")
-  const campaignRounds = campaignRoundsRaw ? Math.max(1, Number.parseInt(campaignRoundsRaw, 10)) : undefined
-  if (campaignRoundsRaw && (!Number.isFinite(campaignRounds) || campaignRounds <= 0)) {
-    throw new Error("Invalid --campaign-rounds/--rounds value. Use a positive integer.")
-  }
+  const campaignRounds = await resolveCampaignRounds(args, outDir)
   const mergeAcceptanceProfile = resolveMergeAcceptanceProfile({
     profiles: projectConfig.mergeConfig.acceptanceProfiles,
     defaultProfile: projectConfig.mergeConfig.defaultAcceptanceProfile,

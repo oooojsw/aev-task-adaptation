@@ -217,6 +217,7 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
           },
           stdio: ["pipe", "pipe", "pipe"],
           shell: false,
+          windowsHide: true,
         })
       : nodeSpawn(normalizePathForSpawn(input.command[0] ?? ""), input.command.slice(1).map(normalizeArgForSpawn), {
           cwd: ensureValidCwd(input.cwd),
@@ -229,6 +230,7 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
           })(),
           stdio: ["pipe", "pipe", "pipe"],
           shell: false,
+          windowsHide: true,
         })
   let stdoutData = ""
   let stderrData = ""
