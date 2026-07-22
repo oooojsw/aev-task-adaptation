@@ -2913,7 +2913,7 @@ async function resolveAdaptiveTrainingConcurrency(input: {
   }
 }
 
-async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
+export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkConfig> {
   assertStrictBenchmarkArgs(args)
   const projectConfig = await loadConfig(repoRoot)
   const taskPackRoot = resolveMaybeRelative(getOption(args, "--task-pack-root"))
@@ -3185,6 +3185,11 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
     reasoningEffort:
       getOption(args, "--skillopt-reasoning-effort") ?? projectConfig.mergeConfig.asSkillOpt.reasoningEffort,
   }
+  const mergeBackendConfig = {
+    mergeExecutionMode,
+    mergeAsLongTask,
+    mergeAsSkillOpt,
+  }
   if (stopAfter && stopAfter !== "baseline") runBaseline = false
   if (stopAfter === "training") {
     return {
@@ -3204,6 +3209,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       reuseVerified: !hasFlag(args, "--no-reuse-verified"),
       resumeRunning: !hasFlag(args, "--no-resume-running"),
       runMerge: false,
+      ...mergeBackendConfig,
       ...mergeConfig,
       runTrainReplay: false,
       mergeAcceptanceProfile: mergeAcceptanceProfile.profileName,
@@ -3258,6 +3264,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       reuseVerified: !hasFlag(args, "--no-reuse-verified"),
       resumeRunning: !hasFlag(args, "--no-resume-running"),
       runMerge: true,
+      ...mergeBackendConfig,
       ...mergeConfig,
       runTrainReplay: false,
       mergeAcceptanceProfile: mergeAcceptanceProfile.profileName,
@@ -3312,6 +3319,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       reuseVerified: !hasFlag(args, "--no-reuse-verified"),
       resumeRunning: !hasFlag(args, "--no-resume-running"),
       runMerge: true,
+      ...mergeBackendConfig,
       ...mergeConfig,
       runTrainReplay: mergeAcceptanceRunsReplay(mergeAcceptanceStages),
       mergeAcceptanceProfile: mergeAcceptanceProfile.profileName,
@@ -3368,9 +3376,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
     reuseVerified: !hasFlag(args, "--no-reuse-verified"),
     resumeRunning: !hasFlag(args, "--no-resume-running"),
     runMerge,
-    mergeExecutionMode,
-    mergeAsLongTask,
-    mergeAsSkillOpt,
+    ...mergeBackendConfig,
     ...mergeConfig,
     runTrainReplay,
     mergeAcceptanceProfile: mergeAcceptanceProfile.profileName,
@@ -3409,7 +3415,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
 }
 
 async function main() {
-  const config = await parseConfig(process.argv.slice(2))
+  const config = await parseBenchmarkConfig(process.argv.slice(2))
   const report = await runTaskPackBenchmark(config)
   console.log(JSON.stringify(report, null, 2))
 }

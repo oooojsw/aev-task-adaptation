@@ -2,6 +2,7 @@ import path from "node:path"
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { decodeSkillPackage, encodeSkillDirectory, runSkillOptMerger } from "../orchestrator/multi-instance/skillopt-merger"
 import { loadConfig } from "../orchestrator/schema"
+import { parseBenchmarkConfig } from "./run-benchmark-orchestrator"
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
@@ -87,6 +88,28 @@ try {
   assert(loaded.mergeConfig.mode === "legacy_script", "Existing default merge mode changed unexpectedly")
   assert(loaded.mergeConfig.asSkillOpt.batchSize === 8, "merge-as-opt total-control config did not load")
   assert(loaded.mergeConfig.asSkillOpt.enabled === false, "merge-as-opt must remain opt-in by default")
+
+  const stopAfterMergeConfig = await parseBenchmarkConfig([
+    "--task-pack-root",
+    path.join(cwd, "auto-evolve", "task-packs", "real-long-tasks", "officeqa-pro-learnbench"),
+    "--out",
+    path.join(root, "parse-config-only"),
+    "--merge-execution-mode",
+    "skillopt",
+    "--skillopt-optimizer-backend",
+    "minimax_chat",
+    "--skillopt-optimizer-model",
+    "MiniMax-M2.7",
+    "--stop-after",
+    "merge",
+    "--dry-run",
+  ])
+  assert(stopAfterMergeConfig.mergeExecutionMode === "skillopt", "stop-after merge lost the merge-as-opt backend")
+  assert(stopAfterMergeConfig.mergeAsSkillOpt?.enabled === true, "stop-after merge did not enable merge-as-opt")
+  assert(
+    stopAfterMergeConfig.mergeAsSkillOpt?.optimizerModel === "MiniMax-M2.7",
+    "stop-after merge lost the SkillOpt optimizer overrides",
+  )
 
   await expectFailure(
     () =>
