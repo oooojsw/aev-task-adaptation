@@ -39,6 +39,22 @@ export interface SkillOptBridgeRequest {
     apiKeyEnv?: string
     reasoningEffort?: string
   }
+  nativeTrain?: {
+    enabled: boolean
+    configPath: string
+    splitDir?: string
+    dataDirs?: string[]
+    outRoot: string
+    epochs: number
+    batchSize: number
+    maxSteps: number
+    evalTest: boolean
+    targetWorkers: number
+    targetBackend?: string
+    targetModel?: string
+    targetBaseUrl?: string
+    targetApiKeyEnv?: string
+  }
 }
 
 export interface SkillOptBridgeResult {
@@ -47,6 +63,9 @@ export interface SkillOptBridgeResult {
   reasoning?: string
   mergedSkill?: string
   tokenSummary?: unknown
+  warmStartSkill?: string
+  nativeTrainSummary?: unknown
+  nativeTrainOutRoot?: string
   error?: string
 }
 
@@ -273,6 +292,12 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
   if (!configPath || !(await pathExists(configPath))) {
     throw new Error("merge-as-opt requires an existing mergeConfig.asSkillOpt.configPath")
   }
+  const nativeTrainConfigPath = input.config.pipelineMode === "native_train"
+    ? resolveConfiguredPath(projectRoot, input.config.nativeTrainConfigPath || input.config.configPath)
+    : ""
+  if (input.config.pipelineMode === "native_train" && (!nativeTrainConfigPath || !(await pathExists(nativeTrainConfigPath)))) {
+    throw new Error("merge-as-opt native_train requires an existing nativeTrainConfigPath")
+  }
   const bridgeScript = resolveConfiguredPath(path.join(input.cwd, "auto-evolve"), input.config.bridgeScript)
   if (!input.bridgeRunner && (!(await pathExists(bridgeScript)) || !input.config.pythonCommand.trim())) {
     throw new Error(`merge-as-opt bridge preflight failed: ${bridgeScript}`)
@@ -302,6 +327,19 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
       optimizerBaseUrl: input.config.optimizerBaseUrl || undefined,
       optimizerApiKeyEnv: input.config.optimizerApiKeyEnv || undefined,
       reasoningEffort: input.config.reasoningEffort || undefined,
+      pipelineMode: input.config.pipelineMode,
+      nativeTrainConfigPath: nativeTrainConfigPath || undefined,
+      nativeTrainSplitDir: input.config.nativeTrainSplitDir || undefined,
+      nativeTrainDataDirs: input.config.nativeTrainDataDirs,
+      nativeTrainEpochs: input.config.nativeTrainEpochs,
+      nativeTrainBatchSize: input.config.nativeTrainBatchSize,
+      nativeTrainMaxSteps: input.config.nativeTrainMaxSteps,
+      nativeTrainEvalTest: input.config.nativeTrainEvalTest,
+      nativeTrainTargetWorkers: input.config.nativeTrainTargetWorkers,
+      targetBackend: input.config.targetBackend || undefined,
+      targetModel: input.config.targetModel || undefined,
+      targetBaseUrl: input.config.targetBaseUrl || undefined,
+      targetApiKeyEnv: input.config.targetApiKeyEnv || undefined,
     },
   }
   await writeJsonFile(inputManifestPath, manifest)
@@ -341,6 +379,26 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
       apiKeyEnv: input.config.optimizerApiKeyEnv || undefined,
       reasoningEffort: input.config.reasoningEffort || undefined,
     },
+    nativeTrain: input.config.pipelineMode === "native_train"
+      ? {
+          enabled: true,
+          configPath: nativeTrainConfigPath,
+          splitDir: input.config.nativeTrainSplitDir
+            ? resolveConfiguredPath(projectRoot, input.config.nativeTrainSplitDir)
+            : undefined,
+          dataDirs: input.config.nativeTrainDataDirs.map((item) => resolveConfiguredPath(projectRoot, item)),
+          outRoot: path.join(mergerRunDir, "native-train"),
+          epochs: input.config.nativeTrainEpochs,
+          batchSize: input.config.nativeTrainBatchSize,
+          maxSteps: input.config.nativeTrainMaxSteps,
+          evalTest: input.config.nativeTrainEvalTest,
+          targetWorkers: input.config.nativeTrainTargetWorkers,
+          targetBackend: input.config.targetBackend || input.config.optimizerBackend || undefined,
+          targetModel: input.config.targetModel || input.config.optimizerModel || undefined,
+          targetBaseUrl: input.config.targetBaseUrl || input.config.optimizerBaseUrl || undefined,
+          targetApiKeyEnv: input.config.targetApiKeyEnv || input.config.optimizerApiKeyEnv || undefined,
+        }
+      : undefined,
   }
   const requestPath = path.join(mergerRunDir, `request-${randomUUID()}.json`)
   const resultPath = path.join(mergerRunDir, `result-${randomUUID()}.json`)
@@ -373,6 +431,10 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
     resultPath,
     reasoning: result.reasoning,
     tokenSummary: result.tokenSummary,
+    pipelineMode: input.config.pipelineMode,
+    warmStartSkill: result.warmStartSkill,
+    nativeTrainSummary: result.nativeTrainSummary,
+    nativeTrainOutRoot: result.nativeTrainOutRoot,
   }
   await writeJsonFile(reportPath, report)
   return {

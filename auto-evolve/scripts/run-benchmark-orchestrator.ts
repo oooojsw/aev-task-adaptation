@@ -481,6 +481,18 @@ const VALUE_OPTIONS = new Set([
   "--skillopt-optimizer-backend",
   "--skillopt-optimizer-base-url",
   "--skillopt-optimizer-model",
+  "--skillopt-pipeline-mode",
+  "--skillopt-native-config",
+  "--skillopt-native-split-dir",
+  "--skillopt-native-data-dirs",
+  "--skillopt-native-epochs",
+  "--skillopt-native-batch-size",
+  "--skillopt-native-max-steps",
+  "--skillopt-target-workers",
+  "--skillopt-target-backend",
+  "--skillopt-target-model",
+  "--skillopt-target-base-url",
+  "--skillopt-target-api-key-env",
   "--skillopt-project-root",
   "--skillopt-python-command",
   "--skillopt-reasoning-effort",
@@ -520,6 +532,7 @@ const FLAG_OPTIONS = new Set([
   "--dry-run",
   "--hierarchical-no-repair",
   "--hierarchical-rerun-after-repair",
+  "--skillopt-native-eval-test",
   "--no-adaptive-concurrency",
   "--no-reuse-verified",
   "--no-resume-running",
@@ -3184,6 +3197,55 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
       getOption(args, "--skillopt-optimizer-api-key-env") ?? projectConfig.mergeConfig.asSkillOpt.optimizerApiKeyEnv,
     reasoningEffort:
       getOption(args, "--skillopt-reasoning-effort") ?? projectConfig.mergeConfig.asSkillOpt.reasoningEffort,
+    pipelineMode: parseChoice<"aggregate_only" | "native_train">({
+      raw: getOption(args, "--skillopt-pipeline-mode"),
+      fallback: projectConfig.mergeConfig.asSkillOpt.pipelineMode,
+      optionName: "--skillopt-pipeline-mode",
+      expected: "aggregate-only or native-train",
+      aliases: {
+        aggregate: "aggregate_only",
+        aggregate_only: "aggregate_only",
+        "aggregate-only": "aggregate_only",
+        native: "native_train",
+        native_train: "native_train",
+        "native-train": "native_train",
+      },
+    }),
+    nativeTrainConfigPath:
+      getOption(args, "--skillopt-native-config") ?? projectConfig.mergeConfig.asSkillOpt.nativeTrainConfigPath,
+    nativeTrainSplitDir:
+      getOption(args, "--skillopt-native-split-dir") ?? projectConfig.mergeConfig.asSkillOpt.nativeTrainSplitDir,
+    nativeTrainDataDirs: getOption(args, "--skillopt-native-data-dirs")
+      ? getOption(args, "--skillopt-native-data-dirs")!.split(",").map((item) => item.trim()).filter(Boolean)
+      : projectConfig.mergeConfig.asSkillOpt.nativeTrainDataDirs,
+    nativeTrainEpochs: parsePositiveIntOption(
+      args,
+      ["--skillopt-native-epochs"],
+      projectConfig.mergeConfig.asSkillOpt.nativeTrainEpochs,
+    ),
+    nativeTrainBatchSize: parsePositiveIntOption(
+      args,
+      ["--skillopt-native-batch-size"],
+      projectConfig.mergeConfig.asSkillOpt.nativeTrainBatchSize,
+    ),
+    nativeTrainMaxSteps: getOption(args, "--skillopt-native-max-steps") === undefined
+      ? projectConfig.mergeConfig.asSkillOpt.nativeTrainMaxSteps
+      : Math.max(0, Number.parseInt(getOption(args, "--skillopt-native-max-steps")!, 10) || 0),
+    nativeTrainEvalTest: hasFlag(args, "--skillopt-native-eval-test")
+      ? true
+      : projectConfig.mergeConfig.asSkillOpt.nativeTrainEvalTest,
+    nativeTrainTargetWorkers: parsePositiveIntOption(
+      args,
+      ["--skillopt-target-workers"],
+      projectConfig.mergeConfig.asSkillOpt.nativeTrainTargetWorkers,
+    ),
+    targetBackend:
+      getOption(args, "--skillopt-target-backend") ?? projectConfig.mergeConfig.asSkillOpt.targetBackend,
+    targetModel: getOption(args, "--skillopt-target-model") ?? projectConfig.mergeConfig.asSkillOpt.targetModel,
+    targetBaseUrl:
+      getOption(args, "--skillopt-target-base-url") ?? projectConfig.mergeConfig.asSkillOpt.targetBaseUrl,
+    targetApiKeyEnv:
+      getOption(args, "--skillopt-target-api-key-env") ?? projectConfig.mergeConfig.asSkillOpt.targetApiKeyEnv,
   }
   const mergeBackendConfig = {
     mergeExecutionMode,

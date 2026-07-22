@@ -1,6 +1,6 @@
 import path from "node:path"
 import { createHash } from "node:crypto"
-import { readFile } from "node:fs/promises"
+import { mkdir, readFile, rename, stat } from "node:fs/promises"
 import { pathExists, readJsonFile, writeJsonFile } from "./fs"
 import type {
   LongTaskCampaignHistoryPolicy,
@@ -72,6 +72,26 @@ export type BenchmarkHistoryContext = {
   validatorProfileHash?: string
 }
 
+const DEFAULT_MAX_BENCHMARK_HISTORY_BYTES = 20 * 1024 * 1024
+
+function maxBenchmarkHistoryBytes() {
+  const raw = Number.parseInt(process.env.AUTO_EVOLVE_MAX_TASK_LEDGER_BYTES ?? "", 10)
+  if (Number.isFinite(raw) && raw > 0) return raw
+  return DEFAULT_MAX_BENCHMARK_HISTORY_BYTES
+}
+
+function compactTimestamp() {
+  return new Date().toISOString().replace(/[:.]/g, "-")
+}
+
+function countStatus(tasks: Record<string, BenchmarkHistoryTaskEntry>) {
+  const dist: Record<string, number> = {}
+  for (const task of Object.values(tasks)) {
+    dist[task.status] = (dist[task.status] ?? 0) + 1
+  }
+  return dist
+}
+
 export function benchmarkHistoryPath(outDir: string) {
   return path.join(outDir, "task-ledger.json")
 }
@@ -108,12 +128,185 @@ export function normalizeHistoryPolicy(
 export async function readBenchmarkHistory(outDir: string) {
   const target = benchmarkHistoryPath(outDir)
   if (!(await pathExists(target))) return undefined
+  const info = await stat(target)
+  const maxBytes = maxBenchmarkHistoryBytes()
+  if (info.size > maxBytes) {
+    throw new Error(
+      `Benchmark task ledger is too large (${info.size} bytes > ${maxBytes} bytes): ${target}. ` +
+        "Run benchmark history preflight/quarantine before resuming.",
+    )
+  }
   return readJsonFile<BenchmarkHistoryManifest>(target)
 }
 
 export async function writeBenchmarkHistory(outDir: string, manifest: BenchmarkHistoryManifest) {
   manifest.updatedAt = nowISO()
   await writeJsonFile(benchmarkHistoryPath(outDir), manifest)
+}
+
+export type BenchmarkHistoryPreflightReport = {
+  schema: "auto-evolve/benchmark-history-preflight/v1"
+  checkedAt: string
+  outDir: string
+  ledgerPath: string
+  action:
+    | "missing"
+    | "ok"
+    | "quarantined_size"
+    | "quarantined_invalid_json"
+    | "quarantined_invalid_schema"
+    | "quarantined_task_mismatch"
+    | "quarantined_backslash_explosion"
+  sizeBytes?: number
+  maxBytes: number
+  expectedTaskCount: number
+  actualTaskCount?: number
+  missingTaskIDs?: string[]
+  extraTaskIDs?: string[]
+  statusDistribution?: Record<string, number>
+  quarantinePath?: string
+  reason?: string
+}
+
+async function quarantineBenchmarkHistoryLedger(outDir: string, reason: string) {
+  const source = benchmarkHistoryPath(outDir)
+  const quarantineDir = path.join(outDir, "history-quarantine")
+  await mkdir(quarantineDir, { recursive: true })
+  const target = path.join(quarantineDir, `task-ledger.${compactTimestamp()}.${reason}.json`)
+  await rename(source, target)
+  return target
+}
+
+async function writeBenchmarkHistoryPreflightReport(outDir: string, report: BenchmarkHistoryPreflightReport) {
+  const dir = path.join(outDir, "history-health")
+  await mkdir(dir, { recursive: true })
+  await writeJsonFile(path.join(dir, `${compactTimestamp()}-task-ledger-preflight.json`), report)
+}
+
+export async function preflightBenchmarkHistory(input: {
+  outDir: string
+  expectedTaskIDs: string[]
+  writeReport?: boolean
+}) {
+  const ledgerPath = benchmarkHistoryPath(input.outDir)
+  const expected = new Set(input.expectedTaskIDs)
+  const maxBytes = maxBenchmarkHistoryBytes()
+  const base = {
+    schema: "auto-evolve/benchmark-history-preflight/v1" as const,
+    checkedAt: nowISO(),
+    outDir: input.outDir,
+    ledgerPath,
+    maxBytes,
+    expectedTaskCount: input.expectedTaskIDs.length,
+  }
+
+  if (!(await pathExists(ledgerPath))) {
+    const report: BenchmarkHistoryPreflightReport = { ...base, action: "missing" }
+    if (input.writeReport !== false) await writeBenchmarkHistoryPreflightReport(input.outDir, report)
+    return report
+  }
+
+  const info = await stat(ledgerPath)
+  if (info.size > maxBytes) {
+    const quarantinePath = await quarantineBenchmarkHistoryLedger(input.outDir, "oversize")
+    const report: BenchmarkHistoryPreflightReport = {
+      ...base,
+      action: "quarantined_size",
+      sizeBytes: info.size,
+      quarantinePath,
+      reason: `task-ledger.json exceeded ${maxBytes} bytes`,
+    }
+    if (input.writeReport !== false) await writeBenchmarkHistoryPreflightReport(input.outDir, report)
+    return report
+  }
+
+  let raw = ""
+  try {
+    raw = await readFile(ledgerPath, "utf8")
+  } catch (error) {
+    const quarantinePath = await quarantineBenchmarkHistoryLedger(input.outDir, "unreadable")
+    const report: BenchmarkHistoryPreflightReport = {
+      ...base,
+      action: "quarantined_invalid_json",
+      sizeBytes: info.size,
+      quarantinePath,
+      reason: error instanceof Error ? error.message : String(error),
+    }
+    if (input.writeReport !== false) await writeBenchmarkHistoryPreflightReport(input.outDir, report)
+    return report
+  }
+
+  if (/\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/.test(raw.slice(0, Math.min(raw.length, 64 * 1024)))) {
+    const quarantinePath = await quarantineBenchmarkHistoryLedger(input.outDir, "backslash-explosion")
+    const report: BenchmarkHistoryPreflightReport = {
+      ...base,
+      action: "quarantined_backslash_explosion",
+      sizeBytes: info.size,
+      quarantinePath,
+      reason: "detected an abnormal repeated-backslash run near the start of task-ledger.json",
+    }
+    if (input.writeReport !== false) await writeBenchmarkHistoryPreflightReport(input.outDir, report)
+    return report
+  }
+
+  let manifest: BenchmarkHistoryManifest
+  try {
+    manifest = JSON.parse(raw.replace(/^\uFEFF/, "")) as BenchmarkHistoryManifest
+  } catch (error) {
+    const quarantinePath = await quarantineBenchmarkHistoryLedger(input.outDir, "invalid-json")
+    const report: BenchmarkHistoryPreflightReport = {
+      ...base,
+      action: "quarantined_invalid_json",
+      sizeBytes: info.size,
+      quarantinePath,
+      reason: error instanceof Error ? error.message : String(error),
+    }
+    if (input.writeReport !== false) await writeBenchmarkHistoryPreflightReport(input.outDir, report)
+    return report
+  }
+
+  if (manifest.schema !== "auto-evolve/benchmark-history/v1" || !manifest.tasks || typeof manifest.tasks !== "object") {
+    const quarantinePath = await quarantineBenchmarkHistoryLedger(input.outDir, "invalid-schema")
+    const report: BenchmarkHistoryPreflightReport = {
+      ...base,
+      action: "quarantined_invalid_schema",
+      sizeBytes: info.size,
+      quarantinePath,
+      reason: "task-ledger.json does not match auto-evolve/benchmark-history/v1",
+    }
+    if (input.writeReport !== false) await writeBenchmarkHistoryPreflightReport(input.outDir, report)
+    return report
+  }
+
+  const actualIDs = new Set(Object.keys(manifest.tasks))
+  const missingTaskIDs = input.expectedTaskIDs.filter((id) => !actualIDs.has(id))
+  const extraTaskIDs = [...actualIDs].filter((id) => !expected.has(id))
+  if (missingTaskIDs.length > 0 || extraTaskIDs.length > 0) {
+    const quarantinePath = await quarantineBenchmarkHistoryLedger(input.outDir, "task-mismatch")
+    const report: BenchmarkHistoryPreflightReport = {
+      ...base,
+      action: "quarantined_task_mismatch",
+      sizeBytes: info.size,
+      actualTaskCount: actualIDs.size,
+      missingTaskIDs,
+      extraTaskIDs,
+      statusDistribution: countStatus(manifest.tasks),
+      quarantinePath,
+      reason: "task-ledger.json task IDs do not match the current benchmark train IDs",
+    }
+    if (input.writeReport !== false) await writeBenchmarkHistoryPreflightReport(input.outDir, report)
+    return report
+  }
+
+  const report: BenchmarkHistoryPreflightReport = {
+    ...base,
+    action: "ok",
+    sizeBytes: info.size,
+    actualTaskCount: actualIDs.size,
+    statusDistribution: countStatus(manifest.tasks),
+  }
+  if (input.writeReport !== false) await writeBenchmarkHistoryPreflightReport(input.outDir, report)
+  return report
 }
 
 export function nextGenerationID(previous?: string) {

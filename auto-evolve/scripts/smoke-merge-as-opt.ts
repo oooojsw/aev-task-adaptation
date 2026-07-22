@@ -88,6 +88,7 @@ try {
   assert(loaded.mergeConfig.mode === "legacy_script", "Existing default merge mode changed unexpectedly")
   assert(loaded.mergeConfig.asSkillOpt.batchSize === 8, "merge-as-opt total-control config did not load")
   assert(loaded.mergeConfig.asSkillOpt.enabled === false, "merge-as-opt must remain opt-in by default")
+  assert(loaded.mergeConfig.asSkillOpt.pipelineMode === "aggregate_only", "merge-as-opt must preserve the historical default")
 
   const stopAfterMergeConfig = await parseBenchmarkConfig([
     "--task-pack-root",
@@ -100,6 +101,16 @@ try {
     "minimax_chat",
     "--skillopt-optimizer-model",
     "MiniMax-M2.7",
+    "--skillopt-pipeline-mode",
+    "native-train",
+    "--skillopt-native-config",
+    "configs/officeqa/default.yaml",
+    "--skillopt-native-epochs",
+    "4",
+    "--skillopt-native-batch-size",
+    "40",
+    "--skillopt-target-workers",
+    "2",
     "--stop-after",
     "merge",
     "--dry-run",
@@ -109,6 +120,30 @@ try {
   assert(
     stopAfterMergeConfig.mergeAsSkillOpt?.optimizerModel === "MiniMax-M2.7",
     "stop-after merge lost the SkillOpt optimizer overrides",
+  )
+  assert(stopAfterMergeConfig.mergeAsSkillOpt?.pipelineMode === "native_train", "stop-after merge lost native_train mode")
+  assert(stopAfterMergeConfig.mergeAsSkillOpt?.nativeTrainEpochs === 4, "native SkillOpt epochs were not preserved")
+  assert(stopAfterMergeConfig.mergeAsSkillOpt?.nativeTrainBatchSize === 40, "native SkillOpt batch size was not preserved")
+  assert(stopAfterMergeConfig.mergeAsSkillOpt?.nativeTrainTargetWorkers === 2, "native target workers were not preserved")
+
+  await expectFailure(
+    () =>
+      runSkillOptMerger({
+        cwd,
+        runRoot: path.join(root, "missing-native-config-run"),
+        sourceSkills: [{ id: "verified-case-001", skillRoot: sourceRoot }],
+        config: {
+          ...loaded.mergeConfig.asSkillOpt,
+          projectRoot: fakeSkillOptRoot,
+          configPath: "configs/merge.yaml",
+          pipelineMode: "native_train",
+          nativeTrainConfigPath: "configs/missing-officeqa.yaml",
+        },
+        bridgeRunner: async () => {
+          throw new Error("must not reach model bridge")
+        },
+      }),
+    "nativeTrainConfigPath",
   )
 
   await expectFailure(
@@ -169,6 +204,18 @@ try {
             apiKeyEnv: loaded.mergeConfig.asSkillOpt.optimizerApiKeyEnv || undefined,
             reasoningEffort: loaded.mergeConfig.asSkillOpt.reasoningEffort || undefined,
           },
+          nativeTrain: {
+            enabled: true,
+            configPath: path.join(actualSkillOptRoot, "configs", "officeqa", "default.yaml"),
+            splitDir: path.join(actualSkillOptRoot, "data", "officeqa_id_split"),
+            dataDirs: [path.join(actualSkillOptRoot, "data", "officeqa_docs_official")],
+            outRoot: path.join(root, "native-preflight-out"),
+            epochs: 4,
+            batchSize: 40,
+            maxSteps: 0,
+            evalTest: false,
+            targetWorkers: 1,
+          },
         },
         null,
         2,
@@ -196,6 +243,8 @@ try {
     assert(preflightCode === 0, `Real SkillOpt bridge preflight failed: ${preflightStderr}`)
     const preflightResult = JSON.parse(await readFile(preflightResultPath, "utf8"))
     assert(preflightResult.passed === true, "Real SkillOpt bridge preflight result did not pass")
+    assert(preflightResult.nativeTrainPreflight?.trainSize > 0, "Native SkillOpt train split did not load")
+    assert(preflightResult.nativeTrainPreflight?.validationSize > 0, "Native SkillOpt validation split did not load")
   }
 
   const outcome = await runSkillOptMerger({
@@ -225,6 +274,7 @@ try {
   assert(!manifestRaw.includes("actual-secret-value"), "API key value leaked into merge manifest")
   const report = JSON.parse(await readFile(outcome.reportPath, "utf8"))
   assert(report.mergePath === "merge-as-opt", "merge-as-opt lineage marker missing")
+  assert(report.pipelineMode === "aggregate_only", "merge-as-opt report lost pipeline mode")
   assert(report.outputFiles.length === 4, "Output file inventory is incomplete")
 
   console.log("smoke-merge-as-opt: passed")

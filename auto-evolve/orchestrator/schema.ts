@@ -179,6 +179,32 @@ export interface LoadedMergeAsSkillOptConfig {
   optimizerApiKeyEnv: string
   /** Optional optimizer reasoning effort override. */
   reasoningEffort: string
+  /** aggregate_only keeps the historical bridge; native_train continues with SkillOpt's unmodified trainer. */
+  pipelineMode: "aggregate_only" | "native_train"
+  /** Dataset-specific SkillOpt config used by the native trainer. */
+  nativeTrainConfigPath: string
+  /** Optional real split directory override for the native dataset adapter. */
+  nativeTrainSplitDir: string
+  /** Optional material directories passed to the native dataset adapter. */
+  nativeTrainDataDirs: string[]
+  /** Native SkillOpt training epochs. */
+  nativeTrainEpochs: number
+  /** Native SkillOpt rollout batch size. */
+  nativeTrainBatchSize: number
+  /** Optional native trainer step cap; zero means the config-derived full run. */
+  nativeTrainMaxSteps: number
+  /** Whether the native trainer should evaluate the held-out test split after training. */
+  nativeTrainEvalTest: boolean
+  /** Target-model worker count used by the native dataset adapter. */
+  nativeTrainTargetWorkers: number
+  /** Optional target backend override; empty inherits the optimizer backend. */
+  targetBackend: string
+  /** Optional target model override; empty inherits the optimizer model. */
+  targetModel: string
+  /** Optional target API base URL override; empty inherits the optimizer base URL. */
+  targetBaseUrl: string
+  /** Environment variable containing the target API key; empty inherits optimizerApiKeyEnv. */
+  targetApiKeyEnv: string
 }
 
 export interface LoadedMergeAsLongTaskConfig {
@@ -666,6 +692,19 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
       optimizerBaseUrl: "",
       optimizerApiKeyEnv: "",
       reasoningEffort: "",
+      pipelineMode: "aggregate_only",
+      nativeTrainConfigPath: "",
+      nativeTrainSplitDir: "",
+      nativeTrainDataDirs: [],
+      nativeTrainEpochs: 4,
+      nativeTrainBatchSize: 40,
+      nativeTrainMaxSteps: 0,
+      nativeTrainEvalTest: false,
+      nativeTrainTargetWorkers: 2,
+      targetBackend: "",
+      targetModel: "",
+      targetBaseUrl: "",
+      targetApiKeyEnv: "",
     },
   },
   blankAcceptanceConfig: {
@@ -1103,6 +1142,27 @@ function normalizeMergeAsSkillOptConfig(
     optimizerBaseUrl: normalizeOptionalString(raw.optimizerBaseUrl) ?? fallback.optimizerBaseUrl,
     optimizerApiKeyEnv: normalizeOptionalString(raw.optimizerApiKeyEnv) ?? fallback.optimizerApiKeyEnv,
     reasoningEffort: normalizeOptionalString(raw.reasoningEffort) ?? fallback.reasoningEffort,
+    pipelineMode: raw.pipelineMode === "native_train" || raw.pipelineMode === "aggregate_only"
+      ? raw.pipelineMode
+      : fallback.pipelineMode,
+    nativeTrainConfigPath:
+      normalizeOptionalString(raw.nativeTrainConfigPath) ?? fallback.nativeTrainConfigPath,
+    nativeTrainSplitDir: normalizeOptionalString(raw.nativeTrainSplitDir) ?? fallback.nativeTrainSplitDir,
+    nativeTrainDataDirs: normalizeStringList(raw.nativeTrainDataDirs, fallback.nativeTrainDataDirs),
+    nativeTrainEpochs: positiveIntegerField(raw, "nativeTrainEpochs", fallback.nativeTrainEpochs),
+    nativeTrainBatchSize: positiveIntegerField(raw, "nativeTrainBatchSize", fallback.nativeTrainBatchSize),
+    nativeTrainMaxSteps:
+      typeof raw.nativeTrainMaxSteps === "number" && Number.isInteger(raw.nativeTrainMaxSteps) && raw.nativeTrainMaxSteps >= 0
+        ? raw.nativeTrainMaxSteps
+        : fallback.nativeTrainMaxSteps,
+    nativeTrainEvalTest:
+      typeof raw.nativeTrainEvalTest === "boolean" ? raw.nativeTrainEvalTest : fallback.nativeTrainEvalTest,
+    nativeTrainTargetWorkers:
+      positiveIntegerField(raw, "nativeTrainTargetWorkers", fallback.nativeTrainTargetWorkers),
+    targetBackend: normalizeOptionalString(raw.targetBackend) ?? fallback.targetBackend,
+    targetModel: normalizeOptionalString(raw.targetModel) ?? fallback.targetModel,
+    targetBaseUrl: normalizeOptionalString(raw.targetBaseUrl) ?? fallback.targetBaseUrl,
+    targetApiKeyEnv: normalizeOptionalString(raw.targetApiKeyEnv) ?? fallback.targetApiKeyEnv,
   }
 }
 

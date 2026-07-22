@@ -161,6 +161,17 @@ This keeps post-merge validation pluggable. Dataset-specific file layout checks,
 
 ## 2026-06-14: Hierarchical Merge Strategy In Unified Benchmark Orchestrator
 
+## 2026-07-22: merge-as-opt 原生训练模式
+
+`merge-as-opt` 现在明确区分两个不能混报的口径：
+
+- `aggregate_only`：历史快速模式。把 AEV 单案例 skill 作为完整候选交给 SkillOpt `merge_patches()` 聚合，只能称“SkillOpt 聚合器实验”。
+- `native_train`：先聚合 AEV skills 得到 warm-start，再把这份 warm-start 交给 SkillOpt 原生 `ReflACTTrainer`，完整运行真实 rollout、minibatch reflection、patch aggregate、rank/clip、apply、selection gate、rejected-step buffer、slow update 和 meta skill。
+
+总控入口是 `config.json > mergeConfig.asSkillOpt.pipelineMode`。`native_train` 还必须显式配置数据集专用 `nativeTrainConfigPath`、真实 `nativeTrainSplitDir` 和材料目录；预检要求 train/validation split 均非空，错误路径在模型调用前 fail closed。训练阶段默认 `nativeTrainEvalTest=false`，避免训练时触碰 held-out test。
+
+需要诚实记录：AEV skills 只负责形成 warm-start，之后的循环是 SkillOpt 原生训练；它不是把 AEV skill 文件伪装成论文 rollout trajectory。报告会分别保存 warm-start aggregate 与 native train 的 token/summary，禁止把两者混成“完全原生 SkillOpt 从空白初始化”的结果。
+
 ### Merge-only 输入血统绑定（2026-07-19）
 
 `scripts/run-hierarchical-merge-only.ts` 默认仍兼容历史行为：按任务 ID 查找最新 campaign。对于存在重复重跑历史的数据集，新实验应显式传入 `--source-benchmark-run <benchmark-run-dir>`，让每个任务的状态和 campaignDir 严格来自该 benchmark 的 `orchestrator-state.json`，避免较新的失败重跑覆盖正式主线中已经验证成功的 campaign。
