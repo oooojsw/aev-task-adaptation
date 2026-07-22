@@ -119,7 +119,7 @@ export interface LoadedValidationConfig {
 
 export interface LoadedMergeConfig {
   /** Which merge path the benchmark orchestrator should prefer. */
-  mode: "legacy_script" | "long_task" | "both_smoke"
+  mode: "legacy_script" | "long_task" | "skillopt" | "both_smoke"
   /** Master switch for config-level merge contract injection. */
   enabled: boolean
   /** Prompt used by the generic flat merger. */
@@ -146,6 +146,39 @@ export interface LoadedMergeConfig {
   acceptanceSuccessCriterion: MergeAcceptanceSuccessCriterion
   /** Controls packaging legacy merged skills into a real long-task campaign. */
   asLongTask: LoadedMergeAsLongTaskConfig
+  /** Controls the optional SkillOpt full-skill hierarchical merge backend. */
+  asSkillOpt: LoadedMergeAsSkillOptConfig
+}
+
+export interface LoadedMergeAsSkillOptConfig {
+  /** Master switch; mode=skillopt also enables the backend for that run. */
+  enabled: boolean
+  /** Absolute SkillOpt checkout root, or a path relative to the Auto-Evolve host repo. */
+  projectRoot: string
+  /** SkillOpt YAML used to configure the optimizer model. Relative paths resolve under projectRoot. */
+  configPath: string
+  /** Python executable or launcher used for the bridge process. */
+  pythonCommand: string
+  /** Bridge script relative to the Auto-Evolve root unless absolute. */
+  bridgeScript: string
+  /** Number of complete skill candidates merged per hierarchical batch. */
+  batchSize: number
+  /** Number of SkillOpt merge calls allowed to run in parallel at one hierarchy level. */
+  workers: number
+  /** Hard timeout for the complete SkillOpt merge bridge process. */
+  timeoutMs: number
+  /** Optional initial skill file/directory. Empty creates a neutral package seed. */
+  initialSkillPath: string
+  /** Optional optimizer backend override, for example minimax_chat or openai_chat. */
+  optimizerBackend: string
+  /** Optional optimizer model/deployment override. */
+  optimizerModel: string
+  /** Optional optimizer API base URL override. */
+  optimizerBaseUrl: string
+  /** Environment variable containing the optimizer API key; the key is never written to run artifacts. */
+  optimizerApiKeyEnv: string
+  /** Optional optimizer reasoning effort override. */
+  reasoningEffort: string
 }
 
 export interface LoadedMergeAsLongTaskConfig {
@@ -618,6 +651,22 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
         levels: [],
       },
     },
+    asSkillOpt: {
+      enabled: false,
+      projectRoot: "",
+      configPath: "",
+      pythonCommand: "python",
+      bridgeScript: "scripts/skillopt-merge-bridge.py",
+      batchSize: 8,
+      workers: 2,
+      timeoutMs: 6 * 60 * 60 * 1000,
+      initialSkillPath: "",
+      optimizerBackend: "",
+      optimizerModel: "",
+      optimizerBaseUrl: "",
+      optimizerApiKeyEnv: "",
+      reasoningEffort: "",
+    },
   },
   blankAcceptanceConfig: {
     enabled: true,
@@ -692,7 +741,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
     excludedTaskIDs: [],
     retryInfraFailed: true,
     retryProductFailed: false,
-    maxAttemptsPerTask: 2,
+    maxAttemptsPerTask: 7,
   },
   directChatConfigPath: "",
   directChatConfig: {
@@ -1030,8 +1079,31 @@ function normalizeStringMap(input: unknown, fallback: Record<string, string> = {
 }
 
 function normalizeMergeMode(input: unknown, fallback: LoadedMergeConfig["mode"]): LoadedMergeConfig["mode"] {
-  if (input === "legacy_script" || input === "long_task" || input === "both_smoke") return input
+  if (input === "legacy_script" || input === "long_task" || input === "skillopt" || input === "both_smoke") return input
   return fallback
+}
+
+function normalizeMergeAsSkillOptConfig(
+  raw: unknown,
+  fallback: LoadedMergeAsSkillOptConfig,
+): LoadedMergeAsSkillOptConfig {
+  if (!isObject(raw)) return { ...fallback }
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    projectRoot: normalizeOptionalString(raw.projectRoot) ?? fallback.projectRoot,
+    configPath: normalizeOptionalString(raw.configPath) ?? fallback.configPath,
+    pythonCommand: normalizeOptionalString(raw.pythonCommand) ?? fallback.pythonCommand,
+    bridgeScript: normalizeOptionalString(raw.bridgeScript) ?? fallback.bridgeScript,
+    batchSize: positiveIntegerField(raw, "batchSize", fallback.batchSize),
+    workers: positiveIntegerField(raw, "workers", fallback.workers),
+    timeoutMs: positiveIntegerField(raw, "timeoutMs", fallback.timeoutMs),
+    initialSkillPath: normalizeOptionalString(raw.initialSkillPath) ?? fallback.initialSkillPath,
+    optimizerBackend: normalizeOptionalString(raw.optimizerBackend) ?? fallback.optimizerBackend,
+    optimizerModel: normalizeOptionalString(raw.optimizerModel) ?? fallback.optimizerModel,
+    optimizerBaseUrl: normalizeOptionalString(raw.optimizerBaseUrl) ?? fallback.optimizerBaseUrl,
+    optimizerApiKeyEnv: normalizeOptionalString(raw.optimizerApiKeyEnv) ?? fallback.optimizerApiKeyEnv,
+    reasoningEffort: normalizeOptionalString(raw.reasoningEffort) ?? fallback.reasoningEffort,
+  }
 }
 
 function normalizeMergeInputSelection(
@@ -1210,6 +1282,7 @@ function normalizeMergeConfig(
       taskPackContracts: { ...fallback.taskPackContracts },
       acceptanceProfiles: normalizeMergeAcceptanceProfiles(undefined, fallback.acceptanceProfiles),
       asLongTask: normalizeMergeAsLongTaskConfig(undefined, fallback.asLongTask),
+      asSkillOpt: normalizeMergeAsSkillOptConfig(undefined, fallback.asSkillOpt),
     }
   }
   return {
@@ -1233,6 +1306,7 @@ function normalizeMergeConfig(
       fallback.acceptanceSuccessCriterion,
     ),
     asLongTask: normalizeMergeAsLongTaskConfig(raw.asLongTask, fallback.asLongTask),
+    asSkillOpt: normalizeMergeAsSkillOptConfig(raw.asSkillOpt, fallback.asSkillOpt),
   }
 }
 

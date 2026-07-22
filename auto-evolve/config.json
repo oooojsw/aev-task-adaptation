@@ -118,7 +118,7 @@
     "enabled": true,
     "enabledNote": "控制 multi-instance flat merge / replay repair 是否注入可拔插 merge contract；开启后合并 prompt 保持通用，任务差异由 contract 提供。",
     "mode": "legacy_script",
-    "modeNote": "Controls the default merge route: legacy_script keeps the old merge pipeline; long_task wraps merge as a normal long-task; both_smoke is for side-by-side smoke only.",
+    "modeNote": "控制默认合并后端：legacy_script=merge-as-old，long_task=merge-as-long-task，skillopt=merge-as-opt；both_smoke 只用于对照烟测。",
     "defaultPrompt": "methods/recipes/multi-instance/prompts/merge.md",
     "defaultPromptNote": "控制通用平面合并 prompt；该文件必须保持数据集无关，不允许写死 audit / paper / spreadsheet 等任务专用输出。",
     "defaultRepairPrompt": "methods/recipes/multi-instance/prompts/merge-repair.md",
@@ -234,6 +234,36 @@
         "levels": [],
         "levelsNote": "Optional per-level overrides. Example: [{\"level\":1,\"groupSize\":5,\"groupConcurrency\":5},{\"level\":2,\"groupSize\":3,\"groupConcurrency\":2}]. Empty means use the defaults above for every level."
       }
+    },
+    "asSkillOpt": {
+      "enabled": false,
+      "enabledNote": "控制是否允许使用 merge-as-opt；正式选择 mode=skillopt 时也会为该次 run 启用。默认关闭，不影响原有两条合并链路。",
+      "projectRoot": "C:/Users/ZhuanZ/Desktop/SkillOpt",
+      "projectRootNote": "SkillOpt 项目根目录。启动模型前会检查目录和 skillopt Python 包是否存在。",
+      "configPath": "configs/_base_/default.yaml",
+      "configPathNote": "SkillOpt 通用优化器配置 YAML；相对路径按 projectRoot 解析。默认不绑定任何数据集，也不改变 AEV 数据集划分；需要时可在本行切换专用模型配置。",
+      "pythonCommand": "python",
+      "pythonCommandNote": "运行 SkillOpt bridge 的 Python 命令或绝对路径。",
+      "bridgeScript": "scripts/skillopt-merge-bridge.py",
+      "bridgeScriptNote": "AEV 内部桥接脚本。大 skill 通过 JSON 文件传递，不拼入 Windows 命令行。",
+      "batchSize": 8,
+      "batchSizeNote": "SkillOpt 每次分层合并多少份完整 skill；持续递归直到只剩一份。",
+      "workers": 2,
+      "workersNote": "SkillOpt 同一合并层最多并发多少个模型请求；该值独立于长程任务和空白回撤并发。",
+      "timeoutMs": 21600000,
+      "timeoutMsNote": "整次 merge-as-opt 最长允许 6 小时，超时按基础设施失败处理，不把半成品送去回撤。",
+      "initialSkillPath": "",
+      "initialSkillPathNote": "可选初始 skill 文件夹。留空时使用中性最小 Skill 包，不混入额外训练经验。",
+      "optimizerBackend": "",
+      "optimizerBackendNote": "可选模型后端覆盖，例如 minimax_chat、openai_chat、qwen_chat；留空使用 SkillOpt YAML。",
+      "optimizerModel": "",
+      "optimizerModelNote": "可选优化器模型覆盖；留空使用 SkillOpt YAML 的 model.optimizer。",
+      "optimizerBaseUrl": "",
+      "optimizerBaseUrlNote": "可选 OpenAI-compatible/厂商 API 地址覆盖。",
+      "optimizerApiKeyEnv": "",
+      "optimizerApiKeyEnvNote": "只填写保存密钥的环境变量名，不在总控或运行产物里写明文 API key。",
+      "reasoningEffort": "",
+      "reasoningEffortNote": "可选推理强度覆盖；留空使用 SkillOpt YAML。"
     }
   },
   "blankAcceptanceConfig": {
@@ -333,7 +363,7 @@
     "retryInfraFailedNote": "控制基础设施类失败是否自动重跑，例如进程崩溃、假活、锁、spawn、平台超时。",
     "retryProductFailed": false,
     "retryProductFailedNote": "控制真实产物或答案失败是否自动重跑；默认关闭，防止反复烧额度。",
-    "maxAttemptsPerTask": 2,
+    "maxAttemptsPerTask": 7,
     "maxAttemptsPerTaskNote": "控制单个任务最多自动尝试次数，防止无限重跑。"
   },
   "adaptiveConcurrency": {

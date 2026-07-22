@@ -4,8 +4,8 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 const repoRoot = path.resolve(import.meta.dir, "..", "..")
 const autoRoot = path.join(repoRoot, "auto-evolve")
 const fixtureRoot = path.join(autoRoot, "runtime-state", "tmp-smoke-resume-auto-evolve-run")
-const taskPackRoot = path.join(autoRoot, "task-packs", "real-long-tasks", "spreadsheetbench-learnbench")
-const trainSplit = path.join(taskPackRoot, "splits", "train-skillopt-official.json")
+const taskPackRoot = path.join(fixtureRoot, "task-pack")
+const trainSplit = path.join(taskPackRoot, "splits", "train.json")
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
@@ -19,6 +19,7 @@ async function writeJson(file: string, value: unknown) {
 async function main() {
   await rm(fixtureRoot, { recursive: true, force: true })
   await mkdir(fixtureRoot, { recursive: true })
+  await writeJson(trainSplit, ["a", "b", "c"])
   await writeJson(path.join(fixtureRoot, "orchestrator-state.json"), {
     runID: "tmp-smoke-resume-auto-evolve-run",
     phase: "training",
@@ -51,6 +52,23 @@ async function main() {
       campaignRounds: 7,
       validateRounds: 1,
       repairAttempts: 0,
+      mergeExecutionMode: "skillopt",
+      mergeAsSkillOpt: {
+        enabled: true,
+        projectRoot: "C:/smoke/SkillOpt",
+        configPath: "configs/smoke.yaml",
+        pythonCommand: "python",
+        bridgeScript: "scripts/skillopt-merge-bridge.py",
+        batchSize: 5,
+        workers: 2,
+        timeoutMs: 123456,
+        initialSkillPath: "C:/smoke/initial-skill",
+        optimizerBackend: "smoke-backend",
+        optimizerModel: "smoke-model",
+        optimizerBaseUrl: "http://127.0.0.1:9999/v1",
+        optimizerApiKeyEnv: "SMOKE_API_KEY",
+        reasoningEffort: "medium",
+      },
       historyPolicy: "fresh-non-verified",
       resumeMode: "safe-non-terminal",
       runMerge: false,
@@ -88,6 +106,11 @@ async function main() {
   assert(result.launcher?.launcherPath, "launcher path missing")
   assert(result.benchmarkArgs?.includes("--out"), "benchmark args missing --out")
   assert(result.benchmarkArgs?.includes(fixtureRoot), "benchmark args do not preserve fixture out")
+  assert(result.benchmarkArgs?.includes("--merge-execution-mode"), "merge backend was not preserved")
+  assert(result.benchmarkArgs?.includes("skillopt"), "merge-as-opt mode was not preserved")
+  assert(result.benchmarkArgs?.includes("smoke-model"), "SkillOpt optimizer model was not preserved")
+  assert(result.benchmarkArgs?.includes("SMOKE_API_KEY"), "SkillOpt API key env name was not preserved")
+  assert(!result.benchmarkArgs?.includes("actual-secret-value"), "SkillOpt API key value leaked into resume args")
   assert(!result.stopArchive, "dry-run must not archive STOP_REQUESTED")
   console.log(JSON.stringify({ passed: true, selected: result.selected, launcher: result.launcher.launcherPath }, null, 2))
 }

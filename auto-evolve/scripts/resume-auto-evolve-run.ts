@@ -22,6 +22,31 @@ type Candidate = {
   synthetic: boolean
 }
 
+type LineageAudit = {
+  schema: "auto-evolve/resume-lineage-audit/v1"
+  createdAt: string
+  selection: string
+  selected: ReturnType<typeof printableCandidate>
+  candidates: Array<ReturnType<typeof printableCandidate>>
+  taskLedger?: {
+    exists: boolean
+    runID?: string
+    currentGenerationID?: string
+    historyPolicy?: string
+    taskCount?: number
+    statuses?: Record<string, number>
+    activeAttempts?: Array<{
+      taskID: string
+      status: string
+      activeAttemptID?: string
+      activeCampaignID?: string
+      activeCampaignDir?: string
+      allowResume?: boolean
+    }>
+  }
+  warnings: string[]
+}
+
 const repoRoot = path.resolve(import.meta.dir, "..", "..")
 const autoRoot = path.join(repoRoot, "auto-evolve")
 const benchmarkRunsRoot = path.join(autoRoot, "runtime-state", "benchmark-runs")
@@ -240,6 +265,7 @@ function buildBenchmarkArgs(outDir: string, config: any, manifest: any) {
   pushFlag(args, "--retry-infra-failed", config.retryInfraFailed)
   pushFlag(args, "--retry-product-failed", config.retryProductFailed)
   pushValue(args, "--merge-strategy", config.mergeStrategy)
+  pushValue(args, "--merge-execution-mode", config.mergeExecutionMode)
   pushValue(args, "--merge-input", config.hierarchicalMerge?.inputFilter)
   pushValue(args, "--merge-group-size", config.hierarchicalMerge?.groupSize)
   pushValue(args, "--merge-grouping", config.hierarchicalMerge?.grouping)
@@ -251,6 +277,19 @@ function buildBenchmarkArgs(outDir: string, config: any, manifest: any) {
   pushValue(args, "--merge-prompt-path", config.mergePromptPath)
   pushValue(args, "--merge-repair-prompt-path", config.mergeRepairPromptPath)
   pushValue(args, "--merge-contract-path", config.mergeContractPath)
+  pushValue(args, "--skillopt-project-root", config.mergeAsSkillOpt?.projectRoot)
+  pushValue(args, "--skillopt-config", config.mergeAsSkillOpt?.configPath)
+  pushValue(args, "--skillopt-python-command", config.mergeAsSkillOpt?.pythonCommand)
+  pushValue(args, "--skillopt-bridge-script", config.mergeAsSkillOpt?.bridgeScript)
+  pushValue(args, "--skillopt-batch-size", config.mergeAsSkillOpt?.batchSize)
+  pushValue(args, "--skillopt-workers", config.mergeAsSkillOpt?.workers)
+  pushValue(args, "--skillopt-timeout-ms", config.mergeAsSkillOpt?.timeoutMs)
+  pushValue(args, "--skillopt-initial-skill", config.mergeAsSkillOpt?.initialSkillPath)
+  pushValue(args, "--skillopt-optimizer-backend", config.mergeAsSkillOpt?.optimizerBackend)
+  pushValue(args, "--skillopt-optimizer-model", config.mergeAsSkillOpt?.optimizerModel)
+  pushValue(args, "--skillopt-optimizer-base-url", config.mergeAsSkillOpt?.optimizerBaseUrl)
+  pushValue(args, "--skillopt-optimizer-api-key-env", config.mergeAsSkillOpt?.optimizerApiKeyEnv)
+  pushValue(args, "--skillopt-reasoning-effort", config.mergeAsSkillOpt?.reasoningEffort)
   pushValue(args, "--replay-concurrency", config.replayConcurrency)
   pushValue(args, "--test-concurrency", config.testConcurrency)
   pushValue(args, "--baseline-concurrency", config.baselineConcurrency)
@@ -413,6 +452,97 @@ function printableCandidate(row: Candidate) {
   }
 }
 
+function countLedgerStatuses(tasks: Record<string, any>) {
+  const statuses: Record<string, number> = {}
+  for (const task of Object.values(tasks)) {
+    const status = String((task as any)?.status ?? "unknown")
+    statuses[status] = (statuses[status] ?? 0) + 1
+  }
+  return statuses
+}
+
+async function buildLineageAudit(input: {
+  selection: string
+  selected: Candidate
+  candidates: Candidate[]
+}) {
+  const warnings: string[] = []
+  if (input.selected.hasStopRequest) warnings.push("Selected run has STOP_REQUESTED.json; resume wrapper will archive it before launch.")
+  if (input.selected.synthetic) warnings.push("Selected run is marked synthetic/smoke; do not use it for formal experiment conclusions.")
+  if (input.candidates.length > 1) {
+    const sameTaskPack = input.candidates.filter((row) => row.taskPackRoot && row.taskPackRoot === input.selected.taskPackRoot)
+    if (sameTaskPack.length > 1) warnings.push(`Multiple candidate runs share the selected task-pack (${sameTaskPack.length}); selection is based on progress sorting or explicit args.`)
+  }
+  const ledgerPath = path.join(input.selected.outDir, "task-ledger.json")
+  const ledger = await readJson<any>(ledgerPath)
+  const tasks = ledger?.tasks && typeof ledger.tasks === "object" ? ledger.tasks as Record<string, any> : undefined
+  if (!ledger) warnings.push("Missing task-ledger.json; lineage checks will rely on orchestrator-state/run-manifest only.")
+  const activeAttempts = tasks
+    ? Object.values(tasks)
+        .map((task: any) => ({
+          taskID: String(task.id ?? ""),
+          status: String(task.status ?? "unknown"),
+          activeAttemptID: task.activeAttemptID,
+          activeCampaignID: task.activeCampaignID,
+          activeCampaignDir: task.activeCampaignDir,
+          allowResume: task.allowResume,
+        }))
+        .filter((task) => task.status !== "queued" || task.activeAttemptID || task.activeCampaignID)
+    : []
+  return {
+    schema: "auto-evolve/resume-lineage-audit/v1" as const,
+    createdAt: new Date().toISOString(),
+    selection: input.selection,
+    selected: printableCandidate(input.selected),
+    candidates: input.candidates.slice(0, 20).map(printableCandidate),
+    taskLedger: {
+      exists: !!ledger,
+      runID: ledger?.runID,
+      currentGenerationID: ledger?.currentGenerationID,
+      historyPolicy: ledger?.historyPolicy,
+      taskCount: tasks ? Object.keys(tasks).length : undefined,
+      statuses: tasks ? countLedgerStatuses(tasks) : undefined,
+      activeAttempts: activeAttempts.slice(0, 200),
+    },
+    warnings,
+  } satisfies LineageAudit
+}
+
+function lineageAuditMarkdown(audit: LineageAudit) {
+  const lines = [
+    "# Resume Lineage Audit",
+    "",
+    `- createdAt: \`${audit.createdAt}\``,
+    `- selection: \`${audit.selection}\``,
+    `- selected: \`${audit.selected.runID}\``,
+    `- outDir: \`${audit.selected.outDir}\``,
+    `- progress: \`${audit.selected.verified}/${audit.selected.total} verified, running=${audit.selected.running}, recovery=${audit.selected.recovery}, failed=${audit.selected.failed}, queued=${audit.selected.queued}\``,
+    `- phase: \`${audit.selected.phase ?? "unknown"}\``,
+    `- taskLedger: \`${audit.taskLedger?.exists ? "present" : "missing"}\``,
+    `- generation: \`${audit.taskLedger?.currentGenerationID ?? "unknown"}\``,
+    `- historyPolicy: \`${audit.taskLedger?.historyPolicy ?? "unknown"}\``,
+    "",
+    "## Warnings",
+    ...(audit.warnings.length ? audit.warnings.map((item) => `- ${item}`) : ["- none"]),
+    "",
+    "## Candidate Runs",
+    "| runID | verified/total | running | recovery | failed | queued | phase | STOP |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+    ...audit.candidates.map((row) =>
+      `| ${row.runID} | ${row.verified}/${row.total} | ${row.running} | ${row.recovery} | ${row.failed} | ${row.queued} | ${row.phase ?? ""} | ${row.hasStopRequest ? "yes" : "no"} |`,
+    ),
+  ]
+  return `${lines.join("\n")}\n`
+}
+
+async function writeLineageAudit(logDir: string, audit: LineageAudit) {
+  const jsonPath = path.join(logDir, "lineage-audit.json")
+  const markdownPath = path.join(logDir, "lineage-audit.md")
+  await writeFile(jsonPath, JSON.stringify(audit, null, 2), "utf8")
+  await writeFile(markdownPath, lineageAuditMarkdown(audit), "utf8")
+  return { jsonPath, markdownPath }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help || args.h) {
@@ -439,6 +569,12 @@ async function main() {
   const movedLeases = args["dry-run"] ? [] : await archiveBenchmarkLeases(candidate.outDir)
   const bunExe = await findBunExe()
   const launcher = await writeLauncher({ outDir: candidate.outDir, args: benchmarkArgs, bunExe, projectRoot: repoRoot })
+  const lineageAudit = await buildLineageAudit({
+    selection: selection.selection,
+    selected: candidate,
+    candidates: selection.candidates,
+  })
+  const lineageAuditPaths = await writeLineageAudit(launcher.logDir, lineageAudit)
   const summary = {
     schema: "auto-evolve/resume-run/v1",
     dryRun: Boolean(args["dry-run"]),
@@ -448,6 +584,8 @@ async function main() {
     movedLeases,
     bunExe,
     launcher,
+    lineageAudit: lineageAuditPaths,
+    lineageWarnings: lineageAudit.warnings,
     preflight,
     benchmarkArgs,
   }

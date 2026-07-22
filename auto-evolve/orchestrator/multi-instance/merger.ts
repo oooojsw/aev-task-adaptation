@@ -27,6 +27,7 @@ import type { CoordinatorState, InstanceState } from "./contract"
 import { appendCoordinatorLog, mergeDir, saveCoordinatorState } from "./repository"
 import { selectValidationModules } from "../validation-engine/registry"
 import { runValidationStage } from "../validation-engine/stage-runner"
+import { buildAccessProfile } from "../access-profile"
 
 export interface RunMergerInput {
   cwd: string
@@ -158,6 +159,12 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
     ...contributingInstances.map((i) => i.harvestedSkillPath!).filter(Boolean),
   ]
   const editPaths = [mergedSkillDir]
+  const access = await buildAccessProfile({
+    role: "multi_instance_merger",
+    mode: "open_book",
+    readPaths,
+    editPaths,
+  })
 
   const result = await runOpencodeTask({
     cwd: input.cwd,
@@ -165,8 +172,9 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
     title: `multi-instance-merge-${state.id}`,
     prompt: fullPrompt,
     concurrencyScope: `multi-instance-merge:${state.id}`,
-    permissionReadPaths: readPaths,
-    permissionEditPaths: editPaths,
+    referencePaths: access.referencePaths,
+    permissionReadPaths: access.permissionReadPaths,
+    permissionEditPaths: access.permissionEditPaths,
   })
 
   await writeTextFile(path.join(mergerRoot, "stdout.log"), result.result.stdout)
@@ -221,7 +229,7 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<
   }
 }
 
-async function runPostMergeValidation(input: {
+export async function runPostMergeValidation(input: {
   cwd: string
   state: CoordinatorState
   config: Awaited<ReturnType<typeof loadConfig>>

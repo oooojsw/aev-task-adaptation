@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
 import { createCoordinatorRun } from "../orchestrator/multi-instance/coordinator"
-import { runCoordinatorPhase2Merge } from "../orchestrator/multi-instance/merger"
+import { runCoordinatorPhase2Merge, runPostMergeValidation } from "../orchestrator/multi-instance/merger"
 import {
   runCoordinatorHierarchicalMerge,
   type HierarchicalMergeFailurePolicy,
@@ -46,6 +46,7 @@ import {
   lineageForAttempt,
   nextAttemptID,
   normalizeHistoryPolicy,
+  preflightBenchmarkHistory,
   readBenchmarkHistory,
   registerCampaignAttempt,
   updateCampaignAttemptStatus,
@@ -54,9 +55,13 @@ import {
 } from "../orchestrator/history-manager"
 import type { LongTaskCampaignHistoryPolicy } from "../orchestrator/long-task-campaign/contract"
 import { runHierarchicalMergeLongTask } from "./run-hierarchical-merge-long-task"
+import { updateExperimentLedger } from "./update-experiment-ledger"
+import { runSkillOptMerger } from "../orchestrator/multi-instance/skillopt-merger"
 
 type OrchestratorMode = "campaign-only" | "full-pipeline"
 type EvalRunner = "blank-opencode" | "direct-chat"
+type MergeExecutionMode = "legacy_script" | "long_task" | "skillopt" | "both_smoke"
+type MergePathName = "merge-as-old" | "merge-as-long-task" | "merge-as-opt" | "merge-both-smoke"
 
 type CampaignRow = {
   id: string
@@ -161,7 +166,7 @@ type BenchmarkConfig = {
   reuseVerified: boolean
   resumeRunning: boolean
   runMerge: boolean
-  mergeExecutionMode?: "legacy_script" | "long_task" | "both_smoke"
+  mergeExecutionMode?: MergeExecutionMode
   mergeAsLongTask?: {
     enabled: boolean
     inputSelection: "success_only" | "failed_only" | "success_and_failed"
@@ -172,6 +177,7 @@ type BenchmarkConfig = {
     focusedBlankAcceptanceMode: string
     finalBlankAcceptanceMode: string
   }
+  mergeAsSkillOpt?: Awaited<ReturnType<typeof loadConfig>>["mergeConfig"]["asSkillOpt"]
   mergeStrategy: "flat" | "hierarchical"
   hierarchicalMerge: {
     groupSize: number
@@ -295,7 +301,11 @@ export type BenchmarkState = {
   merge?: {
     mergedSkillDir?: string
     strategy?: "flat" | "hierarchical"
-    executionMode?: "legacy_script" | "long_task" | "both_smoke"
+    executionMode?: MergeExecutionMode
+    pathName?: MergePathName
+    inputSkillCount?: number
+    sourceTrainVerified?: number
+    sourceTrainTotal?: number
     reportPath?: string
     reportMarkdownPath?: string
   }
@@ -342,6 +352,52 @@ export function clearPausedStopMarkerForResume(state: Pick<BenchmarkState, "stop
   if (state.stop?.status !== "paused_by_user") return false
   delete state.stop
   return true
+}
+
+function mergePathName(mode: MergeExecutionMode | undefined): MergePathName {
+  if (mode === "long_task") return "merge-as-long-task"
+  if (mode === "skillopt") return "merge-as-opt"
+  if (mode === "both_smoke") return "merge-both-smoke"
+  return "merge-as-old"
+}
+
+async function writeMergeLineage(config: BenchmarkConfig, input: {
+  mergedSkillDir?: string
+  strategy?: "flat" | "hierarchical"
+  executionMode?: MergeExecutionMode
+  inputSkillCount?: number
+  sourceTrainVerified?: number
+  sourceTrainTotal?: number
+  reportPath?: string
+  reportMarkdownPath?: string
+  replay?: unknown
+  test?: unknown
+}) {
+  const executionMode = input.executionMode ?? config.mergeExecutionMode ?? "legacy_script"
+  const payload = {
+    schema: "auto-evolve/merge-lineage/v1",
+    createdAt: nowISO(),
+    runID: path.basename(config.outDir),
+    mergePath: mergePathName(executionMode),
+    internalMode: executionMode,
+    strategy: input.strategy ?? config.mergeStrategy,
+    mergedSkillDir: input.mergedSkillDir,
+    inputSkillCount: input.inputSkillCount,
+    sourceTrainVerified: input.sourceTrainVerified,
+    sourceTrainTotal: input.sourceTrainTotal,
+    acceptanceProfile: config.mergeAcceptanceProfile,
+    acceptanceStages: config.mergeAcceptanceStages,
+    acceptanceSuccessCriterion: config.mergeAcceptanceSuccessCriterion,
+    trainReplayScope: config.trainReplayScope,
+    replayConcurrency: config.replayConcurrency,
+    repairAttempts: config.repairAttempts,
+    reportPath: input.reportPath,
+    reportMarkdownPath: input.reportMarkdownPath,
+    replay: input.replay,
+    test: input.test,
+  }
+  await writeJson(path.join(config.outDir, "merge-lineage.json"), payload)
+  return payload
 }
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..")
@@ -417,6 +473,19 @@ const VALUE_OPTIONS = new Set([
   "--merge-repair-prompt-path",
   "--merge-strategy",
   "--merge-success-criterion",
+  "--skillopt-batch-size",
+  "--skillopt-bridge-script",
+  "--skillopt-config",
+  "--skillopt-initial-skill",
+  "--skillopt-optimizer-api-key-env",
+  "--skillopt-optimizer-backend",
+  "--skillopt-optimizer-base-url",
+  "--skillopt-optimizer-model",
+  "--skillopt-project-root",
+  "--skillopt-python-command",
+  "--skillopt-reasoning-effort",
+  "--skillopt-timeout-ms",
+  "--skillopt-workers",
   "--mode",
   "--out",
   "--repair-attempts",
@@ -609,6 +678,70 @@ function parseBooleanOption(args: string[], name: string, fallback: boolean) {
 async function writeJson(file: string, value: unknown) {
   await mkdir(path.dirname(file), { recursive: true })
   await writeJsonFile(file, value)
+}
+
+function statusDistribution(rows: Array<{ status?: string }>) {
+  const dist: Record<string, number> = {}
+  for (const row of rows) {
+    const status = row.status || "<empty>"
+    dist[status] = (dist[status] ?? 0) + 1
+  }
+  return dist
+}
+
+async function writeHistoryStateConsistencyReport(input: {
+  config: BenchmarkConfig
+  state: BenchmarkState
+  history: Awaited<ReturnType<typeof initializeBenchmarkHistory>>
+}) {
+  const stateByID = new Map(input.state.trainResults.map((row) => [row.id, row]))
+  const historyByID = input.history.tasks
+  const expected = input.state.trainIDs
+  const missingInState = expected.filter((id) => !stateByID.has(id))
+  const missingInHistory = expected.filter((id) => !historyByID[id])
+  const extraInState = [...stateByID.keys()].filter((id) => !expected.includes(id))
+  const extraInHistory = Object.keys(historyByID).filter((id) => !expected.includes(id))
+  const mismatchedStatuses = expected
+    .map((id) => {
+      const stateStatus = stateByID.get(id)?.status
+      const historyStatus = historyByID[id]?.status
+      return stateStatus === historyStatus ? undefined : { id, stateStatus, historyStatus }
+    })
+    .filter((item): item is { id: string; stateStatus?: string; historyStatus?: string } => !!item)
+
+  const report = {
+    schema: "auto-evolve/benchmark-history-state-consistency/v1",
+    checkedAt: nowISO(),
+    runID: path.basename(input.config.outDir),
+    outDir: input.config.outDir,
+    ok:
+      missingInState.length === 0 &&
+      missingInHistory.length === 0 &&
+      extraInState.length === 0 &&
+      extraInHistory.length === 0 &&
+      mismatchedStatuses.length === 0,
+    expectedTaskCount: expected.length,
+    stateTaskCount: input.state.trainResults.length,
+    historyTaskCount: Object.keys(historyByID).length,
+    stateStatusDistribution: statusDistribution(input.state.trainResults),
+    historyStatusDistribution: statusDistribution(Object.values(historyByID)),
+    missingInState,
+    missingInHistory,
+    extraInState,
+    extraInHistory,
+    mismatchedStatuses,
+  }
+  const dir = path.join(input.config.outDir, "history-health")
+  await writeJson(path.join(dir, `${stamp()}-state-consistency.json`), report)
+  if (!report.ok) {
+    console.warn(
+      `[benchmark-history] task-ledger/orchestrator-state mismatch: ` +
+        `missingInState=${missingInState.length}, missingInHistory=${missingInHistory.length}, ` +
+        `extraInState=${extraInState.length}, extraInHistory=${extraInHistory.length}, ` +
+        `statusMismatch=${mismatchedStatuses.length}`,
+    )
+  }
+  return report
 }
 
 async function readStopRequest(outDir: string) {
@@ -1051,8 +1184,11 @@ async function writeScorecard(file: string, state: BenchmarkState) {
     lines.push(
       "",
       "## Merge",
+      `- merge path: \`${state.merge.pathName ?? mergePathName(state.merge.executionMode ?? state.config.mergeExecutionMode)}\``,
       `- mergedSkillDir: \`${state.merge.mergedSkillDir}\``,
       `- execution mode: \`${state.config.mergeExecutionMode ?? "legacy_script"}\``,
+      `- input skills: \`${state.merge.inputSkillCount ?? "unknown"}\``,
+      `- source train verified: \`${state.merge.sourceTrainVerified ?? "unknown"}/${state.merge.sourceTrainTotal ?? "unknown"}\``,
       `- acceptance profile: \`${state.config.mergeAcceptanceProfile}\` (${state.config.mergeAcceptanceProfileSource})`,
       `- acceptance stages: \`${state.config.mergeAcceptanceStages.join(",") || "merge_only"}\``,
       `- success criterion: \`${state.config.mergeAcceptanceSuccessCriterion}\``,
@@ -1087,6 +1223,15 @@ async function writeScorecard(file: string, state: BenchmarkState) {
   await writeFile(file, `${lines.join("\n")}\n`, "utf8")
 }
 
+async function refreshExperimentLedgerQuietly(outDir: string) {
+  try {
+    await updateExperimentLedger(outDir)
+  } catch (error) {
+    const message = error instanceof Error ? error.stack || error.message : String(error)
+    await writeFile(path.join(outDir, "experiment-ledger-update-error.log"), `${message}\n`, "utf8").catch(() => undefined)
+  }
+}
+
 async function persistState(stateFile: string, scorecardFile: string, state: BenchmarkState) {
   state.updatedAt = nowISO()
   await writeJson(stateFile, state)
@@ -1099,6 +1244,7 @@ async function persistState(stateFile: string, scorecardFile: string, state: Ben
     trainVerified: state.trainResults.filter((item) => item.status === "verified_success").length,
     trainTotal: state.trainResults.length,
   })
+  await refreshExperimentLedgerQuietly(state.config.outDir)
 }
 
 async function runOneCampaign(config: BenchmarkConfig, pick: TrainPick) {
@@ -1689,7 +1835,46 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
   await saveCoordinatorState(stateRun)
 
   const merge =
-    config.mergeStrategy === "hierarchical"
+    config.mergeExecutionMode === "skillopt"
+      ? await (async () => {
+          const projectConfig = await loadConfig(repoRoot)
+          const skillOptConfig = config.mergeAsSkillOpt ?? projectConfig.mergeConfig.asSkillOpt
+          const contributingInstances = stateRun.instances.filter(
+            (instance) => instance.role !== "test" && instance.status === "passed" && instance.harvestedSkillPath,
+          )
+          const outcome = await runSkillOptMerger({
+            cwd: repoRoot,
+            runRoot: path.join(config.outDir, "merge-and-validate", "phase2-skillopt"),
+            config: skillOptConfig,
+            sourceSkills: contributingInstances.map((instance) => ({
+              id: instance.id,
+              skillRoot: instance.harvestedSkillPath!,
+            })),
+          })
+          const postMergeValidation = await runPostMergeValidation({
+            cwd: repoRoot,
+            state: stateRun,
+            config: projectConfig,
+            mergerRoot: outcome.mergerRunDir,
+            mergedSkillDir: outcome.mergedSkillDir,
+            manifestPath: outcome.inputManifestPath,
+            contributingInstances,
+          })
+          stateRun.postMergeValidationStatus = postMergeValidation.status
+          stateRun.postMergeValidationResultPath = postMergeValidation.resultPath
+          stateRun.postMergeValidationSummary = postMergeValidation.summary
+          if (postMergeValidation.status === "failed") {
+            throw new Error(`merge-as-opt post-merge validation failed: ${postMergeValidation.summary}`)
+          }
+          return {
+            ...outcome,
+            strategy: "hierarchical" as const,
+            postMergeValidationResultPath: postMergeValidation.resultPath,
+            postMergeValidationPassed:
+              postMergeValidation.status === "skipped" ? undefined : postMergeValidation.status === "passed",
+          }
+        })()
+      : config.mergeStrategy === "hierarchical"
       ? await runCoordinatorHierarchicalMerge({
           cwd: repoRoot,
           state: stateRun,
@@ -1716,11 +1901,17 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
   await saveCoordinatorState(stateRun)
   state.merge = {
     mergedSkillDir: merge.mergedSkillDir,
-    strategy: config.mergeStrategy,
+    strategy: config.mergeExecutionMode === "skillopt" ? "hierarchical" : config.mergeStrategy,
+    executionMode: config.mergeExecutionMode ?? "legacy_script",
+    pathName: mergePathName(config.mergeExecutionMode),
+    inputSkillCount: merge.contributingInstances.length,
+    sourceTrainVerified: ok.size,
+    sourceTrainTotal: trainIDs.length,
     reportPath: "reportPath" in merge ? merge.reportPath : undefined,
     reportMarkdownPath: "reportMarkdownPath" in merge ? merge.reportMarkdownPath : undefined,
   }
   await writeJson(path.join(config.outDir, "merge-output.json"), merge)
+  await writeMergeLineage(config, state.merge)
   await persistState(stateFile, scorecardFile, state)
 
   let replay = {
@@ -1782,6 +1973,7 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
         : undefined,
     }
     await writeJson(path.join(config.outDir, "train-replay-output.json"), replay)
+    await writeMergeLineage(config, { ...state.merge, replay })
     await persistState(stateFile, scorecardFile, state)
     const strictFailed =
       mergeAcceptanceUsesStrictGate(config.mergeAcceptanceStages) && replay.accepted === false
@@ -1809,6 +2001,7 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
         })
   state.test = { passed: test.passed, total: test.total, failed: test.failed }
   await writeJson(path.join(config.outDir, config.evalRunner === "direct-chat" ? "direct-chat-test-output.json" : "trained-test-output.json"), test)
+  await writeMergeLineage(config, { ...state.merge, replay, test })
   await persistState(stateFile, scorecardFile, state)
   return { merge, replay, test }
 }
@@ -1918,6 +2111,10 @@ async function mergeAsLongTaskReplayAndTest(
     mergedSkillDir: merge.mergedSkillDir,
     strategy: config.mergeStrategy,
     executionMode: "long_task",
+    pathName: "merge-as-long-task",
+    inputSkillCount: selectedCount,
+    sourceTrainVerified: ok.size,
+    sourceTrainTotal: trainIDs.length,
     reportPath: merge.reportPath,
   }
   await writeJson(path.join(config.outDir, "merge-output.json"), {
@@ -1926,6 +2123,7 @@ async function mergeAsLongTaskReplayAndTest(
     report,
     merge,
   })
+  await writeMergeLineage(config, state.merge)
   await persistState(stateFile, scorecardFile, state)
 
   const replay = {
@@ -1959,6 +2157,7 @@ async function mergeAsLongTaskReplayAndTest(
         "merge-as-long-task runs blank replay as a long-task completion validator; this benchmark replay record mirrors that acceptance.",
       sourceReportPath: merge.reportPath,
     })
+    await writeMergeLineage(config, { ...state.merge, replay })
     await persistState(stateFile, scorecardFile, state)
   }
 
@@ -1975,6 +2174,7 @@ async function mergeAsLongTaskReplayAndTest(
   const test = await runDirectChatHeldoutTest(config, testIDs, merge.mergedSkillDir)
   state.test = { passed: test.passed, total: test.total, failed: test.failed }
   await writeJson(path.join(config.outDir, "direct-chat-test-output.json"), test)
+  await writeMergeLineage(config, { ...state.merge, replay, test })
   await persistState(stateFile, scorecardFile, state)
   return { merge, replay, test }
 }
@@ -2214,6 +2414,21 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
 
   const trainSplitHash = await hashFileIfExists(config.trainSplit)
   const testSplitHash = await hashFileIfExists(config.testSplit)
+  const historyPreflight = await preflightBenchmarkHistory({
+    outDir: config.outDir,
+    expectedTaskIDs: trainIDs,
+  })
+  if (historyPreflight.action !== "ok" && historyPreflight.action !== "missing") {
+    console.warn(
+      [
+        `[benchmark-history] ${historyPreflight.action}: ${historyPreflight.reason ?? "task-ledger.json was quarantined"}`,
+        historyPreflight.quarantinePath ? `quarantine=${historyPreflight.quarantinePath}` : "",
+        "The benchmark ledger will be rebuilt from trusted verified state where possible.",
+      ]
+        .filter(Boolean)
+        .join(" "),
+    )
+  }
   const historyManifest = await initializeBenchmarkHistory({
     outDir: config.outDir,
     runID: path.basename(config.outDir),
@@ -2307,6 +2522,10 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
     }
   }
   await persistState(stateFile, scorecardFile, state)
+  const historyAfterPlan = config.historyContext ? await readBenchmarkHistory(config.historyContext.outDir) : undefined
+  if (historyAfterPlan) {
+    await writeHistoryStateConsistencyReport({ config, state, history: historyAfterPlan })
+  }
 
   if (config.dryRun) {
     const report: BenchmarkSummary = {
@@ -2915,11 +3134,11 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
   const runTest = !hasFlag(args, "--skip-test") && modeOpt !== "campaign-only"
   let runBaseline = !hasFlag(args, "--skip-baseline") && modeOpt !== "campaign-only"
   const mergeConfig = parseHierarchicalMergeConfig(args)
-  const mergeExecutionMode = parseChoice<"legacy_script" | "long_task" | "both_smoke">({
+  const mergeExecutionMode = parseChoice<"legacy_script" | "long_task" | "skillopt" | "both_smoke">({
     raw: getOption(args, "--merge-execution-mode"),
     fallback: projectConfig.mergeConfig.mode,
     optionName: "--merge-execution-mode",
-    expected: "legacy-script, long-task, or both-smoke",
+    expected: "legacy-script, long-task, skillopt/merge-as-opt, or both-smoke",
     aliases: {
       legacy: "legacy_script",
       legacy_script: "legacy_script",
@@ -2927,6 +3146,9 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
       long: "long_task",
       long_task: "long_task",
       "long-task": "long_task",
+      opt: "skillopt",
+      skillopt: "skillopt",
+      "merge-as-opt": "skillopt",
       both: "both_smoke",
       both_smoke: "both_smoke",
       "both-smoke": "both_smoke",
@@ -2941,6 +3163,27 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
     surfaceProfileSet: projectConfig.mergeConfig.asLongTask.surfaceProfileSet,
     focusedBlankAcceptanceMode: projectConfig.mergeConfig.asLongTask.focusedBlankAcceptanceMode,
     finalBlankAcceptanceMode: projectConfig.mergeConfig.asLongTask.finalBlankAcceptanceMode,
+  }
+  const mergeAsSkillOpt = {
+    ...projectConfig.mergeConfig.asSkillOpt,
+    enabled: projectConfig.mergeConfig.asSkillOpt.enabled || mergeExecutionMode === "skillopt",
+    projectRoot: getOption(args, "--skillopt-project-root") ?? projectConfig.mergeConfig.asSkillOpt.projectRoot,
+    configPath: getOption(args, "--skillopt-config") ?? projectConfig.mergeConfig.asSkillOpt.configPath,
+    pythonCommand: getOption(args, "--skillopt-python-command") ?? projectConfig.mergeConfig.asSkillOpt.pythonCommand,
+    bridgeScript: getOption(args, "--skillopt-bridge-script") ?? projectConfig.mergeConfig.asSkillOpt.bridgeScript,
+    batchSize: parsePositiveIntOption(args, ["--skillopt-batch-size"], projectConfig.mergeConfig.asSkillOpt.batchSize),
+    workers: parsePositiveIntOption(args, ["--skillopt-workers"], projectConfig.mergeConfig.asSkillOpt.workers),
+    timeoutMs: parsePositiveIntOption(args, ["--skillopt-timeout-ms"], projectConfig.mergeConfig.asSkillOpt.timeoutMs),
+    initialSkillPath: getOption(args, "--skillopt-initial-skill") ?? projectConfig.mergeConfig.asSkillOpt.initialSkillPath,
+    optimizerBackend:
+      getOption(args, "--skillopt-optimizer-backend") ?? projectConfig.mergeConfig.asSkillOpt.optimizerBackend,
+    optimizerModel: getOption(args, "--skillopt-optimizer-model") ?? projectConfig.mergeConfig.asSkillOpt.optimizerModel,
+    optimizerBaseUrl:
+      getOption(args, "--skillopt-optimizer-base-url") ?? projectConfig.mergeConfig.asSkillOpt.optimizerBaseUrl,
+    optimizerApiKeyEnv:
+      getOption(args, "--skillopt-optimizer-api-key-env") ?? projectConfig.mergeConfig.asSkillOpt.optimizerApiKeyEnv,
+    reasoningEffort:
+      getOption(args, "--skillopt-reasoning-effort") ?? projectConfig.mergeConfig.asSkillOpt.reasoningEffort,
   }
   if (stopAfter && stopAfter !== "baseline") runBaseline = false
   if (stopAfter === "training") {
@@ -3127,6 +3370,7 @@ async function parseConfig(args: string[]): Promise<BenchmarkConfig> {
     runMerge,
     mergeExecutionMode,
     mergeAsLongTask,
+    mergeAsSkillOpt,
     ...mergeConfig,
     runTrainReplay,
     mergeAcceptanceProfile: mergeAcceptanceProfile.profileName,

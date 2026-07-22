@@ -20,6 +20,16 @@
 
 全局有多个角色，他们都是工作节点，只有空白agent节点无法看到答案任何相关内容，其他的任何节点都可以完全或者部分看到答案内容，因为专家经验区就是他们在写，只有空白agent是完全利用专家经验区进行任务，以此来考验专家经验区写的是不是没有过拟合以及泛化，整个系统的目的是产出一份泛化的（不过拟合任何案例）、完备的（可以让空白agent通过大量测试集）的专家经验区（skill）。
 
+## 0.A 合并后端命名与切换（最高优先级）
+
+统一 benchmark 现在有三个可拔插合并后端，必须用以下正式名称：
+
+- `merge-as-old`：原脚本式 merger + replay/repair 链路，内部配置值是 `legacy_script`。
+- `merge-as-long-task`：把合并作为 long-task campaign 运行，内部配置值是 `long_task`。
+- `merge-as-opt`：只把 AEV 产出的 verified 单 case skill 交给 SkillOpt `full_rewrite_minibatch` 分层合并，内部配置值是 `skillopt`。禁止向它偷渡 AEV 对话轨迹、工具调用或 failure packet。
+
+切换位置是 `config.json > mergeConfig.mode`。默认必须继续保持 `legacy_script`；新后端未显式选择时不得启动。三个后端都必须产出同一种 `mergedSkillDir`，后续继续走 AEV 现有 post-merge 表面验证、空白 agent 回撤、repair、final replay 和测试集，不准为 `merge-as-opt` 另造一套验收口径。
+
 ## 0.0 Blank Eval 公开任务合同规则（最高优先级）
 
 空白 agent 是闭卷，但不能“无题可做”。Blank Eval sandbox 必须固定提供一个去答案版 `materials/spec.json`，作为公开任务合同。这个文件只能包含任务目标、材料列表、输出目标、可编辑路径、公开输出约束（例如 SpreadsheetBench 的 `--range C2:C66` 和 sandbox 内 candidate 路径），绝不能包含 `private-answers`、`answer.xlsx`、`--answer`、`ground-truth`、`validator_input.json`、`result.private` 或任何历史 campaign/worker 路径。
