@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "defaults": {
+    "model": "alibaba-coding-plan-cn/qwen3.6-plus"
+  },
+  "limits": {
+    "requestsPerMinute": 14
+  },
+  "phases": {
+    "bootstrap": {},
+    "solve": {},
+    "refine": {},
+    "verify": {},
+    "regression": {}
+  }
+}

@@ -48,6 +48,7 @@ import {
   type MergeAcceptanceStatus,
   type MergeAcceptanceSuccessCriterion,
 } from "./merge-acceptance-policy"
+import { buildAccessProfile } from "../access-profile"
 
 export interface RunValidateInput {
   cwd: string
@@ -432,17 +433,24 @@ async function runOneRepair(input: {
       previousAppendOnlyFailure,
     })
     const cfg = await loadConfig(input.cwd)
+    const access = await buildAccessProfile({
+      role: "multi_instance_repair_agent",
+      mode: "open_book",
+      readPaths: [
+        input.instance.sourceTaskRoot,
+        input.mergedSkillDir,
+        ...(input.repair.contractPath ? [input.repair.contractPath] : []),
+      ],
+      editPaths: [draft],
+    })
     const task = await runOpencodeTask({
       cwd: input.cwd,
       config: cfg,
       title: `mi-append-repair-${input.instance.id}-${n}`,
       prompt,
-      permissionReadPaths: [
-        input.instance.sourceTaskRoot,
-        input.mergedSkillDir,
-        ...(input.repair.contractPath ? [input.repair.contractPath] : []),
-      ],
-      permissionEditPaths: [draft],
+      referencePaths: access.referencePaths,
+      permissionReadPaths: access.permissionReadPaths,
+      permissionEditPaths: access.permissionEditPaths,
       concurrencyScope: `mi-repair:${input.state.id}`,
     })
     await writeTextFile(path.join(dir, "response.txt"), task.result.responseText)

@@ -19,6 +19,7 @@ import { runManagedProcess } from "../managed-process"
 import { buildLongTaskPromptValidatorPrompt } from "./prompts"
 import { extractJsonObject } from "./json-extract"
 import { runLongTaskValidatorViaValidationEngine } from "../validation-engine/long-task-adapter"
+import { buildAccessProfile } from "../access-profile"
 
 const GLOBAL_SCRIPT_VALIDATOR_TIMEOUT_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_SCRIPT_VALIDATOR_TIMEOUT_MS ?? "", 10)
@@ -410,21 +411,25 @@ async function runScriptValidator(input: {
           : `${input.contract.title} passed.`
         : `${input.contract.title} failed with exit code ${exitCode}.`
   const failureText = [summary, normalizedStderr, stdout].join("\n").toLowerCase()
+  const infrastructureSignal =
+    !infraOK ||
+    timedOut ||
+    failureText.includes("validator crashed") ||
+    failureText.includes("validator runtime bootstrap failed") ||
+    failureText.includes("usage:") ||
+    failureText.includes("unrecognized arguments") ||
+    failureText.includes("expected one argument")
   const failureKind = passed
     ? undefined
     : reportedFailureKind === "dataset_failure"
       ? ("dataset_failure" as const)
-      : explicitProductFailure || hasStructuredFailure
+      : explicitProductFailure
         ? ("product_failure" as const)
-      : !infraOK ||
-        timedOut ||
-        failureText.includes("validator crashed") ||
-        failureText.includes("validator runtime bootstrap failed") ||
-        failureText.includes("usage:") ||
-        failureText.includes("unrecognized arguments") ||
-        failureText.includes("expected one argument")
-      ? ("validator_infrastructure" as const)
-      : ("product_failure" as const)
+      : infrastructureSignal
+        ? ("validator_infrastructure" as const)
+      : hasStructuredFailure
+        ? ("product_failure" as const)
+        : ("product_failure" as const)
 
   return {
     id: `validator-${randomUUID().slice(0, 8)}`,
@@ -505,16 +510,22 @@ async function runPromptValidator(input: {
       ...(input.contract.referencePaths ?? []),
     ].filter((item): item is string => typeof item === "string" && item.length > 0),
   )
+  const access = await buildAccessProfile({
+    role: `long_task_validator:${input.contract.id}`,
+    mode: "validator",
+    readPaths,
+    editPaths: [input.validatorDir],
+  })
   const task = await runOpencodeTask({
     cwd: input.cwd,
     config: input.config,
     title: `Long Task Validator ${input.contract.id}`,
     prompt,
     concurrencyScope: `long-task:${input.spec.id ?? input.spec.taskFamily ?? input.spec.title}`,
-    referencePaths: readPaths,
+    referencePaths: access.referencePaths,
     attachedFiles: [],
-    permissionReadPaths: readPaths,
-    permissionEditPaths: [input.validatorDir],
+    permissionReadPaths: access.permissionReadPaths,
+    permissionEditPaths: access.permissionEditPaths,
     model: selection.model,
     agent: selection.agent,
     variant: selection.variant,

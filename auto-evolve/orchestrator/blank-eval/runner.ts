@@ -14,6 +14,7 @@ import type { LongTaskSpec, LongTaskWorkUnit } from "../long-task/contract"
 import { experienceWorkspacePathsFromRoot, resolveExperienceWorkspaceLayout } from "../experience-workspace"
 import { cleanupRuntimeProcessScope } from "../runtime-process-registry"
 import type { BlankEvalInput, BlankEvalResult } from "./contract"
+import { buildAccessProfile } from "../access-profile"
 
 function nowISO() {
   return new Date().toISOString()
@@ -879,6 +880,13 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       ...edits,
     ])
     const permissionReads = filterSandboxExcludedPaths(reads, sandboxRoot)
+    const access = await buildAccessProfile({
+      role: "blank_agent",
+      mode: "closed_book",
+      referencePaths: reads,
+      readPaths: permissionReads,
+      editPaths: edits,
+    })
     const norm = new Map<string, string>()
     for (const item of reads) {
       const got = await winpath(item)
@@ -930,12 +938,12 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
             inline: inlineFiles.map(fix),
             unicode: norm.size > 0,
           }),
-          referencePaths: reads.map(fix),
+          referencePaths: access.referencePaths.map(fix),
           attachedFiles: cFiles.map(fix),
           promptInlineFiles: inlineFiles.map(fix),
-          permissionReadPaths: permissionReads.map(fix),
-          permissionEditPaths: edits.map(fix),
-          allowShell: false,
+          permissionReadPaths: access.permissionReadPaths.map(fix),
+          permissionEditPaths: access.permissionEditPaths.map(fix),
+          allowShell: true,
           model: selection.model,
           agent: selection.agent,
           variant: selection.variant,

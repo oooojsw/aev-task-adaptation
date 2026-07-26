@@ -5,6 +5,7 @@ import { buildSoftJudgePrompt } from "../prompts"
 import { resolveModelSelection } from "../model-selection"
 import type { SoftJudgeRequest, SoftJudgeResult, SoftJudgeSummary } from "./contract"
 import { cleanupRuntimeProcessScope } from "../runtime-process-registry"
+import { buildAccessProfile } from "../access-profile"
 
 export async function runSoftJudge(request: SoftJudgeRequest): Promise<SoftJudgeResult> {
   const runtimeScope = `judge:${request.loadedCase.spec.id}:attempt:${request.judgePlan.attempt}`
@@ -53,6 +54,12 @@ export async function runSoftJudge(request: SoftJudgeRequest): Promise<SoftJudge
     ]),
     ...request.hardCheckArtifacts.map((item) => item.outputPath),
   ]
+  const access = await buildAccessProfile({
+    role: "soft_judge",
+    mode: "maintenance",
+    readPaths: referencePaths,
+    editPaths: [path.dirname(request.inputPaths.judgeSummaryPath)],
+  })
 
   try {
     const task = await runOpencodeTask({
@@ -60,9 +67,9 @@ export async function runSoftJudge(request: SoftJudgeRequest): Promise<SoftJudge
       config: request.config,
       title: `auto-evolve soft judge ${request.loadedCase.spec.id} attempt ${request.judgePlan.attempt}`,
       prompt,
-      referencePaths,
-      permissionReadPaths: referencePaths,
-      permissionEditPaths: [path.dirname(request.inputPaths.judgeSummaryPath)],
+      referencePaths: access.referencePaths,
+      permissionReadPaths: access.permissionReadPaths,
+      permissionEditPaths: access.permissionEditPaths,
       model: execution.model,
       agent: execution.agent,
       variant: execution.variant,

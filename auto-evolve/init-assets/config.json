@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "datasetDir": "dataset/cases",
+  "knowledgeDir": "experience/workspace",
+  "experienceArchiveDir": "experience/archive",
+  "maintenanceGatewayDir": "runtime-state/maintenance-gateway",
+  "experienceTransactionDir": "runtime-state/experience-transaction",
+  "acceptanceFrameworkDir": "runtime-state/acceptance-framework",
+  "experienceEntryFile": "manifest.md",
+  "templateLibraryDir": "experience/templates",
+  "reversePropagationModulesDir": "methods/reverse-propagation-modules",
+  "maintenanceOpsDir": "methods/maintenance-ops",
+  "judgeSkillsDir": "judge-skills",
+  "systemPromptsDir": "prompts",
+  "methodsDir": "methods/recipes",
+  "propagationDir": "runtime-state/propagation",
+  "propagationMethodsDir": "methods/propagation",
+  "optimizationDir": "runtime-state/optimization",
+  "baselineFile": "baseline.md",
+  "splitFile": "dataset/SPLIT.md",
+  "scriptsDir": "scripts",
+  "runsDir": "runtime-state/runs",
+  "modelConfigFile": "model-config.json",
+  "judgeConfigFile": "judge-config.json",
+  "permissionConfigFile": "permission-config.json",
+  "monitorConfigFile": "monitor-config.json",
+  "concurrencyConfigFile": "concurrency-config.json",
+  "modelConfig": {
+    "version": 1,
+    "defaults": {
+      "model": "alibaba-coding-plan-cn/qwen3.6-plus"
+    },
+    "limits": {
+      "requestsPerMinute": 14
+    },
+    "phases": {
+      "bootstrap": {},
+      "solve": {},
+      "refine": {},
+      "verify": {},
+      "regression": {}
+    }
+  },
+  "judgeConfig": {
+    "version": 1,
+    "mode": "soft_plus_hard",
+    "autoRunSkillIDs": ["exact-output", "tool-failures", "session-behavior"]
+  },
+  "permissionConfig": {
+    "version": 1,
+    "mode": "open"
+  },
+  "monitorConfig": {
+    "version": 1,
+    "enabled": true,
+    "autoStart": true,
+    "hostname": "127.0.0.1",
+    "port": 4219,
+    "intervalSeconds": 15,
+    "defaultLimit": 30,
+    "openBrowserOnStart": true
+  },
+  "concurrencyConfig": {
+    "maxConcurrent": 15,
+    "perScopeMaxConcurrent": 5,
+    "maxQueueDepth": 60,
+    "acquireTimeoutMs": 3600000,
+    "minSpawnIntervalMs": 0
+  },
+  "stageConcurrency": {
+    "training": 5,
+    "merge": 1,
+    "hierarchicalMerge": 2,
+    "trainReplay": 3,
+    "testBlank": 3,
+    "testDirectChat": 4,
+    "baseline": 3
+  },
+  "historyConfig": {
+    "policy": "fresh-non-verified",
+    "resumeMode": "safe-non-terminal",
+    "allowLegacyAutoResume": false,
+    "keepVerified": true,
+    "requireLineageForAutoResume": true,
+    "excludedTaskIDs": [],
+    "retryInfraFailed": true,
+    "retryProductFailed": false,
+    "maxAttemptsPerTask": 2
+  },
+  "defaultMethod": "sequential-refine",
+  "defaultPropagationMethod": "single-branch-baseline",
+  "maxRetriesPerCase": 3,
+  "maxMaintenanceRoundsPerAttempt": 3,
+  "roundCaseLimit": 5,
+  "regressionSampleSize": 3
+}

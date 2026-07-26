@@ -20,7 +20,6 @@ INCLUDE_DIRS = {
     "orchestrator",
     "methods",
     "prompts",
-    "frontend",
     "scripts",
 }
 
@@ -112,6 +111,40 @@ IGNORE_PATTERNS = [
     # Dataset materialization scripts are useful operationally, but noisy for
     # a pure architecture export.
     "scripts/create-*.ts",
+    # Report aggregation / bridge utilities are useful operationally, but they
+    # are not part of the core orchestration / validation / permission engine.
+    "scripts/aggregate-*.mjs",
+    "scripts/generate-*.py",
+    "scripts/update-direct-chat-master-report.py",
+    "scripts/update-resource-cost-report.ts",
+    "scripts/export-*bridge.ts",
+    # Future method scaffold. The runtime is not wired yet, and fs.ts already
+    # preserves the template source for architecture review.
+    "methods/recipes/adversarial-test/*",
+    # Smoke tests and local test harnesses prove behavior, but are noisy for a
+    # single architecture/full-picture export.
+    "scripts/smoke-*",
+    "scripts/test-*",
+    # init-assets duplicates the live methods/prompts/templates as copy seeds.
+    # Keep the real methods/prompts tree in the export; omit the duplicate seed
+    # source to avoid doubling prompt content.
+    "init-assets/*",
+    # Human dashboard UI is useful operationally, not core agent orchestration.
+    "frontend/*",
+    # Dataset-specific product validators and materialization/OCR helpers are
+    # plug-in edges. The validation engine and profile wiring remain exported.
+    "scripts/validate-*.py",
+    "scripts/validate-*.ps1",
+    "scripts/validate-*.ts",
+    "scripts/materialize-*.py",
+    "scripts/word_text_utils.py",
+    "scripts/direct-chat-local-ocr.py",
+    "scripts/render-pdf-pages-for-direct-chat.py",
+    "scripts/*.ps1",
+    "scripts/import-opencode-private-profile.ts",
+    "scripts/update-*.ts",
+    "scripts/update-*.py",
+    "scripts/export-*.ts",
 ]
 
 
@@ -182,6 +215,7 @@ def main():
     files = sorted(iter_files(), key=lambda x: x[1].lower())
     with open(OUT, "w", encoding="utf-8") as out:
         out.write("# auto-evolve core code export\n")
+        out.write("# export_kind: clean-full-picture\n")
         out.write(f"# root: {ROOT}\n")
         out.write(f"# generated_at: {datetime.now().isoformat(timespec='seconds')}\n")
         out.write(f"# embedded_ignore_patterns: {len(IGNORE_PATTERNS)}\n")

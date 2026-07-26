@@ -1,4 +1,4 @@
-import path from "node:path"
+﻿import path from "node:path"
 import process from "node:process"
 import { randomUUID } from "node:crypto"
 import { cp, lstat, readdir, rm } from "node:fs/promises"
@@ -44,15 +44,13 @@ import {
   writeBlankAgentEvidenceBundle,
   readLatestBlankAgentEvidenceBundlePath,
   readBlankAgentEvidenceReadablePaths,
-  assertNoDirectoryReadPaths,
 } from "./blank-agent-evidence"
 import {
   collectExpertOracleReadPaths,
-  assertExpertOracleReadPaths,
-  assertNoOracleLeakageInBlankAgentChannel,
   writeExpertOracleBundle,
   type OracleValidatorResult,
 } from "./expert-oracle-evidence"
+import { buildAccessProfile } from "../access-profile"
 import type {
   LongTaskBudgets,
   LongTaskOperationalContextItem,
@@ -938,6 +936,45 @@ async function pulseCampaignState(campaignPaths: ReturnType<typeof longTaskCampa
 
 function uniqueStrings(items: string[]) {
   return Array.from(new Set(items.filter((item) => item.trim().length > 0)))
+}
+
+export type CampaignRoleAccessView = {
+  referencePaths: string[]
+  permissionReadPaths: string[]
+  permissionEditPaths: string[]
+}
+
+export type CampaignRoleAccessInput = {
+  role: string
+  basePaths: string[]
+  optionalPaths?: Array<string | undefined>
+  carryoverFiles?: string[]
+  blankAgentEvidenceBundlePath?: string
+  blankAgentEvidenceReadPaths?: string[]
+  expertOracleBundlePath?: string
+  expertOracleReadPaths?: string[]
+  editPaths?: string[]
+}
+
+export async function buildCampaignRoleAccessView(input: CampaignRoleAccessInput): Promise<CampaignRoleAccessView> {
+  const profile = await buildAccessProfile({
+    role: input.role,
+    mode: "open_book",
+    basePaths: input.basePaths,
+    readPaths: input.optionalPaths,
+    blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
+    blankAgentEvidenceReadPaths: input.blankAgentEvidenceReadPaths,
+    expertOracleBundlePath: input.expertOracleBundlePath,
+    expertOracleReadPaths: input.expertOracleReadPaths,
+    carryoverFiles: input.carryoverFiles,
+    editPaths: input.editPaths,
+  })
+
+  return {
+    referencePaths: profile.referencePaths,
+    permissionReadPaths: profile.permissionReadPaths,
+    permissionEditPaths: profile.permissionEditPaths,
+  }
 }
 
 function normalizeLineContent(raw: string) {
@@ -3720,16 +3757,30 @@ async function runCampaignWorkers(input: {
         expertOracleBundlePath: input.expertOracleBundlePath,
         expertOracleReadPaths: input.expertOracleReadPaths,
       })
-      if (input.blankAgentEvidenceReadPaths?.length) {
-        assertNoDirectoryReadPaths(input.blankAgentEvidenceReadPaths, "campaign-worker blank-agent-evidence read paths")
-        assertNoOracleLeakageInBlankAgentChannel(
-          input.blankAgentEvidenceReadPaths,
-          "campaign-worker blank-agent-evidence read paths",
-        )
-      }
-      if (input.expertOracleReadPaths?.length) {
-        await assertExpertOracleReadPaths(input.expertOracleReadPaths, "campaign-worker expert-oracle read paths")
-      }
+      const access = await buildCampaignRoleAccessView({
+        role: `worker:${role}`,
+        basePaths: [
+          input.runTracePath,
+          input.runTraceDigestPath,
+          input.pendingPackageRoot,
+          input.explorationTreePath,
+          input.workingMemoryPath,
+          input.routingControlPath,
+          input.dispatchTicketsPath,
+          input.blankAgentAcceptanceDiagnosisPath,
+        ],
+        optionalPaths: [
+          input.acceptanceExperiencePath,
+          input.acceptanceExperienceJsonlPath,
+          input.finalAcceptanceFeedbackPath,
+          input.reviewerSuggestionPath,
+        ],
+        blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
+        blankAgentEvidenceReadPaths: input.blankAgentEvidenceReadPaths,
+        expertOracleBundlePath: input.expertOracleBundlePath,
+        expertOracleReadPaths: input.expertOracleReadPaths,
+        carryoverFiles: input.carryoverFiles,
+      })
       const result = await runCampaignSuggestionTask({
         cwd: input.cwd,
         baseSpec: input.baseSpec,
@@ -3737,44 +3788,8 @@ async function runCampaignWorkers(input: {
         prompt,
         selectionPhase: "planning",
         execution: input.baseSpec.planning ?? input.baseSpec.execution,
-        referencePaths: [
-          input.runTracePath,
-          input.runTraceDigestPath,
-          input.pendingPackageRoot,
-          input.explorationTreePath,
-          input.workingMemoryPath,
-          input.routingControlPath,
-          input.dispatchTicketsPath,
-          input.blankAgentAcceptanceDiagnosisPath,
-          ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
-          ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
-          ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
-          ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
-          ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
-          ...(input.blankAgentEvidenceReadPaths ?? []),
-          ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
-          ...(input.expertOracleReadPaths ?? []),
-          ...(input.carryoverFiles ?? []),
-        ],
-        permissionReadPaths: [
-          input.runTracePath,
-          input.runTraceDigestPath,
-          input.pendingPackageRoot,
-          input.explorationTreePath,
-          input.workingMemoryPath,
-          input.routingControlPath,
-          input.dispatchTicketsPath,
-          input.blankAgentAcceptanceDiagnosisPath,
-          ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
-          ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
-          ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
-          ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
-          ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
-          ...(input.blankAgentEvidenceReadPaths ?? []),
-          ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
-          ...(input.expertOracleReadPaths ?? []),
-          ...(input.carryoverFiles ?? []),
-        ],
+        referencePaths: access.referencePaths,
+        permissionReadPaths: access.permissionReadPaths,
         stageDir,
         phase: "campaign_worker",
         runtimeScope: input.runtimeScope,
@@ -3867,32 +3882,26 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     expertOracleBundlePath: input.expertOracleBundlePath,
     expertOracleReadPaths: input.expertOracleReadPaths,
   })
-  // Evidence paths are exact files only (no directories). Assert before granting read access.
-  if (input.blankAgentEvidenceReadPaths?.length) {
-    assertNoDirectoryReadPaths(input.blankAgentEvidenceReadPaths, "blank-agent-evidence read paths")
-    assertNoOracleLeakageInBlankAgentChannel(input.blankAgentEvidenceReadPaths, "blank-agent-evidence read paths")
-  }
-  if (input.expertOracleReadPaths?.length) {
-    await assertExpertOracleReadPaths(input.expertOracleReadPaths, "blank-agent-acceptance-diagnosis expert-oracle read paths")
-  }
-  const sharedRefs = [
-    input.runTracePath,
-    input.runTraceDigestPath,
-    input.pendingPackageRoot,
-    input.explorationTreePath,
-    input.workingMemoryPath,
-    input.routingControlPath,
-    input.dispatchTicketsPath,
-    input.blankAgentAcceptanceDiagnosisPath,
-    input.finalAcceptanceFeedbackPath,
-    ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
-    ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
-    ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
-    ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
-    ...(input.blankAgentEvidenceReadPaths ?? []),
-    ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
-    ...(input.expertOracleReadPaths ?? []),
-  ]
+  const access = await buildCampaignRoleAccessView({
+    role,
+    basePaths: [
+      input.runTracePath,
+      input.runTraceDigestPath,
+      input.pendingPackageRoot,
+      input.explorationTreePath,
+      input.workingMemoryPath,
+      input.routingControlPath,
+      input.dispatchTicketsPath,
+      input.blankAgentAcceptanceDiagnosisPath,
+      input.finalAcceptanceFeedbackPath,
+    ],
+    optionalPaths: [input.acceptanceExperiencePath, input.acceptanceExperienceJsonlPath, input.reviewerSuggestionPath],
+    blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
+    blankAgentEvidenceReadPaths: input.blankAgentEvidenceReadPaths,
+    expertOracleBundlePath: input.expertOracleBundlePath,
+    expertOracleReadPaths: input.expertOracleReadPaths,
+    editPaths: [input.nextPendingPackageRoot, input.nextExplorationTreePath, input.nextRoutingControlPath],
+  })
   const result = await runCampaignSuggestionTask({
     cwd: input.cwd,
     baseSpec: input.baseSpec,
@@ -3900,8 +3909,8 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     prompt,
     selectionPhase: "planning",
     execution: input.baseSpec.planning ?? input.baseSpec.execution,
-    referencePaths: sharedRefs,
-    permissionReadPaths: sharedRefs,
+    referencePaths: access.referencePaths,
+    permissionReadPaths: access.permissionReadPaths,
     stageDir,
     phase: "campaign_worker",
     runtimeScope: input.runtimeScope,
@@ -4064,16 +4073,29 @@ async function runCampaignLead(input: {
     expertOracleBundlePath: input.expertOracleBundlePath,
     expertOracleReadPaths: input.expertOracleReadPaths,
   })
-  if (input.blankAgentEvidenceReadPaths?.length) {
-    assertNoDirectoryReadPaths(input.blankAgentEvidenceReadPaths, "campaign-lead blank-agent-evidence read paths")
-    assertNoOracleLeakageInBlankAgentChannel(
-      input.blankAgentEvidenceReadPaths,
-      "campaign-lead blank-agent-evidence read paths",
-    )
-  }
-  if (input.expertOracleReadPaths?.length) {
-    await assertExpertOracleReadPaths(input.expertOracleReadPaths, "campaign-lead expert-oracle read paths")
-  }
+  const access = await buildCampaignRoleAccessView({
+    role: "lead",
+    basePaths: [
+      input.runTraceDigestPath,
+      input.previousPendingPackageRoot,
+      input.previousExplorationTreePath,
+      input.workingMemoryPath,
+      input.previousRoutingControlPath,
+      input.dispatchTicketsPath,
+      input.blankAgentAcceptanceDiagnosisPath,
+      ...workerSuggestionPaths,
+    ],
+    optionalPaths: [
+      input.reviewerSuggestionPath,
+      input.acceptanceExperiencePath,
+      input.acceptanceExperienceJsonlPath,
+      input.finalAcceptanceFeedbackPath,
+    ],
+    blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
+    blankAgentEvidenceReadPaths: input.blankAgentEvidenceReadPaths,
+    expertOracleBundlePath: input.expertOracleBundlePath,
+    expertOracleReadPaths: input.expertOracleReadPaths,
+  })
   return runCampaignSuggestionTask({
     cwd: input.cwd,
     baseSpec: input.baseSpec,
@@ -4081,43 +4103,9 @@ async function runCampaignLead(input: {
     prompt,
     selectionPhase: "solve",
     execution: input.baseSpec.execution,
-    referencePaths: [
-      input.runTraceDigestPath,
-      input.previousPendingPackageRoot,
-      input.previousExplorationTreePath,
-      input.workingMemoryPath,
-      input.previousRoutingControlPath,
-      input.dispatchTicketsPath,
-      input.blankAgentAcceptanceDiagnosisPath,
-      ...workerSuggestionPaths,
-      ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
-      ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
-      ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
-      ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
-      ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
-      ...(input.blankAgentEvidenceReadPaths ?? []),
-      ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
-      ...(input.expertOracleReadPaths ?? []),
-    ],
-    permissionReadPaths: [
-      input.runTraceDigestPath,
-      input.previousPendingPackageRoot,
-      input.previousExplorationTreePath,
-      input.workingMemoryPath,
-      input.previousRoutingControlPath,
-      input.dispatchTicketsPath,
-      input.blankAgentAcceptanceDiagnosisPath,
-      ...workerSuggestionPaths,
-      ...(input.reviewerSuggestionPath ? [input.reviewerSuggestionPath] : []),
-      ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
-      ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
-      ...(input.finalAcceptanceFeedbackPath ? [input.finalAcceptanceFeedbackPath] : []),
-      ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
-      ...(input.blankAgentEvidenceReadPaths ?? []),
-      ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
-      ...(input.expertOracleReadPaths ?? []),
-    ],
-    permissionEditPaths: [input.nextPendingPackageRoot, input.nextExplorationTreePath, input.nextRoutingControlPath],
+    referencePaths: access.referencePaths,
+    permissionReadPaths: access.permissionReadPaths,
+    permissionEditPaths: access.permissionEditPaths,
     stageDir,
     phase: "campaign_lead",
     runtimeScope: input.runtimeScope,
@@ -4168,16 +4156,23 @@ async function runCampaignReviewer(input: {
     expertOracleBundlePath: input.expertOracleBundlePath,
     expertOracleReadPaths: input.expertOracleReadPaths,
   })
-  if (input.blankAgentEvidenceReadPaths?.length) {
-    assertNoDirectoryReadPaths(input.blankAgentEvidenceReadPaths, "campaign-reviewer blank-agent-evidence read paths")
-    assertNoOracleLeakageInBlankAgentChannel(
-      input.blankAgentEvidenceReadPaths,
-      "campaign-reviewer blank-agent-evidence read paths",
-    )
-  }
-  if (input.expertOracleReadPaths?.length) {
-    await assertExpertOracleReadPaths(input.expertOracleReadPaths, "campaign-reviewer expert-oracle read paths")
-  }
+  const access = await buildCampaignRoleAccessView({
+    role: "reviewer",
+    basePaths: [
+      input.pendingPackageRoot,
+      input.runTracePath,
+      input.explorationTreePath,
+      input.workingMemoryPath,
+      input.routingControlPath,
+      input.dispatchTicketsPath,
+      input.blankAgentAcceptanceDiagnosisPath,
+    ],
+    optionalPaths: [input.acceptanceExperiencePath, input.acceptanceExperienceJsonlPath],
+    blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
+    blankAgentEvidenceReadPaths: input.blankAgentEvidenceReadPaths,
+    expertOracleBundlePath: input.expertOracleBundlePath,
+    expertOracleReadPaths: input.expertOracleReadPaths,
+  })
   const result = await runCampaignSuggestionTask({
     cwd: input.cwd,
     baseSpec: input.baseSpec,
@@ -4185,36 +4180,8 @@ async function runCampaignReviewer(input: {
     prompt,
     selectionPhase: "validation",
     execution: input.baseSpec.validation ?? input.baseSpec.execution,
-    referencePaths: [
-      input.pendingPackageRoot,
-      input.runTracePath,
-      input.explorationTreePath,
-      input.workingMemoryPath,
-      input.routingControlPath,
-      input.dispatchTicketsPath,
-      input.blankAgentAcceptanceDiagnosisPath,
-      ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
-      ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
-      ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
-      ...(input.blankAgentEvidenceReadPaths ?? []),
-      ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
-      ...(input.expertOracleReadPaths ?? []),
-    ],
-    permissionReadPaths: [
-      input.pendingPackageRoot,
-      input.runTracePath,
-      input.explorationTreePath,
-      input.workingMemoryPath,
-      input.routingControlPath,
-      input.dispatchTicketsPath,
-      input.blankAgentAcceptanceDiagnosisPath,
-      ...(input.acceptanceExperiencePath ? [input.acceptanceExperiencePath] : []),
-      ...(input.acceptanceExperienceJsonlPath ? [input.acceptanceExperienceJsonlPath] : []),
-      ...(input.blankAgentEvidenceBundlePath ? [input.blankAgentEvidenceBundlePath] : []),
-      ...(input.blankAgentEvidenceReadPaths ?? []),
-      ...(input.expertOracleBundlePath ? [input.expertOracleBundlePath] : []),
-      ...(input.expertOracleReadPaths ?? []),
-    ],
+    referencePaths: access.referencePaths,
+    permissionReadPaths: access.permissionReadPaths,
     stageDir,
     phase: "campaign_review",
     runtimeScope: input.runtimeScope,
@@ -4631,7 +4598,7 @@ async function runCampaignFinalAcceptance(input: {
     const blankEvalSessionExecutionReportPath = validatorResults
       .map((vr) => vr.rawOutputPath)
       .find((p): p is string => Boolean(p && p.includes("session_execution_report")))
-      ?? path.join(blankEvalRunDir, "execute", "session_execution_report.md")
+      ?? path.join(blankEvalRunDir, "session", "session_execution_report.md")
     const blankEvalSessionDir = path.dirname(blankEvalSessionExecutionReportPath)
     const blankEvalValidationStageResultPath = validatorResults
       .flatMap((vr) => vr.evidenceRefs ?? [])

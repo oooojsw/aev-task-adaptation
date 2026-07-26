@@ -14,6 +14,7 @@ import { writeTaskArtifacts } from "../task-artifacts"
 import { markSolvePhaseViolation, type CaseRuntimeContext, type SolveStageResult } from "../case-runtime"
 import type { MethodStrategyDecision } from "../method-strategies"
 import { cleanupRuntimeProcessScope } from "../runtime-process-registry"
+import { buildAccessProfile } from "../access-profile"
 
 export async function executeSolveStage(input: {
   context: CaseRuntimeContext
@@ -28,6 +29,12 @@ export async function executeSolveStage(input: {
   const runtimeScope = `solve:${context.loaded.spec.id}:attempt:${context.attempt}:phase:${input.phase}`
 
   try {
+    const access = await buildAccessProfile({
+      role: `short_task_${input.phase}`,
+      mode: "open_book",
+      readPaths: [context.workspace.root, context.workspace.entryPath, context.baselinePath, context.scriptsDir, ...materialPaths],
+      editPaths: [],
+    })
     const solveTask = await runOpencodeTask({
       cwd: context.cwd,
       config: context.config,
@@ -42,9 +49,9 @@ export async function executeSolveStage(input: {
         baselinePath: context.baselinePath,
         scriptsDir: context.scriptsDir,
       }),
-      referencePaths: [context.workspace.root, context.workspace.entryPath, context.baselinePath, context.scriptsDir, ...materialPaths],
-      permissionReadPaths: [context.workspace.root, context.workspace.entryPath, context.baselinePath, context.scriptsDir, ...materialPaths],
-      permissionEditPaths: [],
+      referencePaths: access.referencePaths,
+      permissionReadPaths: access.permissionReadPaths,
+      permissionEditPaths: access.permissionEditPaths,
       model: execution.model,
       agent: execution.agent,
       variant: execution.variant,

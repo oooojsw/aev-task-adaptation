@@ -685,7 +685,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
       bridgeScript: "scripts/skillopt-merge-bridge.py",
       batchSize: 8,
       workers: 2,
-      timeoutMs: 6 * 60 * 60 * 1000,
+      timeoutMs: 18 * 60 * 60 * 1000,
       initialSkillPath: "",
       optimizerBackend: "",
       optimizerModel: "",

@@ -66,6 +66,7 @@ export interface SkillOptBridgeResult {
   warmStartSkill?: string
   nativeTrainSummary?: unknown
   nativeTrainOutRoot?: string
+  nativeTrainPreflight?: unknown
   error?: string
 }
 
@@ -435,6 +436,7 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
     warmStartSkill: result.warmStartSkill,
     nativeTrainSummary: result.nativeTrainSummary,
     nativeTrainOutRoot: result.nativeTrainOutRoot,
+    nativeTrainPreflight: result.nativeTrainPreflight,
   }
   await writeJsonFile(reportPath, report)
   return {

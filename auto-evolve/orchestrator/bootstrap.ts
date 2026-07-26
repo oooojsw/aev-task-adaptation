@@ -16,6 +16,7 @@ import {
 } from "./experience-workspace"
 import { resolveModelSelection } from "./model-selection"
 import { runOpencodeTask } from "./opencode"
+import { buildAccessProfile } from "./access-profile"
 import { buildBootstrapPrompt } from "./prompts"
 import { writeTaskArtifacts } from "./task-artifacts"
 import { loadAllCases, loadConfig, type RuntimePathOverrides } from "./schema"
@@ -112,15 +113,21 @@ export async function runBootstrap(cwd: string, options: RunBootstrapOptions): P
       path.join(item.caseDir, item.spec.expected.path),
     ]),
   ]
+  const access = await buildAccessProfile({
+    role: "bootstrap",
+    mode: "maintenance",
+    readPaths: referencePaths,
+    editPaths: [workspace.root],
+  })
 
   const task = await runOpencodeTask({
     cwd,
     config,
     title: "auto-evolve bootstrap",
     prompt,
-    referencePaths,
-    permissionReadPaths: referencePaths,
-    permissionEditPaths: [workspace.root],
+    referencePaths: access.referencePaths,
+    permissionReadPaths: access.permissionReadPaths,
+    permissionEditPaths: access.permissionEditPaths,
     model: execution.model,
     agent: execution.agent,
     variant: execution.variant,

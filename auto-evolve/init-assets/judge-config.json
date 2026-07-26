@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "mode": "soft_plus_hard",
+  "autoRunSkillIDs": [
+    "exact-output",
+    "tool-failures",
+    "session-behavior"
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "title": "example-long-task",
+  "goal": "Use the provided materials and validators to complete the long task and leave validator-backed outputs in the target paths.",
+  "taskFamily": "example-domain",
+  "domainTags": ["demo"],
+  "materials": [
+    {
+      "path": "../../dataset/cases/case-001/material/input.txt",
+      "label": "source material"
+    }
+  ],
+  "targetPaths": [
+    {
+      "path": "../../runtime-state/tmp-output/example-result.txt",
+      "label": "target output"
+    }
+  ],
+  "editablePaths": [
+    "../../runtime-state/tmp-output/example-result.txt"
+  ],
+  "initialExpertContextPaths": [
+    "../../experience/workspace/manifest.md"
+  ],
+  "validators": [
+    {
+      "id": "result-exists",
+      "type": "script",
+      "title": "Result file exists",
+      "path": "../../../scripts/long-task-validator.example.py",
+      "required": true
+    },
+    {
+      "id": "goal-review",
+      "type": "prompt_json",
+      "title": "Goal-level review",
+      "required": true,
+      "prompt": "Inspect the current target files and judge whether they satisfy the stated long-task goal. Return JSON with passed, summary, details, and blocking."
+    }
+  ],
+  "budgets": {
+    "maxAttemptsPerUnit": 2,
+    "maxTotalUnitAttempts": 8,
+    "maxGraphReplans": 2,
+    "maxValidatorCalls": 20,
+    "maxNoProgressCycles": 3,
+    "maxUnitsPerGraph": 8
+  },
+  "shadowMemoryScope": {
+    "namespace": "example-domain",
+    "tags": ["demo"],
+    "retrievalMode": "isolated"
+  }
+}

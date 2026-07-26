@@ -78,6 +78,7 @@ import { runLongTaskValidator } from "./validators"
 import { loadConfig } from "../schema"
 import { runOpencodeTask, type OpencodeTaskInput } from "../opencode"
 import type { OpencodeRunResult } from "../opencode"
+import { buildAccessProfile } from "../access-profile"
 import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
@@ -1177,6 +1178,12 @@ async function runPlanningSession(input: {
           failurePacketSummaries: input.failureSummaries ?? [],
           replanOutputPath: draftPaths.graphDraftPath,
         })
+  const access = await buildAccessProfile({
+    role: input.phase === "plan" ? "long_task_planner" : "long_task_replanner",
+    mode: "open_book",
+    readPaths: [input.specPath, ...planningContextPaths, ...capabilityPaths],
+    editPaths: [draftPaths.root],
+  })
 
   const task = await runOpencodeTask({
     cwd: input.cwd,
@@ -1184,13 +1191,13 @@ async function runPlanningSession(input: {
     title: input.phase === "plan" ? "Long Task Graph Bootstrap" : "Long Task Graph Replan",
     prompt,
     concurrencyScope: `long-task:${input.spec.id ?? input.spec.taskFamily ?? input.spec.title}`,
-    referencePaths: [input.specPath, ...planningContextPaths, ...capabilityPaths],
+    referencePaths: access.referencePaths,
     attachedFiles: capabilityFiles,
-    permissionReadPaths: [input.specPath, ...planningContextPaths, ...capabilityPaths],
+    permissionReadPaths: access.permissionReadPaths,
     // The planner/replanner is explicitly instructed to write graph_draft.json
     // under draftPaths.root; without this edit grant restricted mode can block
     // the draft and force a lower-quality response-text fallback graph.
-    permissionEditPaths: [draftPaths.root],
+    permissionEditPaths: access.permissionEditPaths,
     model: selection.model,
     agent: selection.agent,
     variant: selection.variant,
@@ -1289,6 +1296,21 @@ async function executeWorkUnit(input: {
   const capabilityFiles = capabilityAttachedFiles(input.spec)
   const editablePaths = resolveLongTaskEditablePaths(input.spec)
   const explicitCampaignContextPaths = explicitCampaignExecutionContextPaths(input.spec)
+  const access = await buildAccessProfile({
+    role: "long_task_executor",
+    mode: "open_book",
+    readPaths: [
+      ...input.spec.materials.map((item) => item.path),
+      ...(input.spec.targetPaths ?? []).map((item) => item.path),
+      ...(input.spec.initialExpertContextPaths ?? []),
+      ...explicitCampaignContextPaths,
+      attemptPaths.inputBundlePath,
+      ...capabilityPaths,
+      ...formalPackageRoots,
+      ...input.spec.validators.filter((item) => item.type === "script").map((item) => item.path),
+    ],
+    editPaths: editablePaths,
+  })
   const activateExecution = onceActivationCallback(async () => {
     const latestProgress = await readLongTaskProgressState(input.run)
     const runningProgress = deriveLongTaskProgressState({
@@ -1312,28 +1334,10 @@ async function executeWorkUnit(input: {
     title: `Long Task Execute ${activeUnit.id}`,
     prompt,
     concurrencyScope: `long-task:${input.spec.id ?? input.spec.taskFamily ?? input.spec.title}`,
-    referencePaths: [
-      ...input.spec.materials.map((item) => item.path),
-      ...(input.spec.targetPaths ?? []).map((item) => item.path),
-      ...(input.spec.initialExpertContextPaths ?? []),
-      ...explicitCampaignContextPaths,
-      attemptPaths.inputBundlePath,
-      ...capabilityPaths,
-      ...formalPackageRoots,
-      ...input.spec.validators.filter((item) => item.type === "script").map((item) => item.path),
-    ],
+    referencePaths: access.referencePaths,
     attachedFiles: capabilityFiles,
-    permissionReadPaths: [
-      ...input.spec.materials.map((item) => item.path),
-      ...(input.spec.targetPaths ?? []).map((item) => item.path),
-      ...(input.spec.initialExpertContextPaths ?? []),
-      ...explicitCampaignContextPaths,
-      attemptPaths.inputBundlePath,
-      ...capabilityPaths,
-      ...formalPackageRoots,
-      ...input.spec.validators.filter((item) => item.type === "script").map((item) => item.path),
-    ],
-    permissionEditPaths: editablePaths,
+    permissionReadPaths: access.permissionReadPaths,
+    permissionEditPaths: access.permissionEditPaths,
     model: selection.model,
     agent: selection.agent,
     variant: selection.variant,

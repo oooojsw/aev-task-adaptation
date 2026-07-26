@@ -168,7 +168,11 @@ This keeps post-merge validation pluggable. Dataset-specific file layout checks,
 - `aggregate_only`：历史快速模式。把 AEV 单案例 skill 作为完整候选交给 SkillOpt `merge_patches()` 聚合，只能称“SkillOpt 聚合器实验”。
 - `native_train`：先聚合 AEV skills 得到 warm-start，再把这份 warm-start 交给 SkillOpt 原生 `ReflACTTrainer`，完整运行真实 rollout、minibatch reflection、patch aggregate、rank/clip、apply、selection gate、rejected-step buffer、slow update 和 meta skill。
 
-总控入口是 `config.json > mergeConfig.asSkillOpt.pipelineMode`。`native_train` 还必须显式配置数据集专用 `nativeTrainConfigPath`、真实 `nativeTrainSplitDir` 和材料目录；预检要求 train/validation split 均非空，错误路径在模型调用前 fail closed。训练阶段默认 `nativeTrainEvalTest=false`，避免训练时触碰 held-out test。
+总控入口是 `config.json > mergeConfig.asSkillOpt.pipelineMode`。`native_train` 还必须显式配置数据集专用 `nativeTrainConfigPath`、真实 `nativeTrainSplitDir` 和材料目录。预检不仅要求 train/validation split 非空；OfficeQA 还会逐题确认至少存在一个可读源文件或 oracle 解析页，任何未覆盖样本都会在模型调用前 fail closed。空目录、部分缺页和路径错配不能再进入正式训练。
+
+AEV warm-start 在进入 SkillOpt 原生训练前会保留原始副本 `aev-warm-start.raw.md`，并生成带最高优先级 runtime contract 的 `aev-warm-start.md`。该 contract 明确 SkillOpt 只提供当前 prompt 和 `glob/read/grep`，禁止沿用 AEV 环境里的 Python、shell、下载和 `workspace/answer.txt` 写入要求，最终答案必须直接使用 `<answer>...</answer>`。恢复运行可通过 native request 的 `reuseWarmStartPath` 复用已经审计过的 warm-start，跳过重复聚合，但仍必须重新通过材料和 provider 预检。
+
+OfficeQA 单题 rollout 还有第二道 fail-closed：如果某条样本既没有解析出的本地文件，也没有 oracle 页面上下文，会记录 `infrastructure_missing_evidence` 且 `agent_ok=false`，不允许把空答案伪装成正常模型失败。完整 4 epoch / 8 step 原生训练的默认桥接超时为 18 小时；6 小时不足以覆盖 warm-start 聚合和完整训练。
 
 需要诚实记录：AEV skills 只负责形成 warm-start，之后的循环是 SkillOpt 原生训练；它不是把 AEV skill 文件伪装成论文 rollout trajectory。报告会分别保存 warm-start aggregate 与 native train 的 token/summary，禁止把两者混成“完全原生 SkillOpt 从空白初始化”的结果。
 

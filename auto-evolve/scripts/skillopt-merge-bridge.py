@@ -121,6 +121,25 @@ def extract_core_skill(package_text: str) -> str:
     return package_text[content_start:end].rstrip() + "\n"
 
 
+def adapt_skill_for_native_runtime(skill_text: str) -> str:
+    """Keep learned guidance while overriding instructions impossible in SkillOpt."""
+    contract = """
+
+---
+
+## SkillOpt Native Runtime Contract (highest priority)
+
+This training runtime is not the original Auto-Evolve workspace.
+
+- The current question and its permitted document evidence are already supplied in the user prompt.
+- When tools are available, use only the tools exposed by this runtime (`glob`, `read`, and `grep`).
+- Do not run Python, shell commands, downloads, browsers, or external search unless the current runtime explicitly exposes them.
+- Do not try to create `workspace/answer.txt` or any other file. Return the final answer directly in `<answer>...</answer>`.
+- If older guidance conflicts with this runtime contract, follow this runtime contract while preserving the learned reasoning method.
+""".strip()
+    return f"{skill_text.rstrip()}\n\n{contract}\n"
+
+
 def load_train_module(skillopt_root: Path):
     train_path = skillopt_root / "scripts" / "train.py"
     spec = importlib.util.spec_from_file_location("skillopt_native_train_entry", train_path)
@@ -145,8 +164,15 @@ def run_native_train(request: dict[str, Any], warm_start_package: str) -> tuple[
     if not config_path.is_file():
         raise ValueError(f"Native SkillOpt config does not exist: {config_path}")
     out_root.mkdir(parents=True, exist_ok=True)
+    raw_warm_start_path = out_root / "aev-warm-start.raw.md"
     warm_start_path = out_root / "aev-warm-start.md"
-    warm_start_path.write_text(extract_core_skill(warm_start_package), encoding="utf-8", newline="\n")
+    raw_warm_start = extract_core_skill(warm_start_package)
+    raw_warm_start_path.write_text(raw_warm_start, encoding="utf-8", newline="\n")
+    warm_start_path.write_text(
+        adapt_skill_for_native_runtime(raw_warm_start),
+        encoding="utf-8",
+        newline="\n",
+    )
 
     cfg = flatten_config(load_config(str(config_path)))
     if native.get("splitDir"):
@@ -233,16 +259,137 @@ def preflight_native_train(request: dict[str, Any]) -> dict[str, Any]:
     val_size = len(getattr(dataloader, "val_items", []) or []) if dataloader is not None else 0
     if train_size < 1 or val_size < 1:
         raise ValueError(f"Native SkillOpt split is incomplete: train={train_size}, val={val_size}")
+    evidence_coverage: dict[str, Any] = {}
+    if str(cfg.get("env") or "").strip().lower() == "officeqa":
+        from skillopt.envs.officeqa.tool_runtime import (
+            build_oracle_parsed_pages_context,
+            resolve_candidate_files,
+            resolve_docs_roots,
+        )
+
+        configured_dirs = [Path(str(item)).resolve() for item in cfg.get("data_dirs", [])]
+        material_file_count = sum(
+            1
+            for root in configured_dirs
+            if root.is_dir()
+            for candidate in root.rglob("*")
+            if candidate.is_file()
+        )
+        if material_file_count < 1:
+            raise ValueError(
+                "Native SkillOpt OfficeQA material directories contain no files: "
+                + ", ".join(str(item) for item in configured_dirs)
+            )
+        docs_roots = resolve_docs_roots([str(item) for item in configured_dirs])
+
+        def inspect_split(label: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+            uncovered: list[str] = []
+            resolved_file_items = 0
+            oracle_items = 0
+            for item in items:
+                candidate_files = resolve_candidate_files(item.get("source_files", []), docs_roots)
+                oracle_context = build_oracle_parsed_pages_context(
+                    item.get("source_files", []),
+                    item.get("source_docs", []),
+                    docs_roots,
+                )
+                if candidate_files:
+                    resolved_file_items += 1
+                if oracle_context:
+                    oracle_items += 1
+                if not candidate_files and not oracle_context:
+                    uncovered.append(str(item.get("id") or "<missing-id>"))
+            if uncovered:
+                preview = ", ".join(uncovered[:12])
+                suffix = "" if len(uncovered) <= 12 else f" (+{len(uncovered) - 12} more)"
+                raise ValueError(
+                    f"Native SkillOpt OfficeQA {label} evidence coverage is incomplete: "
+                    f"{len(uncovered)}/{len(items)} items have neither a resolved source file nor oracle parsed pages: "
+                    f"{preview}{suffix}"
+                )
+            return {
+                "totalItems": len(items),
+                "coveredItems": len(items) - len(uncovered),
+                "resolvedFileItems": resolved_file_items,
+                "oracleContextItems": oracle_items,
+            }
+
+        evidence_coverage = {
+            "materialFileCount": material_file_count,
+            "resolvedDocumentRoots": docs_roots,
+            "train": inspect_split("train", list(getattr(dataloader, "train_items", []) or [])),
+            "validation": inspect_split("validation", list(getattr(dataloader, "val_items", []) or [])),
+        }
     return {
         "enabled": True,
         "env": cfg.get("env"),
         "trainSize": train_size,
         "validationSize": val_size,
         "testSize": len(getattr(dataloader, "test_items", []) or []),
+        "evidenceCoverage": evidence_coverage,
     }
 
 
+def converge_skill_candidates(
+    merge_patches_fn,
+    request: dict[str, Any],
+    merged: dict[str, Any],
+    *,
+    max_attempts: int = 2,
+) -> tuple[dict[str, Any], int]:
+    """Use SkillOpt's own aggregate again when its fallback leaves multiple candidates."""
+    attempts = 0
+    current = merged
+    while True:
+        candidates = current.get("skill_candidates") if isinstance(current, dict) else None
+        if isinstance(candidates, list) and len(candidates) == 1:
+            return current, attempts
+        if not isinstance(candidates, list) or not candidates:
+            raise ValueError(
+                "SkillOpt hierarchical aggregate returned no complete skill candidate; "
+                "the aggregate response could not be safely recovered."
+            )
+        if attempts >= max_attempts:
+            raise ValueError(
+                "SkillOpt hierarchical aggregate did not converge to exactly one complete skill candidate; "
+                f"got {len(candidates)} after {attempts} final-consolidation attempts."
+            )
+
+        retry_patches = [
+            {
+                "reasoning": f"final-consolidation input {index + 1}/{len(candidates)}",
+                "skill_candidates": [candidate],
+            }
+            for index, candidate in enumerate(candidates)
+            if isinstance(candidate, dict) and str(candidate.get("new_skill") or "").strip()
+        ]
+        if len(retry_patches) != len(candidates):
+            raise ValueError(
+                "SkillOpt hierarchical aggregate returned malformed candidates; "
+                "refusing to choose or concatenate an incomplete skill."
+            )
+
+        attempts += 1
+        current = merge_patches_fn(
+            skill_content=str(request.get("skillContent") or ""),
+            failure_patches=[],
+            success_patches=retry_patches,
+            # The normal aggregate may leave several very large complete skills when its
+            # final all-at-once call exceeds the provider context. Pairwise consolidation
+            # keeps each native SkillOpt merge call bounded while preserving every input.
+            batch_size=2,
+            workers=max(1, int(request.get("workers") or 1)),
+            update_mode="full_rewrite_minibatch",
+            meta_skill_context=(
+                f"{str(request.get('metaSkillContext') or '')}\n\n"
+                f"Final consolidation attempt {attempts}: merge every complete candidate into exactly "
+                "one coherent skill candidate. Do not return one candidate per input."
+            ).strip(),
+        )
+
+
 def run(request: dict[str, Any]) -> dict[str, Any]:
+    native_preflight = preflight_native_train(request)
     configure_optimizer(request)
     from skillopt.gradient.aggregate import merge_patches
     from skillopt.model import get_token_summary, reset_token_tracker
@@ -250,26 +397,39 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
     reset_token_tracker()
     native_train = request.get("nativeTrain") if isinstance(request.get("nativeTrain"), dict) else {}
     provider_preflight_tokens = verify_optimizer_ready() if bool(native_train.get("enabled")) else {}
-    merged = merge_patches(
-        skill_content=str(request.get("skillContent") or ""),
-        failure_patches=request.get("failurePatches") or [],
-        success_patches=request.get("successPatches") or [],
-        batch_size=int(request.get("batchSize") or 8),
-        workers=int(request.get("workers") or 1),
-        update_mode="full_rewrite_minibatch",
-        meta_skill_context=str(request.get("metaSkillContext") or ""),
-    )
-    candidates = merged.get("skill_candidates") if isinstance(merged, dict) else None
-    if not isinstance(candidates, list) or len(candidates) != 1:
-        raise ValueError(
-            "SkillOpt hierarchical aggregate did not converge to exactly one complete skill candidate; "
-            f"got {len(candidates or [])}. One or more aggregate calls likely used SkillOpt's fallback path."
+    reuse_warm_start_path = Path(str(native_train.get("reuseWarmStartPath") or "")).resolve()
+    if str(native_train.get("reuseWarmStartPath") or "").strip():
+        if not reuse_warm_start_path.is_file():
+            raise ValueError(f"Reusable SkillOpt warm-start does not exist: {reuse_warm_start_path}")
+        reused_text = reuse_warm_start_path.read_text(encoding="utf-8-sig").strip()
+        if not reused_text:
+            raise ValueError(f"Reusable SkillOpt warm-start is empty: {reuse_warm_start_path}")
+        warm_start = (
+            reused_text
+            if FILE_START in reused_text
+            else f"{FILE_START}\n{reused_text}\n{FILE_END}"
         )
-    candidate = candidates[0]
-    if not isinstance(candidate, dict) or not str(candidate.get("new_skill") or "").strip():
-        raise ValueError("SkillOpt candidate is missing new_skill")
-    warm_start = str(candidate["new_skill"])
-    aggregate_tokens = get_token_summary()
+        consolidation_attempts = 0
+        merged_reasoning = f"Reused audited warm-start from {reuse_warm_start_path}"
+        aggregate_tokens = {"reusedWarmStart": True, "calls": 0}
+    else:
+        merged = merge_patches(
+            skill_content=str(request.get("skillContent") or ""),
+            failure_patches=request.get("failurePatches") or [],
+            success_patches=request.get("successPatches") or [],
+            batch_size=int(request.get("batchSize") or 8),
+            workers=int(request.get("workers") or 1),
+            update_mode="full_rewrite_minibatch",
+            meta_skill_context=str(request.get("metaSkillContext") or ""),
+        )
+        merged, consolidation_attempts = converge_skill_candidates(merge_patches, request, merged)
+        candidates = merged.get("skill_candidates")
+        candidate = candidates[0]
+        if not isinstance(candidate, dict) or not str(candidate.get("new_skill") or "").strip():
+            raise ValueError("SkillOpt candidate is missing new_skill")
+        warm_start = str(candidate["new_skill"])
+        merged_reasoning = str(merged.get("reasoning") or "")
+        aggregate_tokens = get_token_summary()
     final_skill, native_summary, native_tokens = run_native_train(request, warm_start)
     token_summary: dict[str, Any] = {
         "provider_preflight": provider_preflight_tokens,
@@ -279,11 +439,13 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema": "auto-evolve/skillopt-merge-result/v1",
         "passed": True,
-        "reasoning": str(merged.get("reasoning") or ""),
+        "reasoning": merged_reasoning,
         "mergedSkill": final_skill,
         "warmStartSkill": warm_start,
+        "warmStartConsolidationAttempts": consolidation_attempts,
         "nativeTrainSummary": native_summary,
         "nativeTrainOutRoot": str((request.get("nativeTrain") or {}).get("outRoot") or ""),
+        "nativeTrainPreflight": native_preflight,
         "tokenSummary": token_summary,
     }
 

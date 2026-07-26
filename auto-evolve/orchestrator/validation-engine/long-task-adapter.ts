@@ -1,4 +1,4 @@
-import path from "node:path"
+﻿import path from "node:path"
 import process from "node:process"
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile } from "node:fs/promises"
@@ -12,7 +12,7 @@ import type {
 } from "../long-task/contract"
 import type { AutoEvolveConfig } from "../schema"
 import type { OpencodeTaskInput } from "../opencode"
-import { pathExists, writeJsonFile, writeTextFile } from "../fs"
+import { pathExists, writeJsonFile, writeValidatorInputJson, writeTextFile } from "../fs"
 import { extractJsonObject } from "../long-task/json-extract"
 import { buildLongTaskPromptValidatorPrompt } from "../long-task/prompts"
 import { resolveModelSelection } from "../model-selection"
@@ -35,6 +35,7 @@ import type {
   ValidationStage,
   ValidationTargetKind,
 } from "./contract"
+import { buildAccessProfile } from "../access-profile"
 
 const GLOBAL_SCRIPT_VALIDATOR_TIMEOUT_MS = (() => {
   const value = Number.parseInt(process.env.AUTO_EVOLVE_SCRIPT_VALIDATOR_TIMEOUT_MS ?? "", 10)
@@ -292,7 +293,7 @@ export async function buildPromptValidatorInput(input: {
     },
   }
   const inputPath = path.join(input.validatorDir, "validator_input.json")
-  await writeJsonFile(inputPath, payload)
+  await writeValidatorInputJson(inputPath, payload)
   return { inputPath, payload }
 }
 
@@ -989,7 +990,7 @@ async function runScriptLongTaskValidation(input: {
   const payloadPath = path.join(input.validatorDir, "validator_input.json")
   const stdoutPath = path.join(input.validatorDir, "stdout.log")
   const stderrPath = path.join(input.validatorDir, "stderr.log")
-  await writeJsonFile(payloadPath, input.payload)
+  await writeValidatorInputJson(payloadPath, input.payload)
 
   const command = buildScriptCommand(input.contract, payloadPath)
   const timeoutMs = resolveScriptValidatorTimeoutMs(input.contract.timeoutMs)
@@ -1055,21 +1056,25 @@ async function runScriptLongTaskValidation(input: {
           : `${input.contract.title} passed.`
         : `${input.contract.title} failed with exit code ${exitCode}.`
   const failureText = [summary, normalizedStderr, stdout].join("\n").toLowerCase()
+  const infrastructureSignal =
+    !infraOK ||
+    timedOut ||
+    failureText.includes("validator crashed") ||
+    failureText.includes("validator runtime bootstrap failed") ||
+    failureText.includes("usage:") ||
+    failureText.includes("unrecognized arguments") ||
+    failureText.includes("expected one argument")
   const failureKind = passed
     ? undefined
     : reportedFailureKind === "dataset_failure"
       ? ("dataset_failure" as const)
-      : explicitProductFailure || hasStructuredFailure
+      : explicitProductFailure
         ? ("product_failure" as const)
-      : !infraOK ||
-        timedOut ||
-        failureText.includes("validator crashed") ||
-        failureText.includes("validator runtime bootstrap failed") ||
-        failureText.includes("usage:") ||
-        failureText.includes("unrecognized arguments") ||
-        failureText.includes("expected one argument")
-      ? ("validator_infrastructure" as const)
-      : ("product_failure" as const)
+      : infrastructureSignal
+        ? ("validator_infrastructure" as const)
+      : hasStructuredFailure
+        ? ("product_failure" as const)
+        : ("product_failure" as const)
 
   return {
     result: {
@@ -1161,16 +1166,22 @@ async function runPromptLongTaskValidation(input: {
       ...(input.contract.referencePaths ?? []),
     ].filter((item): item is string => typeof item === "string" && item.length > 0),
   )
+  const access = await buildAccessProfile({
+    role: `validation_engine_prompt_validator:${input.contract.id}`,
+    mode: "validator",
+    readPaths,
+    editPaths: [input.validatorDir],
+  })
   const task = await runOpencodeTask({
     cwd: input.cwd,
     config: input.config,
     title: `Long Task Validator ${input.contract.id}`,
     prompt,
     concurrencyScope: `long-task:${input.spec.id ?? input.spec.taskFamily ?? input.spec.title}`,
-    referencePaths: readPaths,
+    referencePaths: access.referencePaths,
     attachedFiles: [],
-    permissionReadPaths: readPaths,
-    permissionEditPaths: [input.validatorDir],
+    permissionReadPaths: access.permissionReadPaths,
+    permissionEditPaths: access.permissionEditPaths,
     model: selection.model,
     agent: selection.agent,
     variant: selection.variant,

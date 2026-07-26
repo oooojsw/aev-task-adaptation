@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { loadConfig } from "../orchestrator/schema"
 import { runOpencodeTask } from "../orchestrator/opencode"
 import { autoEvolvePath, pathExists } from "../orchestrator/fs"
+import { buildAccessProfile } from "../orchestrator/access-profile"
 
 type Snapshot = Record<string, { size: number; sha256: string }>
 
@@ -165,15 +166,22 @@ async function main() {
   await writeFile(promptPath, prompt, "utf8")
 
   const before = await snapshot(sandboxRoot)
+  const access = await buildAccessProfile({
+    role: "third_party_readonly_audit",
+    mode: "readonly_audit",
+    referencePaths: liveRead ? [promptPath, inputRoot, benchmarkRoot, campaignRoot, taskPackRoot] : [promptPath, inputRoot],
+    readPaths: liveRead ? [cwd, inputRoot, promptPath, benchmarkRoot, campaignRoot, taskPackRoot] : [inputRoot, promptPath],
+    editPaths: [],
+  })
   const task = await runOpencodeTask({
     cwd,
     workDir: sandboxRoot,
     config,
     title: "Third Party Readonly Audit Smoke",
     prompt,
-    referencePaths: liveRead ? [promptPath, inputRoot, benchmarkRoot, campaignRoot, taskPackRoot] : [promptPath, inputRoot],
-    permissionReadPaths: liveRead ? [cwd, inputRoot, promptPath, benchmarkRoot, campaignRoot, taskPackRoot] : [inputRoot, promptPath],
-    permissionEditPaths: [],
+    referencePaths: access.referencePaths,
+    permissionReadPaths: access.permissionReadPaths,
+    permissionEditPaths: access.permissionEditPaths,
     allowShell: false,
     runtimeScope: "third-party-readonly-audit-smoke",
     recordAdaptiveConcurrency: false,

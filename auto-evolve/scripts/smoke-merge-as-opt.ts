@@ -208,7 +208,9 @@ try {
             enabled: true,
             configPath: path.join(actualSkillOptRoot, "configs", "officeqa", "default.yaml"),
             splitDir: path.join(actualSkillOptRoot, "data", "officeqa_id_split"),
-            dataDirs: [path.join(actualSkillOptRoot, "data", "officeqa_docs_official")],
+            dataDirs: loaded.mergeConfig.asSkillOpt.nativeTrainDataDirs.map((item) =>
+              path.isAbsolute(item) ? item : path.resolve(actualSkillOptRoot, item),
+            ),
             outRoot: path.join(root, "native-preflight-out"),
             epochs: 4,
             batchSize: 40,
@@ -245,6 +247,16 @@ try {
     assert(preflightResult.passed === true, "Real SkillOpt bridge preflight result did not pass")
     assert(preflightResult.nativeTrainPreflight?.trainSize > 0, "Native SkillOpt train split did not load")
     assert(preflightResult.nativeTrainPreflight?.validationSize > 0, "Native SkillOpt validation split did not load")
+    assert(
+      preflightResult.nativeTrainPreflight?.evidenceCoverage?.train?.coveredItems ===
+        preflightResult.nativeTrainPreflight?.trainSize,
+      "Native SkillOpt train evidence coverage is incomplete",
+    )
+    assert(
+      preflightResult.nativeTrainPreflight?.evidenceCoverage?.validation?.coveredItems ===
+        preflightResult.nativeTrainPreflight?.validationSize,
+      "Native SkillOpt validation evidence coverage is incomplete",
+    )
   }
 
   const outcome = await runSkillOptMerger({

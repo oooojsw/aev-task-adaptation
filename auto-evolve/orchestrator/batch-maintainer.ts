@@ -2,6 +2,7 @@ import path from "node:path"
 import { diffExperienceWorkspace, readExperienceWorkspace } from "./experience-workspace"
 import { buildBatchKnowledgeMaintainerPrompt } from "./prompts"
 import { runOpencodeTask } from "./opencode"
+import { buildAccessProfile } from "./access-profile"
 import { resolveModelSelection } from "./model-selection"
 import type { LoadedAutoEvolveConfig } from "./case-runtime"
 import type { ExperienceWorkspaceLayout, ExperienceWorkspaceSnapshot, TemplateLibraryPaths } from "./experience-workspace"
@@ -187,15 +188,21 @@ export async function runBatchKnowledgeMaintainer(
     maintenanceOpsBlock: renderMaintenanceOpsBlock(maintenanceOps),
     sessionReports: request.sessionReports,
   })
+  const access = await buildAccessProfile({
+    role: "batch_knowledge_maintainer",
+    mode: "maintenance",
+    readPaths: referencePaths,
+    editPaths: [request.workspace.root],
+  })
 
   const task = await runOpencodeTask({
     cwd: request.cwd,
     config: request.config,
     title: `auto-evolve batch maintainer batch-${String(request.batchIndex).padStart(2, "0")}`,
     prompt,
-    referencePaths,
-    permissionReadPaths: referencePaths,
-    permissionEditPaths: [request.workspace.root],
+    referencePaths: access.referencePaths,
+    permissionReadPaths: access.permissionReadPaths,
+    permissionEditPaths: access.permissionEditPaths,
     model: execution.model,
     agent: execution.agent,
     variant: execution.variant,

@@ -7,6 +7,7 @@ import { runDirectChatEvaluation } from "../orchestrator/direct-chat/runner"
 import type { DirectChatModelsConfig } from "../orchestrator/direct-chat/contract"
 import { loadConfig } from "../orchestrator/schema"
 import { writeRunManifest } from "../orchestrator/stop-manager"
+import { updateExperimentLedger } from "./update-experiment-ledger"
 
 function parseArgs(argv: string[]) {
   const result: Record<string, string | boolean> = {}
@@ -175,6 +176,13 @@ async function main() {
   if (Boolean(args["preflight-only"])) {
     console.log(`Direct chat preflight finished without model requests: ${result.outDir}`)
   } else {
+    try {
+      await updateExperimentLedger(result.outDir)
+    } catch (error) {
+      const { writeFile } = await import("node:fs/promises")
+      const message = error instanceof Error ? error.stack || error.message : String(error)
+      await writeFile(path.join(result.outDir, "experiment-ledger-update-error.log"), `${message}\n`, "utf8").catch(() => undefined)
+    }
     console.log(`Direct chat evaluation finished: ${result.outDir}`)
     console.log(`Cases x models: ${result.results.length}`)
   }

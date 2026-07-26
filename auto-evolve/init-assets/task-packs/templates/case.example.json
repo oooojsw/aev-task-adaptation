@@ -1,0 +1,15 @@
+{
+  "id": "case-001",
+  "instruction": "Read the attached material and return the target result in valid JSON only.",
+  "materials": [
+    {
+      "path": "material/input.txt",
+      "label": "primary material"
+    }
+  ],
+  "expected": {
+    "path": "expected/output.json",
+    "mode": "json_exact"
+  },
+  "tags": ["baseline"]
+}

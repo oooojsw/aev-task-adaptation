@@ -7,6 +7,7 @@ import { runOpencodeTask, type OpencodeTaskRun } from "./opencode"
 import { runManagedProcess, type ManagedProcessResult } from "./managed-process"
 import { runLongTask } from "./long-task/runner"
 import { runLongTaskCampaign } from "./long-task-campaign/runner"
+import { buildAccessProfile } from "./access-profile"
 
 export type SkillsBenchMode = "short" | "long" | "campaign"
 
@@ -447,15 +448,21 @@ async function runShortSkillsBenchTask(input: SkillsBenchRunOptions, prepared: P
     const stageDir = path.join(prepared.runRoot, `short-attempt-${String(attempt).padStart(2, "0")}`)
     await ensureDirectory(stageDir)
     const prompt = buildSkillsBenchShortPrompt({ prepared, previousFailures: verifierFailures })
+    const access = await buildAccessProfile({
+      role: "skillsbench_short",
+      mode: "open_book",
+      readPaths: [prepared.workDir, prepared.instructionSafePath],
+      editPaths: [prepared.workDir],
+    })
     const opencode = await runOpencodeTask({
       cwd: input.cwd,
       config,
       title: `SkillsBench Short ${prepared.taskID} attempt-${String(attempt).padStart(2, "0")}`,
       prompt,
-      referencePaths: [prepared.workDir, prepared.instructionSafePath],
+      referencePaths: access.referencePaths,
       promptInlineFiles: [prepared.instructionSafePath],
-      permissionReadPaths: [prepared.workDir, prepared.instructionSafePath],
-      permissionEditPaths: [prepared.workDir],
+      permissionReadPaths: access.permissionReadPaths,
+      permissionEditPaths: access.permissionEditPaths,
       runtimeScope: `skillsbench-short:${prepared.taskID}:${randomUUID().slice(0, 8)}`,
       concurrencyScope: input.concurrencyScope ?? `skillsbench:${prepared.taskID}`,
       injectPlatformSafetyRules: true,

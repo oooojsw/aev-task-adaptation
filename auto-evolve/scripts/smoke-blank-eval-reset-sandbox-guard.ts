@@ -53,27 +53,30 @@ async function main() {
     ],
   })
 
-  let rejected = false
-  try {
-    await runBlankEval({
-      cwd,
-      specPath,
-      skillRoots: [skill],
-      runRoot: path.join(root, "runs"),
-      sourceID: "blank-eval-reset-sandbox-guard",
-      mode: "smoke",
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    rejected = message.includes("Blank Eval reset refused path outside sandbox")
-    if (!rejected) throw error
+  const result = await runBlankEval({
+    cwd,
+    specPath,
+    skillRoots: [skill],
+    runRoot: path.join(root, "runs"),
+    sourceID: "blank-eval-reset-sandbox-guard",
+    mode: "smoke",
+  })
+  if (!(await pathExists(victim))) throw new Error("Outside-sandbox victim was deleted.")
+  const publicSpecPath = path.join(result.runDir, "sandbox", "materials", "spec.json")
+  const publicSpec = JSON.parse(await Bun.file(publicSpecPath).text()) as {
+    targetPaths?: Array<{ path?: string }>
+    editablePaths?: string[]
+  }
+  const sandboxRoot = path.join(result.runDir, "sandbox")
+  for (const item of [...(publicSpec.targetPaths ?? []).map((row) => row.path ?? ""), ...(publicSpec.editablePaths ?? [])]) {
+    const rel = path.relative(sandboxRoot, path.resolve(item))
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      throw new Error(`Public blank-eval path escaped sandbox: ${item}`)
+    }
   }
 
-  if (!rejected) throw new Error("Blank Eval reset sandbox guard did not reject an outside-sandbox target.")
-  if (!(await pathExists(victim))) throw new Error("Outside-sandbox victim was deleted.")
-
   await rm(root, { recursive: true, force: true })
-  console.log(JSON.stringify({ passed: true, rejectedOutsideSandboxTarget: true }, null, 2))
+  console.log(JSON.stringify({ passed: true, remappedOutsideSandboxTarget: true }, null, 2))
 }
 
 await main()

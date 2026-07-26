@@ -224,6 +224,25 @@
       "timeoutMs": 300000,
       "concurrency": 3
     },
+    "codex-proxy-gpt-5-5": {
+      "provider": "codex-local-proxy",
+      "transport": "openai-compatible",
+      "baseURL": "http://127.0.0.1:8318/v1",
+      "apiKey": "dummy",
+      "model": "gpt-5.5",
+      "temperature": 0,
+      "maxOutputTokens": 16384,
+      "contextWindowTokens": 128000,
+      "promptBudgetTokens": 120000,
+      "skillBudgetTokens": 50000,
+      "materialBudgetTokens": 65000,
+      "supportsFileInputs": false,
+      "supportsImageInputs": false,
+      "fileInputMode": "none",
+      "imageInputMode": "none",
+      "timeoutMs": 300000,
+      "concurrency": 3
+    },
     "mock-smoke": {
       "provider": "mock",
       "transport": "mock",

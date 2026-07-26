@@ -16,6 +16,21 @@ type CampaignRow = {
   pending: string
 }
 
+type BenchmarkTrainResult = {
+  id: string
+  status: string
+  campaignDir?: string
+  updatedAt?: string
+}
+
+type BenchmarkState = {
+  config?: {
+    taskPackRoot?: string
+    trainSplit?: string
+  }
+  trainResults?: BenchmarkTrainResult[]
+}
+
 const repoRoot = path.resolve(import.meta.dir, "..", "..")
 const autoRoot = path.join(repoRoot, "auto-evolve")
 const campaignRoot = path.join(autoRoot, "runtime-state", "long-task-campaigns")
@@ -83,6 +98,76 @@ async function collectCampaigns(taskPackRoot: string, ids: string[]) {
   return byID
 }
 
+function normalizeStoredPath(value: string) {
+  if (process.platform !== "win32") return value
+  return value.replace(/\\{2,}/g, "\\")
+}
+
+function samePath(left: string, right: string) {
+  return path.resolve(normalizeStoredPath(left)).toLowerCase() === path.resolve(normalizeStoredPath(right)).toLowerCase()
+}
+
+async function collectCampaignsFromBenchmarkRun(input: {
+  benchmarkRun: string
+  taskPackRoot: string
+  trainSplit: string
+  ids: string[]
+}) {
+  const statePath = path.join(input.benchmarkRun, "orchestrator-state.json")
+  if (!(await pathExists(statePath))) {
+    throw new Error(`Source benchmark run has no orchestrator-state.json: ${input.benchmarkRun}`)
+  }
+  const state = await readJson<BenchmarkState>(statePath)
+  if (state.config?.taskPackRoot && !samePath(state.config.taskPackRoot, input.taskPackRoot)) {
+    throw new Error(
+      `Source benchmark task-pack mismatch: expected ${input.taskPackRoot}, got ${state.config.taskPackRoot}`,
+    )
+  }
+  if (state.config?.trainSplit && !samePath(state.config.trainSplit, input.trainSplit)) {
+    throw new Error(`Source benchmark split mismatch: expected ${input.trainSplit}, got ${state.config.trainSplit}`)
+  }
+  const results = Array.isArray(state.trainResults) ? state.trainResults : []
+  const byResultID = new Map(results.map((item) => [String(item.id), item]))
+  const missing = input.ids.filter((id) => !byResultID.has(id))
+  if (missing.length > 0) {
+    throw new Error(`Source benchmark is missing ${missing.length} train result(s): ${missing.join(", ")}`)
+  }
+  const extra = results.map((item) => String(item.id)).filter((id) => !input.ids.includes(id))
+  if (extra.length > 0) {
+    throw new Error(`Source benchmark has ${extra.length} unexpected train result(s): ${extra.join(", ")}`)
+  }
+
+  const byID = new Map<string, CampaignRow[]>()
+  for (const id of input.ids) {
+    const result = byResultID.get(id)!
+    if (!result.campaignDir) {
+      throw new Error(`Source benchmark result ${id} has no campaignDir`)
+    }
+    const dir = normalizeStoredPath(result.campaignDir)
+    const campaignPath = path.join(dir, "campaign.json")
+    if (!(await pathExists(campaignPath))) {
+      throw new Error(`Source benchmark campaign is missing for ${id}: ${dir}`)
+    }
+    const campaign = await readJson<Record<string, unknown>>(campaignPath)
+    const specPath = String(campaign.baseSpecPath ?? "")
+    if (!specPath || !samePath(specPath, taskSpecPath(input.taskPackRoot, id))) {
+      throw new Error(`Source benchmark campaign/spec mismatch for ${id}: ${specPath || "<missing>"}`)
+    }
+    byID.set(id, [
+      {
+        id,
+        status: String(result.status ?? campaign.status ?? "unknown"),
+        dir,
+        updatedAt: String(result.updatedAt ?? campaign.updatedAt ?? campaign.createdAt ?? ""),
+        currentRound: typeof campaign.currentRound === "number" ? campaign.currentRound : undefined,
+        maxRounds: typeof campaign.maxRounds === "number" ? campaign.maxRounds : undefined,
+        pending: path.join(dir, "pending-expert-package", "current"),
+      },
+    ])
+  }
+  return byID
+}
+
 function mapStatus(status: string): InstanceState["status"] {
   if (status === "verified_success") return "passed"
   if (status === "round_limit_reached" || status === "exhausted_failure") return "exhausted"
@@ -124,12 +209,16 @@ async function main() {
   if (!taskPackRoot) throw new Error("Missing --task-pack-root")
   const trainSplit = resolveMaybeRelative(getOption(args, "--train-split"), path.join(taskPackRoot, "splits", "train-selected.json"))
   if (!trainSplit) throw new Error("Missing --train-split")
+  const sourceBenchmarkRun = resolveMaybeRelative(getOption(args, "--source-benchmark-run"))
   const outDir =
     resolveMaybeRelative(getOption(args, "--out")) ??
     path.join(autoRoot, "runtime-state", "hierarchical-merge-only", `${stamp()}-${path.basename(taskPackRoot)}`)
 
   const ids = await readJson<string[]>(trainSplit)
-  const campaigns = await collectCampaigns(taskPackRoot, ids)
+  if (new Set(ids).size !== ids.length) throw new Error("Train split contains duplicate task IDs")
+  const campaigns = sourceBenchmarkRun
+    ? await collectCampaignsFromBenchmarkRun({ benchmarkRun: sourceBenchmarkRun, taskPackRoot, trainSplit, ids })
+    : await collectCampaigns(taskPackRoot, ids)
   const instances: InstanceState[] = []
   for (const id of ids) {
     instances.push(await buildInstance({ id, taskPackRoot, row: campaigns.get(id)?.[0] }))
@@ -160,6 +249,7 @@ async function main() {
   }
   await saveCoordinatorState(state)
   await writeJsonFile(path.join(outDir, "merge-only-input-summary.json"), {
+    sourceBenchmarkRun,
     ids,
     statusCounts: instances.reduce<Record<string, number>>((acc, item) => {
       acc[item.status] = (acc[item.status] ?? 0) + 1
@@ -173,6 +263,16 @@ async function main() {
       errorMessage: item.errorMessage,
     })),
   })
+
+  if (args.includes("--preflight-only")) {
+    await writeJsonFile(path.join(outDir, "preflight-result.json"), {
+      passed: true,
+      sourceBenchmarkRun,
+      taskCount: ids.length,
+      message: "Input lineage validated; no merger model was started.",
+    })
+    return
+  }
 
   const result = await runCoordinatorHierarchicalMerge({
     cwd: repoRoot,

@@ -8,6 +8,7 @@ import type { LongTaskSpec, LongTaskValidatorContract, LongTaskWorkUnit } from "
 import { loadLongTaskSpec } from "../long-task/spec"
 import { selectValidationModules } from "../validation-engine/registry"
 import { runValidationStage } from "../validation-engine/stage-runner"
+import { buildAccessProfile } from "../access-profile"
 import type { CoordinatorState, InstanceState } from "./contract"
 import { appendCoordinatorLog, saveCoordinatorState } from "./repository"
 
@@ -342,13 +343,20 @@ async function runMergeGroup(input: {
     ...(input.options.contractPath ? [input.options.contractPath] : []),
     ...input.items.map((item) => item.skillPath).filter((item): item is string => !!item),
   ]
+  const access = await buildAccessProfile({
+    role: "hierarchical_merger",
+    mode: "open_book",
+    readPaths,
+    editPaths: [outputDir],
+  })
   const result = await runOpencodeTask({
     cwd: input.cwd,
     config,
     title: `hierarchical-merge-${input.state.id}-${groupID}`,
     prompt,
-    permissionReadPaths: readPaths,
-    permissionEditPaths: [outputDir],
+    referencePaths: access.referencePaths,
+    permissionReadPaths: access.permissionReadPaths,
+    permissionEditPaths: access.permissionEditPaths,
     concurrencyScope: `hierarchical-merge:${input.state.id}`,
   })
   await writeTextFile(path.join(root, "stdout.log"), result.result.stdout)
@@ -504,18 +512,25 @@ async function runOneShotRepair(input: {
   ].join("\n")
   await writeTextFile(path.join(repairRoot, "prompt.txt"), prompt)
   const config = await loadConfig(input.cwd)
-  const result = await runOpencodeTask({
-    cwd: input.cwd,
-    config,
-    title: `hierarchical-repair-${input.state.id}-${input.group.groupID}-${input.item.id}`,
-    prompt,
-    permissionReadPaths: [
+  const access = await buildAccessProfile({
+    role: "hierarchical_repair_agent",
+    mode: "open_book",
+    readPaths: [
       manifestPath,
       ...(input.options.contractPath ? [input.options.contractPath] : []),
       input.group.outputDir,
       ...(input.item.skillPath ? [input.item.skillPath] : []),
     ],
-    permissionEditPaths: [draft],
+    editPaths: [draft],
+  })
+  const result = await runOpencodeTask({
+    cwd: input.cwd,
+    config,
+    title: `hierarchical-repair-${input.state.id}-${input.group.groupID}-${input.item.id}`,
+    prompt,
+    referencePaths: access.referencePaths,
+    permissionReadPaths: access.permissionReadPaths,
+    permissionEditPaths: access.permissionEditPaths,
     concurrencyScope: `hierarchical-repair:${input.state.id}`,
   })
   await writeTextFile(path.join(repairRoot, "stdout.log"), result.result.stdout)

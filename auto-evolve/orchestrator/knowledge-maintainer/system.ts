@@ -10,6 +10,7 @@ import {
   type ResolvedReversePropagationModule,
 } from "./reverse-propagation-modules"
 import type { KnowledgeMaintenanceOpDefinition } from "./maintenance-ops"
+import { buildAccessProfile } from "../access-profile"
 
 export interface ResolvedKnowledgeMaintainerSystem {
   reversePropagationModule: ResolvedReversePropagationModule
@@ -100,6 +101,13 @@ export async function resolveKnowledgeMaintainerSystem(
     inputPaths: request.inputPaths,
     sessionReports: request.intent.sessionReports,
   })
+  const access = await buildAccessProfile({
+    role: "knowledge_maintainer",
+    mode: "maintenance",
+    referencePaths: pathPlan.referencePaths,
+    readPaths: pathPlan.permissionReadPaths,
+    editPaths: [request.workspace.root],
+  })
 
   return {
     reversePropagationModule,
@@ -110,9 +118,9 @@ export async function resolveKnowledgeMaintainerSystem(
     loadingStrategyBlock: renderLoadingStrategyBlock(loadingStrategy),
     maintenanceScopeBlock: renderMaintenanceScopeBlock(scopeLevel),
     maintenanceOpsBlock: renderMaintenanceOpsBlock(maintenanceOps),
-    referencePaths: pathPlan.referencePaths,
-    permissionReadPaths: pathPlan.permissionReadPaths,
-    permissionEditPaths: [request.workspace.root],
+    referencePaths: access.referencePaths,
+    permissionReadPaths: access.permissionReadPaths,
+    permissionEditPaths: access.permissionEditPaths,
   }
 }
 

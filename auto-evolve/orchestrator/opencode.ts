@@ -1,4 +1,4 @@
-import path from "node:path"
+﻿import path from "node:path"
 import process from "node:process"
 import os from "node:os"
 import { randomUUID } from "node:crypto"
@@ -576,9 +576,14 @@ async function prepareIsolatedHostRuntime(cwd: string, runLabel: string): Promis
   const xdgData = path.join(root, "data")
   const xdgCache = path.join(root, "cache")
   const xdgState = path.join(root, "state")
+  const managedConfig = path.join(root, "managed-config")
   const opencodeData = path.join(xdgData, "opencode")
   const opencodeCache = path.join(xdgCache, "opencode")
-  await Promise.all([home, xdgConfig, xdgData, xdgCache, xdgState, opencodeData, opencodeCache].map((dir) => ensureDirectory(dir)))
+  await Promise.all(
+    [home, xdgConfig, xdgData, xdgCache, xdgState, managedConfig, opencodeData, opencodeCache].map((dir) =>
+      ensureDirectory(dir),
+    ),
+  )
 
   for (const candidate of privateAuthCandidates(cwd)) {
     if (!(await pathExists(candidate))) continue
@@ -602,6 +607,7 @@ async function prepareIsolatedHostRuntime(cwd: string, runLabel: string): Promis
       XDG_DATA_HOME: xdgData,
       XDG_CACHE_HOME: xdgCache,
       XDG_STATE_HOME: xdgState,
+      OPENCODE_TEST_MANAGED_CONFIG_DIR: managedConfig,
       HOME: home,
       USERPROFILE: home,
       OPENCODE_DISABLE_PROJECT_CONFIG: "1",
@@ -1196,7 +1202,7 @@ async function runOpencodeTaskOnce(
     managed = await runManagedProcess({
       title: input.title,
       command: args,
-      cwd: path.join(input.cwd, "packages", "opencode"),
+      cwd: taskWorkDir,
       env: {
         ...runtimeEnv,
         OPENCODE_CONFIG_DIR: overrideConfigDir,

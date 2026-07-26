@@ -13,6 +13,11 @@ async function assertSourceGuards() {
   assert(source.includes("watchSeed: WatchPick[]"), "queueTrain must accept watchSeed")
   assert(source.includes("watch.size === 0"), "queueTrain exit condition must include watch.size")
   assert(source.includes('status: "watch_live"'), "runOneCampaign must have watch_live defensive return")
+  assert(source.includes("const DEFAULT_CAMPAIGN_ROUNDS = 7"), "benchmark default campaign rounds must be 7")
+  assert(
+    source.includes("inferCampaignRoundsFromExistingOverrides") && source.includes("campaign-spec-overrides"),
+    "benchmark resume must inherit campaign rounds from existing run overrides",
+  )
 }
 
 async function assertNoOwnerRunningIsStale() {

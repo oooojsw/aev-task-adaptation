@@ -41,6 +41,19 @@ def load_payload(path_text: str | None) -> dict:
         return {}
 
 
+def load_json_file(path: str) -> Any:
+    with open(path, "rb") as f:
+        data = f.read()
+    encodings = ["utf-8-sig", "utf-16", "utf-16-le", "utf-16-be"]
+    last_error: Exception | None = None
+    for encoding in encodings:
+        try:
+            return json.loads(data.decode(encoding))
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(f"candidate json could not be decoded as UTF-8/UTF-16: {last_error}")
+
+
 def infer_task_dir(payload: dict) -> str | None:
     for item in payload.get("materials", []):
         if not isinstance(item, dict):
@@ -177,8 +190,7 @@ def resolve_workbook_sheet(sheet_name: str, sheetnames: list[str]) -> str:
 
 
 def load_candidate_object(candidate_path: str) -> dict:
-    with open(candidate_path, "r", encoding="utf-8-sig") as f:
-        raw = json.load(f)
+    raw = load_json_file(candidate_path)
     if not isinstance(raw, dict):
         raise RuntimeError("candidate json must be an object")
     return raw
