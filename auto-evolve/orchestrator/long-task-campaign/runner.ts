@@ -51,6 +51,14 @@ import {
   type OracleValidatorResult,
 } from "./expert-oracle-evidence"
 import { buildAccessProfile } from "../access-profile"
+import {
+  MULTI_SKILL_MERGE_WORKER_ROLES,
+  buildMultiSkillMergeLeadPrompt,
+  buildMultiSkillMergeReviewerPrompt,
+  buildMultiSkillMergeRoleAccess,
+  buildMultiSkillMergeWorkerPrompt,
+  isMultiSkillMergeProfile,
+} from "../task-profiles/multi-skill-merge"
 import type {
   LongTaskBudgets,
   LongTaskOperationalContextItem,
@@ -936,6 +944,10 @@ async function pulseCampaignState(campaignPaths: ReturnType<typeof longTaskCampa
 
 function uniqueStrings(items: string[]) {
   return Array.from(new Set(items.filter((item) => item.trim().length > 0)))
+}
+
+function presentPaths(items: Array<string | undefined>) {
+  return items.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
 }
 
 export type CampaignRoleAccessView = {
@@ -2154,7 +2166,8 @@ function collectStaticBaseContextPaths(baseSpec: LongTaskSpec) {
   return uniqueStrings((baseSpec.initialExpertContextPaths ?? []).filter(isStaticBaseContextPath))
 }
 
-function defaultCampaignWorkerRoles(): LongTaskCampaignWorkerRole[] {
+function defaultCampaignWorkerRoles(baseSpec?: LongTaskSpec): LongTaskCampaignWorkerRole[] {
+  if (baseSpec && isMultiSkillMergeProfile(baseSpec)) return [...MULTI_SKILL_MERGE_WORKER_ROLES]
   return [
     "blank_acceptance_diagnostician",
     "success_synthesizer",
@@ -3732,12 +3745,49 @@ async function runCampaignWorkers(input: {
   onPulse?: OpencodeTaskInput["onPulse"]
   carryoverFiles?: string[]
 }) {
-  const workerRoles = defaultCampaignWorkerRoles()
+  const workerRoles = defaultCampaignWorkerRoles(input.baseSpec)
   const suggestions = await Promise.all(
     workerRoles.map(async (role) => {
       const stageDir = path.join(input.roundPaths.workersRoot, role)
       const suggestionPath = path.join(stageDir, "suggestion.json")
-      const prompt = buildCampaignWorkerPrompt({
+      const profileAccess = isMultiSkillMergeProfile(input.baseSpec)
+        ? await buildMultiSkillMergeRoleAccess({
+            role,
+            context: {
+              stageDir,
+              sourceRoots: input.baseSpec.formalPackageRoots ?? [],
+              taskDefinitionPaths: input.baseSpec.materials.map((item) => item.path),
+              candidateReadRoot: input.pendingPackageRoot,
+              tracePaths: [input.runTracePath, input.runTraceDigestPath],
+              replayEvidencePaths: [
+                ...presentPaths([
+                  input.blankAgentAcceptanceDiagnosisPath,
+                  input.finalAcceptanceFeedbackPath,
+                  input.blankAgentEvidenceBundlePath,
+                  ...(input.blankAgentEvidenceReadPaths ?? []),
+                ]),
+              ],
+              internalStatePaths: presentPaths([
+                input.explorationTreePath,
+                input.workingMemoryPath,
+                input.routingControlPath,
+                input.dispatchTicketsPath,
+                input.acceptanceExperiencePath,
+                input.acceptanceExperienceJsonlPath,
+                input.reviewerSuggestionPath,
+                ...(input.carryoverFiles ?? []),
+              ]),
+              oraclePaths: presentPaths([input.expertOracleBundlePath, ...(input.expertOracleReadPaths ?? [])]),
+            },
+          })
+        : undefined
+      const prompt = profileAccess
+        ? buildMultiSkillMergeWorkerPrompt({
+            role,
+            roundNumber: input.roundNumber,
+            accessManifestPath: path.join(stageDir, "access-manifest.json"),
+          })
+        : buildCampaignWorkerPrompt({
         title: input.campaignSpec.title,
         roundNumber: input.roundNumber,
         role,
@@ -3757,7 +3807,7 @@ async function runCampaignWorkers(input: {
         expertOracleBundlePath: input.expertOracleBundlePath,
         expertOracleReadPaths: input.expertOracleReadPaths,
       })
-      const access = await buildCampaignRoleAccessView({
+      const access = profileAccess ?? await buildCampaignRoleAccessView({
         role: `worker:${role}`,
         basePaths: [
           input.runTracePath,
@@ -4051,7 +4101,47 @@ async function runCampaignLead(input: {
     .map((item) => item.suggestionPath ?? item.responsePath)
     .filter((item): item is string => Boolean(item))
   const stageDir = path.join(input.roundPaths.root, "campaign-lead")
-  const prompt = buildCampaignLeadPrompt({
+  const profileAccess = isMultiSkillMergeProfile(input.baseSpec)
+    ? await buildMultiSkillMergeRoleAccess({
+        role: "merge_lead",
+        context: {
+          stageDir,
+          sourceRoots: input.baseSpec.formalPackageRoots ?? [],
+          taskDefinitionPaths: input.baseSpec.materials.map((item) => item.path),
+          candidateReadRoot: input.previousPendingPackageRoot,
+          candidateWriteRoots: [
+            input.nextPendingPackageRoot,
+            input.nextExplorationTreePath,
+            input.nextRoutingControlPath,
+          ],
+          tracePaths: [input.runTracePath, input.runTraceDigestPath],
+          workerSuggestionPaths,
+          replayEvidencePaths: presentPaths([
+            input.blankAgentAcceptanceDiagnosisPath,
+            input.finalAcceptanceFeedbackPath,
+            input.blankAgentEvidenceBundlePath,
+            ...(input.blankAgentEvidenceReadPaths ?? []),
+          ]),
+          internalStatePaths: presentPaths([
+            input.previousExplorationTreePath,
+            input.workingMemoryPath,
+            input.previousRoutingControlPath,
+            input.dispatchTicketsPath,
+            input.reviewerSuggestionPath,
+            input.acceptanceExperiencePath,
+            input.acceptanceExperienceJsonlPath,
+          ]),
+          oraclePaths: presentPaths([input.expertOracleBundlePath, ...(input.expertOracleReadPaths ?? [])]),
+        },
+      })
+    : undefined
+  const prompt = profileAccess
+    ? buildMultiSkillMergeLeadPrompt({
+        roundNumber: input.roundNumber,
+        accessManifestPath: path.join(stageDir, "access-manifest.json"),
+        nextCandidateRoot: input.nextPendingPackageRoot,
+      })
+    : buildCampaignLeadPrompt({
     title: input.campaignSpec.title,
     roundNumber: input.roundNumber,
     runTracePath: input.runTraceDigestPath,
@@ -4073,7 +4163,7 @@ async function runCampaignLead(input: {
     expertOracleBundlePath: input.expertOracleBundlePath,
     expertOracleReadPaths: input.expertOracleReadPaths,
   })
-  const access = await buildCampaignRoleAccessView({
+  const access = profileAccess ?? await buildCampaignRoleAccessView({
     role: "lead",
     basePaths: [
       input.runTraceDigestPath,
@@ -4141,7 +4231,38 @@ async function runCampaignReviewer(input: {
   onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const stageDir = input.stageDir ?? input.roundPaths.reviewerRoot
-  const prompt = buildCampaignReviewerPrompt({
+  const profileAccess = isMultiSkillMergeProfile(input.baseSpec)
+    ? await buildMultiSkillMergeRoleAccess({
+        role: "merge_retention_reviewer",
+        context: {
+          stageDir,
+          sourceRoots: input.baseSpec.formalPackageRoots ?? [],
+          taskDefinitionPaths: input.baseSpec.materials.map((item) => item.path),
+          candidateReadRoot: input.pendingPackageRoot,
+          tracePaths: [input.runTracePath],
+          replayEvidencePaths: presentPaths([
+            input.blankAgentAcceptanceDiagnosisPath,
+            input.blankAgentEvidenceBundlePath,
+            ...(input.blankAgentEvidenceReadPaths ?? []),
+          ]),
+          internalStatePaths: presentPaths([
+            input.explorationTreePath,
+            input.workingMemoryPath,
+            input.routingControlPath,
+            input.dispatchTicketsPath,
+            input.acceptanceExperiencePath,
+            input.acceptanceExperienceJsonlPath,
+          ]),
+          oraclePaths: presentPaths([input.expertOracleBundlePath, ...(input.expertOracleReadPaths ?? [])]),
+        },
+      })
+    : undefined
+  const prompt = profileAccess
+    ? buildMultiSkillMergeReviewerPrompt({
+        roundNumber: input.roundNumber,
+        accessManifestPath: path.join(stageDir, "access-manifest.json"),
+      })
+    : buildCampaignReviewerPrompt({
     title: input.campaignSpec.title,
     roundNumber: input.roundNumber,
     pendingPackageRoot: input.pendingPackageRoot,
@@ -4156,7 +4277,7 @@ async function runCampaignReviewer(input: {
     expertOracleBundlePath: input.expertOracleBundlePath,
     expertOracleReadPaths: input.expertOracleReadPaths,
   })
-  const access = await buildCampaignRoleAccessView({
+  const access = profileAccess ?? await buildCampaignRoleAccessView({
     role: "reviewer",
     basePaths: [
       input.pendingPackageRoot,
@@ -4332,6 +4453,7 @@ async function runCampaignFinalAcceptance(input: {
   const acceptanceRoot = input.finalAcceptanceRoot ?? input.roundPaths.finalAcceptanceRoot
   const acceptanceResultPath = input.finalAcceptanceResultPath ?? input.roundPaths.finalAcceptanceResultPath
   const validatorPartitions = partitionCampaignFinalAcceptanceValidators(input.baseSpec)
+  const acceptanceMode = input.baseSpec.campaignFinalAcceptanceMode ?? "blank_agent"
   if (!validatorPartitions.contracts.length) {
     const emptyResult = {
       campaignID: input.campaignID,
@@ -4345,6 +4467,23 @@ async function runCampaignFinalAcceptance(input: {
     await ensureDirectory(acceptanceRoot)
     await writeJsonFile(acceptanceResultPath, emptyResult)
     return emptyResult
+  }
+  if (acceptanceMode === "validators_only" && !validatorPartitions.surfaceValidators.length) {
+    const missingSurfaceResult = {
+      campaignID: input.campaignID,
+      roundNumber: input.roundNumber,
+      runID: input.sourceRunID,
+      passed: false,
+      failureKind: "infrastructure_failure" as const,
+      summary:
+        "Campaign validators-only final acceptance is not configured: no surface validators were found.",
+      validatorResults: [] as LongTaskValidatorResult[],
+      acceptanceMode,
+      createdAt: nowISO(),
+    }
+    await ensureDirectory(acceptanceRoot)
+    await writeJsonFile(acceptanceResultPath, missingSurfaceResult)
+    return missingSurfaceResult
   }
 
   await ensureDirectory(acceptanceRoot)
@@ -4369,6 +4508,7 @@ async function runCampaignFinalAcceptance(input: {
       legacyBlankAgentValidatorIDs: validatorPartitions.legacyBlankAgentValidators.map((item) => item.id),
       productValidatorIDs: validatorPartitions.productValidators.map((item) => item.id),
     },
+    acceptanceMode,
     createdAt: nowISO(),
   })
 
@@ -4420,7 +4560,11 @@ async function runCampaignFinalAcceptance(input: {
   let blankEvalResultPath: string | undefined
   let blankEvalRunDir: string | undefined
   if (surfacePassed) {
-    if (validatorPartitions.legacyBlankAgentValidators.length) {
+    if (acceptanceMode === "validators_only") {
+      // Product replay is owned by the outer merge supervisor. Intermediate
+      // merge campaigns only prove that their skill package is structurally
+      // valid and generalized enough to move upward.
+    } else if (validatorPartitions.legacyBlankAgentValidators.length) {
       for (const validator of validatorPartitions.legacyBlankAgentValidators) {
         const result = await runLongTaskValidator({
           cwd: input.cwd,
@@ -4522,15 +4666,17 @@ async function runCampaignFinalAcceptance(input: {
       }
     }
   } else {
-    validatorResults.push(
-      blankEvalValidatorResult({
-        passed: false,
-        failureKind: "product_failure",
-        summary: "Blank-agent acceptance was skipped because the pending skill failed surface validation.",
-        details: validatorResults.filter((result) => !result.passed).map((result) => result.summary),
-        evidenceRefs: [bundlePath, validationPackageRoot],
-      }),
-    )
+    if (acceptanceMode === "blank_agent") {
+      validatorResults.push(
+        blankEvalValidatorResult({
+          passed: false,
+          failureKind: "product_failure",
+          summary: "Blank-agent acceptance was skipped because the pending skill failed surface validation.",
+          details: validatorResults.filter((result) => !result.passed).map((result) => result.summary),
+          evidenceRefs: [bundlePath, validationPackageRoot],
+        }),
+      )
+    }
   }
 
   const passed = validatorResults.every((result) => result.passed)
@@ -4549,7 +4695,9 @@ async function runCampaignFinalAcceptance(input: {
       ? ("infrastructure_failure" as const)
       : ("product_failure" as const)
   const summary = passed
-    ? "Campaign final acceptance passed: surface checks and blank-agent product validation both passed."
+    ? acceptanceMode === "validators_only"
+      ? "Campaign intermediate acceptance passed: surface validators passed; product replay is deferred to the external merge supervisor."
+      : "Campaign final acceptance passed: surface checks and blank-agent product validation both passed."
     : validatorResults
         .filter((result) => !result.passed)
         .map((result) => result.summary)
@@ -4568,6 +4716,8 @@ async function runCampaignFinalAcceptance(input: {
     preBlankValidationStageResultPath,
     blankEvalResultPath,
     blankEvalRunDir,
+    acceptanceMode,
+    blankEvalSkipped: acceptanceMode === "validators_only",
     validatorPartitions: {
       surfaceValidatorIDs: validatorPartitions.surfaceValidators.map((item) => item.id),
       legacyBlankAgentValidatorIDs: validatorPartitions.legacyBlankAgentValidators.map((item) => item.id),

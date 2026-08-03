@@ -210,6 +210,10 @@ export interface LoadedMergeAsSkillOptConfig {
 export interface LoadedMergeAsLongTaskConfig {
   /** Master switch for generating/running merge-as-long-task task packs. */
   enabled: boolean
+  /** Historical runtime or the opt-in multi-Skill merge task profile. */
+  taskProfile: "legacy" | "multi_skill_merge_v2"
+  /** Historical path grants or the fail-closed named information-view compiler. */
+  accessSystem: "legacy" | "profile_v2"
   /** Which source skills from a benchmark run become merge inputs. */
   inputSelection: "success_only" | "failed_only" | "success_and_failed"
   /** Number of source skills per merge long-task. */
@@ -228,6 +232,20 @@ export interface LoadedMergeAsLongTaskConfig {
   focusedBlankAcceptanceMode: string
   /** Blank acceptance mode used for the final full replay. */
   finalBlankAcceptanceMode: string
+  /** Product-validation backend used by merge-as-long-task. */
+  acceptanceRunner: "blank-opencode" | "direct-chat" | "opt-direct-chat"
+  /** Named behavior preset; custom preserves explicit historical field combinations. */
+  preset: "custom" | "msl_final_only" | "msl_layer_closed_loop"
+  /** per_round preserves historical blank replay; per_group uses the pluggable MSL supervisor; final_only validates once. */
+  acceptanceTiming: "per_round" | "per_group" | "final_only"
+  /** Backend-neutral concurrency for replay/acceptance execution. */
+  acceptanceConcurrency: number
+  /** Strategy used by the MSL supervisor after a group has produced a candidate Skill. */
+  replayPolicy: "closed_loop_stable_guard"
+  /** Run one immutable full-scope confirmation after the final group has passed its repair loop. */
+  finalConfirmation: {
+    enabled: boolean
+  }
   /** Recursive scheduler defaults for hierarchical merge-as-long-task. */
   hierarchical: LoadedMergeAsLongTaskHierarchicalConfig
 }
@@ -251,6 +269,8 @@ export interface LoadedMergeAsLongTaskHierarchicalConfig {
   watchPollMs: number
   /** Maximum live campaign health polls before the hierarchical supervisor fails closed. */
   watchMaxPolls: number
+  /** Maximum MSL repair campaigns after a group replay fails. */
+  maxReplayRepairAttempts: number
   /** Which source skills enter the first hierarchical level. */
   inputSelection: "success_only" | "failed_only" | "success_and_failed"
   /** Replay scope for intermediate levels. */
@@ -398,6 +418,33 @@ export interface LoadedDirectChatConfig extends DirectChatModelsConfig {
   defaultRunMode?: string
 }
 
+export interface LoadedSkillOptDirectChatConfig {
+  /** Explicit opt-in; native SkillOpt evaluation remains disabled by default. */
+  enabled: boolean
+  /** External SkillOpt checkout. AEV reads it but keeps outputs in AEV run directories. */
+  projectRoot: string
+  /** SkillOpt dataset config, resolved relative to projectRoot. */
+  configPath: string
+  /** Python executable used to launch SkillOpt's unmodified scripts/eval_only.py. */
+  pythonCommand: string
+  /** Native SkillOpt split directory, resolved relative to projectRoot. */
+  splitDir: string
+  /** Material/evidence roots passed to the native dataset adapter. */
+  dataDirs: string[]
+  targetBackend: string
+  targetModel: string
+  /** Optional provider endpoint override, passed without credentials. */
+  targetBaseUrl: string
+  /** Optional isolated OpenCode auth snapshot. Its selected provider key wins over the ambient environment. */
+  targetAuthFile: string
+  targetAuthProviderID: string
+  /** Environment variable holding the provider key; its value is never persisted. */
+  targetApiKeyEnv: string
+  reasoningEffort: string
+  workers: number
+  timeoutMs: number
+}
+
 export interface AutoEvolveConfig {
   version: number
   datasetDir: string
@@ -452,6 +499,7 @@ export interface AutoEvolveConfig {
   directChatConfigFile: string
   directChatConfigPath: string
   directChatConfig: LoadedDirectChatConfig
+  skillOptDirectChatConfig: LoadedSkillOptDirectChatConfig
 }
 
 export interface CaseMaterial {
@@ -597,6 +645,11 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
         validatorProfiles: ["skill-surface/standard-hard-v1"],
         blankEvalValidatorProfiles: [],
       },
+      "merge-surface-standard": {
+        description: "Merged-skill layout and anti-leak hard gates with semantic validator failures kept repairable.",
+        validatorProfiles: ["merge-surface/standard-hard-v2"],
+        blankEvalValidatorProfiles: [],
+      },
     },
   },
   mergeConfig: {
@@ -645,6 +698,8 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
     acceptanceSuccessCriterion: "all_pass",
     asLongTask: {
       enabled: false,
+      taskProfile: "legacy",
+      accessSystem: "legacy",
       inputSelection: "success_only",
       groupSize: 25,
       grouping: "sequential",
@@ -654,6 +709,14 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
       surfaceValidatorProfiles: [],
       focusedBlankAcceptanceMode: "merge-focused-failures",
       finalBlankAcceptanceMode: "merge-final-full-replay",
+      acceptanceRunner: "blank-opencode",
+      preset: "custom",
+      acceptanceTiming: "per_round",
+      acceptanceConcurrency: 5,
+      replayPolicy: "closed_loop_stable_guard",
+      finalConfirmation: {
+        enabled: true,
+      },
       hierarchical: {
         enabled: false,
         levelPlanningMode: "until_one",
@@ -664,6 +727,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
         groupConcurrency: 2,
         watchPollMs: 10_000,
         watchMaxPolls: 720,
+        maxReplayRepairAttempts: 20,
         inputSelection: "success_only",
         intermediateReplayScope: "group_cases",
         finalReplayScope: "union_source_cases",
@@ -829,6 +893,23 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
       delayMs: 30_000,
       categories: ["network", "timeout", "rate_limit", "provider_5xx"],
     },
+  },
+  skillOptDirectChatConfig: {
+    enabled: false,
+    projectRoot: "",
+    configPath: "configs/officeqa/default.yaml",
+    pythonCommand: "python",
+    splitDir: "data/officeqa_id_split",
+    dataDirs: [],
+    targetBackend: "",
+    targetModel: "",
+    targetBaseUrl: "",
+    targetAuthFile: "",
+    targetAuthProviderID: "",
+    targetApiKeyEnv: "",
+    reasoningEffort: "medium",
+    workers: 3,
+    timeoutMs: 12 * 60 * 60 * 1000,
   },
 }
 
@@ -1289,6 +1370,11 @@ function normalizeMergeAsLongTaskHierarchicalConfig(
     groupConcurrency: positiveIntegerField(raw, "groupConcurrency", fallback.groupConcurrency),
     watchPollMs: positiveIntegerField(raw, "watchPollMs", fallback.watchPollMs),
     watchMaxPolls: positiveIntegerField(raw, "watchMaxPolls", fallback.watchMaxPolls),
+    maxReplayRepairAttempts: positiveIntegerField(
+      raw,
+      "maxReplayRepairAttempts",
+      fallback.maxReplayRepairAttempts,
+    ),
     inputSelection: normalizeMergeInputSelection(raw.inputSelection, fallback.inputSelection),
     intermediateReplayScope: normalizeMergeReplayScope(raw.intermediateReplayScope, fallback.intermediateReplayScope),
     finalReplayScope: normalizeMergeReplayScope(raw.finalReplayScope, fallback.finalReplayScope),
@@ -1316,8 +1402,24 @@ function normalizeMergeAsLongTaskConfig(
       hierarchical: normalizeMergeAsLongTaskHierarchicalConfig(undefined, fallback.hierarchical),
     }
   }
+  const preset =
+    raw.preset === "msl_final_only" || raw.preset === "msl_layer_closed_loop" || raw.preset === "custom"
+      ? raw.preset
+      : fallback.preset
+  const explicitAcceptanceTiming =
+    raw.acceptanceTiming === "final_only" || raw.acceptanceTiming === "per_group" || raw.acceptanceTiming === "per_round"
+      ? raw.acceptanceTiming
+      : fallback.acceptanceTiming
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    taskProfile:
+      raw.taskProfile === "multi_skill_merge_v2" || raw.taskProfile === "legacy"
+        ? raw.taskProfile
+        : fallback.taskProfile,
+    accessSystem:
+      raw.accessSystem === "profile_v2" || raw.accessSystem === "legacy"
+        ? raw.accessSystem
+        : fallback.accessSystem,
     inputSelection: normalizeMergeInputSelection(raw.inputSelection, fallback.inputSelection),
     groupSize: positiveIntegerField(raw, "groupSize", fallback.groupSize),
     grouping: normalizeMergeGrouping(raw.grouping, fallback.grouping),
@@ -1328,6 +1430,34 @@ function normalizeMergeAsLongTaskConfig(
     focusedBlankAcceptanceMode:
       normalizeOptionalString(raw.focusedBlankAcceptanceMode) ?? fallback.focusedBlankAcceptanceMode,
     finalBlankAcceptanceMode: normalizeOptionalString(raw.finalBlankAcceptanceMode) ?? fallback.finalBlankAcceptanceMode,
+    acceptanceRunner:
+      raw.acceptanceRunner === "direct-chat" || raw.acceptanceRunner === "opt-direct-chat" || raw.acceptanceRunner === "blank-opencode"
+        ? raw.acceptanceRunner
+        : fallback.acceptanceRunner,
+    preset,
+    acceptanceTiming:
+      preset === "msl_layer_closed_loop"
+        ? "per_group"
+        : preset === "msl_final_only"
+          ? "final_only"
+          : explicitAcceptanceTiming,
+    acceptanceConcurrency: positiveIntegerField(
+      raw,
+      "acceptanceConcurrency",
+      positiveIntegerField(raw, "replayConcurrency", fallback.acceptanceConcurrency),
+    ),
+    replayPolicy:
+      raw.replayPolicy === "closed_loop_stable_guard"
+        ? raw.replayPolicy
+        : fallback.replayPolicy,
+    finalConfirmation: {
+      enabled:
+        preset === "msl_layer_closed_loop"
+          ? true
+          : isObject(raw.finalConfirmation) && typeof raw.finalConfirmation.enabled === "boolean"
+          ? raw.finalConfirmation.enabled
+          : fallback.finalConfirmation.enabled,
+    },
     hierarchical: normalizeMergeAsLongTaskHierarchicalConfig(raw.hierarchical, fallback.hierarchical),
   }
 }
@@ -1652,6 +1782,30 @@ function normalizeDirectChatConfig(
   }
 }
 
+function normalizeSkillOptDirectChatConfig(
+  raw: unknown,
+  fallback: LoadedSkillOptDirectChatConfig = DEFAULT_CONFIG.skillOptDirectChatConfig,
+): LoadedSkillOptDirectChatConfig {
+  if (!isObject(raw)) return { ...fallback }
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    projectRoot: normalizeOptionalString(raw.projectRoot) ?? fallback.projectRoot,
+    configPath: normalizeOptionalString(raw.configPath) ?? fallback.configPath,
+    pythonCommand: normalizeOptionalString(raw.pythonCommand) ?? fallback.pythonCommand,
+    splitDir: normalizeOptionalString(raw.splitDir) ?? fallback.splitDir,
+    dataDirs: normalizeStringList(raw.dataDirs, fallback.dataDirs),
+    targetBackend: normalizeOptionalString(raw.targetBackend) ?? fallback.targetBackend,
+    targetModel: normalizeOptionalString(raw.targetModel) ?? fallback.targetModel,
+    targetBaseUrl: normalizeOptionalString(raw.targetBaseUrl) ?? fallback.targetBaseUrl,
+    targetAuthFile: normalizeOptionalString(raw.targetAuthFile) ?? fallback.targetAuthFile,
+    targetAuthProviderID: normalizeOptionalString(raw.targetAuthProviderID) ?? fallback.targetAuthProviderID,
+    targetApiKeyEnv: normalizeOptionalString(raw.targetApiKeyEnv) ?? fallback.targetApiKeyEnv,
+    reasoningEffort: normalizeOptionalString(raw.reasoningEffort) ?? fallback.reasoningEffort,
+    workers: positiveIntegerField(raw, "workers", fallback.workers),
+    timeoutMs: positiveIntegerField(raw, "timeoutMs", fallback.timeoutMs),
+  }
+}
+
 function normalizeMaterials(raw: unknown): CaseMaterial[] {
   if (!Array.isArray(raw)) return []
   return raw
@@ -1793,6 +1947,7 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
     )
   }
   directChatConfig = normalizeDirectChatConfig(raw.directChatConfig, directChatConfig)
+  const skillOptDirectChatConfig = normalizeSkillOptDirectChatConfig(raw.skillOptDirectChatConfig)
   const adaptiveConcurrency =
     raw.adaptiveConcurrency && typeof raw.adaptiveConcurrency === "object"
       ? (raw.adaptiveConcurrency as Record<string, unknown>)
@@ -1937,6 +2092,7 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
     directChatConfigFile,
     directChatConfigPath,
     directChatConfig,
+    skillOptDirectChatConfig,
   }
 
   return { ...config, configPath }

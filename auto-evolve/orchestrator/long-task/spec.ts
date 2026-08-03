@@ -701,6 +701,8 @@ export async function loadLongTaskSpec(
   }))
   const disableCompletionValidators =
     typeof raw.disableCompletionValidators === "boolean" ? raw.disableCompletionValidators : false
+  const campaignFinalAcceptanceMode =
+    raw.campaignFinalAcceptanceMode === "validators_only" ? "validators_only" : "blank_agent"
 
   const planning = isObject(raw.planning)
     ? {
@@ -732,6 +734,19 @@ export async function loadLongTaskSpec(
     title: typeof raw.title === "string" && raw.title.trim() ? raw.title : "Long Task",
     goal: typeof raw.goal === "string" && raw.goal.trim() ? raw.goal : "",
     taskFamily: typeof raw.taskFamily === "string" && raw.taskFamily.trim() ? raw.taskFamily : undefined,
+    taskProfile: isObject(raw.taskProfile)
+      ? {
+          id:
+            typeof raw.taskProfile.id === "string" && raw.taskProfile.id.trim()
+              ? raw.taskProfile.id.trim()
+              : "",
+          accessSystem: raw.taskProfile.accessSystem === "profile_v2" ? "profile_v2" : "legacy",
+          version:
+            typeof raw.taskProfile.version === "string" && raw.taskProfile.version.trim()
+              ? raw.taskProfile.version.trim()
+              : undefined,
+        }
+      : undefined,
     domainTags: normalizeStringArray(raw.domainTags),
     materials,
     targetPaths,
@@ -752,6 +767,7 @@ export async function loadLongTaskSpec(
     capabilities,
     validatorProfiles,
     blankEvalValidatorProfiles,
+    campaignFinalAcceptanceMode,
     validators,
     planning,
     execution,
@@ -799,6 +815,9 @@ export async function loadLongTaskSpec(
 
   if (!spec.goal.trim()) {
     throw new Error(`Long-task spec is missing a non-empty goal: ${resolvedSpecPath}`)
+  }
+  if (spec.taskProfile && !spec.taskProfile.id) {
+    throw new Error(`Long-task taskProfile.id must be non-empty: ${resolvedSpecPath}`)
   }
   if (!spec.materials.length) {
     throw new Error(`Long-task spec must include at least one material: ${resolvedSpecPath}`)

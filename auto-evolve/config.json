@@ -100,8 +100,7 @@
       "merge-surface-standard": {
         "description": "Merged skill pre-blank hard gates: standard skill layout plus generic merge anti-leak surface checks.",
         "validatorProfiles": [
-          "skill-surface/standard-hard-v1",
-          "merge-surface/standard-v1"
+          "merge-surface/standard-hard-v2"
         ],
         "blankEvalValidatorProfiles": []
       },
@@ -117,7 +116,7 @@
   "mergeConfig": {
     "enabled": true,
     "enabledNote": "控制 multi-instance flat merge / replay repair 是否注入可拔插 merge contract；开启后合并 prompt 保持通用，任务差异由 contract 提供。",
-    "mode": "legacy_script",
+    "mode": "long_task",
     "modeNote": "控制默认合并后端：legacy_script=merge-as-old，long_task=merge-as-long-task，skillopt=merge-as-opt；both_smoke 只用于对照烟测。",
     "defaultPrompt": "methods/recipes/multi-instance/prompts/merge.md",
     "defaultPromptNote": "控制通用平面合并 prompt；该文件必须保持数据集无关，不允许写死 audit / paper / spreadsheet 等任务专用输出。",
@@ -172,11 +171,15 @@
     "acceptanceSuccessCriterion": "all_pass",
     "acceptanceSuccessCriterionNote": "控制 strict_all_pass 的成功标准；all_pass 表示最终回撤必须全过，allow_partial/report_only 只适合探索实验。",
     "asLongTask": {
-      "enabled": false,
+      "enabled": true,
       "enabledNote": "Controls whether merge can be generated as a normal long-task dataset instead of only using the legacy merge script.",
+      "taskProfile": "multi_skill_merge_v2",
+      "taskProfileNote": "控制长程合并使用哪套角色流程；legacy 保持原流程，multi_skill_merge_v2 启用源清点、覆盖映射、冲突消解、去重、来源审计和回撤诊断角色。",
+      "accessSystem": "profile_v2",
+      "accessSystemNote": "控制角色文件权限；legacy 保持旧路径授权，profile_v2 使用命名信息视图、逐角色 access-manifest 和越界失败关闭。multi_skill_merge_v2 必须与 profile_v2 成对启用。",
       "inputSelection": "success_only",
       "inputSelectionNote": "Controls which source case skills enter the merge long-task: success_only, failed_only, or success_and_failed.",
-      "groupSize": 25,
+      "groupSize": 5,
       "groupSizeNote": "Controls how many source skills are packed into one merge long-task case.",
       "grouping": "sequential",
       "groupingNote": "Controls grouping strategy. Only sequential is enabled now to avoid hidden random splits.",
@@ -192,8 +195,22 @@
       "focusedBlankAcceptanceModeNote": "Controls the blank acceptance mode for focused repair rounds after replay failures.",
       "finalBlankAcceptanceMode": "merge-final-full-replay",
       "finalBlankAcceptanceModeNote": "Controls the blank acceptance mode for final merged-skill replay.",
+      "acceptanceRunner": "opt-direct-chat",
+      "acceptanceRunnerNote": "Controls merge-as-long-task product validation: blank-opencode keeps historical blank replay; direct-chat uses AEV chat; opt-direct-chat calls SkillOpt's native eval-only runner.",
+      "preset": "msl_layer_closed_loop",
+      "presetNote": "msl_layer_closed_loop forces per-group closed-loop acceptance plus immutable final confirmation; msl_final_only preserves the historical low-cost final-only path; custom uses the explicit fields below.",
+      "acceptanceTiming": "per_group",
+      "acceptanceTimingNote": "per_round keeps the historical Blank Agent replay, per_group runs the selected Direct Chat backend after every hierarchy group, and final_only validates only the final merged skill. Ordinary AEV campaigns are unchanged.",
+      "acceptanceConcurrency": 5,
+      "acceptanceConcurrencyNote": "Backend-neutral concurrency for each group acceptance run; replayConcurrency remains supported for historical Blank replay.",
+      "replayPolicy": "closed_loop_stable_guard",
+      "replayPolicyNote": "Controls the per-group MSL repair loop: full scope first, then failed-only repair/replay, then replay the previously stable cases to detect regression.",
+      "finalConfirmation": {
+        "enabled": true,
+        "enabledNote": "After the final group passes its repair loop, freeze the Skill and run one more full-scope evaluation without allowing repair."
+      },
       "hierarchical": {
-        "enabled": false,
+        "enabled": true,
         "enabledNote": "Controls whether merge-as-long-task is recursively scheduled as level-01, level-02 ... until one final skill remains.",
         "levelPlanningMode": "until_one",
         "levelPlanningModeNote": "Controls hierarchy planning: until_one keeps merging until one skill remains; configured_levels only runs explicitly listed levels.",
@@ -211,6 +228,8 @@
         "watchPollMsNote": "Controls how often the hierarchical merge live supervisor checks already-running group campaigns.",
         "watchMaxPolls": 720,
         "watchMaxPollsNote": "Controls how many watch polls are allowed before a healthy-looking group campaign is treated as unresolved and fails closed.",
+        "maxReplayRepairAttempts": 20,
+        "maxReplayRepairAttemptsNote": "Controls how many isolated merge-as-long-task repair campaigns may run after a group replay fails; this does not change ordinary AEV training rounds.",
         "inputSelection": "success_only",
         "inputSelectionNote": "Controls first-level source skill selection: success_only, failed_only, or success_and_failed.",
         "intermediateReplayScope": "group_cases",
@@ -771,6 +790,41 @@
       "pageWindow": 0,
       "pdfRenderDpi": 240
     }
+  },
+  "skillOptDirectChatConfig": {
+    "enabled": true,
+    "enabledNote": "Master switch for the external SkillOpt native Direct Chat adapter; false preserves all historical AEV behavior.",
+    "projectRoot": "C:/Users/ZhuanZ/Desktop/SkillOpt",
+    "projectRootNote": "Read-only external SkillOpt checkout. AEV never writes evaluation outputs into this directory.",
+    "configPath": "configs/officeqa/default.yaml",
+    "configPathNote": "Native SkillOpt dataset config, resolved relative to projectRoot.",
+    "pythonCommand": "python",
+    "pythonCommandNote": "Python executable used to launch SkillOpt's unmodified scripts/eval_only.py.",
+    "splitDir": "data/officeqa_id_split",
+    "splitDirNote": "Native SkillOpt split directory; AEV creates filtered copies only under its own run output.",
+    "dataDirs": [
+      "E:/project/experiment/datasets/OfficeQA_corpus/treasury_bulletins_parsed",
+      "C:/Users/ZhuanZ/Desktop/SkillOpt/data/officeqa_docs_pdf_text_fallback"
+    ],
+    "dataDirsNote": "Native SkillOpt material/evidence roots. They are passed explicitly for every run so filtered cross-partition evaluation cannot silently lose OfficeQA evidence.",
+    "targetBackend": "minimax_chat",
+    "targetBackendNote": "Optional SkillOpt target backend override; empty inherits the native config.",
+    "targetModel": "MiniMax-M2.7",
+    "targetModelNote": "Optional SkillOpt target model override; empty inherits the native config.",
+    "targetBaseUrl": "https://api.minimaxi.com/anthropic/v1",
+    "targetBaseUrlNote": "MiniMax Coding Plan China endpoint used by the proven SkillOpt runs; prevents sk-cp credentials from being sent to the incompatible international endpoint.",
+    "targetAuthFile": "C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/auto-evolve/.opencode-private/data/opencode/auth.json",
+    "targetAuthFileNote": "Isolated OpenCode auth snapshot used by opt-direct-chat. When set, this source wins over the ambient environment and prevents a normal sk-api key from shadowing the Coding Plan credential.",
+    "targetAuthProviderID": "minimax-cn-coding-plan",
+    "targetAuthProviderIDNote": "Provider entry selected from targetAuthFile. The key value is read only at child launch and is never persisted in reports or command lines.",
+    "targetApiKeyEnv": "MINIMAX_API_KEY",
+    "targetApiKeyEnvNote": "Fallback environment variable used only when targetAuthFile is empty. The secret value is never written into launch files or command lines.",
+    "reasoningEffort": "medium",
+    "reasoningEffortNote": "Reasoning effort passed directly to SkillOpt eval_only.py.",
+    "workers": 3,
+    "workersNote": "Native SkillOpt rollout concurrency.",
+    "timeoutMs": 43200000,
+    "timeoutMsNote": "Hard timeout for one native SkillOpt evaluation run."
   },
   "defaultMethod": "sequential-refine",
   "defaultPropagationMethod": "single-branch-baseline",

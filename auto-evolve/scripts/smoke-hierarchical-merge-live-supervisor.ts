@@ -128,16 +128,23 @@ async function main() {
     campaignManifestPath: manifestPath,
     outRoot,
     label: "live-supervisor-smoke",
+    taskProfile: "multi_skill_merge_v2",
+    accessSystem: "profile_v2",
     levels: [
       { level: 1, groupSize: 5, groupConcurrency: 2 },
       { level: 2, groupSize: 2, groupConcurrency: 1 },
     ],
     levelPlanningMode: "configured_levels",
     finalizationMode: "merge_remaining_to_one",
+    // This smoke verifies todo/active/watch supervision and hierarchy
+    // promotion. Replay and repair have their own deterministic smoke.
+    mountBlankReplay: false,
     runner: fakeRunner,
   })
 
   assert(report.status === "complete", `expected complete, got ${report.status}`)
+  assert(report.taskProfile === "multi_skill_merge_v2", "report must preserve task profile")
+  assert(report.accessSystem === "profile_v2", "report must preserve access system")
   assert(report.levels.length === 2, `expected 2 levels, got ${report.levels.length}`)
   assert(report.levels[0]?.groupCount === 2, "level 1 should have 2 groups")
   assert(report.levels[1]?.groupCount === 1, "level 2 should have 1 final group")
@@ -151,6 +158,8 @@ async function main() {
 
   const state = await readJsonFile<any>(path.join(outRoot, "hierarchical-live-state.json"))
   assert(state.schema === "hierarchical-merge-long-task-live-state/v1", "live state schema missing")
+  assert(state.taskProfile === "multi_skill_merge_v2", "live state must preserve task profile")
+  assert(state.accessSystem === "profile_v2", "live state must preserve access system")
   assert(state.levels[0]?.groups[0]?.status, "live state group status missing")
   assert(
     state.levels.some((level: any) => level.groups.some((group: any) => group.outputSkillPath)),

@@ -54,12 +54,17 @@ import {
   type BenchmarkHistoryTaskEntry,
 } from "../orchestrator/history-manager"
 import type { LongTaskCampaignHistoryPolicy } from "../orchestrator/long-task-campaign/contract"
-import { runHierarchicalMergeLongTask } from "./run-hierarchical-merge-long-task"
+import {
+  runHierarchicalMergeLongTask,
+  type ExternalMergeAcceptanceRunner,
+} from "./run-hierarchical-merge-long-task"
 import { updateExperimentLedger } from "./update-experiment-ledger"
 import { runSkillOptMerger } from "../orchestrator/multi-instance/skillopt-merger"
+import { runSkillOptNativeEval } from "../orchestrator/skillopt-native-eval/runner"
+import type { SkillOptNativeEvalConfig, SkillOptNativeSplit } from "../orchestrator/skillopt-native-eval/contract"
 
 type OrchestratorMode = "campaign-only" | "full-pipeline"
-type EvalRunner = "blank-opencode" | "direct-chat"
+type EvalRunner = "blank-opencode" | "direct-chat" | "opt-direct-chat"
 type MergeExecutionMode = "legacy_script" | "long_task" | "skillopt" | "both_smoke"
 type MergePathName = "merge-as-old" | "merge-as-long-task" | "merge-as-opt" | "merge-both-smoke"
 
@@ -169,6 +174,8 @@ type BenchmarkConfig = {
   mergeExecutionMode?: MergeExecutionMode
   mergeAsLongTask?: {
     enabled: boolean
+    taskProfile: "legacy" | "multi_skill_merge_v2"
+    accessSystem: "legacy" | "profile_v2"
     inputSelection: "success_only" | "failed_only" | "success_and_failed"
     groupSize: number
     replayScope: "group_cases" | "union_source_cases" | "sampled_source_cases"
@@ -176,6 +183,15 @@ type BenchmarkConfig = {
     surfaceProfileSet: string
     focusedBlankAcceptanceMode: string
     finalBlankAcceptanceMode: string
+    acceptanceRunner: EvalRunner
+    preset: "custom" | "msl_final_only" | "msl_layer_closed_loop"
+    acceptanceTiming: "per_round" | "per_group" | "final_only"
+    acceptanceConcurrency: number
+    replayPolicy: "closed_loop_stable_guard"
+    maxReplayRepairAttempts: number
+    finalConfirmation: {
+      enabled: boolean
+    }
   }
   mergeAsSkillOpt?: Awaited<ReturnType<typeof loadConfig>>["mergeConfig"]["asSkillOpt"]
   mergeStrategy: "flat" | "hierarchical"
@@ -217,6 +233,7 @@ type BenchmarkConfig = {
     maxPdfCharsPerFile?: number
     skillInputMode?: "full" | "head-tail" | "core-files"
   }
+  skillOptDirectChat: SkillOptNativeEvalConfig
   runBaseline: boolean
   /**
    * When true, a full-pipeline benchmark may continue into merge/replay/test
@@ -308,6 +325,10 @@ export type BenchmarkState = {
     sourceTrainTotal?: number
     reportPath?: string
     reportMarkdownPath?: string
+    hierarchyBuilt?: boolean
+    acceptanceCompleted?: boolean
+    accepted?: boolean
+    acceptanceStatus?: string
   }
   trainReplay?: {
     passed: number
@@ -473,6 +494,15 @@ const VALUE_OPTIONS = new Set([
   "--merge-repair-prompt-path",
   "--merge-strategy",
   "--merge-success-criterion",
+  "--opt-direct-chat-config",
+  "--opt-direct-chat-project-root",
+  "--opt-direct-chat-python",
+  "--opt-direct-chat-reasoning-effort",
+  "--opt-direct-chat-split-dir",
+  "--opt-direct-chat-target-backend",
+  "--opt-direct-chat-target-model",
+  "--opt-direct-chat-timeout-ms",
+  "--opt-direct-chat-workers",
   "--skillopt-batch-size",
   "--skillopt-bridge-script",
   "--skillopt-config",
@@ -2005,7 +2035,9 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
   const test =
     config.evalRunner === "direct-chat"
       ? await runDirectChatHeldoutTest(config, testIDs, merge.mergedSkillDir)
-      : await runCoordinatorPhase3Validate({
+      : config.evalRunner === "opt-direct-chat"
+        ? await runSkillOptNativeProductEval(config, testIDs, merge.mergedSkillDir, "valid_unseen", "opt-direct-chat-test")
+        : await runCoordinatorPhase3Validate({
           cwd: repoRoot,
           state: stateRun,
           rounds: config.validateRounds,
@@ -2013,7 +2045,13 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
           filter: (instance) => instance.role === "test",
         })
   state.test = { passed: test.passed, total: test.total, failed: test.failed }
-  await writeJson(path.join(config.outDir, config.evalRunner === "direct-chat" ? "direct-chat-test-output.json" : "trained-test-output.json"), test)
+  const testOutputName =
+    config.evalRunner === "direct-chat"
+      ? "direct-chat-test-output.json"
+      : config.evalRunner === "opt-direct-chat"
+        ? "opt-direct-chat-test-output.json"
+        : "trained-test-output.json"
+  await writeJson(path.join(config.outDir, testOutputName), test)
   await writeMergeLineage(config, { ...state.merge, replay, test })
   await persistState(stateFile, scorecardFile, state)
   return { merge, replay, test }
@@ -2078,11 +2116,55 @@ async function mergeAsLongTaskReplayAndTest(
       : config.mergeAsLongTask?.inputSelection === "failed_only"
         ? trainIDs.length - ok.size
         : trainIDs.length
+  const selectedCaseIDs = inputs.rows
+    .filter((row) =>
+      config.mergeAsLongTask?.inputSelection === "success_only"
+        ? row.verified
+        : config.mergeAsLongTask?.inputSelection === "failed_only"
+          ? !row.verified
+          : true,
+    )
+    .map((row) => row.id)
   if (selectedCount <= 0) {
     throw new Error(`merge-as-long-task selected no inputs. inputSelection=${config.mergeAsLongTask?.inputSelection ?? "success_only"}`)
   }
 
   const outRoot = path.join(config.outDir, "merge-as-long-task")
+  const externalAcceptanceRunner =
+    config.mergeAsLongTask?.acceptanceRunner === "blank-opencode"
+      ? undefined
+      : createMergeAcceptanceRunner(config, config.mergeAsLongTask.acceptanceRunner)
+  const perGroupAcceptance =
+    config.mergeAsLongTask?.acceptanceTiming === "per_group" && externalAcceptanceRunner
+      ? {
+          stages: ["initial_replay", "repair_promote"] as MergeAcceptanceStage[],
+          successCriterion: "all_pass" as const,
+          maxRepairAttempts: config.mergeAsLongTask.maxReplayRepairAttempts,
+          runner: externalAcceptanceRunner,
+        }
+      : undefined
+  const immutableFinalConfirmation =
+    config.mergeAsLongTask?.acceptanceTiming === "per_group" &&
+    config.mergeAsLongTask.finalConfirmation.enabled &&
+    externalAcceptanceRunner
+      ? {
+          caseIDs: selectedCaseIDs,
+          stages: ["initial_replay", "strict_acceptance_gate"] as MergeAcceptanceStage[],
+          successCriterion: "all_pass" as const,
+          maxRepairAttempts: 0,
+          runner: externalAcceptanceRunner,
+        }
+      : undefined
+  const finalOnlyAcceptance =
+    config.mergeAsLongTask?.acceptanceTiming === "final_only" && externalAcceptanceRunner
+      ? {
+          caseIDs: selectedCaseIDs,
+          stages: config.mergeAcceptanceStages,
+          successCriterion: config.mergeAcceptanceSuccessCriterion,
+          maxRepairAttempts: config.repairAttempts,
+          runner: externalAcceptanceRunner,
+        }
+      : undefined
   const flatLevels = hierarchical.enabled
     ? undefined
     : [
@@ -2091,7 +2173,7 @@ async function mergeAsLongTaskReplayAndTest(
           groupSize: selectedCount,
           groupConcurrency: 1,
           replayScope: config.mergeAsLongTask?.replayScope ?? "group_cases",
-          blankReplayConcurrency: config.mergeAsLongTask?.replayConcurrency ?? config.stageConcurrency.trainReplay,
+          blankReplayConcurrency: config.mergeAsLongTask?.acceptanceConcurrency ?? config.stageConcurrency.trainReplay,
           surfaceProfileSet: config.mergeAsLongTask?.surfaceProfileSet,
           blankAcceptanceScenario: "merge_initial_replay",
         },
@@ -2103,20 +2185,24 @@ async function mergeAsLongTaskReplayAndTest(
     campaignManifestPath: inputs.manifestPath,
     outRoot,
     label: `${config.label}-merge-as-long-task`,
+    taskProfile: config.mergeAsLongTask?.taskProfile,
+    accessSystem: config.mergeAsLongTask?.accessSystem,
     groupSize: hierarchical.enabled ? hierarchical.groupSize : selectedCount,
     groupConcurrency: hierarchical.enabled ? hierarchical.groupConcurrency : 1,
-    replayConcurrency: config.mergeAsLongTask?.replayConcurrency ?? config.stageConcurrency.trainReplay,
+    replayConcurrency: config.mergeAsLongTask?.acceptanceConcurrency ?? config.stageConcurrency.trainReplay,
+    maxReplayRepairAttempts: config.mergeAsLongTask?.maxReplayRepairAttempts,
     levelPlanningMode: hierarchical.enabled ? hierarchical.levelPlanningMode : "configured_levels",
     finalizationMode: hierarchical.enabled ? hierarchical.finalizationMode : "require_single_final",
     levels: flatLevels,
+    mountBlankReplay:
+      config.mergeAsLongTask?.acceptanceTiming === "per_round" &&
+      config.mergeAsLongTask?.acceptanceRunner === "blank-opencode",
+    perGroupAcceptance,
+    externalFinalAcceptance: immutableFinalConfirmation ?? finalOnlyAcceptance,
     dryRun: config.dryRun,
   })
-  if (!report.finalSkillPath) {
-    throw new Error(`merge-as-long-task finished without finalSkillPath. status=${report.status}`)
-  }
-
   const merge = {
-    mergedSkillDir: report.finalSkillPath,
+    mergedSkillDir: report.finalSkillPath ?? "",
     strategy: config.mergeStrategy,
     reportPath: path.join(outRoot, "hierarchical-live-report.json"),
   }
@@ -2129,6 +2215,10 @@ async function mergeAsLongTaskReplayAndTest(
     sourceTrainVerified: ok.size,
     sourceTrainTotal: trainIDs.length,
     reportPath: merge.reportPath,
+    hierarchyBuilt: report.hierarchyBuilt,
+    acceptanceCompleted: report.acceptanceCompleted,
+    accepted: report.accepted,
+    acceptanceStatus: report.externalFinalAcceptance?.acceptanceStatus ?? report.status,
   }
   await writeJson(path.join(config.outDir, "merge-output.json"), {
     schema: "benchmark-merge-as-long-task-output/v1",
@@ -2138,36 +2228,133 @@ async function mergeAsLongTaskReplayAndTest(
   })
   await writeMergeLineage(config, state.merge)
   await persistState(stateFile, scorecardFile, state)
-
-  const replay = {
-    passed: trainIDs.length,
-    total: trainIDs.length,
-    failed: 0,
-    skipped: 0,
-    durationMs: 0,
-    acceptanceStatus: "repair_promoted" as MergeAcceptanceStatus,
-    accepted: true,
-    stagesRun: ["initial_replay"] as MergeAcceptanceStage[],
-  }
-  if (config.runTrainReplay) {
+  if (!report.finalSkillPath) {
+    const failedLevel = report.hierarchyFailure
+      ? report.levels.find((item: any) => item.level === report.hierarchyFailure.level)
+      : undefined
+    const attemptedGroups = (failedLevel?.groups ?? []).filter((group: any) => group.status !== "not_started")
+    const attemptedTotal = attemptedGroups.reduce((sum: number, group: any) => sum + Number(group.caseCount ?? 0), 0)
+    const failedCaseIDs = [
+      ...new Set(
+        attemptedGroups.flatMap((group: any) =>
+          Array.isArray(group.replay?.failedCaseIDs) ? group.replay.failedCaseIDs.map(String) : [],
+        ),
+      ),
+    ]
+    const replay = {
+      passed: Math.max(0, attemptedTotal - failedCaseIDs.length),
+      total: selectedCaseIDs.length,
+      failed: failedCaseIDs.length,
+      skipped: Math.max(0, selectedCaseIDs.length - attemptedTotal),
+      durationMs: 0,
+      regressions: failedCaseIDs,
+      acceptanceStatus: report.status as MergeAcceptanceStatus,
+      accepted: false,
+      stagesRun: config.mergeAcceptanceStages,
+      hierarchyFailure: report.hierarchyFailure,
+    }
     state.phase = "train_replay"
     state.trainReplay = {
       passed: replay.passed,
       total: replay.total,
       failed: replay.failed,
       acceptanceStatus: replay.acceptanceStatus,
+      accepted: false,
+      stagesRun: replay.stagesRun,
+    }
+    await writeJson(path.join(config.outDir, "train-replay-output.json"), {
+      ...replay,
+      note: "merge-as-long-task stopped fail-closed before producing a final Skill; unstarted cases were not evaluated.",
+      sourceReportPath: merge.reportPath,
+    })
+    await writeMergeLineage(config, { ...state.merge, replay })
+    await persistState(stateFile, scorecardFile, state)
+    return { merge, replay, test: undefined }
+  }
+  if (!report.accepted) {
+    throw new Error(
+      `merge-as-long-task built the hierarchy but did not pass acceptance: ${state.merge.acceptanceStatus}. ` +
+        `Candidate Skill and reports were preserved at ${merge.mergedSkillDir}.`,
+    )
+  }
+
+  const externalFinalOnly = config.mergeAsLongTask?.acceptanceTiming === "final_only"
+  const supervisedExternalReplay = report.externalFinalAcceptance
+  const externalReplay = supervisedExternalReplay
+    ? {
+        passed: supervisedExternalReplay.passed,
+        total: supervisedExternalReplay.total,
+        failed: supervisedExternalReplay.failed,
+        skipped: 0,
+        durationMs: 0,
+        regressions: supervisedExternalReplay.failedCaseIDs,
+        acceptanceStatus: supervisedExternalReplay.acceptanceStatus as MergeAcceptanceStatus,
+        accepted: supervisedExternalReplay.accepted,
+        stagesRun: supervisedExternalReplay.stagesRun as MergeAcceptanceStage[],
+        initialReplay: supervisedExternalReplay.initialReplay,
+        finalReplay: supervisedExternalReplay.finalReplay,
+        repairAttempts: supervisedExternalReplay.repairAttempts,
+        mergedSkillDir: supervisedExternalReplay.finalSkillPath,
+        externalAcceptanceReportPath: supervisedExternalReplay.reportPath,
+      }
+    : externalFinalOnly
+      ? config.mergeAsLongTask?.acceptanceRunner === "direct-chat"
+        ? await runDirectChatHeldoutTest(config, trainIDs, merge.mergedSkillDir, "direct-chat-train-replay", "train")
+        : undefined
+      : undefined
+  if (externalFinalOnly && !externalReplay) {
+    throw new Error(
+      "merge-as-long-task acceptanceTiming=final_only requires acceptanceRunner=direct-chat or opt-direct-chat. " +
+        "blank-opencode must keep acceptanceTiming=per_round.",
+    )
+  }
+  const replay = supervisedExternalReplay
+    ? externalReplay!
+    : externalReplay
+    ? {
+        ...externalReplay,
+        acceptanceStatus: (externalReplay.passed === externalReplay.total ? "replay_passed" : "replay_failed") as MergeAcceptanceStatus,
+        accepted: externalReplay.passed === externalReplay.total,
+        stagesRun: ["initial_replay"] as MergeAcceptanceStage[],
+      }
+    : {
+        passed: selectedCaseIDs.length,
+        total: selectedCaseIDs.length,
+        failed: 0,
+        skipped: 0,
+        durationMs: 0,
+        acceptanceStatus: "replay_passed" as MergeAcceptanceStatus,
+        accepted: true,
+        stagesRun: ["initial_replay"] as MergeAcceptanceStage[],
+      }
+  if (config.runTrainReplay) {
+    state.phase = "train_replay"
+    state.trainReplay = {
+      passed: replay.passed,
+      total: replay.total,
+      failed: replay.failed,
+      repairAttempts: "repairAttempts" in replay ? replay.repairAttempts : undefined,
+      acceptanceStatus: replay.acceptanceStatus,
       accepted: replay.accepted,
       stagesRun: replay.stagesRun,
-      initialReplay: {
-        passed: replay.passed,
-        total: replay.total,
-        failed: replay.failed,
-      },
+      initialReplay:
+        "initialReplay" in replay && replay.initialReplay
+          ? replay.initialReplay
+          : {
+              passed: replay.passed,
+              total: replay.total,
+              failed: replay.failed,
+            },
+      finalReplay: "finalReplay" in replay ? replay.finalReplay : undefined,
     }
     await writeJson(path.join(config.outDir, "train-replay-output.json"), {
       ...replay,
       note:
-        "merge-as-long-task runs blank replay as a long-task completion validator; this benchmark replay record mirrors that acceptance.",
+        externalFinalOnly
+          ? `merge-as-long-task deferred product replay to final ${config.mergeAsLongTask?.acceptanceRunner}.`
+          : config.mergeAsLongTask?.acceptanceTiming === "per_group"
+            ? `merge-as-long-task closed every hierarchy group with ${config.mergeAsLongTask.acceptanceRunner}, then ran the configured immutable final confirmation.`
+            : "merge-as-long-task runs blank replay as a long-task completion validator; this benchmark replay record mirrors that acceptance.",
       sourceReportPath: merge.reportPath,
     })
     await writeMergeLineage(config, { ...state.merge, replay })
@@ -2178,21 +2365,34 @@ async function mergeAsLongTaskReplayAndTest(
 
   state.phase = "test"
   await persistState(stateFile, scorecardFile, state)
-  if (config.evalRunner !== "direct-chat") {
+  if (config.evalRunner === "blank-opencode") {
     throw new Error(
-      "mergeExecutionMode=long_task currently supports held-out test only with evalRunner=direct-chat. " +
-        "Use --stop-after train-replay or --eval-runner direct-chat, or keep mergeExecutionMode=legacy_script for blank-opencode held-out tests.",
+      "mergeExecutionMode=long_task supports held-out test with direct-chat or opt-direct-chat. " +
+        "Use --stop-after train-replay, choose a Direct Chat runner, or keep mergeExecutionMode=legacy_script for blank-opencode held-out tests.",
     )
   }
-  const test = await runDirectChatHeldoutTest(config, testIDs, merge.mergedSkillDir)
+  const test =
+    config.evalRunner === "opt-direct-chat"
+      ? await runSkillOptNativeProductEval(config, testIDs, merge.mergedSkillDir, "valid_unseen", "opt-direct-chat-test")
+      : await runDirectChatHeldoutTest(config, testIDs, merge.mergedSkillDir)
   state.test = { passed: test.passed, total: test.total, failed: test.failed }
-  await writeJson(path.join(config.outDir, "direct-chat-test-output.json"), test)
+  await writeJson(
+    path.join(config.outDir, config.evalRunner === "opt-direct-chat" ? "opt-direct-chat-test-output.json" : "direct-chat-test-output.json"),
+    test,
+  )
   await writeMergeLineage(config, { ...state.merge, replay, test })
   await persistState(stateFile, scorecardFile, state)
   return { merge, replay, test }
 }
 
-async function runDirectChatHeldoutTest(config: BenchmarkConfig, testIDs: string[], mergedSkillDir: string) {
+async function runDirectChatHeldoutTest(
+  config: BenchmarkConfig,
+  testIDs: string[],
+  mergedSkillDir: string,
+  runName = "direct-chat-test",
+  splitName = "test",
+  concurrencyOverride?: number,
+) {
   const directChat = config.directChat
   if (!directChat) {
     throw new Error("Direct Chat test configuration is missing.")
@@ -2205,7 +2405,7 @@ async function runDirectChatHeldoutTest(config: BenchmarkConfig, testIDs: string
       "Direct Chat has no configured models. Add directChatConfig.models to auto-evolve/config.json or pass --direct-chat-models-config <json>.",
     )
   }
-  const runRoot = path.join(config.outDir, "direct-chat-test")
+  const runRoot = path.join(config.outDir, runName)
   const skill = await buildSkillBundle({ skillRoot: mergedSkillDir, outDir: runRoot })
   const splitPath = path.join(runRoot, "direct-chat-test-ids.json")
   await writeJson(splitPath, testIDs)
@@ -2213,7 +2413,7 @@ async function runDirectChatHeldoutTest(config: BenchmarkConfig, testIDs: string
     adapterID: directChat.adapterID,
     taskPackRoot: config.taskPackRoot,
     splitPath,
-    splitName: "test",
+    splitName,
     outDir: runRoot,
     allowOmittedMaterials: directChat.allowOmittedMaterials,
     maxPdfCharsPerFile: directChat.maxPdfCharsPerFile,
@@ -2228,13 +2428,22 @@ async function runDirectChatHeldoutTest(config: BenchmarkConfig, testIDs: string
     runModeID: directChat.runModeID,
     runModeDescription: directChat.runModeDescription,
     modelIDs: directChat.modelIDs,
-    globalConcurrency: directChat.globalConcurrency ?? config.stageConcurrency.testDirectChat,
+    globalConcurrency: concurrencyOverride ?? directChat.globalConcurrency ?? config.stageConcurrency.testDirectChat,
     includeNoSkillBaseline: directChat.includeNoSkillBaseline,
     noSkillOnly: directChat.noSkillOnly,
     skillInputMode: directChat.skillInputMode,
     resumeExisting: true,
   })
   const passed = result.results.filter((item) => item.passed).length
+  const infrastructureCategories = new Set([
+    "auth",
+    "quota",
+    "rate_limit",
+    "provider_5xx",
+    "timeout",
+    "network",
+    "config",
+  ])
   return {
     passed,
     total: result.results.length,
@@ -2243,6 +2452,114 @@ async function runDirectChatHeldoutTest(config: BenchmarkConfig, testIDs: string
     regressions: result.results.filter((item) => !item.passed).map((item) => `${item.modelID}:${item.caseID}`),
     durationMs: 0,
     directChatRunDir: runRoot,
+    caseResults: result.results.map((item) => ({
+      id: item.caseID,
+      passed: item.passed,
+      summary: item.error ?? item.errorCategory ?? (item.passed ? "Direct Chat passed" : "Direct Chat failed"),
+      resultPath: path.join(runRoot, "results", item.modelID, item.caseID, "result.json"),
+    })),
+    infrastructureFailures: result.results
+      .filter((item) => !item.passed && infrastructureCategories.has(item.errorCategory ?? "unknown"))
+      .map((item) => ({
+        id: item.caseID,
+        summary: item.error ?? item.errorCategory ?? "Direct Chat infrastructure failure",
+      })),
+  }
+}
+
+async function runSkillOptNativeProductEval(
+  config: BenchmarkConfig,
+  caseIDs: string[],
+  mergedSkillDir: string,
+  split: SkillOptNativeSplit,
+  runName: string,
+  workersOverride?: number,
+) {
+  const runRoot = path.join(config.outDir, runName)
+  const skill = await buildSkillBundle({ skillRoot: mergedSkillDir, outDir: path.join(runRoot, "skill-bundle") })
+  return runSkillOptNativeEval({
+    config: workersOverride
+      ? { ...config.skillOptDirectChat, workers: workersOverride }
+      : config.skillOptDirectChat,
+    skillPath: skill.bundlePath,
+    split,
+    caseIDs,
+    outDir: runRoot,
+    runtimeScope: `benchmark:${path.basename(config.outDir)}:${runName}`,
+  })
+}
+
+function createMergeAcceptanceRunner(
+  config: BenchmarkConfig,
+  runnerKind: Exclude<EvalRunner, "blank-opencode">,
+): ExternalMergeAcceptanceRunner {
+  return async (evaluation) => {
+    const relativeOut = path.relative(config.outDir, evaluation.outDir)
+    if (runnerKind === "opt-direct-chat") {
+      const native = await runSkillOptNativeProductEval(
+        config,
+        evaluation.caseIDs,
+        evaluation.candidateSkillRoot,
+        "train",
+        relativeOut,
+        config.mergeAsLongTask?.acceptanceConcurrency,
+      )
+      const caseDir = path.join(evaluation.outDir, "normalized-case-results")
+      await mkdir(caseDir, { recursive: true })
+      const cases = await Promise.all(
+        native.cases.map(async (item) => {
+          const resultPath = path.join(caseDir, `${item.id.replace(/[^A-Za-z0-9._-]/g, "_")}.json`)
+          await writeJson(resultPath, {
+            schema: "merge-long-task-external-case-result/v1",
+            phase: evaluation.phase,
+            repairAttempt: evaluation.repairAttempt,
+            candidateSkillRoot: evaluation.candidateSkillRoot,
+            nativeRunDir: native.nativeRunDir,
+            nativeResultsPath: native.nativeResultsPath,
+            ...item,
+          })
+          return {
+            id: item.id,
+            passed: item.passed,
+            summary:
+              item.failReason ??
+              (item.passed ? "SkillOpt native Direct Chat passed" : "SkillOpt native Direct Chat failed"),
+            resultPath,
+            evidenceBundlePath: native.nativeResultsPath,
+          }
+        }),
+      )
+      return {
+        passed: native.passed,
+        total: native.total,
+        failed: native.failed,
+        skipped: native.skipped,
+        durationMs: native.durationMs,
+        cases,
+        resultPath: native.nativeSummaryPath,
+        raw: native,
+      }
+    }
+
+    const direct = await runDirectChatHeldoutTest(
+      config,
+      evaluation.caseIDs,
+      evaluation.candidateSkillRoot,
+      relativeOut,
+      "train",
+      config.mergeAsLongTask?.acceptanceConcurrency,
+    )
+    return {
+      passed: direct.passed,
+      total: direct.total,
+      failed: direct.failed,
+      skipped: direct.skipped,
+      durationMs: direct.durationMs,
+      cases: direct.caseResults,
+      infrastructureFailures: direct.infrastructureFailures,
+      resultPath: path.join(direct.directChatRunDir, "summary.json"),
+      raw: direct,
+    }
   }
 }
 
@@ -2292,8 +2609,9 @@ function shouldStopAfter(config: BenchmarkConfig, phase: NonNullable<BenchmarkCo
 }
 
 function mergeAcceptanceFailed(config: BenchmarkConfig, replay: { passed: number; total: number; accepted?: boolean }) {
+  if (replay.accepted === false) return true
   if (!config.runTrainReplay) return false
-  if (mergeAcceptanceUsesStrictGate(config.mergeAcceptanceStages)) return replay.accepted === false
+  if (replay.accepted === true) return false
   return replay.passed !== replay.total
 }
 
@@ -2681,6 +2999,27 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
   }
 
   const merged = await mergeReplayAndTest(config, trainIDs, testIDs, ok, state, stateFile, scorecardFile)
+  if (mergeAcceptanceFailed(config, merged.replay)) {
+    const report: BenchmarkSummary = {
+      config,
+      trainIDs,
+      testIDs,
+      trainVerified: ok.size,
+      trainTotal: trainIDs.length,
+      status: merged.replay.accepted === false || mergeAcceptanceUsesStrictGate(config.mergeAcceptanceStages)
+        ? "merge_acceptance_failed"
+        : "train_replay_failed",
+      mergedSkillDir: merged.merge.mergedSkillDir,
+      trainingIncompleteContinued: incompleteTraining,
+    }
+    const finalReportPath = path.join(config.outDir, "final-report.json")
+    state.phase = "aborted"
+    state.finalReportPath = finalReportPath
+    await writeJson(finalReportPath, report)
+    await persistState(stateFile, scorecardFile, state)
+    return report
+  }
+
   if (shouldStopAfter(config, "merge")) {
     const report: BenchmarkSummary = {
       config,
@@ -2694,27 +3033,6 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
     }
     const finalReportPath = path.join(config.outDir, "final-report.json")
     state.phase = "completed"
-    state.finalReportPath = finalReportPath
-    await writeJson(finalReportPath, report)
-    await persistState(stateFile, scorecardFile, state)
-    return report
-  }
-
-  if (mergeAcceptanceFailed(config, merged.replay)) {
-    const report: BenchmarkSummary = {
-      config,
-      trainIDs,
-      testIDs,
-      trainVerified: ok.size,
-      trainTotal: trainIDs.length,
-      status: mergeAcceptanceUsesStrictGate(config.mergeAcceptanceStages)
-        ? "merge_acceptance_failed"
-        : "train_replay_failed",
-      mergedSkillDir: merged.merge.mergedSkillDir,
-      trainingIncompleteContinued: incompleteTraining,
-    }
-    const finalReportPath = path.join(config.outDir, "final-report.json")
-    state.phase = "aborted"
     state.finalReportPath = finalReportPath
     await writeJson(finalReportPath, report)
     await persistState(stateFile, scorecardFile, state)
@@ -3028,7 +3346,7 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
     raw: getOption(args, "--eval-runner"),
     fallback: "blank-opencode",
     optionName: "--eval-runner",
-    expected: "blank-opencode or direct-chat",
+    expected: "blank-opencode, direct-chat, or opt-direct-chat",
     aliases: {
       blank: "blank-opencode",
       blank_opencode: "blank-opencode",
@@ -3036,6 +3354,10 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
       direct: "direct-chat",
       direct_chat: "direct-chat",
       chat: "direct-chat",
+      opt: "opt-direct-chat",
+      opt_direct_chat: "opt-direct-chat",
+      skillopt: "opt-direct-chat",
+      "skillopt-direct-chat": "opt-direct-chat",
     },
   })
   const directChatRunModeID = getOption(args, "--direct-chat-run-mode") ?? projectConfig.directChatConfig.defaultRunMode
@@ -3088,6 +3410,49 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
       getOption(args, "--direct-chat-skill-input-mode") === "full"
         ? (getOption(args, "--direct-chat-skill-input-mode") as "full" | "head-tail" | "core-files")
         : directChatRunMode?.skillInputMode || projectConfig.directChatConfig.skillInput?.mode,
+  }
+  const skillOptDirectChat = {
+    ...projectConfig.skillOptDirectChatConfig,
+    enabled:
+      projectConfig.skillOptDirectChatConfig.enabled ||
+      evalRunner === "opt-direct-chat" ||
+      projectConfig.mergeConfig.asLongTask.acceptanceRunner === "opt-direct-chat",
+    projectRoot:
+      resolveMaybeRelative(getOption(args, "--opt-direct-chat-project-root")) ??
+      projectConfig.skillOptDirectChatConfig.projectRoot,
+    configPath: getOption(args, "--opt-direct-chat-config") ?? projectConfig.skillOptDirectChatConfig.configPath,
+    pythonCommand:
+      getOption(args, "--opt-direct-chat-python") ?? projectConfig.skillOptDirectChatConfig.pythonCommand,
+    splitDir: getOption(args, "--opt-direct-chat-split-dir") ?? projectConfig.skillOptDirectChatConfig.splitDir,
+    dataDirs: projectConfig.skillOptDirectChatConfig.dataDirs,
+    targetBackend:
+      getOption(args, "--opt-direct-chat-target-backend") ?? projectConfig.skillOptDirectChatConfig.targetBackend,
+    targetModel:
+      getOption(args, "--opt-direct-chat-target-model") ?? projectConfig.skillOptDirectChatConfig.targetModel,
+    targetBaseUrl: projectConfig.skillOptDirectChatConfig.targetBaseUrl,
+    targetApiKeyEnv: projectConfig.skillOptDirectChatConfig.targetApiKeyEnv,
+    reasoningEffort:
+      getOption(args, "--opt-direct-chat-reasoning-effort") ??
+      projectConfig.skillOptDirectChatConfig.reasoningEffort,
+    workers: parsePositiveIntOption(
+      args,
+      ["--opt-direct-chat-workers"],
+      projectConfig.skillOptDirectChatConfig.workers,
+    ),
+    timeoutMs: parsePositiveIntOption(
+      args,
+      ["--opt-direct-chat-timeout-ms"],
+      projectConfig.skillOptDirectChatConfig.timeoutMs,
+    ),
+  }
+  if (
+    (evalRunner === "opt-direct-chat" || projectConfig.mergeConfig.asLongTask.acceptanceRunner === "opt-direct-chat") &&
+    !hasFlag(args, "--dry-run") &&
+    !skillOptDirectChat.projectRoot
+  ) {
+    throw new Error(
+      "opt-direct-chat requires skillOptDirectChatConfig.projectRoot or --opt-direct-chat-project-root.",
+    )
   }
   if (
     evalRunner === "direct-chat" &&
@@ -3169,6 +3534,8 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
   })
   const mergeAsLongTask = {
     enabled: projectConfig.mergeConfig.asLongTask.enabled || mergeExecutionMode === "long_task",
+    taskProfile: projectConfig.mergeConfig.asLongTask.taskProfile,
+    accessSystem: projectConfig.mergeConfig.asLongTask.accessSystem,
     inputSelection: projectConfig.mergeConfig.asLongTask.inputSelection,
     groupSize: projectConfig.mergeConfig.asLongTask.groupSize,
     replayScope: projectConfig.mergeConfig.asLongTask.replayScope,
@@ -3176,6 +3543,43 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
     surfaceProfileSet: projectConfig.mergeConfig.asLongTask.surfaceProfileSet,
     focusedBlankAcceptanceMode: projectConfig.mergeConfig.asLongTask.focusedBlankAcceptanceMode,
     finalBlankAcceptanceMode: projectConfig.mergeConfig.asLongTask.finalBlankAcceptanceMode,
+    acceptanceRunner: projectConfig.mergeConfig.asLongTask.acceptanceRunner,
+    preset: projectConfig.mergeConfig.asLongTask.preset,
+    acceptanceTiming: projectConfig.mergeConfig.asLongTask.acceptanceTiming,
+    acceptanceConcurrency: projectConfig.mergeConfig.asLongTask.acceptanceConcurrency,
+    replayPolicy: projectConfig.mergeConfig.asLongTask.replayPolicy,
+    maxReplayRepairAttempts:
+      projectConfig.mergeConfig.asLongTask.hierarchical.maxReplayRepairAttempts,
+    finalConfirmation: projectConfig.mergeConfig.asLongTask.finalConfirmation,
+  }
+  if (
+    mergeAsLongTask.enabled &&
+    mergeAsLongTask.acceptanceTiming === "per_round" &&
+    mergeAsLongTask.acceptanceRunner !== "blank-opencode"
+  ) {
+    throw new Error(
+      "merge-as-long-task acceptanceTiming=per_round requires acceptanceRunner=blank-opencode. " +
+        "Direct Chat runners must use acceptanceTiming=per_group or final_only.",
+    )
+  }
+  if (
+    mergeAsLongTask.enabled &&
+    mergeAsLongTask.acceptanceTiming === "per_group" &&
+    mergeAsLongTask.acceptanceRunner === "blank-opencode"
+  ) {
+    throw new Error(
+      "merge-as-long-task acceptanceTiming=per_group requires direct-chat or opt-direct-chat. " +
+        "Use per_round for the historical blank-opencode replay path.",
+    )
+  }
+  if (
+    mergeAsLongTask.enabled &&
+    mergeAsLongTask.acceptanceTiming === "final_only" &&
+    mergeAsLongTask.acceptanceRunner === "blank-opencode"
+  ) {
+    throw new Error(
+      "merge-as-long-task acceptanceTiming=final_only requires acceptanceRunner=direct-chat or opt-direct-chat.",
+    )
   }
   const mergeAsSkillOpt = {
     ...projectConfig.mergeConfig.asSkillOpt,
@@ -3283,6 +3687,7 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
       runTest: false,
       evalRunner,
       directChat,
+      skillOptDirectChat,
       runBaseline: false,
       continueAfterTrainingIncomplete,
       trainReplayScope,
@@ -3338,6 +3743,7 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
       runTest: false,
       evalRunner,
       directChat,
+      skillOptDirectChat,
       runBaseline: false,
       continueAfterTrainingIncomplete,
       trainReplayScope,
@@ -3393,6 +3799,7 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
       runTest: false,
       evalRunner,
       directChat,
+      skillOptDirectChat,
       runBaseline: false,
       continueAfterTrainingIncomplete,
       trainReplayScope,
@@ -3450,6 +3857,7 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
     runTest,
     evalRunner,
     directChat,
+    skillOptDirectChat,
     runBaseline,
     continueAfterTrainingIncomplete,
     trainReplayScope,

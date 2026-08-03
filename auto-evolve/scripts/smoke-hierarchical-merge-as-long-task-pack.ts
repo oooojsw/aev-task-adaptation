@@ -1,6 +1,7 @@
 import path from "node:path"
 import { rm } from "node:fs/promises"
 import { ensureDirectory, readJsonFile, writeJsonFile, writeTextFile } from "../orchestrator/fs"
+import { readAndValidateMergeSourceSkillIndex } from "../orchestrator/merge-source-lineage"
 import { createHierarchicalMergeLongTaskPacks } from "./create-hierarchical-merge-long-task-pack"
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -112,6 +113,9 @@ async function main() {
   const finalMaterialsDir = path.join(finalTaskDir, "materials")
   const finalManifest = await readJsonFile<any>(path.join(finalMaterialsDir, "input-manifest.json"))
   const finalReplayPlan = await readJsonFile<any>(path.join(finalMaterialsDir, "replay-plan.json"))
+  const finalSourceIndex = await readAndValidateMergeSourceSkillIndex(
+    path.join(finalMaterialsDir, "source-skill-index.json"),
+  )
 
   assert(Array.isArray(finalManifest.items), "final input manifest must contain items")
   assert(finalManifest.items.length === 2, `final manifest should contain 2 group skills, got ${finalManifest.items.length}`)
@@ -120,6 +124,11 @@ async function main() {
   assert(Array.isArray(finalReplayPlan.cases), "final replay plan must contain cases")
   assert(finalReplayPlan.cases.length === 25, `final replay should expand to 25 original cases, got ${finalReplayPlan.cases.length}`)
   assert(new Set(finalReplayPlan.cases.map((item: any) => item.id)).size === 25, "final replay plan contains duplicate case IDs")
+  assert(finalSourceIndex.entries.length === 25, "final source Skill index must retain all 25 leaf skills")
+  assert(
+    ids.every((id) => finalSourceIndex.entries.some((entry) => entry.sourceCaseID === id)),
+    "final source Skill index must resolve every original case ID",
+  )
 
   const level1ReplayPlan = await readJsonFile<any>(
     path.join(outRoot, "level-01", "task-pack", "tasks", "merge-group-001", "materials", "replay-plan.json"),
@@ -154,6 +163,7 @@ async function main() {
           groupCount: level.groupCount,
         })),
         finalReplayCases: finalReplayPlan.cases.length,
+        finalSourceSkillEntries: finalSourceIndex.entries.length,
         finalManifestItems: finalManifest.items.length,
         singleInputStatus: singleSummary.status,
       },

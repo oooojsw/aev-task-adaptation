@@ -1,5 +1,5 @@
 import path from "node:path"
-import { cp, readdir } from "node:fs/promises"
+import { cp, readdir, rename } from "node:fs/promises"
 import { ensureDirectory, pathExists, readTextFile, writeJsonFile, writeTextFile } from "../fs"
 import { loadConfig } from "../schema"
 import { runOpencodeTask } from "../opencode"
@@ -26,9 +26,15 @@ export interface HierarchicalMergeOptions {
   concurrency?: number
   /** Number of local replay blank-eval checks that may run concurrently inside one group. */
   localReplayConcurrency?: number
+  /** Number of retries for blank-eval infrastructure failures. */
+  localReplayInfrastructureRetries?: number
+  /** Abort the merge instead of treating persistent infrastructure failures as model failures. */
+  localReplayFailClosedOnInfrastructure?: boolean
   promptPath?: string
   repairPromptPath?: string
   contractPath?: string
+  /** Reuse fully materialized groups when resuming the same run directory. */
+  resumeExistingGroups?: boolean
   localReplay?: {
     enabled: boolean
     levels: HierarchicalReplayLevels
@@ -61,6 +67,7 @@ export interface HierarchicalMergeOutcome {
         passed: number
         failed: number
         repaired: number
+        infrastructureSkipped?: number
       }
     }>
   }>
@@ -94,11 +101,13 @@ type MergeGroupResult = {
     passed: number
     failed: number
     repaired: number
+    infrastructureSkipped?: number
     rows: ReplayRow[]
   }
 }
 
 type ReplayRow = { id: string; passed: boolean; repaired: boolean; runDir?: string; summary?: string }
+type ReplayCheckpoint = ReplayRow & { infrastructureSkipped?: boolean }
 
 type HierarchicalPostMergeValidation = {
   status: "passed" | "failed" | "skipped"
@@ -251,7 +260,9 @@ function itemFromGroup(group: MergeGroupResult, level: number): MergeItem {
       `Merged group from level ${level}.`,
       `Input positives: ${passed}. Input non-positives: ${failed}.`,
       ...(group.localReplay
-        ? [`Local replay ${group.localReplay.passed}/${group.localReplay.total}, repaired=${group.localReplay.repaired}.`]
+        ? [
+            `Local replay ${group.localReplay.passed}/${group.localReplay.total}, repaired=${group.localReplay.repaired}, infrastructureSkipped=${group.localReplay.infrastructureSkipped ?? 0}.`,
+          ]
         : []),
     ],
   }
@@ -373,6 +384,46 @@ async function runMergeGroup(input: {
   } satisfies MergeGroupResult
 }
 
+async function loadCompletedMergeGroup(input: {
+  root: string
+  groupID: string
+  items: MergeItem[]
+}): Promise<MergeGroupResult | undefined> {
+  const outputDir = path.join(input.root, "output")
+  const manifestPath = path.join(input.root, "input-manifest.json")
+  const required = [
+    path.join(input.root, "response.txt"),
+    path.join(input.root, "output-files.json"),
+    manifestPath,
+    path.join(outputDir, "INDEX.md"),
+    path.join(outputDir, "CORE.md"),
+    path.join(outputDir, "meta.json"),
+  ]
+  for (const file of required) {
+    if (!(await pathExists(file))) return undefined
+  }
+  const manifest = JSON.parse(await readTextFile(manifestPath)) as {
+    groupID?: string
+    inputs?: Array<{ id?: string }>
+  }
+  const manifestIDs = Array.isArray(manifest.inputs) ? manifest.inputs.map((item) => String(item.id ?? "")) : []
+  const expectedIDs = input.items.map((item) => item.id)
+  if (manifest.groupID !== input.groupID || JSON.stringify(manifestIDs) !== JSON.stringify(expectedIDs)) return undefined
+  return {
+    groupID: input.groupID,
+    outputDir,
+    manifestPath,
+    statusCounts: statusCounts(input.items),
+    inputItems: input.items,
+  }
+}
+
+async function archiveIncompleteMergeGroup(root: string) {
+  if (!(await pathExists(root))) return
+  const archived = `${root}.interrupted-${Date.now()}`
+  await rename(root, archived)
+}
+
 async function runLocalSuccessReplay(input: {
   cwd: string
   state: CoordinatorState
@@ -383,31 +434,84 @@ async function runLocalSuccessReplay(input: {
   const replayTargets = input.group.inputItems.filter(
     (item) => item.sourceKind === "instance" && isPositiveStatus(item.status),
   )
-  const rows: ReplayRow[] = []
+  const rows: ReplayCheckpoint[] = []
   let passed = 0
   let repaired = 0
+  let infrastructureSkipped = 0
   let next = 0
+  let fatalInfrastructureError: Error | undefined
   const active = new Set<Promise<void>>()
   const limit = Math.max(1, input.options.localReplayConcurrency ?? 1)
+  const checkpointRoot = path.join(input.groupRoot, "local-success-replay", "checkpoints")
+  await ensureDirectory(checkpointRoot)
+  async function saveCheckpoint(row: ReplayCheckpoint) {
+    await writeJsonFile(path.join(checkpointRoot, `${row.id}.json`), row)
+  }
+  const pendingTargets: MergeItem[] = []
+  for (const item of replayTargets) {
+    const checkpointPath = path.join(checkpointRoot, `${item.id}.json`)
+    if (!(await pathExists(checkpointPath))) {
+      pendingTargets.push(item)
+      continue
+    }
+    const row = JSON.parse(await readTextFile(checkpointPath)) as ReplayCheckpoint
+    if (row.id !== item.id) throw new Error(`Replay checkpoint ID mismatch: ${checkpointPath}`)
+    rows.push(row)
+    if (row.passed) passed += 1
+    if (row.repaired) repaired += 1
+    if (row.infrastructureSkipped) infrastructureSkipped += 1
+  }
   async function runItem(item: MergeItem) {
     const specPath = path.join(item.sourceTaskRoot, "spec.json")
-    const runRoot = path.join(input.groupRoot, "local-success-replay", item.id)
     try {
-      const result = await runBlankEval({
-        cwd: input.cwd,
-        specPath,
-        skillRoots: [input.group.outputDir],
-        runRoot,
-        sourceID: `${input.group.groupID}:${item.id}`,
-        mode: "train-backtest",
-        concurrencyScope: `hierarchical-local-replay:${input.state.id}`,
-      })
-      if (result.passed) {
-        passed += 1
-        rows.push({ id: item.id, passed: true, repaired: false, runDir: result.runDir, summary: result.summary })
+      const infrastructureRetries = Math.max(0, input.options.localReplayInfrastructureRetries ?? 0)
+      let result: Awaited<ReturnType<typeof runBlankEval>> | undefined
+      for (let attempt = 0; attempt <= infrastructureRetries; attempt += 1) {
+        const runRoot = path.join(
+          input.groupRoot,
+          "local-success-replay",
+          item.id,
+          `attempt-${String(attempt + 1).padStart(2, "0")}`,
+        )
+        result = await runBlankEval({
+          cwd: input.cwd,
+          specPath,
+          skillRoots: [input.group.outputDir],
+          runRoot,
+          sourceID: `${input.group.groupID}:${item.id}:attempt-${attempt + 1}`,
+          mode: "train-backtest",
+          concurrencyScope: `hierarchical-local-replay:${input.state.id}`,
+        })
+        if (result.failureKind !== "validator_infrastructure") break
+      }
+      if (!result) throw new Error(`Blank replay produced no result for ${item.id}`)
+      if (result.failureKind === "validator_infrastructure") {
+        const message = `Hierarchical replay infrastructure failed for ${item.id}: ${result.summary}`
+        if (input.options.localReplayFailClosedOnInfrastructure) {
+          fatalInfrastructureError ??= new Error(message)
+          return
+        }
+        const row: ReplayCheckpoint = {
+          id: item.id,
+          passed: false,
+          repaired: false,
+          infrastructureSkipped: true,
+          runDir: result.runDir,
+          summary: message,
+        }
+        infrastructureSkipped += 1
+        rows.push(row)
+        await saveCheckpoint(row)
         return
       }
-      const didRepair = input.options.localReplay?.repairOnFailure
+      if (result.passed) {
+        passed += 1
+        const row = { id: item.id, passed: true, repaired: false, runDir: result.runDir, summary: result.summary }
+        rows.push(row)
+        await saveCheckpoint(row)
+        return
+      }
+      const didRepair = result.failureKind !== "dataset_failure" && input.options.localReplay?.repairOnFailure
         ? await runOneShotRepair({
             cwd: input.cwd,
             state: input.state,
@@ -420,25 +524,42 @@ async function runLocalSuccessReplay(input: {
           })
         : false
       if (didRepair) repaired += 1
-      rows.push({ id: item.id, passed: false, repaired: didRepair, runDir: result.runDir, summary: result.summary })
+      const row = { id: item.id, passed: false, repaired: didRepair, runDir: result.runDir, summary: result.summary }
+      rows.push(row)
+      await saveCheckpoint(row)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      rows.push({ id: item.id, passed: false, repaired: false, summary: message })
+      if (input.options.localReplayFailClosedOnInfrastructure) {
+        fatalInfrastructureError ??= new Error(`Hierarchical replay crashed for ${item.id}: ${message}`)
+        return
+      }
+      const row: ReplayCheckpoint = {
+        id: item.id,
+        passed: false,
+        repaired: false,
+        infrastructureSkipped: true,
+        summary: message,
+      }
+      infrastructureSkipped += 1
+      rows.push(row)
+      await saveCheckpoint(row)
     }
   }
-  while (next < replayTargets.length || active.size > 0) {
-    while (next < replayTargets.length && active.size < limit) {
-      const task = runItem(replayTargets[next]!).finally(() => active.delete(task))
+  while (next < pendingTargets.length || active.size > 0) {
+    while (!fatalInfrastructureError && next < pendingTargets.length && active.size < limit) {
+      const task = runItem(pendingTargets[next]!).finally(() => active.delete(task))
       active.add(task)
       next += 1
     }
     if (active.size > 0) await Promise.race(active)
+    else if (fatalInfrastructureError) throw fatalInfrastructureError
   }
   const summary = {
     total: replayTargets.length,
     passed,
-    failed: replayTargets.length - passed,
+    failed: replayTargets.length - passed - infrastructureSkipped,
     repaired,
+    infrastructureSkipped,
     rows,
   }
   input.group.localReplay = summary
@@ -736,15 +857,24 @@ export async function runCoordinatorHierarchicalMerge(input: {
     const groupLimit = Math.max(1, input.options.concurrency ?? 1)
     async function runOneGroup(i: number) {
       const groupRoot = path.join(runRoot, `level-${level}`, `level-${String(level).padStart(2, "0")}-group-${String(i + 1).padStart(3, "0")}`)
-      const group = await runMergeGroup({
-        cwd: input.cwd,
-        state,
-        runRoot,
-        options: input.options,
-        level,
-        groupIndex: i,
-        items: groups[i]!,
-      })
+      const groupID = `level-${String(level).padStart(2, "0")}-group-${String(i + 1).padStart(3, "0")}`
+      let group = input.options.resumeExistingGroups
+        ? await loadCompletedMergeGroup({ root: groupRoot, groupID, items: groups[i]! })
+        : undefined
+      if (group) {
+        await appendCoordinatorLog(state, "info", `Hierarchical merge ${groupID}: reused completed group.`)
+      } else {
+        if (input.options.resumeExistingGroups) await archiveIncompleteMergeGroup(groupRoot)
+        group = await runMergeGroup({
+          cwd: input.cwd,
+          state,
+          runRoot,
+          options: input.options,
+          level,
+          groupIndex: i,
+          items: groups[i]!,
+        })
+      }
       let postMergeValidation = await runHierarchicalPostMergeValidation({
         cwd: input.cwd,
         state,
@@ -800,6 +930,7 @@ export async function runCoordinatorHierarchicalMerge(input: {
               passed: group.localReplay.passed,
               failed: group.localReplay.failed,
               repaired: group.localReplay.repaired,
+              infrastructureSkipped: group.localReplay.infrastructureSkipped ?? 0,
             }
           : undefined,
       })

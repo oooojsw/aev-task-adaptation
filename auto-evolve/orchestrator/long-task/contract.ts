@@ -195,6 +195,12 @@ export interface LongTaskSpec {
   title: string
   goal: string
   taskFamily?: string
+  /** Optional task-specific role/access profile. Missing means the historical runtime. */
+  taskProfile?: {
+    id: string
+    accessSystem: "legacy" | "profile_v2"
+    version?: string
+  }
   domainTags?: string[]
   materials: LongTaskPathRef[]
   targetPaths?: LongTaskPathRef[]
@@ -214,6 +220,9 @@ export interface LongTaskSpec {
   validatorProfiles?: string[]
   // Optional dedicated validator profiles for blank-eval/deployment style runs.
   blankEvalValidatorProfiles?: string[]
+  // Campaigns normally run a clean blank agent after surface checks. Merge
+  // groups may defer product replay to an external hierarchy supervisor.
+  campaignFinalAcceptanceMode?: "blank_agent" | "validators_only"
   validators: LongTaskValidatorContract[]
   planning?: ExecutionSpec
   execution?: ExecutionSpec

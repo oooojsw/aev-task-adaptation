@@ -118,6 +118,12 @@ export type LongTaskCampaignWorkerRole =
   | "learning_promoter"
   | "exploration_tree_synthesizer"
   | "drift_guard_synthesizer"
+  | "merge_source_inventory_auditor"
+  | "merge_coverage_mapper"
+  | "merge_conflict_resolver"
+  | "merge_deduplication_curator"
+  | "merge_provenance_guard"
+  | "merge_replay_failure_diagnostician"
   | "custom"
 
 export interface LongTaskCampaignWorkerSuggestion {

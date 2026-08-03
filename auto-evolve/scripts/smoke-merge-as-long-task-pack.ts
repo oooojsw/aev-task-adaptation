@@ -2,6 +2,7 @@ import path from "node:path"
 import { rm } from "node:fs/promises"
 import { ensureDirectory, readJsonFile, writeJsonFile, writeTextFile } from "../orchestrator/fs"
 import { loadLongTaskSpec } from "../orchestrator/long-task/spec"
+import { readAndValidateMergeSourceSkillIndex } from "../orchestrator/merge-source-lineage"
 import { createMergeLongTaskPack } from "./create-merge-long-task-pack"
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -91,6 +92,8 @@ async function main() {
     outTaskPack: outPack,
     groupSize: 2,
     maxGroups: 1,
+    taskProfile: "legacy",
+    accessSystem: "legacy",
     blankAcceptanceMode: "merge-final-full-replay",
   })
 
@@ -98,13 +101,18 @@ async function main() {
   assert(generated.blankAcceptanceScenario === "merge_initial_replay", "expected default merge_initial_replay autoMount scenario")
   assert(generated.blankAcceptanceMode === "merge-final-full-replay", "expected default auto-mounted final replay mode")
   assert(
-    generated.validatorProfiles.includes("skill-surface/standard-hard-v1") &&
-      generated.validatorProfiles.includes("merge-surface/standard-v1"),
+    generated.validatorProfiles.includes("merge-surface/standard-hard-v2"),
     "expected merged surface validator profiles",
   )
 
   const loaded = await loadLongTaskSpec(generated.groups[0].specPath)
   const spec = loaded.spec
+  assert(
+    spec.campaignFinalAcceptanceMode === "blank_agent",
+    "ordinary merge packs with internal replay must preserve blank-agent campaign acceptance",
+  )
+  assert(spec.taskProfile === undefined, "legacy merge pack must not opt into profile_v2")
+  assert(Boolean(spec.initialGraph), "legacy merge pack must preserve its historical fixed initial graph")
   const campaignSpecPath = path.join(path.dirname(generated.groups[0].specPath), "campaign.json")
   const campaignSpec = await readJsonFile<Record<string, unknown>>(campaignSpecPath)
   assert(typeof campaignSpec.title === "string" && campaignSpec.title, "campaign spec must include title")
@@ -121,6 +129,16 @@ async function main() {
   const validatorIDs = spec.validators.map((item) => item.id)
   assert(validatorIDs.includes("skill-structure-hard"), "missing skill structure validator")
   assert(validatorIDs.includes("merge-surface-generalization-hard"), "missing merge surface validator")
+  const structureValidator = spec.validators.find((item) => item.id === "skill-structure-hard")
+  const generalizationValidator = spec.validators.find((item) => item.id === "merge-surface-generalization-hard")
+  assert(
+    JSON.stringify(structureValidator?.successExitCodes) === JSON.stringify([0, 1]),
+    "merge structure validator must keep semantic exit code 1 repairable",
+  )
+  assert(
+    JSON.stringify(generalizationValidator?.successExitCodes) === JSON.stringify([0, 1]),
+    "merge surface validator must keep semantic exit code 1 repairable",
+  )
   const blankPlan = spec.validators.find((item) => item.type === "blank_eval_plan")
   assert(blankPlan, "missing blank eval plan validator")
   assert(blankPlan.replayPolicy?.strategy === "failures_then_regression", "blank eval plan should mount focused replay policy")
@@ -130,10 +148,101 @@ async function main() {
   )
   assert(blankPlan.validation?.allowedAudiences?.includes("blank_agent") !== true, "blank_agent must not see validators")
   assert(spec.targetPaths?.some((item) => item.role === "experience-workspace"), "missing experience-workspace target")
+  const groupTaskDir = path.dirname(generated.groups[0].specPath)
+  const seededSurfaceContract = await readJsonFile<Record<string, unknown>>(
+    path.join(groupTaskDir, "workspace", "merged-skill", "surface_contract.json"),
+  )
+  assert(
+    Array.isArray(seededSurfaceContract.documents) && seededSurfaceContract.documents.includes("meta.json"),
+    "merge surface contract must preserve meta.json in campaign snapshots",
+  )
+  const sourceIndexPath = path.join(groupTaskDir, "materials", "source-skill-index.json")
+  const sourceIndex = await readAndValidateMergeSourceSkillIndex(sourceIndexPath)
+  assert(sourceIndex.entries.length === 2, "source skill index must preserve both leaf skills")
+  assert(
+    sourceIndex.entries.every((item) => item.readableFiles.length >= 3),
+    "source skill index must enumerate every readable source skill file",
+  )
+  assert(
+    spec.formalPackageRoots?.some((item) => item.endsWith("materials\\merge-inputs") || item.endsWith("materials/merge-inputs")),
+    "merge executor must receive source skill roots through formal package permissions",
+  )
+  assert(
+    spec.materials.every((item) => !item.path.includes("merge-inputs") && !item.path.includes("source-skill-index")),
+    "closed-book materials must not expose source skills or lineage index",
+  )
   const graphCompletionIDs = spec.initialGraph?.completion_validator_ids ?? []
   assert(
     validatorIDs.every((id) => graphCompletionIDs.includes(id)),
     `initial graph completion validators must include all loaded validators. graph=${graphCompletionIDs.join(",")} loaded=${validatorIDs.join(",")}`,
+  )
+
+  const profileV2Pack = await createMergeLongTaskPack({
+    cwd,
+    taskPackRoot: sourcePack,
+    splitPath,
+    campaignManifestPath: manifestPath,
+    outTaskPack: path.join(root, "profile-v2-pack"),
+    groupSize: 2,
+    maxGroups: 1,
+    taskProfile: "multi_skill_merge_v2",
+    accessSystem: "profile_v2",
+    mountBlankReplay: false,
+  })
+  const profileV2Spec = (await loadLongTaskSpec(profileV2Pack.groups[0].specPath)).spec
+  assert(profileV2Spec.taskProfile?.id === "multi_skill_merge_v2", "profile_v2 task profile must be persisted")
+  assert(profileV2Spec.taskProfile?.accessSystem === "profile_v2", "profile_v2 access system must be persisted")
+  assert(
+    profileV2Spec.campaignFinalAcceptanceMode === "validators_only",
+    "external final-only profile must defer product replay instead of starting a campaign blank agent",
+  )
+  assert(profileV2Spec.initialGraph === undefined, "profile_v2 must let the merge planner build the graph")
+  assert(
+    (profileV2Spec.formalPackageRoots ?? []).some(
+      (item) => item.endsWith("materials\\source-skill-index.json") || item.endsWith("materials/source-skill-index.json"),
+    ),
+    "profile_v2 planner/executor must receive the frozen source lineage index",
+  )
+
+  let mixedProfileFailed = false
+  try {
+    await createMergeLongTaskPack({
+      cwd,
+      taskPackRoot: sourcePack,
+      splitPath,
+      campaignManifestPath: manifestPath,
+      outTaskPack: path.join(root, "mixed-profile-pack"),
+      taskProfile: "multi_skill_merge_v2",
+      accessSystem: "legacy",
+    })
+  } catch (error) {
+    mixedProfileFailed = String(error).includes("must be enabled together")
+  }
+  assert(mixedProfileFailed, "mixed task/access profile must fail closed")
+
+  const externalFinalOnly = await createMergeLongTaskPack({
+    cwd,
+    taskPackRoot: sourcePack,
+    splitPath,
+    campaignManifestPath: manifestPath,
+    outTaskPack: path.join(root, "external-final-only-pack"),
+    groupSize: 2,
+    maxGroups: 1,
+    mountBlankReplay: false,
+  })
+  const externalSpec = (await loadLongTaskSpec(externalFinalOnly.groups[0].specPath)).spec
+  assert(externalFinalOnly.mountBlankReplay === false, "external final-only pack must record deferred replay")
+  assert(
+    externalSpec.campaignFinalAcceptanceMode === "validators_only",
+    "external final-only pack must explicitly select validators-only campaign acceptance",
+  )
+  assert(
+    externalSpec.validators.every((item) => item.type !== "blank_eval_plan"),
+    "external final-only pack must not mount an internal blank replay validator",
+  )
+  assert(
+    externalSpec.validators.some((item) => item.id === "merge-surface-generalization-hard"),
+    "external final-only pack must preserve surface validation",
   )
 
   let unknownProfileFailed = false

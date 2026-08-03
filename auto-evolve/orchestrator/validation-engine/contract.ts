@@ -130,4 +130,9 @@ export interface ValidationEngineResult {
   result: ValidationResult
   views: ValidationResultViews
   viewPaths?: Partial<Record<ValidationResultViewKind, string>>
+  /**
+   * Internal structured output for trusted orchestrators. This is never an
+   * audience view and must not be forwarded to blank agents.
+   */
+  raw?: Record<string, unknown>
 }

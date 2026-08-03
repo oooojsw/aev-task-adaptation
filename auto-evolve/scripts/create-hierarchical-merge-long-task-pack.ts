@@ -1,5 +1,5 @@
 import path from "node:path"
-import { ensureDirectory, readJsonFile, writeJsonFile } from "../orchestrator/fs"
+import { ensureDirectory, pathExists, readJsonFile, writeJsonFile } from "../orchestrator/fs"
 import { loadConfig } from "../orchestrator/schema"
 import { createMergeLongTaskPack } from "./create-merge-long-task-pack"
 
@@ -124,6 +124,10 @@ export async function buildNextLevelRows(level: number, groups: GeneratedGroup[]
       ? path.resolve((group as any).outputSkillPath)
       : path.join(taskDir, "workspace", "merged-skill")
     const materialsDir = path.join(taskDir, "materials")
+    const sourceSkillIndexPath = path.join(materialsDir, "source-skill-index.json")
+    if (!(await pathExists(sourceSkillIndexPath))) {
+      throw new Error(`Successful hierarchical group is missing source skill index: ${sourceSkillIndexPath}`)
+    }
     const inputManifest = await readJsonFile<any>(path.join(materialsDir, "input-manifest.json"))
     const replayPlan = await readJsonFile<any>(path.join(materialsDir, "replay-plan.json"))
     const manifestItems = Array.isArray(inputManifest.items) ? inputManifest.items : []
@@ -152,6 +156,7 @@ export async function buildNextLevelRows(level: number, groups: GeneratedGroup[]
       sourceCases,
       replayCases,
       levelResultPath: path.join(taskDir, "campaign.json"),
+      sourceSkillIndexPath,
     })
   }
   return rows

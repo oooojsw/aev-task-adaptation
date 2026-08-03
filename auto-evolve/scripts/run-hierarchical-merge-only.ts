@@ -31,6 +31,13 @@ type BenchmarkState = {
   trainResults?: BenchmarkTrainResult[]
 }
 
+type FrozenSourceSkillManifest = {
+  sourceSkills?: Array<{
+    id?: string
+    skillRoot?: string
+  }>
+}
+
 const repoRoot = path.resolve(import.meta.dir, "..", "..")
 const autoRoot = path.join(repoRoot, "auto-evolve")
 const campaignRoot = path.join(autoRoot, "runtime-state", "long-task-campaigns")
@@ -168,6 +175,29 @@ async function collectCampaignsFromBenchmarkRun(input: {
   return byID
 }
 
+async function collectFrozenSourceSkills(input: { manifestPath: string; ids: string[] }) {
+  const manifest = await readJson<FrozenSourceSkillManifest>(input.manifestPath)
+  const rows = Array.isArray(manifest.sourceSkills) ? manifest.sourceSkills : []
+  const byID = new Map<string, string>()
+  for (const row of rows) {
+    const id = String(row.id ?? "").trim()
+    const skillRoot = String(row.skillRoot ?? "").trim()
+    if (!id || !skillRoot) throw new Error(`Invalid frozen source skill row in ${input.manifestPath}`)
+    if (byID.has(id)) throw new Error(`Duplicate frozen source skill ID: ${id}`)
+    const resolved = normalizeStoredPath(skillRoot)
+    if (!(await pathExists(resolved))) throw new Error(`Frozen source skill is missing for ${id}: ${resolved}`)
+    byID.set(id, resolved)
+  }
+  const missing = input.ids.filter((id) => !byID.has(id))
+  const extra = [...byID.keys()].filter((id) => !input.ids.includes(id))
+  if (missing.length > 0 || extra.length > 0) {
+    throw new Error(
+      `Frozen source skill/split mismatch: missing=[${missing.join(", ")}], extra=[${extra.join(", ")}]`,
+    )
+  }
+  return byID
+}
+
 function mapStatus(status: string): InstanceState["status"] {
   if (status === "verified_success") return "passed"
   if (status === "round_limit_reached" || status === "exhausted_failure") return "exhausted"
@@ -210,18 +240,40 @@ async function main() {
   const trainSplit = resolveMaybeRelative(getOption(args, "--train-split"), path.join(taskPackRoot, "splits", "train-selected.json"))
   if (!trainSplit) throw new Error("Missing --train-split")
   const sourceBenchmarkRun = resolveMaybeRelative(getOption(args, "--source-benchmark-run"))
+  const sourceSkillsManifest = resolveMaybeRelative(getOption(args, "--source-skills-manifest"))
+  if (sourceBenchmarkRun && sourceSkillsManifest) {
+    throw new Error("Use only one source selector: --source-benchmark-run or --source-skills-manifest")
+  }
   const outDir =
     resolveMaybeRelative(getOption(args, "--out")) ??
     path.join(autoRoot, "runtime-state", "hierarchical-merge-only", `${stamp()}-${path.basename(taskPackRoot)}`)
 
   const ids = await readJson<string[]>(trainSplit)
   if (new Set(ids).size !== ids.length) throw new Error("Train split contains duplicate task IDs")
-  const campaigns = sourceBenchmarkRun
-    ? await collectCampaignsFromBenchmarkRun({ benchmarkRun: sourceBenchmarkRun, taskPackRoot, trainSplit, ids })
-    : await collectCampaigns(taskPackRoot, ids)
+  const frozenSkills = sourceSkillsManifest
+    ? await collectFrozenSourceSkills({ manifestPath: sourceSkillsManifest, ids })
+    : undefined
+  const campaigns = frozenSkills
+    ? new Map<string, CampaignRow[]>()
+    : sourceBenchmarkRun
+      ? await collectCampaignsFromBenchmarkRun({ benchmarkRun: sourceBenchmarkRun, taskPackRoot, trainSplit, ids })
+      : await collectCampaigns(taskPackRoot, ids)
   const instances: InstanceState[] = []
   for (const id of ids) {
-    instances.push(await buildInstance({ id, taskPackRoot, row: campaigns.get(id)?.[0] }))
+    const frozenSkillRoot = frozenSkills?.get(id)
+    if (frozenSkillRoot) {
+      instances.push({
+        id,
+        sourceTaskRoot: path.join(taskPackRoot, "tasks", id),
+        engine: "skillsbench",
+        role: "train",
+        status: "passed",
+        rounds: 0,
+        harvestedSkillPath: frozenSkillRoot,
+      })
+    } else {
+      instances.push(await buildInstance({ id, taskPackRoot, row: campaigns.get(id)?.[0] }))
+    }
   }
 
   await ensureDirectory(outDir)
@@ -250,6 +302,7 @@ async function main() {
   await saveCoordinatorState(state)
   await writeJsonFile(path.join(outDir, "merge-only-input-summary.json"), {
     sourceBenchmarkRun,
+    sourceSkillsManifest,
     ids,
     statusCounts: instances.reduce<Record<string, number>>((acc, item) => {
       acc[item.status] = (acc[item.status] ?? 0) + 1
@@ -268,11 +321,22 @@ async function main() {
     await writeJsonFile(path.join(outDir, "preflight-result.json"), {
       passed: true,
       sourceBenchmarkRun,
+      sourceSkillsManifest,
       taskCount: ids.length,
       message: "Input lineage validated; no merger model was started.",
     })
     return
   }
+
+  const localReplayEnabled = !args.includes("--hierarchical-no-local-replay")
+  const repairAttemptsPerCase = Math.max(
+    0,
+    Number.parseInt(getOption(args, "--hierarchical-repair-attempts") ?? "1", 10),
+  )
+  const localReplayConcurrency = Math.max(
+    1,
+    Number.parseInt(getOption(args, "--hierarchical-replay-concurrency") ?? "1", 10),
+  )
 
   const result = await runCoordinatorHierarchicalMerge({
     cwd: repoRoot,
@@ -282,12 +346,17 @@ async function main() {
       inputFilter: "all",
       failurePolicy: "negative_evidence",
       grouping: "status_balanced",
+      resumeExistingGroups: true,
+      localReplayConcurrency,
+      localReplayInfrastructureRetries: 2,
+      localReplayFailClosedOnInfrastructure: args.includes("--hierarchical-fail-closed-infrastructure"),
       localReplay: {
-        enabled: true,
+        enabled: localReplayEnabled,
         levels: "level1",
-        repairOnFailure: true,
-        repairAttemptsPerCase: 1,
-        rerunAfterRepair: false,
+        repairOnFailure:
+          localReplayEnabled && !args.includes("--hierarchical-no-repair") && repairAttemptsPerCase > 0,
+        repairAttemptsPerCase,
+        rerunAfterRepair: args.includes("--hierarchical-rerun-after-repair"),
       },
     },
   })

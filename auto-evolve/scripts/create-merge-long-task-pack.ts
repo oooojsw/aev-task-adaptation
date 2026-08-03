@@ -15,6 +15,13 @@ import {
   type BlankAcceptanceAutoMountScenario,
   type BlankAcceptanceModeProfile,
 } from "../orchestrator/schema"
+import {
+  MERGE_SOURCE_SKILL_INDEX_SCHEMA,
+  copyFrozenSkill,
+  readAndValidateMergeSourceSkillIndex,
+  resolveMergeSourceSkillEntryPaths,
+  type MergeSourceSkillIndexEntry,
+} from "../orchestrator/merge-source-lineage"
 
 type ManifestRow = {
   id?: string
@@ -35,6 +42,10 @@ type ManifestRow = {
   sourceCases?: string[]
   replayCases?: Array<string | ManifestReplayCase>
   levelResultPath?: string
+  sourceSkillIndexPath?: string
+  repairTargetsPath?: string
+  originBenchmarkRunID?: string
+  benchmarkRunID?: string
 }
 
 type ManifestReplayCase = {
@@ -53,6 +64,10 @@ export type CreateMergeLongTaskPackInput = {
   campaignManifestPath: string
   outTaskPack: string
   label?: string
+  /** Opt-in role/prompt profile. Missing preserves the historical merge task. */
+  taskProfile?: "legacy" | "multi_skill_merge_v2"
+  /** Opt-in named information-view access compiler. */
+  accessSystem?: "legacy" | "profile_v2"
   groupSize?: number
   maxGroups?: number
   replayConcurrency?: number
@@ -60,6 +75,8 @@ export type CreateMergeLongTaskPackInput = {
   surfaceValidatorProfiles?: string[]
   blankAcceptanceMode?: string
   blankAcceptanceScenario?: BlankAcceptanceAutoMountScenario | string
+  /** False keeps surface validators but defers product replay to an outer final-only evaluator. */
+  mountBlankReplay?: boolean
   inputSelection?: "success_only" | "failed_only" | "success_and_failed"
   allowMissingManifestRows?: boolean
   dryRun?: boolean
@@ -433,7 +450,12 @@ function blankEvalCriterion(mode: BlankAcceptanceModeProfile) {
   return mode.successCriterion === "report_only" ? "allow_partial" : mode.successCriterion
 }
 
-function taskEntryMarkdown(input: { groupID: string; caseCount: number; validatorProfiles: string[] }) {
+function taskEntryMarkdown(input: {
+  groupID: string
+  caseCount: number
+  validatorProfiles: string[]
+  repairMode: boolean
+}) {
   return `# Merge Long Task: ${input.groupID}
 
 You are merging multiple previously learned single-case skills into one clean, general expert skill.
@@ -443,6 +465,7 @@ Inputs:
 - \`materials/replay-plan.json\`: cases that the merged skill will be blank-evaluated on.
 - \`materials/merge-inputs/\`: copied source skills.
 - \`materials/merge-contract.json\`: the output contract the merged skill must satisfy.
+${input.repairMode ? "- `materials/repair-targets.json`: controller-owned failed-case evidence and exact frozen leaf Skill paths.\n" : ""}
 
 Write the merged skill into \`workspace/merged-skill\`.
 
@@ -452,6 +475,7 @@ Hard requirements:
 - Do not include private-answer paths, validator private files, gold answers, or absolute runtime paths.
 - Satisfy the mounted surface validator profiles: ${input.validatorProfiles.join(", ") || "(none)"}.
 - The merged skill must teach a blank agent how to solve the replay cases without seeing any training traces.
+${input.repairMode ? "- This is a repair pass. Preserve the seeded baseline, focus on repair-target failures, and avoid unrelated rewrites.\n" : ""}
 
 This group contains ${input.caseCount} source skill(s).
 `
@@ -506,7 +530,7 @@ Use casebook notes to avoid repeated mistakes.
     "surface_contract.json": {
       version: 1,
       entry: "INDEX.md",
-      documents: ["INDEX.md", "CORE.md", "casebook/", "open_observations.md"],
+      documents: ["INDEX.md", "CORE.md", "meta.json", "casebook/", "open_observations.md"],
     },
     "open_observations.md": "# Open Observations\n\n",
   }
@@ -527,6 +551,13 @@ export async function createMergeLongTaskPack(input: CreateMergeLongTaskPackInpu
   const cwd = path.resolve(input.cwd)
   const autoRoot = autoEvolvePath(cwd)
   const config = await loadConfig(cwd)
+  const taskProfile = input.taskProfile ?? config.mergeConfig.asLongTask.taskProfile
+  const accessSystem = input.accessSystem ?? config.mergeConfig.asLongTask.accessSystem
+  if ((taskProfile === "multi_skill_merge_v2") !== (accessSystem === "profile_v2")) {
+    throw new Error(
+      "multi_skill_merge_v2 and profile_v2 must be enabled together; mixed legacy/profile configuration is unsafe.",
+    )
+  }
   const taskPackRoot = path.resolve(input.taskPackRoot)
   const outTaskPack = path.resolve(input.outTaskPack)
   const splitPath = path.resolve(input.splitPath)
@@ -572,7 +603,21 @@ export async function createMergeLongTaskPack(input: CreateMergeLongTaskPackInpu
     profilesRoot: config.validationConfig.profilesRoot,
     refs: validatorProfiles,
   })
-  const { modeID, mode, scenario } = resolveBlankAcceptanceMode(config, input)
+  const mountBlankReplay = input.mountBlankReplay !== false
+  const resolvedBlank = mountBlankReplay
+    ? resolveBlankAcceptanceMode(config, input)
+    : {
+        modeID: "external-final-only",
+        mode: {
+          description: "Product replay is deferred to the outer benchmark final evaluator.",
+          runner: "blank_eval_plan" as const,
+          mode: "parallel" as const,
+          caseSelection: "all_cases" as const,
+          successCriterion: "report_only" as const,
+        },
+        scenario: input.blankAcceptanceScenario ?? "merge_initial_replay",
+      }
+  const { modeID, mode, scenario } = resolvedBlank
   const replayConcurrency = normalizePositiveInteger(
     input.replayConcurrency,
     "replay concurrency",
@@ -591,12 +636,16 @@ export async function createMergeLongTaskPack(input: CreateMergeLongTaskPackInpu
     const taskDir = path.join(outTaskPack, "tasks", groupID)
     const materialsDir = path.join(taskDir, "materials")
     const mergeInputsDir = path.join(materialsDir, "merge-inputs")
+    const sourceLeafSkillsDir = path.join(materialsDir, "source-leaf-skills")
+    const sourceSpecsDir = path.join(materialsDir, "source-specs")
+    const sourceSkillIndexPath = path.join(materialsDir, "source-skill-index.json")
+    const repairTargetsPath = path.join(materialsDir, "repair-targets.json")
     const workspaceDir = path.join(taskDir, "workspace", "merged-skill")
     const replayCases = group.flatMap((row) => {
       const id = normalizeID(row)!
       return resolveReplayCases({ row, rowID: id, taskPackRoot, manifestDir, materialsDir })
     })
-    assertModeLegal(modeID, mode, replayCases.length)
+    if (mountBlankReplay) assertModeLegal(modeID, mode, replayCases.length)
     for (const replayCase of replayCases) {
       const absoluteReplaySpec = path.resolve(materialsDir, replayCase.specPath)
       if (!(await pathExists(absoluteReplaySpec))) {
@@ -604,6 +653,18 @@ export async function createMergeLongTaskPack(input: CreateMergeLongTaskPackInpu
       }
     }
     const manifest = []
+    const sourceSkillEntries = new Map<string, MergeSourceSkillIndexEntry>()
+    const repairTargetSources = group
+      .map((row) => asString(row.repairTargetsPath))
+      .filter((item): item is string => Boolean(item))
+      .map((item) => resolveFrom(manifestDir, item))
+    if (new Set(repairTargetSources.map((item) => path.resolve(item).toLowerCase())).size > 1) {
+      throw new Error(`Merge repair group ${groupID} references multiple repairTargetsPath values`)
+    }
+    const repairSourcePath = repairTargetSources[0]
+    if (repairSourcePath && !(await pathExists(repairSourcePath))) {
+      throw new Error(`Merge repair targets file does not exist: ${repairSourcePath}`)
+    }
     for (const row of group) {
       const id = normalizeID(row)!
       const skillRoot = resolveSkillRoot(row, manifestDir)
@@ -611,19 +672,81 @@ export async function createMergeLongTaskPack(input: CreateMergeLongTaskPackInpu
         throw new Error(`Missing skill root for ${id}: ${skillRoot ?? "(not provided)"}`)
       }
       const dest = path.join(mergeInputsDir, safeID(id, `case-${manifest.length + 1}`))
-      if (!input.dryRun) await cp(skillRoot, dest, { recursive: true, force: true })
+      if (!input.dryRun) await copyFrozenSkill(skillRoot, dest)
       const explicitSourceSpec = asString(row.specPath) ?? asString(row.taskSpecPath)
       const maybeSourceSpecPath = explicitSourceSpec ? resolveFrom(manifestDir, explicitSourceSpec) : resolveOptionalSpecPath(taskPackRoot, row, id, manifestDir)
       const sourceSpecPath = maybeSourceSpecPath && (await pathExists(maybeSourceSpecPath)) ? maybeSourceSpecPath : undefined
+      const sourceCases = normalizeSourceCases(row, id)
+      const inheritedIndexPath = asString(row.sourceSkillIndexPath)
+        ? resolveFrom(manifestDir, row.sourceSkillIndexPath!)
+        : undefined
+      if (!input.dryRun && inheritedIndexPath) {
+        const inherited = await readAndValidateMergeSourceSkillIndex(inheritedIndexPath)
+        for (const entry of inherited.entries) {
+          if (!sourceCases.includes(entry.sourceCaseID)) continue
+          if (sourceSkillEntries.has(entry.sourceCaseID)) {
+            throw new Error(`Duplicate leaf source case '${entry.sourceCaseID}' while building ${groupID}`)
+          }
+          const inheritedPaths = resolveMergeSourceSkillEntryPaths(inheritedIndexPath, entry)
+          const leafRoot = path.join(sourceLeafSkillsDir, safeID(entry.sourceCaseID, `leaf-${sourceSkillEntries.size + 1}`))
+          const copied = await copyFrozenSkill(inheritedPaths.root, leafRoot)
+          const frozenSourceSpecPath = inheritedPaths.sourceSpecPath
+            ? path.join(sourceSpecsDir, `${safeID(entry.sourceCaseID, "leaf")}.json`)
+            : undefined
+          if (inheritedPaths.sourceSpecPath && frozenSourceSpecPath) {
+            await ensureDirectory(path.dirname(frozenSourceSpecPath))
+            await cp(inheritedPaths.sourceSpecPath, frozenSourceSpecPath, { force: true })
+          }
+          sourceSkillEntries.set(entry.sourceCaseID, {
+            ...entry,
+            frozenSkillRoot: normalizeSlash(path.relative(materialsDir, leafRoot)),
+            readableFiles: copied.files.map((file) => normalizeSlash(path.relative(materialsDir, file))),
+            sourceSkillHash: copied.hash,
+            sourceSpecPath: frozenSourceSpecPath
+              ? normalizeSlash(path.relative(materialsDir, frozenSourceSpecPath))
+              : undefined,
+          })
+        }
+        const missing = sourceCases.filter((sourceCaseID) => !sourceSkillEntries.has(sourceCaseID))
+        if (missing.length) {
+          throw new Error(`Inherited source skill index is missing leaf case(s) for ${id}: ${missing.join(", ")}`)
+        }
+      } else if (!input.dryRun) {
+        if (sourceCases.length !== 1 || sourceCases[0] !== id) {
+          throw new Error(
+            `Merged source '${id}' has ${sourceCases.length} leaf case(s) but no sourceSkillIndexPath; cross-level lineage would be lost.`,
+          )
+        }
+        if (sourceSkillEntries.has(id)) throw new Error(`Duplicate leaf source case '${id}' while building ${groupID}`)
+        const leafRoot = path.join(sourceLeafSkillsDir, safeID(id, `leaf-${sourceSkillEntries.size + 1}`))
+        const copied = await copyFrozenSkill(skillRoot, leafRoot)
+        const frozenSourceSpecPath = sourceSpecPath ? path.join(sourceSpecsDir, `${safeID(id, "leaf")}.json`) : undefined
+        if (sourceSpecPath && frozenSourceSpecPath) {
+          await ensureDirectory(path.dirname(frozenSourceSpecPath))
+          await cp(sourceSpecPath, frozenSourceSpecPath, { force: true })
+        }
+        sourceSkillEntries.set(id, {
+          sourceCaseID: id,
+          sourceStatus: normalizeStatus(row) || "unknown",
+          frozenSkillRoot: normalizeSlash(path.relative(materialsDir, leafRoot)),
+          readableFiles: copied.files.map((file) => normalizeSlash(path.relative(materialsDir, file))),
+          sourceSpecPath: frozenSourceSpecPath
+            ? normalizeSlash(path.relative(materialsDir, frozenSourceSpecPath))
+            : undefined,
+          sourceSkillHash: copied.hash,
+          originBenchmarkRunID: asString(row.originBenchmarkRunID) ?? asString(row.benchmarkRunID),
+        })
+      }
       manifest.push({
         id,
         sourceKind: asString(row.sourceKind) ?? (Array.isArray(row.replayCases) && row.replayCases.length ? "merged_skill" : "case_skill"),
         status: normalizeStatus(row) || undefined,
         sourceSkillRoot: normalizeSlash(path.relative(materialsDir, dest)),
         sourceSpecPath: sourceSpecPath ? normalizeSlash(path.relative(materialsDir, sourceSpecPath)) : undefined,
-        sourceCases: normalizeSourceCases(row, id),
+        sourceCases,
         replayCases: resolveReplayCases({ row, rowID: id, taskPackRoot, manifestDir, materialsDir }),
         levelResultPath: row.levelResultPath ? normalizeSlash(path.relative(materialsDir, resolveFrom(manifestDir, row.levelResultPath))) : undefined,
+        sourceSkillIndexPath: normalizeSlash(path.relative(materialsDir, sourceSkillIndexPath)),
       })
     }
 
@@ -631,12 +754,25 @@ export async function createMergeLongTaskPack(input: CreateMergeLongTaskPackInpu
       schema: "auto-evolve-blank-eval-plan/v1",
       cases: replayCases,
     }
-    const completionValidatorIDs = Array.from(new Set([...profileValidatorIDs, "merged-skill-blank-eval-plan"]))
+    const completionValidatorIDs = Array.from(
+      new Set([...profileValidatorIDs, ...(mountBlankReplay ? ["merged-skill-blank-eval-plan"] : [])]),
+    )
     const spec = {
       id: groupID,
       title: `Merge source skills ${groupID}`,
-      goal: `Merge ${group.length} source skills into one clean expert skill that passes surface checks and blank replay.`,
+      goal: `Merge ${group.length} source skills into one clean expert skill that passes surface checks${
+        mountBlankReplay ? " and blank replay" : "; final product replay is run externally after the hierarchy completes"
+      }.`,
       taskFamily: "merge-long-task",
+      ...(taskProfile === "multi_skill_merge_v2"
+        ? {
+            taskProfile: {
+              id: taskProfile,
+              accessSystem,
+              version: "2",
+            },
+          }
+        : {}),
       domainTags: ["merge", "skill", "blank-eval-plan"],
       materials: [
         { path: "./00-task-entry.md", label: "Task entry", role: "instructions" },
@@ -647,9 +783,20 @@ export async function createMergeLongTaskPack(input: CreateMergeLongTaskPackInpu
       targetPaths: [{ path: "./workspace/merged-skill", label: "merged-skill", role: "experience-workspace" }],
       editablePaths: ["./workspace/merged-skill"],
       preservePreseededEditablePaths: ["./workspace/merged-skill"],
+      // These paths are available to the open-book merge executor. Campaign
+      // Blank Eval replaces formalPackageRoots with the candidate package, so
+      // the closed-book agent never receives source skills or the leaf index.
+      formalPackageRoots: [
+        "./materials/merge-inputs",
+        "./materials/source-leaf-skills",
+        "./materials/source-skill-index.json",
+        ...(repairSourcePath ? ["./materials/repair-targets.json"] : []),
+      ],
+      campaignFinalAcceptanceMode: mountBlankReplay ? "blank_agent" : "validators_only",
       validatorProfiles,
-      validators: [
-        {
+      validators: mountBlankReplay
+        ? [
+            {
           id: "merged-skill-blank-eval-plan",
           type: "blank_eval_plan",
           title: "Merged skill blank replay",
@@ -673,26 +820,40 @@ export async function createMergeLongTaskPack(input: CreateMergeLongTaskPackInpu
             answerAccess: "private_oracle",
             allowedAudiences: ["merger", "repair_agent", "dashboard", "memory", "audit"],
           },
-        },
-      ],
-      initialGraph: {
-        planner_summary: "The generated task has a single merge unit followed by completion validators.",
-        completion_validator_ids: completionValidatorIDs,
-        units: [
-          {
-            id: "merge-skills",
-            title: "Merge source skills",
-            goal: "Read the source skills, merge reusable lessons into workspace/merged-skill, and satisfy the merge contract.",
-            inputs: ["./00-task-entry.md", "./materials/input-manifest.json", "./materials/merge-contract.json"],
-            depends_on: [],
-            expected_artifacts: ["./workspace/merged-skill/INDEX.md", "./workspace/merged-skill/CORE.md"],
-            claim: "Merged skill package has been written.",
-            check_plan: "Completion validators will check surface quality and blank replay.",
-            validator_ids: [],
-            retry_budget: 1,
-          },
-        ],
-      },
+            },
+          ]
+        : [],
+      ...(taskProfile === "legacy"
+        ? {
+            initialGraph: {
+              planner_summary: "The generated task has a single merge unit followed by completion validators.",
+              completion_validator_ids: completionValidatorIDs,
+              units: [
+                {
+                  id: "merge-skills",
+                  title: "Merge source skills",
+                  goal:
+                    "Read the source skills, merge reusable lessons into workspace/merged-skill, and satisfy the merge contract.",
+                  inputs: [
+                    "./00-task-entry.md",
+                    "./materials/input-manifest.json",
+                    "./materials/merge-contract.json",
+                    "./materials/source-skill-index.json",
+                    "./materials/merge-inputs",
+                    "./materials/source-leaf-skills",
+                    ...(repairSourcePath ? ["./materials/repair-targets.json"] : []),
+                  ],
+                  depends_on: [],
+                  expected_artifacts: ["./workspace/merged-skill/INDEX.md", "./workspace/merged-skill/CORE.md"],
+                  claim: "Merged skill package has been written.",
+                  check_plan: "Completion validators will check surface quality and blank replay.",
+                  validator_ids: [],
+                  retry_budget: 1,
+                },
+              ],
+            },
+          }
+        : {}),
       budgets: {
         maxAttemptsPerUnit: 1,
         maxTotalUnitAttempts: 3,
@@ -701,23 +862,44 @@ export async function createMergeLongTaskPack(input: CreateMergeLongTaskPackInpu
         maxNoProgressCycles: 4,
         maxUnitsPerGraph: 4,
       },
-      notes: `Generated by create-merge-long-task-pack using blank acceptance scenario ${scenario} and mode ${modeID}.`,
+      notes: `Generated by create-merge-long-task-pack using task profile ${taskProfile}, access system ${accessSystem}, blank acceptance scenario ${scenario}, and mode ${modeID}.`,
     }
 
     if (!input.dryRun) {
       await ensureDirectory(taskDir)
       await writeTextFile(
         path.join(taskDir, "00-task-entry.md"),
-        taskEntryMarkdown({ groupID, caseCount: group.length, validatorProfiles }),
+        taskEntryMarkdown({
+          groupID,
+          caseCount: group.length,
+          validatorProfiles,
+          repairMode: Boolean(repairSourcePath),
+        }),
       )
       await writeJsonFile(path.join(materialsDir, "input-manifest.json"), { schema: "merge-input-manifest/v1", items: manifest })
+      await writeJsonFile(sourceSkillIndexPath, {
+        schema: MERGE_SOURCE_SKILL_INDEX_SCHEMA,
+        entries: Array.from(sourceSkillEntries.values()).sort((left, right) =>
+          left.sourceCaseID.localeCompare(right.sourceCaseID),
+        ),
+      })
+      await readAndValidateMergeSourceSkillIndex(sourceSkillIndexPath)
+      if (repairSourcePath) await cp(repairSourcePath, repairTargetsPath, { force: true })
       await writeJsonFile(path.join(materialsDir, "replay-plan.json"), plan)
       await writeJsonFile(path.join(materialsDir, "merge-contract.json"), {
         schema: "merge-contract-pointer/v1",
         contractRef: config.mergeConfig.defaultContract,
         taskPackContracts: config.mergeConfig.taskPackContracts,
       })
-      await writeSeedSkill(workspaceDir, groupID)
+      const repairBaseline =
+        group.length === 1 && asString(group[0]?.sourceKind) === "repair_baseline"
+          ? resolveSkillRoot(group[0]!, manifestDir)
+          : undefined
+      if (repairBaseline) {
+        await copyFrozenSkill(repairBaseline, workspaceDir)
+      } else {
+        await writeSeedSkill(workspaceDir, groupID)
+      }
       await writeJsonFile(path.join(taskDir, "spec.json"), spec)
       await writeJsonFile(path.join(taskDir, "campaign.json"), {
         title: `${input.label ?? path.basename(outTaskPack)}-${groupID}`,
@@ -747,6 +929,7 @@ export async function createMergeLongTaskPack(input: CreateMergeLongTaskPackInpu
       sourceCampaignManifestPath: normalizeSlash(manifestPath),
       blankAcceptanceScenario: scenario,
       blankAcceptanceMode: modeID,
+      mountBlankReplay,
       generated,
     })
   }
@@ -759,6 +942,7 @@ export async function createMergeLongTaskPack(input: CreateMergeLongTaskPackInpu
     profileValidatorIDs,
     blankAcceptanceScenario: scenario,
     blankAcceptanceMode: modeID,
+    mountBlankReplay,
   }
 }
 

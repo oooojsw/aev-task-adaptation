@@ -1,4 +1,4 @@
-﻿import path from "node:path"
+import path from "node:path"
 import process from "node:process"
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile } from "node:fs/promises"
@@ -1326,5 +1326,6 @@ export async function runLongTaskValidatorViaValidationEngine(input: {
     result: executed.result,
     views,
     viewPaths,
+    raw: executed.raw,
   }
 }

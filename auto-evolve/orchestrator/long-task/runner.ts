@@ -79,6 +79,11 @@ import { loadConfig } from "../schema"
 import { runOpencodeTask, type OpencodeTaskInput } from "../opencode"
 import type { OpencodeRunResult } from "../opencode"
 import { buildAccessProfile } from "../access-profile"
+import {
+  buildMultiSkillMergePlannerPrompt,
+  buildMultiSkillMergeRoleAccess,
+  isMultiSkillMergeProfile,
+} from "../task-profiles/multi-skill-merge"
 import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
@@ -1036,7 +1041,11 @@ function explicitCampaignExecutionContextPaths(spec: LongTaskSpec) {
 function selectLongTaskPlanningContext(spec: LongTaskSpec) {
   const initialContext = uniqueStrings(spec.initialExpertContextPaths ?? [])
   const staticContext = initialContext.filter((item) => !isCampaignRuntimePlanningContextPath(item))
-  return uniqueStrings([...explicitCampaignPlanningContextPaths(spec), ...staticContext])
+  const profileContext =
+    spec.taskProfile?.id === "multi_skill_merge_v2" && spec.taskProfile.accessSystem === "profile_v2"
+      ? spec.formalPackageRoots ?? []
+      : []
+  return uniqueStrings([...explicitCampaignPlanningContextPaths(spec), ...staticContext, ...profileContext])
 }
 
 async function readRequiredRoutingRegions(spec: LongTaskSpec) {
@@ -1159,12 +1168,13 @@ async function runPlanningSession(input: {
   const planningContextPaths = selectLongTaskPlanningContext(input.spec)
   const capabilityPaths = capabilityReferencePaths(input.spec)
   const capabilityFiles = capabilityAttachedFiles(input.spec)
+  const formalPackageRoots = resolveLongTaskFormalPackageRoots(input.spec)
   const draftPaths =
     input.phase === "plan"
       ? longTaskPlanPaths(input.run)
       : longTaskReplanPaths(input.run, (input.existingGraph?.revision ?? 0) + 1)
 
-  const prompt =
+  const basePrompt =
     input.phase === "plan"
       ? buildLongTaskPlanningPrompt({
           spec: input.spec,
@@ -1178,12 +1188,37 @@ async function runPlanningSession(input: {
           failurePacketSummaries: input.failureSummaries ?? [],
           replanOutputPath: draftPaths.graphDraftPath,
         })
-  const access = await buildAccessProfile({
-    role: input.phase === "plan" ? "long_task_planner" : "long_task_replanner",
-    mode: "open_book",
-    readPaths: [input.specPath, ...planningContextPaths, ...capabilityPaths],
-    editPaths: [draftPaths.root],
-  })
+  const profileV2 = isMultiSkillMergeProfile(input.spec)
+  const access = profileV2
+    ? await buildMultiSkillMergeRoleAccess({
+        role: "merge_planner",
+        context: {
+          stageDir: draftPaths.root,
+          sourceRoots: formalPackageRoots,
+          taskDefinitionPaths: uniqueStrings([
+            input.specPath,
+            ...input.spec.materials.map((item) => item.path),
+          ]),
+          plannerWriteRoots: [draftPaths.root],
+          internalStatePaths: uniqueStrings([
+            ...planningContextPaths.filter((item) => !formalPackageRoots.includes(item)),
+            ...capabilityPaths,
+          ]),
+        },
+      })
+    : await buildAccessProfile({
+        role: input.phase === "plan" ? "long_task_planner" : "long_task_replanner",
+        mode: "open_book",
+        readPaths: [input.specPath, ...planningContextPaths, ...capabilityPaths],
+        editPaths: [draftPaths.root],
+      })
+  const prompt = profileV2
+    ? buildMultiSkillMergePlannerPrompt({
+        basePrompt,
+        accessManifestPath: path.join(draftPaths.root, "access-manifest.json"),
+        planningOutputPath: draftPaths.graphDraftPath,
+      })
+    : basePrompt
 
   const task = await runOpencodeTask({
     cwd: input.cwd,
