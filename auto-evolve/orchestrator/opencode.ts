@@ -327,7 +327,7 @@ async function buildReadListPermissionRules(cwd: string, paths: string[]) {
   return rules
 }
 
-async function buildEditPermissionRules(cwd: string, paths: string[]) {
+export async function buildEditPermissionRules(cwd: string, paths: string[]) {
   const rules: Record<string, "allow" | "deny"> = {
     "*": "deny",
   }
@@ -340,7 +340,10 @@ async function buildEditPermissionRules(cwd: string, paths: string[]) {
       addPermissionPathVariants(rules, cwd, absolute, info.isDirectory())
       if (canonical !== absolute) addPermissionPathVariants(rules, cwd, canonical, info.isDirectory())
     } catch {
-      addPermissionPathVariants(rules, cwd, absolute, false)
+      // Editable roots are often declared before their directories are
+      // materialized. Keep the boundary at the explicitly granted path, but
+      // allow descendants so a session can create the requested artifacts.
+      addPermissionPathVariants(rules, cwd, absolute, true)
       continue
     }
   }
@@ -463,6 +466,16 @@ function objectRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
 }
 
+const RUNTIME_PROVIDER_CACHE_KEYS = ["id", "env", "npm", "api", "name", "models"] as const
+
+export function sanitizeCachedProviderForRuntime(provider: Record<string, unknown>) {
+  const sanitized: Record<string, unknown> = {}
+  for (const key of RUNTIME_PROVIDER_CACHE_KEYS) {
+    if (provider[key] !== undefined) sanitized[key] = provider[key]
+  }
+  return sanitized
+}
+
 async function readJsonObject(filePath: string) {
   try {
     const parsed = JSON.parse((await readFile(filePath, "utf8")).replace(/^\uFEFF/, ""))
@@ -506,7 +519,9 @@ async function materializeProviderFromModelCache(input: {
     ...input.baseConfig,
     provider: {
       ...providers,
-      [parsed.providerID]: cached.provider,
+      // The model cache also carries UI metadata such as `doc`. OpenCode's
+      // runtime provider schema is strict, so only materialize supported keys.
+      [parsed.providerID]: sanitizeCachedProviderForRuntime(cached.provider),
     },
   }
 }

@@ -1767,3 +1767,10 @@ auto-evolve-core-code-<timestamp>.txt
 OpenCode 在把 `read` 等工具产生的图片、PDF、音频或视频附件送入模型前，现在同时检查两层能力：供应商传输通道是否支持工具媒体，以及当前具体模型是否声明支持对应输入类型。文本模型（例如当前配置为纯文本的 MiniMax M2.7）不会再因为供应商协议本身支持附件，就被错误发送图片或 PDF；不支持的附件会被替换为明确的文本提示。视觉模型原有的图片传递行为保持不变。
 
 本次修复同时覆盖两条入口：session 工具结果组装，以及 provider 发送前的最终防御过滤。AEV 默认 OpenCode 二进制已更新，替换前版本保存在 `packages/opencode/node_modules/opencode-windows-x64/bin/opencode.exe.pre-media-capability-20260803.bak`，便于紧急回滚。
+
+真实 OfficeQA 单题烟测随后补出了两项运行侧兼容保护：
+
+- 私有模型缓存中的 `doc`、界面标签等展示元数据不能整包写入运行时 `opencode.json`；现在只物化 OpenCode provider schema 接受的核心字段，避免严格配置校验在模型启动前失败。
+- 明确授权的可编辑目录可能在会话启动时尚未创建；现在这种路径仍只以自身为安全边界，但会同时允许其后代文件，避免 agent 能创建目录却不能写入目录内产物。
+
+烟测使用 OfficeQA UID0001 的真实 78 页 Treasury Bulletin 扫描 PDF。MiniMax M2.7 成功启动，没有接收不支持的图片/PDF输入，而是自动改走 PyMuPDF 与本地 Tesseract OCR；因此媒体硬门和纯文本降级链路已得到真实验证。该题后续因历史扫描表格定位困难和旧编辑目录权限问题产生大量 OCR 调用，在约 8.3 万 token 时主动止损，不能把这次烟测记为题目验证通过。
