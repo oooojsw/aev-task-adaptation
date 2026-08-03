@@ -13,6 +13,7 @@ import { iife } from "@/util/iife"
 import { errorMessage } from "@/util/error"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
+import { ProviderMediaCapability } from "@/provider/media-capability"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { Effect } from "effect"
 
@@ -589,7 +590,7 @@ export namespace MessageV2 {
     //
     // Only apply this workaround if the model actually supports image input -
     // otherwise there's no point extracting images.
-    const supportsMediaInToolResults = (() => {
+    const providerSupportsMediaInToolResults = (() => {
       if (model.api.npm === "@ai-sdk/anthropic") return true
       if (model.api.npm === "@ai-sdk/openai") return true
       if (model.api.npm === "@ai-sdk/amazon-bedrock") return true
@@ -721,19 +722,35 @@ export namespace MessageV2 {
               // For providers that don't support media in tool results, extract media files
               // (images, PDFs) to be sent as a separate user message
               const mediaAttachments = attachments.filter((a) => isMedia(a.mime))
+              const supportedMediaAttachments = mediaAttachments.filter((a) =>
+                ProviderMediaCapability.supportsInput(model, a.mime),
+              )
+              const unsupportedMediaAttachments = mediaAttachments.filter(
+                (a) => !ProviderMediaCapability.supportsInput(model, a.mime),
+              )
               const nonMediaAttachments = attachments.filter((a) => !isMedia(a.mime))
-              if (!supportsMediaInToolResults && mediaAttachments.length > 0) {
-                media.push(...mediaAttachments)
+              if (!providerSupportsMediaInToolResults && supportedMediaAttachments.length > 0) {
+                media.push(...supportedMediaAttachments)
               }
-              const finalAttachments = supportsMediaInToolResults ? attachments : nonMediaAttachments
+              const finalAttachments = providerSupportsMediaInToolResults
+                ? [...nonMediaAttachments, ...supportedMediaAttachments]
+                : nonMediaAttachments
+              const finalOutputText = [
+                outputText,
+                ...unsupportedMediaAttachments.map((attachment) =>
+                  ProviderMediaCapability.unsupportedInputMessage(attachment.mime, attachment.filename),
+                ),
+              ]
+                .filter(Boolean)
+                .join("\n")
 
               const output =
                 finalAttachments.length > 0
                   ? {
-                      text: outputText,
+                      text: finalOutputText,
                       attachments: finalAttachments,
                     }
-                  : outputText
+                  : finalOutputText
 
               assistantMessage.parts.push({
                 type: ("tool-" + part.tool) as `tool-${string}`,

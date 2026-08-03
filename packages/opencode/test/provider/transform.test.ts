@@ -1014,6 +1014,80 @@ describe("ProviderTransform.message - empty image handling", () => {
   })
 })
 
+describe("ProviderTransform.message - tool result media capabilities", () => {
+  const textOnlyModel = {
+    id: "minimax-m2.7",
+    providerID: "minimax",
+    api: { id: "MiniMax-M2.7", url: "https://example.com", npm: "@ai-sdk/anthropic" },
+    capabilities: {
+      input: { text: true, audio: false, image: false, video: false, pdf: false },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      temperature: true,
+      reasoning: true,
+      attachment: false,
+      toolcall: true,
+      interleaved: false,
+    },
+  } as any
+
+  test("replaces unsupported media nested in tool results", () => {
+    const msgs = [
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call-1",
+            toolName: "read",
+            output: {
+              type: "content",
+              value: [
+                { type: "text", text: "Image read successfully" },
+                { type: "media", mediaType: "image/png", data: "Zm9v" },
+                { type: "media", mediaType: "application/pdf", data: "Zm9v" },
+              ],
+            },
+          },
+        ],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, textOnlyModel, {}) as any[]
+    expect(result[0].content[0].output.value).toEqual([
+      { type: "text", text: "Image read successfully" },
+      { type: "text", text: "ERROR: Cannot read image (this model does not support image input). Inform the user." },
+      { type: "text", text: "ERROR: Cannot read pdf (this model does not support pdf input). Inform the user." },
+    ])
+  })
+
+  test("preserves supported media nested in tool results", () => {
+    const visionModel = {
+      ...textOnlyModel,
+      capabilities: {
+        ...textOnlyModel.capabilities,
+        input: { ...textOnlyModel.capabilities.input, image: true },
+      },
+    }
+    const media = { type: "media", mediaType: "image/png", data: "Zm9v" }
+    const msgs = [
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call-1",
+            toolName: "read",
+            output: { type: "content", value: [media] },
+          },
+        ],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, visionModel, {}) as any[]
+    expect(result[0].content[0].output.value).toEqual([media])
+  })
+})
+
 describe("ProviderTransform.message - anthropic empty content filtering", () => {
   const anthropicModel = {
     id: "anthropic/claude-3-5-sonnet",

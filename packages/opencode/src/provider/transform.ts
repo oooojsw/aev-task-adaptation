@@ -3,19 +3,9 @@ import { mergeDeep, unique } from "remeda"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import type { JSONSchema } from "zod/v4/core"
 import type { Provider } from "./provider"
-import type { ModelsDev } from "./models"
 import { iife } from "@/util/iife"
 import { Flag } from "@/flag/flag"
-
-type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
-
-function mimeToModality(mime: string): Modality | undefined {
-  if (mime.startsWith("image/")) return "image"
-  if (mime.startsWith("audio/")) return "audio"
-  if (mime.startsWith("video/")) return "video"
-  if (mime === "application/pdf") return "pdf"
-  return undefined
-}
+import { ProviderMediaCapability } from "./media-capability"
 
 export namespace ProviderTransform {
   export const OUTPUT_TOKEN_MAX = Flag.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX || 32_000
@@ -239,10 +229,31 @@ export namespace ProviderTransform {
 
   function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {
     return msgs.map((msg) => {
-      if (msg.role !== "user" || !Array.isArray(msg.content)) return msg
+      if (!Array.isArray(msg.content)) return msg
 
       const filtered = msg.content.map((part) => {
-        if (part.type !== "file" && part.type !== "image") return part
+        if (part.type === "tool-result") {
+          const output = part.output as { type?: string; value?: unknown } | undefined
+          if (output?.type !== "content" || !Array.isArray(output.value)) return part
+          return {
+            ...part,
+            output: {
+              ...output,
+              value: output.value.map((item) => {
+                if (!item || typeof item !== "object") return item
+                const media = item as { type?: string; mediaType?: string }
+                if (media.type !== "media" || typeof media.mediaType !== "string") return item
+                if (ProviderMediaCapability.supportsInput(model, media.mediaType)) return item
+                return {
+                  type: "text" as const,
+                  text: ProviderMediaCapability.unsupportedInputMessage(media.mediaType),
+                }
+              }),
+            },
+          }
+        }
+
+        if (msg.role !== "user" || (part.type !== "file" && part.type !== "image")) return part
 
         // Check for empty base64 image data
         if (part.type === "image") {
@@ -260,18 +271,17 @@ export namespace ProviderTransform {
 
         const mime = part.type === "image" ? part.image.toString().split(";")[0].replace("data:", "") : part.mediaType
         const filename = part.type === "file" ? part.filename : undefined
-        const modality = mimeToModality(mime)
+        const modality = ProviderMediaCapability.modality(mime)
         if (!modality) return part
-        if (model.capabilities.input[modality]) return part
+        if (ProviderMediaCapability.supportsInput(model, mime)) return part
 
-        const name = filename ? `"${filename}"` : modality
         return {
           type: "text" as const,
-          text: `ERROR: Cannot read ${name} (this model does not support ${modality} input). Inform the user.`,
+          text: ProviderMediaCapability.unsupportedInputMessage(mime, filename),
         }
       })
 
-      return { ...msg, content: filtered }
+      return { ...msg, content: filtered } as ModelMessage
     })
   }
 

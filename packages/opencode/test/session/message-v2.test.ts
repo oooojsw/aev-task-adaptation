@@ -267,7 +267,7 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
-  test("converts assistant tool completion into tool-call + tool-result messages with attachments", async () => {
+  test("omits tool media that the model cannot read", async () => {
     const userID = "m-user"
     const assistantID = "m-assistant"
 
@@ -346,17 +346,77 @@ describe("session.message-v2.toModelMessage", () => {
             toolCallId: "call-1",
             toolName: "bash",
             output: {
-              type: "content",
-              value: [
-                { type: "text", text: "ok" },
-                { type: "media", mediaType: "image/png", data: "Zm9v" },
-              ],
+              type: "text",
+              value: 'ok\nERROR: Cannot read "attachment.png" (this model does not support image input). Inform the user.',
             },
             providerOptions: { openai: { tool: "meta" } },
           },
         ],
       },
     ])
+  })
+
+  test("keeps tool media when the model supports it", async () => {
+    const userID = "m-user"
+    const assistantID = "m-assistant"
+    const visionModel: Provider.Model = {
+      ...model,
+      capabilities: {
+        ...model.capabilities,
+        attachment: true,
+        input: { ...model.capabilities.input, image: true },
+      },
+    }
+    const input: MessageV2.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [{ ...basePart(userID, "u1"), type: "text", text: "run tool" }] as MessageV2.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "tool",
+            callID: "call-1",
+            tool: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "attachment.png" },
+              output: "Image read successfully",
+              title: "Read",
+              metadata: {},
+              time: { start: 0, end: 1 },
+              attachments: [
+                {
+                  ...basePart(assistantID, "file-1"),
+                  type: "file",
+                  mime: "image/png",
+                  filename: "attachment.png",
+                  url: "data:image/png;base64,Zm9v",
+                },
+              ],
+            },
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    const result = await MessageV2.toModelMessages(input, visionModel)
+    expect(result[2]).toMatchObject({
+      role: "tool",
+      content: [
+        {
+          output: {
+            type: "content",
+            value: [
+              { type: "text", text: "Image read successfully" },
+              { type: "media", mediaType: "image/png", data: "Zm9v" },
+            ],
+          },
+        },
+      ],
+    })
   })
 
   test("omits provider metadata when assistant model differs", async () => {

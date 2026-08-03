@@ -1761,3 +1761,9 @@ auto-evolve-core-code-<timestamp>.txt
 - 每次体检会写入 `history-health/*-task-ledger-preflight.json`；benchmark 计划阶段还会写 `history-health/*-state-consistency.json`，用于检查 `task-ledger.json` 和 `orchestrator-state.json` 是否分叉。
 
 这层保护只处理平台账本健康，不改变已经成功的 skill/campaign 产物；如果体检报告显示 mismatch，需要优先排查是否误用了错误 split、错误 `--out` 或旧 run 血统。
+
+## OpenCode 工具媒体能力硬门（2026-08-03）
+
+OpenCode 在把 `read` 等工具产生的图片、PDF、音频或视频附件送入模型前，现在同时检查两层能力：供应商传输通道是否支持工具媒体，以及当前具体模型是否声明支持对应输入类型。文本模型（例如当前配置为纯文本的 MiniMax M2.7）不会再因为供应商协议本身支持附件，就被错误发送图片或 PDF；不支持的附件会被替换为明确的文本提示。视觉模型原有的图片传递行为保持不变。
+
+本次修复同时覆盖两条入口：session 工具结果组装，以及 provider 发送前的最终防御过滤。AEV 默认 OpenCode 二进制已更新，替换前版本保存在 `packages/opencode/node_modules/opencode-windows-x64/bin/opencode.exe.pre-media-capability-20260803.bak`，便于紧急回滚。
