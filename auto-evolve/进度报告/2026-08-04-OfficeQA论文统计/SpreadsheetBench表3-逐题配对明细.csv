@@ -1,0 +1,2774 @@
+﻿测试模型,对比,task_id,左,右,变化
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,109-21,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,11276,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,120-24,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,12307,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,13-1,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,130-9,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,13284,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,142-19,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,14240,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,146-49,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,147-48,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,15380,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,15387,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,156-14,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,1563,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,15671,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,157-4,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,160-6,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,16511,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,168-17,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,17-35,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,17111,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,177-6,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,178-22,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,183-8,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,18645,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,188-39,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,18935,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,191-40,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,1925,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,203-15,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,208-20,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,209-30,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,23-24,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,230-16,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,236-22,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,24-23,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,267-21,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,269-43,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,269-44,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,279-23,1,0,-1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,28-7,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,280-17,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,290-1,1,0,-1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,290-27,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,297-42,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,3002,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,302-1,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,304-35,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,31202,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,31746,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,32093,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,32293,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,32562,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,32789,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,33157,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,333-29,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,334-11,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,33722,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,341-14,1,0,-1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,341-40,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,34210,1,0,-1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,343-20,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,353-29,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,353-6,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,35739,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,35747,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,359-21,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,36191,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,36277,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,367-23,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,36764,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,37086,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,37229,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,374-18,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,374-31,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,37462,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,37554,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,37900,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,38074,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,382-29,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,384-4,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,38537,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,387-16,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,38703,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,388-47,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,38823,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,38969,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,38985,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,3911,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,39190,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,39432,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,39515,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,39667,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,399-14,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,40478,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,40757,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,408-5,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,409-45,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,40959,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,41-47,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,41265,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,41348,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,41410,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,41420,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,41589,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,416-27,1,0,-1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,41601,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,41691,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,41969,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,41978,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,42181,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,42198,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,42216,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,423-16,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,42515,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,42526,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,42902,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,42930,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,43213,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,43657,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,438-18,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,440-24,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,44017,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,44266,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,44296,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,44389,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,44628,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,448-11,1,0,-1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,44913,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,45063,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,45300,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,455-35,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,45707,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,45738,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,45896,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,45937,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,45944,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,46167,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,46240,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,469-9,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,4714,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,477-45,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,47827,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,47842,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,47933,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,48257,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,486-17,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,48608,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,48643,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,488-14,1,0,-1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,48924,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,48969,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,48975,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,48982,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,49036,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,49196,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,49237,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,493-5,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,49300,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,496-15,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,496-34,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,49667,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,49801,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,49857,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,49945,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50051,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50088,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50193,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50250,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50324,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50486,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50521,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50526,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50631,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50682,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50683,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50796,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50811,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50952,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,50971,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,510-3,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,51262,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,51289,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,51354,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,51359,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,51431,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,51556,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,51586,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,51680,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,52050,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,52220,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,52233,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,52305,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,524-31,1,0,-1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,52532,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,52541,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,52575,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,52807,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,52917,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,52964,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,531-18,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,53117,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,53167,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,534-26,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,53449,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,535-20,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,53994,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,54196,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,54242,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,54274,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,54474,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,545-35,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,54513,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,54590,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,54667,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,54675,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,547-18,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,547-43,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,54717,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,54925,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,55085,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,55260,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,55468,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,55708,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,55817,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,55976,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,55977,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,56225,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,56378,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,56419,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,56599,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,567-21,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,56915,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,56920,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,56921,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,56953,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,57033,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,57117,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,57232,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,57262,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,57354,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,57590,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,57612,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,57693,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,57989,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,58032,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,58147,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,5835,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,58687,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,58701,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,58723,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,58904,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,58942,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,59129,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,59160,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,59224,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,59358,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,59511,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,59639,0,1,1
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,59734,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,59794,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,59884,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,599-9,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,59902,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,61-4,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,73-45,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,7665,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,79-7,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,82-38,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,84-40,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,91-34,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,9111,1,1,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,9391,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,9448,0,0,0
+GPT-5.4-mini,AEV merge-as-old vs 无 Skill,97-36,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,109-21,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,11276,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,120-24,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,12307,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,13-1,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,130-9,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,13284,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,142-19,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,14240,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,146-49,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,147-48,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,15380,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,15387,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,156-14,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,1563,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,15671,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,157-4,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,160-6,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,16511,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,168-17,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,17-35,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,17111,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,177-6,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,178-22,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,183-8,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,18645,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,188-39,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,18935,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,191-40,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,1925,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,203-15,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,208-20,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,209-30,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,23-24,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,230-16,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,236-22,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,24-23,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,267-21,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,269-43,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,269-44,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,279-23,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,28-7,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,280-17,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,290-1,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,290-27,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,297-42,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,3002,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,302-1,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,304-35,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,31202,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,31746,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,32093,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,32293,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,32562,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,32789,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,33157,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,333-29,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,334-11,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,33722,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,341-14,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,341-40,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,34210,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,343-20,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,353-29,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,353-6,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,35739,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,35747,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,359-21,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,36191,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,36277,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,367-23,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,36764,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,37086,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,37229,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,374-18,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,374-31,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,37462,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,37554,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,37900,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,38074,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,382-29,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,384-4,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,38537,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,387-16,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,38703,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,388-47,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,38823,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,38969,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,38985,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,3911,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,39190,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,39432,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,39515,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,39667,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,399-14,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,40478,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,40757,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,408-5,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,409-45,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,40959,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,41-47,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,41265,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,41348,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,41410,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,41420,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,41589,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,416-27,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,41601,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,41691,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,41969,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,41978,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,42181,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,42198,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,42216,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,423-16,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,42515,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,42526,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,42902,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,42930,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,43213,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,43657,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,438-18,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,440-24,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,44017,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,44266,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,44296,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,44389,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,44628,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,448-11,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,44913,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,45063,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,45300,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,455-35,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,45707,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,45738,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,45896,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,45937,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,45944,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,46167,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,46240,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,469-9,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,4714,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,477-45,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,47827,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,47842,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,47933,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,48257,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,486-17,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,48608,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,48643,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,488-14,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,48924,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,48969,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,48975,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,48982,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,49036,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,49196,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,49237,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,493-5,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,49300,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,496-15,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,496-34,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,49667,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,49801,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,49857,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,49945,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50051,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50088,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50193,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50250,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50324,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50486,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50521,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50526,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50631,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50682,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50683,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50796,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50811,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50952,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,50971,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,510-3,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,51262,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,51289,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,51354,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,51359,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,51431,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,51556,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,51586,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,51680,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,52050,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,52220,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,52233,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,52305,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,524-31,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,52532,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,52541,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,52575,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,52807,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,52917,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,52964,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,531-18,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,53117,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,53161,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,53167,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,534-26,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,53449,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,535-20,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,53994,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,54196,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,54242,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,54274,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,54474,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,545-35,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,54513,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,54590,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,54667,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,54675,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,547-18,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,547-43,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,54717,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,54925,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,55085,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,55260,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,55468,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,55708,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,55817,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,55976,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,55977,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,56225,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,56378,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,56419,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,56599,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,567-21,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,56915,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,56920,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,56921,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,56953,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,57033,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,57117,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,57232,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,57262,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,57354,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,57590,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,57612,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,57693,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,57989,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,58032,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,58147,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,5835,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,58687,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,58701,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,58723,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,58904,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,58942,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,59129,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,59160,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,59224,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,59358,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,59511,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,59639,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,59734,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,59794,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,59884,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,599-9,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,59902,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,61-4,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,73-45,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,7665,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,79-7,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,82-38,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,84-40,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,91-34,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,9111,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,9391,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,9448,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs 无 Skill,97-36,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,109-21,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,11276,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,120-24,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,12307,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,13-1,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,130-9,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,13284,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,142-19,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,14240,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,146-49,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,147-48,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,15380,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,15387,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,156-14,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,1563,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,15671,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,157-4,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,160-6,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,16511,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,168-17,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,17-35,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,17111,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,177-6,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,178-22,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,183-8,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,18645,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,188-39,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,18935,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,191-40,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,1925,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,203-15,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,208-20,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,209-30,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,23-24,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,230-16,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,236-22,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,24-23,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,267-21,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,269-43,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,269-44,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,279-23,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,28-7,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,280-17,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,290-1,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,290-27,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,297-42,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,3002,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,302-1,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,304-35,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,31202,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,31746,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,32093,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,32293,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,32562,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,32789,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,33157,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,333-29,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,334-11,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,33722,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,341-14,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,341-40,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,34210,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,343-20,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,353-29,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,353-6,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,35739,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,35747,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,359-21,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,36191,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,36277,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,367-23,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,36764,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,37086,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,37229,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,374-18,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,374-31,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,37462,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,37554,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,37900,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,38074,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,382-29,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,384-4,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,38537,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,387-16,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,38703,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,388-47,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,38823,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,38969,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,38985,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,3911,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,39190,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,39432,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,39515,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,39667,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,399-14,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,40478,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,40757,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,408-5,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,409-45,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,40959,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,41-47,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,41265,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,41348,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,41410,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,41420,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,41589,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,416-27,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,41601,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,41691,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,41969,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,41978,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,42181,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,42198,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,42216,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,423-16,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,42515,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,42526,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,42902,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,42930,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,43213,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,43657,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,438-18,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,440-24,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,44017,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,44266,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,44296,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,44389,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,44628,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,448-11,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,44913,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,45063,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,45300,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,455-35,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,45707,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,45738,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,45896,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,45937,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,45944,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,46167,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,46240,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,469-9,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,4714,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,477-45,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,47827,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,47842,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,47933,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,48257,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,486-17,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,48608,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,48643,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,488-14,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,48924,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,48969,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,48975,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,48982,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,49036,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,49196,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,49237,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,493-5,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,49300,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,496-15,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,496-34,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,49667,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,49801,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,49857,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,49945,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50051,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50088,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50193,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50250,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50324,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50486,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50521,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50526,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50631,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50682,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50683,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50796,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50811,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50952,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,50971,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,510-3,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,51262,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,51289,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,51354,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,51359,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,51431,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,51556,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,51586,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,51680,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,52050,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,52220,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,52233,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,52305,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,524-31,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,52532,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,52541,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,52575,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,52807,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,52917,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,52964,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,531-18,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,53117,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,53167,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,534-26,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,53449,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,535-20,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,53994,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,54196,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,54242,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,54274,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,54474,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,545-35,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,54513,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,54590,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,54667,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,54675,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,547-18,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,547-43,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,54717,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,54925,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,55085,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,55260,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,55468,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,55708,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,55817,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,55976,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,55977,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,56225,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,56378,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,56419,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,56599,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,567-21,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,56915,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,56920,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,56921,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,56953,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,57033,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,57117,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,57232,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,57262,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,57354,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,57590,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,57612,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,57693,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,57989,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,58032,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,58147,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,5835,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,58687,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,58701,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,58723,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,58904,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,58942,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,59129,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,59160,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,59224,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,59358,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,59511,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,59639,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,59734,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,59794,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,59884,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,599-9,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,59902,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,61-4,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,73-45,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,7665,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,79-7,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,82-38,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,84-40,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,91-34,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,9111,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,9391,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,9448,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs 无 Skill,97-36,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,109-21,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,11276,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,120-24,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,12307,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,13-1,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,130-9,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,13284,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,142-19,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,14240,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,146-49,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,147-48,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,15380,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,15387,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,156-14,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,1563,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,15671,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,157-4,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,160-6,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,16511,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,168-17,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,17-35,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,17111,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,177-6,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,178-22,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,183-8,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,18645,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,188-39,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,18935,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,191-40,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,1925,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,203-15,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,208-20,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,209-30,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,23-24,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,230-16,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,236-22,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,24-23,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,267-21,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,269-43,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,269-44,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,279-23,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,28-7,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,280-17,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,290-1,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,290-27,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,297-42,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,3002,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,302-1,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,304-35,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,31202,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,31746,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,32093,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,32293,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,32562,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,32789,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,33157,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,333-29,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,334-11,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,33722,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,341-14,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,341-40,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,34210,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,343-20,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,353-29,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,353-6,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,35739,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,35747,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,359-21,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,36191,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,36277,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,367-23,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,36764,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,37086,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,37229,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,374-18,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,374-31,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,37462,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,37554,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,37900,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,38074,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,382-29,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,384-4,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,38537,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,387-16,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,38703,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,388-47,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,38823,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,38969,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,38985,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,3911,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,39190,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,39432,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,39515,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,39667,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,399-14,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,40478,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,40757,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,408-5,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,409-45,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,40959,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,41-47,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,41265,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,41348,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,41410,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,41420,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,41589,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,416-27,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,41601,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,41691,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,41969,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,41978,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,42181,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,42198,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,42216,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,423-16,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,42515,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,42526,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,42902,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,42930,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,43213,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,43657,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,438-18,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,440-24,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,44017,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,44266,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,44296,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,44389,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,44628,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,448-11,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,44913,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,45063,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,45300,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,455-35,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,45707,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,45738,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,45896,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,45937,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,45944,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,46167,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,46240,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,469-9,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,4714,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,477-45,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,47827,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,47842,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,47933,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,48257,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,486-17,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,48608,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,48643,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,488-14,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,48924,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,48969,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,48975,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,48982,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,49036,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,49196,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,49237,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,493-5,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,49300,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,496-15,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,496-34,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,49667,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,49801,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,49857,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,49945,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50051,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50088,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50193,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50250,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50324,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50486,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50521,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50526,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50631,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50682,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50683,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50796,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50811,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50952,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,50971,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,510-3,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,51262,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,51289,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,51354,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,51359,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,51431,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,51556,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,51586,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,516-46,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,51680,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,52050,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,52220,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,52233,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,52305,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,524-31,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,52532,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,52541,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,52575,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,52807,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,52917,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,52964,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,531-18,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,53117,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,53167,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,534-26,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,53449,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,535-20,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,53994,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,54196,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,54242,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,54274,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,54474,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,545-35,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,54513,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,54590,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,54667,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,54675,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,547-18,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,547-43,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,54717,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,54925,0,1,1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,55085,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,55260,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,55468,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,55708,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,55817,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,55976,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,55977,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,56225,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,56378,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,56419,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,56599,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,567-21,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,56915,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,56920,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,56921,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,56953,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,57033,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,57117,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,57232,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,57262,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,57354,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,57590,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,57612,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,57693,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,57989,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,58032,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,58147,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,5835,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,58687,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,58701,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,58723,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,58904,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,58942,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,59129,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,59160,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,59224,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,59358,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,59511,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,59639,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,59734,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,59794,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,59884,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,599-9,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,59902,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,61-4,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,73-45,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,7665,1,0,-1
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,79-7,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,82-38,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,84-40,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,91-34,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,9111,1,1,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,9391,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,9448,0,0,0
+GPT-5.4-mini,optMiniMax M2.7 Skill vs AEV merge-as-old,97-36,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,109-21,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,11276,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,120-24,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,12307,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,13-1,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,130-9,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,13284,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,142-19,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,14240,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,146-49,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,147-48,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,15380,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,15387,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,156-14,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,1563,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,15671,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,157-4,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,160-6,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,16511,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,168-17,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,17-35,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,17111,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,177-6,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,178-22,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,183-8,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,18645,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,188-39,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,18935,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,191-40,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,1925,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,203-15,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,208-20,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,209-30,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,23-24,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,230-16,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,236-22,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,24-23,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,267-21,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,269-43,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,269-44,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,279-23,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,28-7,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,280-17,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,290-1,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,290-27,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,297-42,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,3002,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,302-1,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,304-35,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,31202,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,31746,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,32093,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,32293,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,32562,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,32789,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,33157,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,333-29,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,334-11,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,33722,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,341-14,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,341-40,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,34210,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,343-20,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,353-29,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,353-6,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,35739,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,35747,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,359-21,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,36191,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,36277,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,367-23,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,36764,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,37086,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,37229,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,374-18,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,374-31,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,37462,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,37554,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,37900,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,38074,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,382-29,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,384-4,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,38537,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,387-16,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,38703,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,388-47,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,38823,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,38969,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,38985,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,3911,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,39190,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,39432,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,39515,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,39667,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,399-14,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,40478,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,40757,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,408-5,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,409-45,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,40959,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,41-47,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,41265,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,41348,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,41410,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,41420,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,41589,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,416-27,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,41601,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,41691,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,41969,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,41978,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,42181,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,42198,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,42216,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,423-16,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,42515,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,42526,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,42902,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,42930,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,43213,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,43657,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,438-18,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,440-24,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,44017,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,44266,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,44296,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,44389,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,44628,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,448-11,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,44913,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,45063,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,45300,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,455-35,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,45707,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,45738,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,45896,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,45937,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,45944,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,46167,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,46240,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,469-9,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,4714,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,477-45,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,47827,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,47842,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,47933,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,48257,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,486-17,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,48608,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,48643,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,488-14,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,48924,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,48969,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,48975,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,48982,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,49036,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,49196,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,49237,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,493-5,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,49300,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,496-15,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,496-34,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,49667,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,49801,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,49857,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,49945,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50051,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50088,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50193,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50250,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50324,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50486,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50521,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50526,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50631,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50682,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50683,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50796,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50811,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50952,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,50971,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,510-3,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,51262,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,51289,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,51354,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,51359,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,51431,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,51556,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,51586,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,516-46,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,51680,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,52050,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,52220,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,52233,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,52305,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,524-31,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,52532,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,52541,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,52575,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,52807,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,52917,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,52964,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,531-18,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,53117,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,53167,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,534-26,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,53449,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,535-20,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,53994,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,54196,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,54242,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,54274,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,54474,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,545-35,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,54513,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,54590,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,54667,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,54675,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,547-18,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,547-43,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,54717,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,54925,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,55085,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,55260,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,55468,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,55708,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,55817,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,55976,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,55977,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,56225,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,56378,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,56419,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,56599,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,567-21,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,56915,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,56920,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,56921,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,56953,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,57033,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,57117,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,57232,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,57262,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,57354,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,57590,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,57612,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,57693,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,57989,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,58032,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,58147,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,5835,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,58687,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,58701,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,58723,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,58904,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,58942,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,59129,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,59160,0,1,1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,59224,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,59358,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,59511,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,59639,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,59734,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,59794,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,59884,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,599-9,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,59902,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,61-4,1,0,-1
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,73-45,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,7665,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,79-7,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,82-38,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,84-40,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,91-34,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,9111,1,1,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,9391,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,9448,0,0,0
+GPT-5.4-mini,SkillOpt 官方 Skill vs AEV merge-as-old,97-36,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,109-21,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,11276,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,120-24,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,12307,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,13-1,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,130-9,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,13284,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,142-19,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,14240,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,146-49,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,147-48,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,15380,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,15387,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,156-14,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,1563,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,15671,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,157-4,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,160-6,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,16511,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,168-17,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,17-35,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,17111,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,177-6,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,178-22,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,183-8,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,18645,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,188-39,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,18935,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,191-40,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,1925,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,203-15,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,208-20,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,209-30,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,23-24,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,230-16,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,236-22,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,24-23,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,267-21,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,269-43,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,269-44,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,279-23,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,28-7,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,280-17,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,290-1,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,290-27,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,297-42,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,3002,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,302-1,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,304-35,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,31202,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,31746,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,32093,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,32293,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,32562,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,32789,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,33157,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,333-29,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,334-11,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,33722,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,341-14,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,341-40,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,34210,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,343-20,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,353-29,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,353-6,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,35739,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,35747,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,359-21,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,36191,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,36277,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,367-23,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,36764,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,37086,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,37229,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,374-18,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,374-31,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,37462,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,37554,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,37900,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,38074,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,382-29,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,384-4,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,38537,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,387-16,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,38703,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,388-47,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,38823,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,38969,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,38985,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,3911,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,39190,1,0,-1
+GPT-5.4,AEV merge-as-old vs 无 Skill,39432,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,39515,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,39667,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,399-14,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,40478,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,40757,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,408-5,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,409-45,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,40959,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,41-47,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,41265,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,41348,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,41410,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,41420,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,41589,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,416-27,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,41601,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,41691,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,41969,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,41978,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,42181,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,42198,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,42216,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,423-16,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,42515,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,42526,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,42902,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,42930,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,43213,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,43657,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,438-18,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,440-24,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,44017,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,44266,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,44296,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,44389,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,44628,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,448-11,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,44913,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,45063,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,45300,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,455-35,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,45707,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,45738,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,45896,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,45937,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,45944,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,46167,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,46240,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,469-9,1,0,-1
+GPT-5.4,AEV merge-as-old vs 无 Skill,4714,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,477-45,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,47827,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,47842,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,47933,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,48257,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,486-17,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,48608,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,48643,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,488-14,1,0,-1
+GPT-5.4,AEV merge-as-old vs 无 Skill,48924,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,48969,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,48975,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,48982,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,49036,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,49196,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,49237,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,493-5,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,49300,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,496-15,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,496-34,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,49667,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,49801,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,49857,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,49945,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,50051,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,50088,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,50193,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,50250,1,0,-1
+GPT-5.4,AEV merge-as-old vs 无 Skill,50324,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,50486,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,50521,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,50526,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,50631,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,50682,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,50683,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,50796,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,50811,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,50952,1,0,-1
+GPT-5.4,AEV merge-as-old vs 无 Skill,50971,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,510-3,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,51262,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,51289,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,51354,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,51359,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,51431,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,51556,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,51586,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,516-46,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,51680,1,0,-1
+GPT-5.4,AEV merge-as-old vs 无 Skill,52050,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,52220,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,52233,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,52305,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,524-31,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,52532,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,52541,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,52575,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,52807,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,52917,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,52964,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,531-18,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,53117,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,53161,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,53167,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,534-26,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,53449,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,535-20,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,53994,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,54196,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,54242,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,54274,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,54474,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,545-35,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,54513,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,54590,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,54667,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,54675,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,547-18,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,547-43,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,54717,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,54925,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,55085,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,55260,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,55468,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,55708,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,55817,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,55976,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,55977,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,56225,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,56378,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,56419,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,56599,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,567-21,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,56915,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,56920,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,56921,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,56953,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,57033,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,57117,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,57232,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,57262,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,57354,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,57590,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,57612,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,57693,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,57989,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,58032,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,58147,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,5835,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,58687,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,58701,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,58723,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,58904,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,58942,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,59129,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,59160,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,59224,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,59358,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,59511,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,59639,0,1,1
+GPT-5.4,AEV merge-as-old vs 无 Skill,59734,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,59794,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,59884,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,599-9,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,59902,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,61-4,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,73-45,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,7665,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,79-7,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,82-38,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,84-40,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,91-34,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,9111,1,1,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,9391,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,9448,0,0,0
+GPT-5.4,AEV merge-as-old vs 无 Skill,97-36,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,109-21,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,11276,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,120-24,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,12307,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,13-1,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,130-9,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,13284,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,142-19,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,14240,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,146-49,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,147-48,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,15380,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,15387,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,156-14,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,1563,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,15671,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,157-4,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,160-6,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,16511,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,168-17,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,17-35,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,17111,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,177-6,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,178-22,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,183-8,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,18645,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,188-39,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,18935,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,191-40,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,1925,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,203-15,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,208-20,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,209-30,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,23-24,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,230-16,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,236-22,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,24-23,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,267-21,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,269-43,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,269-44,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,279-23,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,28-7,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,280-17,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,290-1,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,290-27,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,297-42,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,3002,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,302-1,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,304-35,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,31202,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,31746,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,32093,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,32293,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,32562,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,32789,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,33157,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,333-29,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,334-11,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,33722,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,341-14,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,341-40,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,34210,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,343-20,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,353-29,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,353-6,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,35739,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,35747,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,359-21,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,36191,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,36277,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,367-23,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,36764,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,37086,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,37229,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,374-18,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,374-31,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,37462,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,37554,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,37900,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,38074,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,382-29,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,384-4,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,38537,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,387-16,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,38703,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,388-47,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,38823,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,38969,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,38985,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,3911,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,39190,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,39432,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,39515,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,39667,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,399-14,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,40478,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,40757,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,408-5,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,409-45,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,40959,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,41-47,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,41265,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,41348,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,41410,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,41420,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,41589,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,416-27,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,41601,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,41691,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,41969,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,41978,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,42181,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,42198,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,42216,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,423-16,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,42515,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,42526,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,42902,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,42930,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,43213,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,43657,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,438-18,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,440-24,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,44017,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,44266,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,44296,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,44389,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,44628,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,448-11,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,44913,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,45063,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,45300,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,455-35,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,45707,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,45738,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,45896,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,45937,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,45944,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,46167,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,46240,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,469-9,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,4714,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,477-45,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,47827,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,47842,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,47933,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,48257,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,486-17,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,48608,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,48643,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,488-14,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,48924,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,48969,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,48975,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,48982,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,49036,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,49196,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,49237,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,493-5,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,49300,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,496-15,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,496-34,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,49667,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,49801,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,49857,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,49945,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50051,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50088,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50193,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50250,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50324,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50486,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50521,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50526,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50631,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50682,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50683,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50796,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50811,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50952,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,50971,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,510-3,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,51262,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,51289,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,51354,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,51359,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,51431,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,51556,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,51586,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,516-46,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,51680,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,52050,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,52220,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,52233,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,52305,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,524-31,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,52532,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,52541,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,52575,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,52807,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,52917,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,52964,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,531-18,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,53117,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,53161,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,53167,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,534-26,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,53449,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,535-20,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,53994,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,54196,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,54242,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,54274,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,54474,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,545-35,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,54513,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,54590,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,54667,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,54675,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,547-18,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,547-43,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,54717,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,54925,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,55085,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,55260,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,55468,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,55708,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,55817,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,55976,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,55977,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,56225,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,56378,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,56419,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,56599,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,567-21,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,56915,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,56920,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,56921,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,56953,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,57033,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,57117,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,57232,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,57262,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,57354,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,57590,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,57612,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,57693,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,57989,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,58032,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,58147,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,5835,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,58687,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,58701,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,58723,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,58904,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,58942,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,59129,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,59160,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,59224,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,59358,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,59511,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,59639,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,59734,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,59794,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,59884,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,599-9,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,59902,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,61-4,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,73-45,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,7665,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,79-7,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,82-38,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,84-40,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,91-34,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,9111,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,9391,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,9448,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs 无 Skill,97-36,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,109-21,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,11276,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,120-24,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,12307,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,13-1,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,130-9,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,13284,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,142-19,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,14240,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,146-49,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,147-48,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,15380,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,15387,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,156-14,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,1563,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,15671,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,157-4,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,160-6,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,16511,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,168-17,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,17-35,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,17111,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,177-6,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,178-22,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,183-8,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,18645,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,188-39,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,18935,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,191-40,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,1925,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,203-15,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,208-20,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,209-30,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,23-24,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,230-16,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,236-22,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,24-23,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,267-21,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,269-43,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,269-44,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,279-23,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,28-7,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,280-17,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,290-1,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,290-27,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,297-42,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,3002,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,302-1,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,304-35,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,31202,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,31746,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,32093,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,32293,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,32562,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,32789,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,33157,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,333-29,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,334-11,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,33722,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,341-14,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,341-40,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,34210,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,343-20,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,353-29,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,353-6,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,35739,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,35747,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,359-21,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,36191,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,36277,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,367-23,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,36764,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,37086,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,37229,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,374-18,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,374-31,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,37462,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,37554,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,37900,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,38074,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,382-29,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,384-4,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,38537,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,387-16,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,38703,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,388-47,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,38823,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,38969,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,38985,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,3911,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,39190,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,39432,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,39515,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,39667,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,399-14,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,40478,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,40757,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,408-5,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,409-45,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,40959,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,41-47,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,41265,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,41348,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,41410,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,41420,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,41589,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,416-27,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,41601,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,41691,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,41969,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,41978,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,42181,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,42198,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,42216,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,423-16,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,42515,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,42526,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,42902,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,42930,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,43213,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,43657,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,438-18,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,440-24,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,44017,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,44266,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,44296,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,44389,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,44628,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,448-11,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,44913,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,45063,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,45300,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,455-35,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,45707,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,45738,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,45896,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,45937,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,45944,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,46167,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,46240,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,469-9,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,4714,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,477-45,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,47827,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,47842,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,47933,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,48257,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,486-17,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,48608,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,48643,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,488-14,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,48924,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,48969,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,48975,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,48982,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,49036,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,49196,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,49237,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,493-5,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,49300,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,496-15,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,496-34,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,49667,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,49801,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,49857,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,49945,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50051,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50088,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50193,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50250,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50324,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50486,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50521,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50526,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50631,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50682,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50683,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50796,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50811,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50952,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,50971,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,510-3,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,51262,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,51289,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,51354,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,51359,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,51431,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,51556,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,51586,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,516-46,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,51680,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,52050,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,52220,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,52233,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,52305,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,524-31,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,52532,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,52541,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,52575,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,52807,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,52917,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,52964,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,531-18,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,53117,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,53161,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,53167,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,534-26,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,53449,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,535-20,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,53994,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,54196,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,54242,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,54274,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,54474,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,545-35,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,54513,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,54590,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,54667,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,54675,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,547-18,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,547-43,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,54717,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,54925,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,55085,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,55260,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,55468,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,55708,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,55817,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,55976,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,55977,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,56225,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,56378,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,56419,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,56599,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,567-21,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,56915,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,56920,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,56921,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,56953,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,57033,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,57117,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,57232,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,57262,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,57354,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,57590,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,57612,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,57693,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,57989,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,58032,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,58147,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,5835,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,58687,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,58701,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,58723,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,58904,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,58942,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,59129,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,59160,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,59224,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,59358,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,59511,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,59639,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,59734,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,59794,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,59884,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,599-9,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,59902,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,61-4,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,73-45,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,7665,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,79-7,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,82-38,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,84-40,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,91-34,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,9111,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,9391,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,9448,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs 无 Skill,97-36,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,109-21,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,11276,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,120-24,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,12307,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,13-1,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,130-9,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,13284,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,142-19,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,14240,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,146-49,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,147-48,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,15380,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,15387,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,156-14,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,1563,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,15671,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,157-4,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,160-6,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,16511,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,168-17,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,17-35,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,17111,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,177-6,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,178-22,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,183-8,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,18645,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,188-39,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,18935,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,191-40,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,1925,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,203-15,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,208-20,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,209-30,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,23-24,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,230-16,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,236-22,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,24-23,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,267-21,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,269-43,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,269-44,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,279-23,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,28-7,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,280-17,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,290-1,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,290-27,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,297-42,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,3002,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,302-1,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,304-35,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,31202,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,31746,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,32093,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,32293,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,32562,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,32789,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,33157,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,333-29,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,334-11,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,33722,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,341-14,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,341-40,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,34210,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,343-20,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,353-29,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,353-6,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,35739,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,35747,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,359-21,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,36191,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,36277,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,367-23,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,36764,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,37086,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,37229,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,374-18,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,374-31,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,37462,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,37554,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,37900,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,38074,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,382-29,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,384-4,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,38537,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,387-16,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,38703,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,388-47,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,38823,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,38969,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,38985,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,3911,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,39190,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,39432,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,39515,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,39667,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,399-14,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,40478,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,40757,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,408-5,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,409-45,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,40959,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,41-47,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,41265,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,41348,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,41410,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,41420,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,41589,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,416-27,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,41601,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,41691,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,41969,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,41978,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,42181,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,42198,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,42216,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,423-16,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,42515,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,42526,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,42902,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,42930,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,43213,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,43657,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,438-18,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,440-24,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,44017,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,44266,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,44296,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,44389,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,44628,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,448-11,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,44913,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,45063,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,45300,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,455-35,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,45707,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,45738,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,45896,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,45937,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,45944,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,46167,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,46240,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,469-9,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,4714,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,477-45,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,47827,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,47842,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,47933,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,48257,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,486-17,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,48608,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,48643,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,488-14,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,48924,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,48969,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,48975,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,48982,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,49036,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,49196,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,49237,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,493-5,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,49300,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,496-15,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,496-34,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,49667,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,49801,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,49857,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,49945,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50051,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50088,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50193,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50250,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50324,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50486,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50521,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50526,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50631,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50682,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50683,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50796,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50811,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50952,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,50971,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,510-3,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,51262,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,51289,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,51354,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,51359,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,51431,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,51556,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,51586,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,516-46,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,51680,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,52050,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,52220,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,52233,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,52305,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,524-31,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,52532,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,52541,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,52575,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,52807,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,52917,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,52964,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,531-18,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,53117,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,53161,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,53167,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,534-26,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,53449,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,535-20,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,53994,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,54196,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,54242,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,54274,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,54474,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,545-35,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,54513,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,54590,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,54667,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,54675,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,547-18,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,547-43,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,54717,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,54925,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,55085,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,55260,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,55468,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,55708,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,55817,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,55976,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,55977,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,56225,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,56378,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,56419,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,56599,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,567-21,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,56915,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,56920,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,56921,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,56953,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,57033,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,57117,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,57232,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,57262,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,57354,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,57590,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,57612,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,57693,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,57989,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,58032,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,58147,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,5835,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,58687,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,58701,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,58723,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,58904,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,58942,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,59129,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,59160,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,59224,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,59358,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,59511,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,59639,1,0,-1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,59734,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,59794,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,59884,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,599-9,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,59902,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,61-4,0,1,1
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,73-45,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,7665,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,79-7,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,82-38,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,84-40,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,91-34,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,9111,1,1,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,9391,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,9448,0,0,0
+GPT-5.4,optMiniMax M2.7 Skill vs AEV merge-as-old,97-36,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,109-21,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,11276,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,120-24,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,12307,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,13-1,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,130-9,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,13284,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,142-19,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,14240,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,146-49,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,147-48,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,15380,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,15387,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,156-14,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,1563,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,15671,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,157-4,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,160-6,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,16511,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,168-17,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,17-35,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,17111,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,177-6,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,178-22,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,183-8,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,18645,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,188-39,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,18935,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,191-40,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,1925,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,203-15,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,208-20,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,209-30,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,23-24,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,230-16,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,236-22,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,24-23,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,267-21,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,269-43,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,269-44,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,279-23,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,28-7,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,280-17,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,290-1,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,290-27,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,297-42,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,3002,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,302-1,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,304-35,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,31202,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,31746,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,32093,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,32293,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,32562,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,32789,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,33157,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,333-29,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,334-11,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,33722,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,341-14,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,341-40,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,34210,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,343-20,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,353-29,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,353-6,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,35739,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,35747,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,359-21,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,36191,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,36277,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,367-23,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,36764,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,37086,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,37229,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,374-18,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,374-31,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,37462,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,37554,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,37900,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,38074,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,382-29,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,384-4,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,38537,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,387-16,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,38703,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,388-47,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,38823,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,38969,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,38985,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,3911,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,39190,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,39432,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,39515,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,39667,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,399-14,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,40478,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,40757,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,408-5,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,409-45,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,40959,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,41-47,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,41265,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,41348,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,41410,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,41420,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,41589,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,416-27,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,41601,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,41691,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,41969,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,41978,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,42181,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,42198,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,42216,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,423-16,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,42515,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,42526,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,42902,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,42930,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,43213,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,43657,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,438-18,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,440-24,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,44017,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,44266,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,44296,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,44389,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,44628,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,448-11,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,44913,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,45063,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,45300,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,455-35,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,45707,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,45738,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,45896,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,45937,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,45944,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,46167,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,46240,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,469-9,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,4714,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,477-45,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,47827,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,47842,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,47933,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,48257,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,486-17,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,48608,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,48643,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,488-14,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,48924,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,48969,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,48975,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,48982,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,49036,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,49196,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,49237,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,493-5,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,49300,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,496-15,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,496-34,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,49667,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,49801,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,49857,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,49945,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50051,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50088,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50193,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50250,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50324,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50486,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50521,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50526,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50631,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50682,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50683,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50796,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50811,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50952,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,50971,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,510-3,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,51262,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,51289,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,51354,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,51359,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,51431,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,51556,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,51586,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,516-46,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,51680,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,52050,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,52220,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,52233,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,52305,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,524-31,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,52532,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,52541,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,52575,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,52807,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,52917,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,52964,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,531-18,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,53117,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,53161,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,53167,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,534-26,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,53449,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,535-20,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,53994,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,54196,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,54242,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,54274,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,54474,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,545-35,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,54513,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,54590,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,54667,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,54675,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,547-18,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,547-43,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,54717,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,54925,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,55085,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,55260,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,55468,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,55708,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,55817,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,55976,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,55977,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,56225,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,56378,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,56419,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,56599,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,567-21,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,56915,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,56920,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,56921,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,56953,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,57033,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,57117,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,57232,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,57262,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,57354,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,57590,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,57612,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,57693,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,57989,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,58032,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,58147,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,5835,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,58687,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,58701,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,58723,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,58904,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,58942,1,0,-1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,59129,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,59160,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,59224,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,59358,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,59511,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,59639,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,59734,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,59794,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,59884,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,599-9,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,59902,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,61-4,0,1,1
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,73-45,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,7665,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,79-7,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,82-38,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,84-40,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,91-34,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,9111,1,1,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,9391,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,9448,0,0,0
+GPT-5.4,SkillOpt 官方 Skill vs AEV merge-as-old,97-36,1,0,-1

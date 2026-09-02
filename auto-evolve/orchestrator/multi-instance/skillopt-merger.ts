@@ -351,6 +351,7 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
     "Return exactly one complete package in new_skill, with no prose outside file boundaries.",
     "Preserve useful relative filenames and file types; never emit absolute paths, dot segments, hidden paths, or duplicate paths.",
     "The source candidates are verified skills, not trajectories. Merge their reusable methods and remove case-specific answers or identifiers.",
+    "The final merged new_skill must be one coherent deduplicated package, targeting at most 60,000 characters while preserving reusable coverage.",
   ].join("\n")
   const request: SkillOptBridgeRequest = {
     schema: "auto-evolve/skillopt-merge-request/v1",

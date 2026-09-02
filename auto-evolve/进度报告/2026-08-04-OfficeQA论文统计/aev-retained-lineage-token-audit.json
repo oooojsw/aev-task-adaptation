@@ -1,0 +1,126 @@
+{
+  "schema": "auto-evolve-historical-long-task-token-audit/v1",
+  "createdAt": "2026-08-03T16:16:27.144Z",
+  "benchmarkOut": "C:/Users/ZhuanZ/Desktop/opencode re/opencode latest/auto-evolve/进度报告/2026-08-04-OfficeQA论文统计/aev-retained-lineage-audit-input",
+  "scope": "task-ledger campaigns plus their referenced long-task executor runs",
+  "coverage": {
+    "ledgerTasks": 40,
+    "campaignAttempts": 36,
+    "campaignDirectories": 36,
+    "retainedCampaignDirectories": 36,
+    "inferredHistoricalCampaigns": 0,
+    "missingCampaignDirectories": 0,
+    "matchedLongTaskRuns": 29,
+    "eventFiles": 779,
+    "filesWithUsage": 779,
+    "filesWithoutUsage": 0,
+    "unreadableFiles": 0,
+    "uniqueStepFinishRecords": 12551,
+    "mergeEventFiles": 0
+  },
+  "totals": {
+    "sessions": 779,
+    "steps": 12551,
+    "inputTokens": 52485761,
+    "outputTokens": 7291103,
+    "reasoningTokens": 0,
+    "cacheReadTokens": 585198758,
+    "cacheWriteTokens": 1072207,
+    "totalTokens": 646047829,
+    "componentTotal": 646047829,
+    "rawCost": 0
+  },
+  "byRole": {
+    "lead": {
+      "sessions": 70,
+      "steps": 1987,
+      "inputTokens": 7649353,
+      "outputTokens": 1302869,
+      "reasoningTokens": 0,
+      "cacheReadTokens": 119709799,
+      "cacheWriteTokens": 91847,
+      "totalTokens": 128753868,
+      "componentTotal": 128753868,
+      "rawCost": 0
+    },
+    "blank_agent": {
+      "sessions": 123,
+      "steps": 4037,
+      "inputTokens": 6232361,
+      "outputTokens": 2073496,
+      "reasoningTokens": 0,
+      "cacheReadTokens": 174637070,
+      "cacheWriteTokens": 383563,
+      "totalTokens": 183326490,
+      "componentTotal": 183326490,
+      "rawCost": 0
+    },
+    "reviewer": {
+      "sessions": 114,
+      "steps": 837,
+      "inputTokens": 5990066,
+      "outputTokens": 388124,
+      "reasoningTokens": 0,
+      "cacheReadTokens": 25714528,
+      "cacheWriteTokens": 76950,
+      "totalTokens": 32169668,
+      "componentTotal": 32169668,
+      "rawCost": 0
+    },
+    "worker": {
+      "sessions": 350,
+      "steps": 2462,
+      "inputTokens": 23511222,
+      "outputTokens": 1565518,
+      "reasoningTokens": 0,
+      "cacheReadTokens": 95298669,
+      "cacheWriteTokens": 382513,
+      "totalTokens": 120757922,
+      "componentTotal": 120757922,
+      "rawCost": 0
+    },
+    "planner": {
+      "sessions": 18,
+      "steps": 279,
+      "inputTokens": 912046,
+      "outputTokens": 178360,
+      "reasoningTokens": 0,
+      "cacheReadTokens": 10482758,
+      "cacheWriteTokens": 0,
+      "totalTokens": 11573164,
+      "componentTotal": 11573164,
+      "rawCost": 0
+    },
+    "executor": {
+      "sessions": 78,
+      "steps": 2421,
+      "inputTokens": 6205651,
+      "outputTokens": 1556856,
+      "reasoningTokens": 0,
+      "cacheReadTokens": 135141023,
+      "cacheWriteTokens": 72356,
+      "totalTokens": 142975886,
+      "componentTotal": 142975886,
+      "rawCost": 0
+    },
+    "validator": {
+      "sessions": 26,
+      "steps": 528,
+      "inputTokens": 1985062,
+      "outputTokens": 225880,
+      "reasoningTokens": 0,
+      "cacheReadTokens": 24214911,
+      "cacheWriteTokens": 64978,
+      "totalTokens": 26490831,
+      "componentTotal": 26490831,
+      "rawCost": 0
+    }
+  },
+  "limitations": [
+    "This reconstructs provider-reported usage retained in events.json; sessions whose event files were deleted cannot be recovered.",
+    "The merge/replay directory has no events.json usage records, so merge/replay tokens are not included.",
+    "rawCost may be zero when the provider reports tokens but OpenCode has no price metadata."
+  ],
+  "missingCampaignDirs": [],
+  "unreadableFiles": []
+}

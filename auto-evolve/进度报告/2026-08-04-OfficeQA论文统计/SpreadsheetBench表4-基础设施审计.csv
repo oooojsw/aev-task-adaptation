@@ -1,0 +1,20 @@
+﻿测试模型,条件,task_id,phase,原因,处理
+GPT-5.4-mini,无 Skill,516-46,llm,llm-call-failed: UnicodeEncodeError: 'gbk' codec can't encode character '\u0648' in position 474: illegal multibyte sequence,从该条件有效分母及逐题配对中排除
+GPT-5.4-mini,无 Skill,60-7,exec,unexpected: ValueError: Consolidated Tracker is not a valid coordinate or range,从该条件有效分母及逐题配对中排除
+GPT-5.4-mini,无 Skill,283-32,exec,unexpected: ValueError: invalid literal for int() with base 10: '',从该条件有效分母及逐题配对中排除
+GPT-5.4-mini,AEV merge-as-old,60-7,exec,unexpected: ValueError: Consolidated Tracker is not a valid coordinate or range,从该条件有效分母及逐题配对中排除
+GPT-5.4-mini,AEV merge-as-old,283-32,exec,unexpected: ValueError: invalid literal for int() with base 10: '',从该条件有效分母及逐题配对中排除
+GPT-5.4-mini,AEV merge-as-old,53161,llm,llm-call-failed: RuntimeError: Qwen chat call failed after 5 retries: timed out,从该条件有效分母及逐题配对中排除
+GPT-5.4-mini,optMiniMax M2.7 Skill,60-7,exec,unexpected: ValueError: Consolidated Tracker is not a valid coordinate or range,从该条件有效分母及逐题配对中排除
+GPT-5.4-mini,optMiniMax M2.7 Skill,283-32,exec,unexpected: ValueError: invalid literal for int() with base 10: '',从该条件有效分母及逐题配对中排除
+GPT-5.4-mini,SkillOpt 官方 Skill,60-7,exec,unexpected: ValueError: Consolidated Tracker is not a valid coordinate or range,从该条件有效分母及逐题配对中排除
+GPT-5.4-mini,SkillOpt 官方 Skill,283-32,exec,unexpected: ValueError: invalid literal for int() with base 10: '',从该条件有效分母及逐题配对中排除
+GPT-5.4-mini,SkillOpt 官方 Skill,53161,timeout,task-timeout-600s,从该条件有效分母及逐题配对中排除
+GPT-5.4,无 Skill,60-7,exec,unexpected: ValueError: Consolidated Tracker is not a valid coordinate or range,从该条件有效分母及逐题配对中排除
+GPT-5.4,无 Skill,283-32,exec,unexpected: ValueError: invalid literal for int() with base 10: '',从该条件有效分母及逐题配对中排除
+GPT-5.4,AEV merge-as-old,60-7,exec,unexpected: ValueError: Consolidated Tracker is not a valid coordinate or range,从该条件有效分母及逐题配对中排除
+GPT-5.4,AEV merge-as-old,283-32,exec,unexpected: ValueError: invalid literal for int() with base 10: '',从该条件有效分母及逐题配对中排除
+GPT-5.4,optMiniMax M2.7 Skill,60-7,exec,unexpected: ValueError: Consolidated Tracker is not a valid coordinate or range,从该条件有效分母及逐题配对中排除
+GPT-5.4,optMiniMax M2.7 Skill,283-32,exec,unexpected: ValueError: invalid literal for int() with base 10: '',从该条件有效分母及逐题配对中排除
+GPT-5.4,SkillOpt 官方 Skill,60-7,exec,unexpected: ValueError: Consolidated Tracker is not a valid coordinate or range,从该条件有效分母及逐题配对中排除
+GPT-5.4,SkillOpt 官方 Skill,283-32,exec,unexpected: ValueError: invalid literal for int() with base 10: '',从该条件有效分母及逐题配对中排除

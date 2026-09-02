@@ -1045,20 +1045,25 @@ async function runScriptLongTaskValidation(input: {
     (reportedFailureKind === "product_failure" ||
       reportedFailureKind === "answer_mismatch" ||
       reportedFailureKind === "quality_mismatch")
+  const explicitInfrastructureFailure =
+    reportedFailureKind === "validator_infrastructure" ||
+    reportedFailureKind === "infrastructure_failure" ||
+    reportedFailureKind === "validator_crash"
   const parsedSummary = readStringField(parsed, "summary", "message", "result_summary")
   const summary = parsedSummary
     ? parsedSummary
     : timedOut
       ? `${input.contract.title} timed out after ${timeoutMs} ms.`
-      : infraOK
-        ? reportedPassed === false
-          ? `${input.contract.title} reported product failure.`
-          : `${input.contract.title} passed.`
-        : `${input.contract.title} failed with exit code ${exitCode}.`
+      : hasStructuredFailure
+        ? `${input.contract.title} reported product failure.`
+        : infraOK
+          ? `${input.contract.title} passed.`
+          : `${input.contract.title} failed with exit code ${exitCode}.`
   const failureText = [summary, normalizedStderr, stdout].join("\n").toLowerCase()
   const infrastructureSignal =
-    !infraOK ||
     timedOut ||
+    explicitInfrastructureFailure ||
+    (!hasStructuredFailure && !infraOK) ||
     failureText.includes("validator crashed") ||
     failureText.includes("validator runtime bootstrap failed") ||
     failureText.includes("usage:") ||
@@ -1070,6 +1075,8 @@ async function runScriptLongTaskValidation(input: {
       ? ("dataset_failure" as const)
       : explicitProductFailure
         ? ("product_failure" as const)
+      : explicitInfrastructureFailure
+        ? ("validator_infrastructure" as const)
       : infrastructureSignal
         ? ("validator_infrastructure" as const)
       : hasStructuredFailure

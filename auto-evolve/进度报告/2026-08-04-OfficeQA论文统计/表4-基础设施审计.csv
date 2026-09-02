@@ -1,0 +1,27 @@
+﻿decision,experiment,rows,unique_ids,infra,reason,source
+纳入,GPT-5.4-mini / 无 Skill,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt54mini-skillopt-singleturn-noskill-20260716\results.jsonl
+纳入,GPT-5.4-mini / AEV merge-as-old,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt54mini-skillopt-singleturn-with-aev-skill-merged172-20260716\results.jsonl
+纳入,GPT-5.4-mini / optMiniMax M2.7 Skill,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt54mini-skillopt-singleturn-with-minimax27-trained-skill-20260719\results.jsonl
+纳入,GPT-5.4-mini / AEV merge-as-opt,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt54mini-skillopt-singleturn-with-merge-as-opt-minimax27-skill-20260730-recovery4\results.jsonl
+纳入,GPT-5.4-mini / SkillOpt 官方 Skill,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt54mini-skillopt-singleturn-with-original-skill-20260716\results.jsonl
+纳入,GPT-5.4 / 无 Skill,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt54-skillopt-native-singleturn-noskill-clean-20260718\results.jsonl
+纳入,GPT-5.4 / AEV merge-as-old,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt54-skillopt-singleturn-with-final-skill-20260716-011950\results.jsonl
+纳入,GPT-5.4 / optMiniMax M2.7 Skill,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt54-skillopt-singleturn-with-minimax27-trained-skill-20260719\results.jsonl
+纳入,GPT-5.4 / AEV merge-as-opt,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt54-skillopt-singleturn-with-merge-as-opt-minimax27-skill-20260726-v3\results.jsonl
+纳入,GPT-5.4 / SkillOpt 官方 Skill,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt54-skillopt-native-singleturn-official-skill-clean-20260718\results.jsonl
+纳入,GPT-5.5 / 无 Skill,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt55-skillopt-singleturn-noskill-20260714-145800\results.jsonl
+纳入,GPT-5.5 / AEV merge-as-old,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\opencode re\opencode latest\auto-evolve\进度报告\2026-08-04-OfficeQA论文统计\uid0068-retry\composite-results.jsonl
+纳入,GPT-5.5 / optMiniMax M2.7 Skill,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt55-skillopt-singleturn-with-optminimax27-skill-20260719\results.jsonl
+纳入,GPT-5.5 / AEV merge-as-opt,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt55-skillopt-singleturn-with-merge-as-opt-minimax27-skill-20260730-recovery4\results.jsonl
+纳入,GPT-5.5 / SkillOpt 官方 Skill,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-gpt55-skillopt-singleturn-with-official-skill-20260716\results.jsonl
+纳入,MiniMax M2.7 / 无 Skill,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-minimax27-native-singleturn-no-skill-20260731\results.jsonl
+纳入,MiniMax M2.7 / AEV merge-as-old,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-minimax27-skillopt-singleturn-with-aev-merge-as-old-skill-20260730-recovery4\results.jsonl
+纳入,MiniMax M2.7 / optMiniMax M2.7 Skill,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-minimax27-native-singleturn-optminimax-skill-20260731\results.jsonl
+纳入,MiniMax M2.7 / AEV merge-as-opt,172,172,0,完整同口径结果,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\officeqa-minimax27-skillopt-singleturn-with-aev-merge-as-opt-skill-20260730-recovery4\results.jsonl
+排除,GPT-5.4 merge-as-opt,0/172,未作为正式结果,是,provider/backend 配置错误，已由 v3 替代,20260726
+排除,GPT-5.4 merge-as-opt,0/172,未作为正式结果,是,provider/backend 配置错误，已由 v3 替代,20260726-v2
+排除,GPT-5.4-mini merge-as-opt,23/172,未作为正式结果,是,服务异常恢复前结果，已由 recovery4 替代,20260730 初始
+排除,GPT-5.5 merge-as-opt,40/172,未作为正式结果,是,服务异常恢复前结果，已由 recovery4 替代,20260730 初始
+排除,MiniMax M2.7 merge-as-old,0/172,未作为正式结果,是,provider 失败，已由 recovery4 替代,20260730 初始
+排除,MiniMax M2.7 merge-as-opt,0/172,未作为正式结果,是,provider 失败，已由 recovery4 替代,20260730 初始
+排除,MiniMax M2.7 无 Skill,0/172,未作为正式结果,是,额度/认证基础设施失败，已干净补跑,20260731 HTTP402 archive

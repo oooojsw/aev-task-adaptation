@@ -98,6 +98,12 @@ async function smokeScriptValidatorInfraGate() {
     expectedPassed: false,
     expectedFailureKind: "product_failure",
   })
+  await scriptValidatorCase({
+    name: "exit1-json-false",
+    code: 'console.log(JSON.stringify({ passed: false, score: 0, summary: "answer mismatch" })); process.exit(1)\n',
+    expectedPassed: false,
+    expectedFailureKind: "product_failure",
+  })
 }
 
 async function smokePrivateAnswerInference() {

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
 import sys
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 FILE_START = '<!-- AEV_SKILL_FILE_START "CORE.md" -->'
@@ -335,7 +336,9 @@ def converge_skill_candidates(
     request: dict[str, Any],
     merged: dict[str, Any],
     *,
-    max_attempts: int = 2,
+    max_attempts: int = 8,
+    strict_finalizer_fn: Callable[[list[dict[str, Any]]], dict[str, Any]] | None = None,
+    checkpoint_fn: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Use SkillOpt's own aggregate again when its fallback leaves multiple candidates."""
     attempts = 0
@@ -350,6 +353,11 @@ def converge_skill_candidates(
                 "the aggregate response could not be safely recovered."
             )
         if attempts >= max_attempts:
+            if strict_finalizer_fn is not None:
+                strict = strict_finalizer_fn(candidates)
+                strict_candidates = strict.get("skill_candidates") if isinstance(strict, dict) else None
+                if isinstance(strict_candidates, list) and len(strict_candidates) == 1:
+                    return strict, attempts + 1
             raise ValueError(
                 "SkillOpt hierarchical aggregate did not converge to exactly one complete skill candidate; "
                 f"got {len(candidates)} after {attempts} final-consolidation attempts."
@@ -382,10 +390,76 @@ def converge_skill_candidates(
             update_mode="full_rewrite_minibatch",
             meta_skill_context=(
                 f"{str(request.get('metaSkillContext') or '')}\n\n"
-                f"Final consolidation attempt {attempts}: merge every complete candidate into exactly "
-                "one coherent skill candidate. Do not return one candidate per input."
+                f"Final consolidation attempt {attempts}/{max_attempts}: merge every complete candidate into exactly "
+                "one coherent replacement skill candidate. Deduplicate and generalize overlapping rules; preserve "
+                "coverage rather than copying every sentence. The final new_skill should be concise (target at most "
+                "60,000 characters). Do not return one candidate per input."
             ).strip(),
         )
+        if checkpoint_fn is not None:
+            checkpoint_fn(current)
+
+
+def force_pairwise_skill_consolidation(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Strictly reduce complete candidates 2->1 without concatenation fallback."""
+    from skillopt.model import chat_optimizer
+    from skillopt.utils.json_utils import extract_json
+
+    current = list(candidates)
+    level = 0
+    while len(current) > 1:
+        level += 1
+        next_level: list[dict[str, Any]] = []
+        for offset in range(0, len(current), 2):
+            pair = current[offset: offset + 2]
+            if len(pair) == 1:
+                next_level.append(pair[0])
+                continue
+            user = (
+                "Merge these two complete AEV skill candidates into exactly one concise replacement skill. "
+                "Deduplicate and generalize overlapping rules while preserving reusable task coverage. "
+                "Remove task IDs, answers, absolute paths, and runtime-only instructions. Target at most 30,000 "
+                "characters in new_skill. Preserve the AEV_SKILL_FILE_START/END package markers.\n\n"
+                + json.dumps(pair, ensure_ascii=False)
+            )
+            merged_candidate: dict[str, Any] | None = None
+            last_error = "no valid response"
+            for retry in range(1, 4):
+                response, _ = chat_optimizer(
+                    system=(
+                        "Return valid JSON only with keys reasoning and skill_candidates. "
+                        "skill_candidates must contain exactly one object with new_skill."
+                    ),
+                    user=user,
+                    max_completion_tokens=32000,
+                    retries=2,
+                    stage="merge_strict_pairwise_finalizer",
+                )
+                parsed = extract_json(str(response or ""))
+                parsed_candidates = parsed.get("skill_candidates") if isinstance(parsed, dict) else None
+                if isinstance(parsed_candidates, list) and len(parsed_candidates) == 1:
+                    candidate = parsed_candidates[0]
+                    skill = str(candidate.get("new_skill") or "") if isinstance(candidate, dict) else ""
+                    if FILE_START in skill and FILE_END in skill:
+                        merged_candidate = candidate
+                        break
+                last_error = f"retry {retry} did not return one complete packaged skill"
+            if merged_candidate is None:
+                raise ValueError(
+                    f"Strict pairwise finalizer failed at level {level}, pair {offset // 2 + 1}: {last_error}"
+                )
+            next_level.append(merged_candidate)
+        current = next_level
+    return {
+        "reasoning": f"Strict pairwise finalizer converged in {level} levels",
+        "skill_candidates": current,
+    }
+
+
+def source_candidate_digest(request: dict[str, Any]) -> str:
+    payload = request.get("successPatches") or []
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def run(request: dict[str, Any]) -> dict[str, Any]:
@@ -413,23 +487,72 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
         merged_reasoning = f"Reused audited warm-start from {reuse_warm_start_path}"
         aggregate_tokens = {"reusedWarmStart": True, "calls": 0}
     else:
-        merged = merge_patches(
-            skill_content=str(request.get("skillContent") or ""),
-            failure_patches=request.get("failurePatches") or [],
-            success_patches=request.get("successPatches") or [],
-            batch_size=int(request.get("batchSize") or 8),
-            workers=int(request.get("workers") or 1),
-            update_mode="full_rewrite_minibatch",
-            meta_skill_context=str(request.get("metaSkillContext") or ""),
+        source_digest = source_candidate_digest(request)
+        native_out = Path(str(native_train.get("outRoot") or ".native-train")).resolve()
+        checkpoint_path = native_out / "warm-start-convergence-checkpoint.json"
+        checkpoint = read_json(checkpoint_path) if checkpoint_path.is_file() else {}
+        if checkpoint.get("sourceDigest") == source_digest and isinstance(checkpoint.get("current"), dict):
+            merged = checkpoint["current"]
+            aggregate_tokens = {
+                "reusedConvergenceCheckpoint": True,
+                "checkpointPath": str(checkpoint_path),
+                "calls": 0,
+            }
+        else:
+            merged = merge_patches(
+                skill_content=str(request.get("skillContent") or ""),
+                failure_patches=request.get("failurePatches") or [],
+                success_patches=request.get("successPatches") or [],
+                batch_size=int(request.get("batchSize") or 8),
+                workers=int(request.get("workers") or 1),
+                update_mode="full_rewrite_minibatch",
+                meta_skill_context=str(request.get("metaSkillContext") or ""),
+            )
+            write_json(
+                checkpoint_path,
+                {
+                    "schema": "auto-evolve/skillopt-warm-start-checkpoint/v1",
+                    "sourceDigest": source_digest,
+                    "status": "aggregate_pending_convergence",
+                    "current": merged,
+                },
+            )
+            aggregate_tokens = get_token_summary()
+        merged, consolidation_attempts = converge_skill_candidates(
+            merge_patches,
+            request,
+            merged,
+            strict_finalizer_fn=force_pairwise_skill_consolidation,
+            checkpoint_fn=lambda current: write_json(
+                checkpoint_path,
+                {
+                    "schema": "auto-evolve/skillopt-warm-start-checkpoint/v1",
+                    "sourceDigest": source_digest,
+                    "status": "convergence_in_progress",
+                    "current": current,
+                },
+            ),
         )
-        merged, consolidation_attempts = converge_skill_candidates(merge_patches, request, merged)
+        write_json(
+            checkpoint_path,
+            {
+                "schema": "auto-evolve/skillopt-warm-start-checkpoint/v1",
+                "sourceDigest": source_digest,
+                "status": "converged",
+                "current": merged,
+            },
+        )
         candidates = merged.get("skill_candidates")
         candidate = candidates[0]
         if not isinstance(candidate, dict) or not str(candidate.get("new_skill") or "").strip():
             raise ValueError("SkillOpt candidate is missing new_skill")
         warm_start = str(candidate["new_skill"])
         merged_reasoning = str(merged.get("reasoning") or "")
-        aggregate_tokens = get_token_summary()
+        current_aggregate_tokens = get_token_summary()
+        if aggregate_tokens.get("reusedConvergenceCheckpoint"):
+            aggregate_tokens["resumeTokenSummary"] = current_aggregate_tokens
+        else:
+            aggregate_tokens = current_aggregate_tokens
     final_skill, native_summary, native_tokens = run_native_train(request, warm_start)
     token_summary: dict[str, Any] = {
         "provider_preflight": provider_preflight_tokens,

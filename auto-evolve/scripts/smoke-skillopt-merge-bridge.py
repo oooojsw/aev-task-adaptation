@@ -63,6 +63,25 @@ assert_true(len(converged["skill_candidates"]) == 1, "Final consolidation must p
 assert_true(len(consolidation_calls[0]["success_patches"]) == 5, "All fallback candidates must be preserved")
 assert_true(consolidation_calls[0]["batch_size"] == 2, "Fallback recovery must consolidate large skills pairwise")
 
+slow_counts = [5, 4, 3, 2, 1]
+
+
+def slowly_converging_merge(**_kwargs):
+    count = slow_counts.pop(0)
+    return {
+        "reasoning": "slow but monotonic consolidation",
+        "skill_candidates": candidate_inputs[:count],
+    }
+
+
+slow_converged, slow_attempts = bridge.converge_skill_candidates(
+    slowly_converging_merge,
+    {"batchSize": 8, "workers": 2, "skillContent": "# Seed"},
+    {"reasoning": "fallback concatenation", "skill_candidates": candidate_inputs + candidate_inputs[:4]},
+)
+assert_true(slow_attempts == 5, f"Expected five slow consolidation attempts, got {slow_attempts}")
+assert_true(len(slow_converged["skill_candidates"]) == 1, "Slow consolidation did not reach one candidate")
+
 
 def nonconverging_merge(**_kwargs):
     return {"reasoning": "fallback concatenation", "skill_candidates": candidate_inputs}
@@ -79,6 +98,25 @@ except ValueError as error:
     assert_true("after 2 final-consolidation attempts" in str(error), f"Unexpected failure: {error}")
 else:
     raise AssertionError("Persistent multi-candidate fallback must fail closed")
+
+strict_calls = {"count": 0}
+
+
+def strict_finalizer(candidates):
+    strict_calls["count"] += 1
+    return {"reasoning": "strict", "skill_candidates": [candidates[0]]}
+
+
+strict_converged, strict_attempts = bridge.converge_skill_candidates(
+    nonconverging_merge,
+    {"batchSize": 8, "workers": 2, "skillContent": "# Seed"},
+    {"reasoning": "fallback concatenation", "skill_candidates": candidate_inputs},
+    max_attempts=2,
+    strict_finalizer_fn=strict_finalizer,
+)
+assert_true(strict_calls["count"] == 1, "Strict finalizer was not called after normal convergence exhausted")
+assert_true(strict_attempts == 3, f"Strict finalizer attempt was not counted: {strict_attempts}")
+assert_true(len(strict_converged["skill_candidates"]) == 1, "Strict finalizer did not return one candidate")
 
 calls = {"aggregate": 0, "chat": 0, "reset": 0}
 

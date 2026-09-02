@@ -1,0 +1,6 @@
+_base_: C:/Users/ZhuanZ/Desktop/SkillOpt/configs/spreadsheetbench/default.yaml
+
+env:
+  data_root: E:/project/experiment/SpreadsheetBench/all_data_912_v0.1
+  workers: 2
+  exec_timeout: 600

@@ -1,0 +1,4 @@
+﻿训练/合并,规模,calls,prompt_tokens,completion_tokens,total_tokens,wall_time_s,说明
+AEV MiniMax M2.7 长程训练,官方 train80；69 verified_success，4 failed，7 round-limit,未知,未知,未知,未知,未知,历史运行早于完整分角色 token 账本；cost-ledger 为空，不能记作 0
+optMiniMax M2.7 SkillOpt 训练,train80 / val40；8 steps；2 accept / 6 reject；best 14/40,1018,3381825,1341494,4723319,16370.1,SkillOpt summary 完整记录
+AEV merge-as-old,69 个成功 Skill，16 -> 4 -> 1 分层合并,未知,未知,未知,未知,未知,历史合并未保存 provider usage，不能记作 0

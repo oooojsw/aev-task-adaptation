@@ -1,0 +1,9 @@
+﻿测试模型,条件,原始题数,基础设施失败,有效题数,hard通过,hard成功率,hard_95CI_low,hard_95CI_high,soft成功率,结果目录
+GPT-5.4-mini,无 Skill,280,4,276,67,0.2427536231884058,0.19592743575281663,0.296642390753894,0.2753623188405797,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\spreadsheetbench-gpt54mini-noskill-20260720
+GPT-5.4-mini,AEV merge-as-old,280,4,276,83,0.3007246376811594,0.24966255049960231,0.35725773763939883,0.34903381642512077,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\spreadsheetbench-gpt54mini-aev-merged-skill-20260720
+GPT-5.4-mini,optMiniMax M2.7 Skill,280,4,276,76,0.2753623188405797,0.22601870285104786,0.3308732583238262,0.30434782608695654,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\spreadsheetbench-gpt54mini-optminimax-m27-skill-20260721
+GPT-5.4-mini,SkillOpt 官方 Skill,280,4,276,110,0.39855072463768115,0.3425632444293451,0.4573234477141463,0.4577294685990338,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\spreadsheetbench-gpt54mini-skillopt-official-skill-20260721
+GPT-5.4,无 Skill,280,2,278,62,0.22302158273381295,0.17805177056936133,0.2755417474163162,0.25659472422062346,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\spreadsheetbench-gpt54-noskill-63384-20260722
+GPT-5.4,AEV merge-as-old,280,2,278,87,0.3129496402877698,0.2613042314250365,0.3696939885133432,0.3609112709832134,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\spreadsheetbench-gpt54-aev-minimax-m27-skill-63384-20260722
+GPT-5.4,optMiniMax M2.7 Skill,280,2,278,69,0.24820143884892087,0.20108566227923333,0.30218117225320085,0.27937649880095927,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\spreadsheetbench-gpt54-optminimax-m27-skill-63384-20260722
+GPT-5.4,SkillOpt 官方 Skill,280,2,278,119,0.42805755395683454,0.37126371718377926,0.48681252125405905,0.49040767386091133,C:\Users\ZhuanZ\Desktop\SkillOpt\outputs\spreadsheetbench-gpt54-skillopt-official-gpt55-skill-63384-20260722
