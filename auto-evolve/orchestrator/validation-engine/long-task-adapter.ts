@@ -1037,7 +1037,9 @@ async function runScriptLongTaskValidation(input: {
   const successExitCodes = input.contract.successExitCodes ?? [0]
   const infraOK = !timedOut && successExitCodes.includes(exitCode)
   const reportedPassed = readBooleanField(parsed, "passed", "ok", "success")
-  const passed = infraOK && (reportedPassed ?? true)
+  // 拦截旧版阻塞豁免，防止未作答再次晋升为验收成功。
+  const rejectedExemption = readStringField(parsed, "method") === "data-unavailable-blocked"
+  const passed = !rejectedExemption && infraOK && (reportedPassed ?? true)
   const reportedFailureKind = readStringField(parsed, "failureKind", "failure_kind")
   const hasStructuredFailure = parsed !== undefined && reportedPassed === false
   const explicitProductFailure =
@@ -1050,7 +1052,9 @@ async function runScriptLongTaskValidation(input: {
     reportedFailureKind === "infrastructure_failure" ||
     reportedFailureKind === "validator_crash"
   const parsedSummary = readStringField(parsed, "summary", "message", "result_summary")
-  const summary = parsedSummary
+  const summary = rejectedExemption
+    ? "Rejected unsafe data-unavailable-blocked exemption; answer verification is required."
+    : parsedSummary
     ? parsedSummary
     : timedOut
       ? `${input.contract.title} timed out after ${timeoutMs} ms.`
@@ -1071,6 +1075,8 @@ async function runScriptLongTaskValidation(input: {
     failureText.includes("expected one argument")
   const failureKind = passed
     ? undefined
+    : rejectedExemption
+      ? ("validator_infrastructure" as const)
     : reportedFailureKind === "dataset_failure"
       ? ("dataset_failure" as const)
       : explicitProductFailure

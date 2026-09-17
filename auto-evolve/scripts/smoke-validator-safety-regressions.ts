@@ -75,6 +75,12 @@ async function scriptValidatorCase(input: {
 
 async function smokeScriptValidatorInfraGate() {
   await scriptValidatorCase({
+    name: "blocked-exemption-is-not-success",
+    code: 'console.log(JSON.stringify({ passed: true, score: 1, method: "data-unavailable-blocked" })); process.exit(0)\n',
+    expectedPassed: false,
+    expectedFailureKind: "validator_infrastructure",
+  })
+  await scriptValidatorCase({
     name: "exit0-json-true",
     code: 'console.log(JSON.stringify({ passed: true, summary: "ok" })); process.exit(0)\n',
     expectedPassed: true,

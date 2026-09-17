@@ -110,7 +110,7 @@ def structured_answers_equal(expected, predicted, tolerance: float) -> bool:
         expected_number = float(expected)
         predicted_number = float(predicted)
         if not math.isfinite(expected_number) or not math.isfinite(predicted_number):
-            return expected_number == predicted_number
+            return False
         if expected_number == 0:
             return predicted_number == 0
         return abs(expected_number - predicted_number) / abs(expected_number) <= tolerance
@@ -129,6 +129,14 @@ def structured_answers_equal(expected, predicted, tolerance: float) -> bool:
     return expected == predicted
 
 
+def reject(summary: str, failure_kind: str) -> None:
+    print(json.dumps({
+        "passed": False, "score": 0.0, "method": "officeqa-validation-error",
+        "failureKind": failure_kind, "summary": summary,
+    }, ensure_ascii=False, allow_nan=False))
+    raise SystemExit(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("payload_json", nargs="?")
@@ -137,6 +145,8 @@ def main() -> None:
     parser.add_argument("--reward", required=True)
     parser.add_argument("--tolerance", type=float, default=0.01)
     args, _unknown = parser.parse_known_args()
+    if not math.isfinite(args.tolerance) or args.tolerance < 0:
+        reject("Tolerance must be finite and non-negative.", "validator_infrastructure")
 
     payload = load_payload(args.payload_json)
     candidate_path = resolve_candidate_path(args.candidate, payload)
@@ -149,6 +159,10 @@ def main() -> None:
 
     ground_truth_text = answer_file.read_text(encoding="utf-8-sig", errors="ignore").strip()
     predicted = candidate_path.read_text(encoding="utf-8-sig", errors="ignore").strip()
+    if not ground_truth_text:
+        reject("Private answer is empty.", "validator_infrastructure")
+    if not predicted:
+        reject("Candidate answer is empty.", "product_failure")
     expected_structured = parse_structured_answer(ground_truth_text)
     predicted_structured = parse_structured_answer(predicted)
     if expected_structured is not None and predicted_structured is not None:
@@ -165,7 +179,10 @@ def main() -> None:
 
     reward = load_reward_module(Path(args.reward))
     score = reward.score_answer(ground_truth_text, predicted, args.tolerance)
-    if score < 1.0:
+    # 只认标准答案得分；阻塞声明和旁路文件不能授予通过。
+    if type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= 1:
+        reject("Reward returned an invalid score.", "validator_infrastructure")
+    if score != 1.0:
         print(json.dumps({
             "passed": False,
             "score": score,

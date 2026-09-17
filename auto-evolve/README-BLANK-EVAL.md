@@ -3,6 +3,14 @@
 
 原始完整备份：README-FULL-ARCHIVE-20260709-015413.md。
 
+## OfficeQA 阻塞声明不得算通过（2026-09-17）
+
+产品验收只按固定标准答案评分。`DATA UNAVAILABLE` 或旁路 `answer.json` 中的 `claimed_success=false` / `blockers` 都不能授予成功。有限、合法的满分才允许通过；异常分数、空标准答案属于验证器基础设施失败，空答卷属于产品失败。两个脚本验收入口拒绝旧的 `data-unavailable-blocked` 方法。此防线不能代替限制宿主写权限的沙盒。
+
+回归入口：`python auto-evolve/scripts/test-officeqa-validator.py`、`python auto-evolve/scripts/test-officeqa-reconciliation.py`、`bun run auto-evolve/scripts/smoke-validator-safety-regressions.ts`、`bun run auto-evolve/scripts/smoke-direct-chat-answer-extraction.ts`。
+
+历史复核：`python auto-evolve/scripts/audit-officeqa-acceptance.py --run <原目录>`，读取最终隔离答卷重新评分，不调用模型。已完成且空闲的 run 可用 `bun run auto-evolve/scripts/reconcile-officeqa-exemptions.ts --run <原目录> --apply` 撤销已确认的旧豁免成功；先备份当前索引，使用原子写入，原始验收证据保留。默认不带 `--apply` 只生成报告。其他类型分数变化或证据缺失时拒绝修改。
+
 <!-- 原 README 行 248-310 -->
 
 ## Blank Eval 物理闭卷沙盒红线（2026-06-26）
