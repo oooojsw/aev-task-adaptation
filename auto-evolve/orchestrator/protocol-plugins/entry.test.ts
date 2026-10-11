@@ -69,6 +69,29 @@ test("entry freezes and resumes exact linked project/protocol", async () => {
   await expect(prepareEntry(f.run, f.entry, f.runtime)).rejects.toThrow("Cannot change")
 })
 
+test("completed entry reuse verifies Skill and receipt without checker calls", async () => {
+  const f = await fixture()
+  const candidate = path.join(f.root, "candidate")
+  const attempt = path.join(f.root, "attempt")
+  const receipt = await runEntry(f.run, f.entry, candidate, attempt, f.runtime)
+  expect(await runEntry(f.run, f.entry, candidate, attempt, f.runtime, { reuseCompleted: true })).toEqual(receipt)
+  expect(f.calls()).toBe(1)
+  await writeFile(path.join(candidate, "rules.txt"), "Changed rule")
+  await expect(runEntry(f.run, f.entry, candidate, attempt, f.runtime, { reuseCompleted: true })).rejects.toThrow("identity")
+  await writeFile(path.join(candidate, "rules.txt"), "Reusable rule")
+  await writeFile(path.join(attempt, "protocol.receipt.json"), JSON.stringify({ ...receipt, status: "rejected" }))
+  await expect(runEntry(f.run, f.entry, candidate, attempt, f.runtime, { reuseCompleted: true })).rejects.toThrow("identity")
+  expect(f.calls()).toBe(1)
+})
+
+test("completed fault cannot be reused or resent", async () => {
+  const f = await fixture("scoring_error")
+  const attempt = path.join(f.root, "attempt")
+  await runEntry(f.run, f.entry, path.join(f.root, "candidate"), attempt, f.runtime)
+  await expect(runEntry(f.run, f.entry, path.join(f.root, "candidate"), attempt, f.runtime, { reuseCompleted: true })).rejects.toThrow("verdict")
+  expect(f.calls()).toBe(1)
+})
+
 test("derived replay preserves complete frozen selection and lineage", async () => {
   const f = await fixture()
   f.selection.protocol.phases.replay = structuredClone(f.selection.protocol.phases.source!)
@@ -216,6 +239,9 @@ test("instance replay routes explicit protocol and does not use legacy blank exe
   expect(result?.passed).toBe(true)
   expect(result?.receipt.executed).toBe(false)
   expect(result?.infrastructureFailure).toBe(false)
+  expect(f.calls()).toBe(1)
+  expect(await instanceReplay({ cwd: f.root, sourceTaskRoot: f.root, parentRunRoot: f.run,
+    candidateRoot: path.join(f.root, "candidate"), slotDir: path.join(f.root, "slot"), role: "train" }, f.runtime)).toEqual(result)
   expect(f.calls()).toBe(1)
   await expect(instanceReplay({ cwd: f.root, sourceTaskRoot: f.root,
     candidateRoot: path.join(f.root, "candidate"), slotDir: path.join(f.root, "missing"), role: "train" }, f.runtime))

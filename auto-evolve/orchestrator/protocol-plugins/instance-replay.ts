@@ -30,7 +30,7 @@ export async function instanceReplay(input: { cwd: string; sourceTaskRoot: strin
   const runRoot = path.join(input.slotDir, "protocol-run")
   const entry = await deriveEntry({ parentRunRoot: input.parentRunRoot, parentEntry: spec.protocolPlugins,
     runRoot, phase: input.role === "test" ? "test" : "replay", taskID: spec.protocolPlugins.taskID, runtime })
-  const receipt = await runEntry(runRoot, entry, input.candidateRoot, path.join(runRoot, "attempt"), runtime)
+  const receipt = await runEntry(runRoot, entry, input.candidateRoot, path.join(runRoot, "attempt"), runtime, { reuseCompleted: true })
   return { receipt, runRoot, passed: receipt.status === "passed",
     infrastructureFailure: !["passed", "rejected"].includes(receipt.status) }
   } catch (cause) {

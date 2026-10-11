@@ -1,4 +1,5 @@
 import path from "node:path"
+import { createHash } from "node:crypto"
 import { readFile, mkdir, open, access } from "node:fs/promises"
 import { writeJsonAtomic } from "../atomic-write"
 import type { Phase, Selection } from "./contract"
@@ -78,12 +79,33 @@ export async function prepareEntry(runRoot: string, config: Entry | undefined, r
   return { dir, entry, protocol, project }
 }
 
-export async function runEntry(runRoot: string, entry: Entry, candidateRoot: string, attemptRoot: string, runtime: Runtime) {
+export async function runEntry(runRoot: string, entry: Entry, candidateRoot: string, attemptRoot: string, runtime: Runtime,
+  options: { reuseCompleted?: boolean } = {}) {
   if (!path.isAbsolute(attemptRoot)) throw new Error("Absolute attempt root required")
   const prepared = await prepareEntry(runRoot, entry, runtime)
   if (!prepared) throw new Error("Explicit plugin entry required")
   const task = await taskFromPack(prepared.project, entry.taskID, entry.phase, candidateRoot)
+  const inputs = await Promise.all([task.skill, task.materials, task.privateInputs].map(async (files) =>
+    Promise.all(files.map(async (file) => ({ ...file, sha256: createHash("sha256").update(await readFile(file.path)).digest("hex") })))))
+  const binding = fingerprint({ entry, project: prepared.project.fingerprint, protocol: prepared.protocol.fingerprint, inputs })
+  const matches = (receipt: Awaited<ReturnType<Runtime["run"]>>) =>
+    [receipt.evidence.skill, receipt.evidence.materials, receipt.evidence.privateInputs].every((files, index) =>
+      canonical(files.map(({ id, kind, sha256 }) => ({ id, kind, sha256 })).sort((a, b) => a.id.localeCompare(b.id))) ===
+      canonical(inputs[index].map(({ id, kind, sha256 }) => ({ id, kind, sha256 })).sort((a, b) => a.id.localeCompare(b.id))))
   await mkdir(attemptRoot, { recursive: true })
+  const receiptPath = path.join(attemptRoot, "protocol.receipt.json")
+  const checkpoint = path.join(attemptRoot, "protocol.completed.json")
+  if (options.reuseCompleted && await exists(receiptPath)) {
+    // 仅复用身份一致的完整判决，故障和半完成调用不自动重发。
+    if (!await exists(path.join(attemptRoot, "protocol.started.claim")) ||
+        await exists(path.join(attemptRoot, "protocol.failure.json"))) throw new Error("Incomplete attempt; inspect before recovery")
+    const saved = JSON.parse((await readFile(checkpoint, "utf8")).replace(/^\uFEFF/, ""))
+    const receipt = JSON.parse((await readFile(receiptPath, "utf8")).replace(/^\uFEFF/, ""))
+    if (canonical(saved) !== canonical({ binding, receipt: fingerprint(receipt) }) ||
+        receipt.task !== task.id || receipt.phase !== entry.phase || receipt.protocolFingerprint !== prepared.protocol.fingerprint ||
+        !["passed", "rejected"].includes(receipt.status) || !matches(receipt)) throw new Error("Completed attempt identity or verdict drift")
+    return receipt as Awaited<ReturnType<Runtime["run"]>>
+  }
   if (await exists(path.join(attemptRoot, "protocol.receipt.json")) ||
       await exists(path.join(attemptRoot, "protocol.failure.json"))) throw new Error("Existing attempt evidence; inspect before recovery")
   // 调用已认领但未完成时，不自动重发可能已计费的请求。
@@ -91,7 +113,10 @@ export async function runEntry(runRoot: string, entry: Entry, candidateRoot: str
   await claim.close()
   try {
     const receipt = await runtime.run(prepared.protocol, entry.phase, task)
-    await writeJsonAtomic(path.join(attemptRoot, "protocol.receipt.json"), receipt)
+    await writeJsonAtomic(receiptPath, receipt)
+    // 读取与执行之间若输入漂移，保留回执但禁止登记为可复用。
+    if (!matches(receipt)) throw new Error("Attempt inputs changed during execution")
+    await writeJsonAtomic(checkpoint, { binding, receipt: fingerprint(receipt) })
     return receipt
   } catch (err) {
     await writeJsonAtomic(path.join(attemptRoot, "protocol.failure.json"), { status: "interrupted", message: String(err) })
