@@ -27,7 +27,8 @@ import { runSkillsBenchTask } from "../skillsbench-adapter"
 import type { CoordinatorState, InstanceState, FanoutOutcome } from "./contract"
 import { appendCoordinatorLog, fanoutDir, saveCoordinatorState, instanceSlot } from "./repository"
 import { harvest } from "../protocol-plugins/harvest"
-import { projectCampaign } from "../protocol-plugins/project-campaign"
+import { projectCampaign, type ProjectCampaignDriver } from "../protocol-plugins/project-campaign"
+import type { Runtime } from "../protocol-plugins/runtime"
 
 export interface InstanceSpec {
   /** Stable id, e.g. "court-form-filling-1". */
@@ -80,6 +81,12 @@ function coordinatorRunID(label: string, now = new Date()) {
 }
 
 export async function createCoordinatorRun(input: CreateCoordinatorRunInput): Promise<CoordinatorState> {
+  if (input.instances.some((row) => row.engine === "protocol_project") &&
+      (!Number.isSafeInteger(input.rounds) || input.rounds < 1 ||
+       (input.fanoutLimit !== undefined && (!Number.isSafeInteger(input.fanoutLimit) || input.fanoutLimit < 1)) ||
+       new Set(input.instances.map((row) => row.id)).size !== input.instances.length)) {
+    throw new Error("Explicit positive project rounds/concurrency and unique task IDs required")
+  }
   const now = new Date().toISOString()
   const state: CoordinatorState = {
     id: path.basename(input.runRoot),
@@ -124,10 +131,14 @@ export async function createCoordinatorRun(input: CreateCoordinatorRunInput): Pr
  * global OpenCodeGate. Returns a summary when all instances reach a
  * terminal state (or minTerminalToStop is hit).
  */
-export async function runCoordinatorPhase1Fanout(input: RunCoordinatorPhase1Input): Promise<FanoutOutcome> {
+export async function runCoordinatorPhase1Fanout(input: RunCoordinatorPhase1Input,
+  dependencies?: { projectDriver?: ProjectCampaignDriver; protocolRuntime?: Runtime }): Promise<FanoutOutcome> {
   const state = input.state
   const startedAt = Date.now()
   const fanoutLimit = state.options.fanoutLimit ?? state.instances.length
+  if (state.instances.some((row) => row.engine === "protocol_project") && (!Number.isSafeInteger(fanoutLimit) || fanoutLimit < 1)) {
+    throw new Error("Project fanout concurrency must be a positive integer")
+  }
   const inFlight = new Set<Promise<unknown>>()
 
   // Index by id for cheap lookups.
@@ -159,7 +170,7 @@ export async function runCoordinatorPhase1Fanout(input: RunCoordinatorPhase1Inpu
     while (inFlight.size >= fanoutLimit) {
       await Promise.race(inFlight)
     }
-    const job = runSingleInstance(input.cwd, state, spec, instance, input.onInstanceUpdate)
+    const job = runSingleInstance(input.cwd, state, spec, instance, input.onInstanceUpdate, dependencies)
       .finally(() => {
         inFlight.delete(job)
       })
@@ -192,6 +203,7 @@ async function runSingleInstance(
   spec: InstanceSpec,
   instance: InstanceState,
   notify?: (instance: InstanceState) => void,
+  dependencies?: { projectDriver?: ProjectCampaignDriver; protocolRuntime?: Runtime },
 ) {
   instance.status = "running"
   await saveCoordinatorState(state)
@@ -209,7 +221,7 @@ async function runSingleInstance(
   try {
     const project = spec.engine === "protocol_project" ? await projectCampaign({ cwd,
       taskRoot: spec.sourceTaskRoot, taskID: spec.id, rounds: instance.rounds,
-      launchRoot: path.join(fanoutDir(state.runRoot), instanceSlot(instance), "campaign-launch") }) : undefined
+      launchRoot: path.join(fanoutDir(state.runRoot), instanceSlot(instance), "campaign-launch") }, dependencies?.projectDriver) : undefined
     if (project) {
       instance.campaignID = project.campaignID
       instance.campaignDir = project.campaignDir
@@ -257,7 +269,7 @@ async function runSingleInstance(
         // 新协议只收集实际通过的候选，不能复制未验收current冒充成功。
         if (result.passed) {
           const got = await harvest({ cwd, campaignRoot: result.runDir, taskID: instance.id,
-            targetRoot: path.join(fanoutDir(state.runRoot), instanceSlot(instance), "protocol-skill") })
+            targetRoot: path.join(fanoutDir(state.runRoot), instanceSlot(instance), "protocol-skill") }, dependencies?.protocolRuntime)
           instance.harvestedSkillPath = got.candidateRoot
           instance.harvestedProtocolReceiptPath = got.receiptPath
         }
