@@ -17,7 +17,7 @@
  */
 
 import path from "node:path"
-import { readdir, stat } from "node:fs/promises"
+import { readdir, stat, readFile } from "node:fs/promises"
 import { ensureDirectory, pathExists, readTextFile, writeJsonFile, writeTextFile } from "../fs"
 import type { LongTaskSpec, LongTaskValidatorContract, LongTaskWorkUnit } from "../long-task/contract"
 import { loadLongTaskSpec } from "../long-task/spec"
@@ -28,6 +28,9 @@ import { appendCoordinatorLog, mergeDir, saveCoordinatorState } from "./reposito
 import { selectValidationModules } from "../validation-engine/registry"
 import { runValidationStage } from "../validation-engine/stage-runner"
 import { buildAccessProfile } from "../access-profile"
+import { mergeStage, type ProtocolMergeConfig } from "../protocol-plugins/merge-stage"
+import type { Runtime } from "../protocol-plugins/runtime"
+import type { opencodeDriver } from "../protocol-plugins/opencode-driver"
 
 export interface RunMergerInput {
   cwd: string
@@ -36,6 +39,7 @@ export interface RunMergerInput {
   promptPath?: string
   /** Optional task-specific merge contract JSON path. */
   contractPath?: string
+  protocolMerge?: ProtocolMergeConfig
 }
 
 export interface MergerOutcome {
@@ -51,8 +55,33 @@ export interface MergerOutcome {
  * hardcode the absolute path so the same code works under different layouts.
  */
 const DEFAULT_PROMPT_REL = "methods/recipes/multi-instance/prompts/merge.md"
-export async function runCoordinatorPhase2Merge(input: RunMergerInput): Promise<MergerOutcome> {
+export async function runCoordinatorPhase2Merge(input: RunMergerInput,
+  dependencies?: { runtime?: Runtime; createDriver?: typeof opencodeDriver }): Promise<MergerOutcome> {
   const state = input.state
+  if (input.protocolMerge) {
+    // 显式新协议走独立合同；失败不回落到旧固定包合并。
+    const eligible = state.instances.filter((row) => row.role !== "test" && row.status === "passed" && row.harvestedSkillPath)
+    if (!eligible.length || eligible.length !== input.protocolMerge.sources.length ||
+        !eligible.every((row) => input.protocolMerge!.sources.some((source) => source.id === row.id &&
+          path.resolve(source.candidateRoot) === path.resolve(row.harvestedSkillPath!)))) throw new Error("Protocol merge source selection mismatch")
+    state.phase = "phase2_merge"
+    await saveCoordinatorState(state)
+    const result = await mergeStage({ cwd: input.cwd, runRoot: path.join(mergeDir(state.runRoot), "protocol-merge"),
+      config: input.protocolMerge }, dependencies)
+    state.mergedSkillDir = result.mergedSkillDir
+    state.postMergeValidationStatus = "passed"
+    state.postMergeValidationResultPath = result.postMergeValidationResultPath
+    state.postMergeValidationSummary = "Declared merge protocol passed; claim recorded in receipt"
+    await saveCoordinatorState(state)
+    return result
+  }
+  for (const row of state.instances.filter((row) => row.role !== "test" && row.status === "passed" && row.harvestedSkillPath)) {
+    const spec = path.join(row.sourceTaskRoot, "spec.json")
+    if ((row.campaignDir && await pathExists(path.join(row.campaignDir, "protocol-plugins", "entry.snapshot.json"))) ||
+        (await pathExists(spec) && Object.hasOwn(JSON.parse((await readFile(spec, "utf8")).replace(/^\uFEFF/, "")), "protocolPlugins"))) {
+      throw new Error("Explicit protocol merge configuration required; no legacy fallback")
+    }
+  }
   state.phase = "phase2_merge"
   await saveCoordinatorState(state)
 

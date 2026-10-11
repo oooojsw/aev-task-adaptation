@@ -11,6 +11,9 @@ import { instanceReplay, ProtocolReplayFault } from "./instance-replay"
 import { mergeRepair } from "./merge-repair"
 import { instanceRepair } from "./instance-repair"
 import { mergeContext } from "./merge-context"
+import { runCoordinatorPhase2Merge } from "../multi-instance/merger"
+import type { CoordinatorState } from "../multi-instance/contract"
+import { mergeStage } from "./merge-stage"
 
 async function fixture(status: "passed" | "rejected" | "scoring_error" | "data_error" = "passed") {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -128,6 +131,89 @@ test("merge context refuses rejected and duplicate sources", async () => {
       sources: status === "passed" ? [source, source] : [source], runtime: f.runtime })).rejects.toThrow()
     expect(f.calls()).toBe(1)
   }
+})
+
+test("real merger accepts arbitrary entries and recovers without author or checker repeat", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.merge = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  const candidate = path.join(f.root, "candidate")
+  const attempt = path.join(f.root, "attempt")
+  await runEntry(f.run, f.entry, candidate, attempt, f.runtime)
+  const state: CoordinatorState = { id: "merge-fixture", label: "Merge", phase: "phase1_fanout", createdAt: "fixed", updatedAt: "fixed",
+    runRoot: path.join(f.root, "coordinator"), options: { skillsbenchRoot: f.root, rounds: 1, fanoutLimit: 1 }, log: [],
+    instances: [{ id: "task", role: "train", engine: "skillsbench", sourceTaskRoot: f.root, campaignDir: f.run,
+      status: "passed", harvestedSkillPath: candidate, rounds: 1 }] }
+  const input = { cwd: f.root, state, protocolMerge: { parentRunRoot: f.run, entry: f.entry,
+    sources: [{ id: "task", candidateRoot: candidate, receiptPath: path.join(attempt, "protocol.receipt.json") }],
+    author: { model: "fixture/author", expectedModel: "fixture/author", timeoutMs: 1000, maxInputBytes: 100000 } } }
+  let calls = 0
+  const dependencies = { runtime: f.runtime, createDriver: async () => ({ implementation: "a".repeat(64), preflight: async () => {},
+    invoke: async (request: { editPaths: string[]; readPaths: string[]; allowShell: boolean }) => {
+      calls++
+      expect(request.allowShell).toBe(false)
+      expect(request.editPaths.map((file) => path.basename(file))).toEqual(["rules.txt"])
+      expect(request.readPaths).toHaveLength(1)
+      await writeFile(request.editPaths[0], "Combined reusable rules")
+      return { completed: true, actualModel: "fixture/author", evidence: [] }
+    } }) }
+  const first = await runCoordinatorPhase2Merge(input, dependencies)
+  expect(first.postMergeValidationPassed).toBe(true)
+  expect(await readFile(path.join(first.mergedSkillDir, "rules.txt"), "utf8")).toBe("Combined reusable rules")
+  expect(f.calls()).toBe(2)
+  expect(await runCoordinatorPhase2Merge(input, dependencies)).toMatchObject({ ...first, reused: true })
+  expect(calls).toBe(1)
+  expect(f.calls()).toBe(2)
+  await writeFile(path.join(first.mergedSkillDir, "rules.txt"), "Changed deployment")
+  await expect(runCoordinatorPhase2Merge(input, dependencies)).rejects.toThrow("output drift")
+  expect(calls).toBe(1)
+  expect(f.calls()).toBe(2)
+  await expect(runCoordinatorPhase2Merge({ cwd: f.root, state }, dependencies)).rejects.toThrow("no legacy fallback")
+})
+
+test("merge missing output or wrong author model cannot promote or resend", async () => {
+  for (const mode of ["missing", "wrong-model"] as const) {
+    const f = await fixture()
+    f.selection.protocol.phases.merge = structuredClone(f.selection.protocol.phases.source!)
+    await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+    const candidate = path.join(f.root, "candidate")
+    const attempt = path.join(f.root, "attempt")
+    await runEntry(f.run, f.entry, candidate, attempt, f.runtime)
+    let calls = 0
+    const input = { cwd: f.root, runRoot: path.join(f.root, "merge"), config: { parentRunRoot: f.run, entry: f.entry,
+      sources: [{ id: "task", candidateRoot: candidate, receiptPath: path.join(attempt, "protocol.receipt.json") }],
+      author: { model: "fixture/author", expectedModel: "fixture/author", timeoutMs: 1000, maxInputBytes: 100000 } } }
+    const dependencies = { runtime: f.runtime, createDriver: async () => ({ implementation: "a".repeat(64), preflight: async () => {},
+      invoke: async () => { calls++; return { completed: true, actualModel: mode === "missing" ? "fixture/author" : "other/model", evidence: [] } } }) }
+    await expect(mergeStage(input, dependencies)).rejects.toThrow()
+    await expect(mergeStage(input, dependencies)).rejects.toThrow()
+    expect(calls).toBe(1)
+    expect(f.calls()).toBe(1)
+    expect(await readFile(path.join(candidate, "rules.txt"), "utf8")).toBe("Reusable rule")
+  }
+})
+
+test("merge protocol rejection is never promoted and repeated author invocation is blocked", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.merge = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  const candidate = path.join(f.root, "candidate")
+  const attempt = path.join(f.root, "attempt")
+  await runEntry(f.run, f.entry, candidate, attempt, f.runtime)
+  const runtime = new Runtime().addChecker({ id: "check", version: "1", implementation: "d".repeat(64),
+    targets: ["skill"], mechanisms: ["script"], productKinds: ["text"], validate() {} }, async () => ({ status: "rejected", message: "Rejected merge" }))
+  let calls = 0
+  const input = { cwd: f.root, runRoot: path.join(f.root, "merge"), config: { parentRunRoot: f.run, entry: f.entry,
+    sources: [{ id: "task", candidateRoot: candidate, receiptPath: path.join(attempt, "protocol.receipt.json") }],
+    author: { model: "fixture/author", expectedModel: "fixture/author", timeoutMs: 1000, maxInputBytes: 100000 } } }
+  const dependencies = { runtime, createDriver: async () => ({ implementation: "a".repeat(64), preflight: async () => {},
+    invoke: async (request: { editPaths: string[] }) => {
+      calls++; await writeFile(request.editPaths[0], "Rejected merged rules")
+      return { completed: true, actualModel: "fixture/author", evidence: [] }
+    } }) }
+  await expect(mergeStage(input, dependencies)).rejects.toThrow("Merge not accepted: rejected")
+  await expect(mergeStage(input, dependencies)).rejects.toThrow()
+  expect(calls).toBe(1)
 })
 
 test("derived replay preserves complete frozen selection and lineage", async () => {
