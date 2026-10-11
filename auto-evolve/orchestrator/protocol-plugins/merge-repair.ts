@@ -68,7 +68,11 @@ export async function mergeRepair(input: { parentRunRoot: string; parentEntry: E
       const completed = JSON.parse((await readFile(path.join(root, "completed.json"), "utf8")).replace(/^\uFEFF/, ""))
       await readFile(path.join(root, "author.started.claim"))
       const { hash, ...body } = completed
+      // 恢复同时核对作者输入与回执，避免仅凭候选误认完成。
+      const request = JSON.parse((await readFile(path.join(root, "author.request.json"), "utf8")).replace(/^\uFEFF/, ""))
+      const author = JSON.parse((await readFile(path.join(root, "author.result.json"), "utf8")).replace(/^\uFEFF/, ""))
       if (hash !== fingerprint(body) || body.binding !== fingerprint(binding) ||
+          body.authorRequest !== fingerprint(request) || body.authorResult !== fingerprint(author) || author.completed !== true ||
           !["edit_rejected", "rejected", "passed"].includes(body.outcome) ||
           (await readCandidate(draft, skill)).fingerprint !== body.candidate) throw new Error("Repair checkpoint identity changed")
       if (body.outcome === "edit_rejected") continue
@@ -102,6 +106,7 @@ export async function mergeRepair(input: { parentRunRoot: string; parentEntry: E
       before: base.fingerprint, after: candidate.fingerprint })
     const checkpoint = async (outcome: "edit_rejected" | "rejected" | "passed", receipt?: Receipt) => {
       const body = { binding: fingerprint(binding), candidate: candidate.fingerprint, outcome,
+        authorRequest: fingerprint(request), authorResult: fingerprint(author),
         ...(receipt ? { receipt: fingerprint(receipt) } : {}) }
       await writeJsonAtomic(path.join(root, "completed.json"), { ...body, hash: fingerprint(body) })
     }
@@ -111,10 +116,10 @@ export async function mergeRepair(input: { parentRunRoot: string; parentEntry: E
       runRoot, phase: "replay", taskID: input.parentEntry.taskID, runtime: input.runtime })
     feedback = await runEntry(runRoot, entry, draft, path.join(runRoot, "attempt"), input.runtime)
     if (!["passed", "rejected"].includes(feedback.status)) throw new Error("Repair replay infrastructure fault; no further author calls")
+    // 拒绝证据也必须对应稳定候选，否则不能继续修订。
+    if ((await readCandidate(draft, skill)).fingerprint !== candidate.fingerprint ||
+        (await readCandidate(input.candidateRoot, skill)).fingerprint !== base.fingerprint) throw new Error("Repair candidate changed during acceptance")
     if (feedback.status === "passed") {
-      // 验收后再次核对正文，防止晋级到验收未读取的版本。
-      if ((await readCandidate(draft, skill)).fingerprint !== candidate.fingerprint ||
-          (await readCandidate(input.candidateRoot, skill)).fingerprint !== base.fingerprint) throw new Error("Repair candidate changed during acceptance")
       await checkpoint("passed", feedback)
       return { fixed: true, attempts: attempt, candidateRoot: draft, receipt: feedback }
     }

@@ -341,6 +341,18 @@ test("repair resumes completed acceptance and rejects configuration drift or int
   const first = await mergeRepair(options)
   expect(await mergeRepair(options)).toEqual(first)
   expect(calls).toBe(1)
+  const authorResultPath = path.join(options.repairRoot, "attempt-01", "author.result.json")
+  const authorRequestPath = path.join(options.repairRoot, "attempt-01", "author.request.json")
+  const originalResult = await readFile(authorResultPath)
+  const originalRequest = await readFile(authorRequestPath)
+  await writeFile(authorResultPath, JSON.stringify({ completed: false, evidence: [] }))
+  await expect(mergeRepair(options)).rejects.toThrow("checkpoint identity changed")
+  await writeFile(authorResultPath, originalResult)
+  await writeFile(authorRequestPath, JSON.stringify({ mode: "rewrite", entries: [] }))
+  await expect(mergeRepair(options)).rejects.toThrow("checkpoint identity changed")
+  await writeFile(authorRequestPath, originalRequest)
+  expect(await mergeRepair(options)).toEqual(first)
+  expect(calls).toBe(1)
   await expect(mergeRepair({ ...options, authorIdentity: "b".repeat(64) })).rejects.toThrow("configuration changed")
   await expect(mergeRepair({ ...options, maxAttempts: 3 })).rejects.toThrow("configuration changed")
   const interrupted = { ...options, repairRoot: path.join(f.root, "interrupted"), author: async () => {
@@ -352,6 +364,34 @@ test("repair resumes completed acceptance and rejects configuration drift or int
   await writeFile(path.join(first.candidateRoot, "rules.txt"), "changed after acceptance")
   await expect(mergeRepair(options)).rejects.toThrow("checkpoint identity changed")
   expect(calls).toBe(2)
+})
+
+test("repair blocks candidate mutation even when replay rejects", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.replay = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  const repairRoot = path.join(f.root, "repair")
+  let checks = 0
+  let authors = 0
+  const runtime = new Runtime().addChecker({ id: "check", version: "1", implementation: "d".repeat(64),
+    targets: ["skill"], mechanisms: ["script"], productKinds: ["text"], validate() {} }, async () => {
+    checks++
+    if (checks > 1) await writeFile(path.join(repairRoot, "attempt-01", "candidate", "rules.txt"), "mutated while judging")
+    return { status: "rejected", message: "Needs correction" }
+  })
+  const initial = await runEntry(f.run, f.entry, path.join(f.root, "candidate"), path.join(f.root, "initial"), runtime)
+  const options = { parentRunRoot: f.run, parentEntry: f.entry, repairRoot,
+    candidateRoot: path.join(f.root, "candidate"), initial, initialReceiptPath: path.join(f.root, "initial", "protocol.receipt.json"),
+    maxAttempts: 2, mode: "rewrite" as const, runtime, authorIdentity: "a".repeat(64),
+    author: async (request: { candidateRoot: string }) => {
+      authors++
+      await writeFile(path.join(request.candidateRoot, "rules.txt"), "stable proposed revision")
+      return { completed: true, evidence: [] }
+    } }
+  await expect(mergeRepair(options)).rejects.toThrow("candidate changed during acceptance")
+  expect(authors).toBe(1)
+  await expect(mergeRepair(options)).rejects.toThrow()
+  expect(authors).toBe(1)
 })
 
 test("instance repair author receives staged public material and declared edits only", async () => {
