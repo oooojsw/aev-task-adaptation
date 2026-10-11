@@ -6,6 +6,7 @@ import { Runtime } from "./runtime"
 import { runEntry } from "./entry"
 import { prepareProjectTasks } from "./project-tasks"
 import { runProjectBatch, validateProjectBatch, type ProjectBatchConfig } from "./project-batch"
+import { runCoordinatorPhase3Validate } from "../multi-instance/validator"
 
 async function fixture() {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -92,6 +93,28 @@ test("batch configuration changes block before additional calls and unsupported 
   expect(() => validateProjectBatch({ ...f.input.config, repairAttempts: 1 })).toThrow("append-only")
   expect(() => validateProjectBatch({ ...f.input.config, sourceReplay: false })).toThrow("valid project")
   expect(() => validateProjectBatch({ ...f.input.config, fanoutLimit: 0 })).toThrow("valid project")
+})
+
+test("actual outer replay resumes initial checkpoint without new checks and blocks altered evidence", async () => {
+  const f = await fixture()
+  const first = await runProjectBatch(f.input, f.dependencies)
+  const input = { cwd: f.root, state: first.state, validateLimit: 1,
+    filter: (row: { role: string; status: string }) => row.role === "train" && row.status === "passed",
+    repair: { enabled: false, mode: "append_only" as const, maxAttemptsPerCase: 0 } }
+  const resumed = await runCoordinatorPhase3Validate(input, { protocolRuntime: f.dependencies.runtime })
+  expect(resumed.initialReplay).toEqual(first.progress.outcomes.replay.initialReplay)
+  expect(resumed.accepted).toBe(true)
+  expect(f.counts()).toEqual({ checks: 4, answers: 1, authors: 1, learners: 1 })
+  const row = first.state.instances.find((item) => item.role === "train")!
+  const receiptPath = path.join(row.validateRunRoot!, "attempt", "protocol.receipt.json")
+  const receipt = await readFile(receiptPath)
+  await writeFile(receiptPath, JSON.stringify({ status: "passed" }))
+  await expect(runCoordinatorPhase3Validate(input, { protocolRuntime: f.dependencies.runtime })).rejects.toThrow("receipt drift")
+  await writeFile(receiptPath, receipt)
+  await expect(runCoordinatorPhase3Validate({ ...input, rounds: 3 }, { protocolRuntime: f.dependencies.runtime })).rejects.toThrow("configuration drift")
+  await writeFile(path.join(first.state.mergedSkillDir!, "rules.txt"), "Changed original initial candidate")
+  await expect(runCoordinatorPhase3Validate(input, { protocolRuntime: f.dependencies.runtime })).rejects.toThrow("candidate drift")
+  expect(f.counts()).toEqual({ checks: 4, answers: 1, authors: 1, learners: 1 })
 })
 
 test("concurrent batch invocation cannot duplicate learning or overwrite active state", async () => {

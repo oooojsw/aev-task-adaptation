@@ -52,6 +52,7 @@ import { buildAccessProfile } from "../access-profile"
 import { instanceReplay, ProtocolReplayFault } from "../protocol-plugins/instance-replay"
 import { instanceRepairCurrent, type ProtocolRepairAuthorConfig } from "../protocol-plugins/instance-repair"
 import type { Runtime } from "../protocol-plugins/runtime"
+import { initialReplayJournal } from "../protocol-plugins/validation-journal"
 
 export interface RunValidateInput {
   cwd: string
@@ -142,12 +143,32 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput,
     let accepted = false
 
     if (hasMergeAcceptanceStage(stages, "initial_replay")) {
+      const journal = await initialReplayJournal({ runRoot: state.runRoot, candidateRoot: mergedSkillDir,
+        cwd: input.cwd, eligible, runtime: dependencies?.protocolRuntime,
+        config: { stages, successCriterion, rounds, limit, repair: input.repair ? {
+          enabled: input.repair.enabled, mode: input.repair.mode,
+          maxAttemptsPerCase: input.repair.maxAttemptsPerCase, protocolAuthor: input.repair.protocolAuthor ?? null,
+          promptPath: input.repair.promptPath ?? null, contractPath: input.repair.contractPath ?? null } : null,
+          finalReplaySlotName: input.acceptancePolicy?.finalReplaySlotName ?? null } })
+      if (journal?.completed) {
+        initialReplay = journal.completed.result as ReplaySnapshot
+        // 保留已修补通过状态；未晋级来源恢复原始拒绝证据。
+        for (const saved of journal.completed.rows) {
+          const row = eligible.find((item) => item.id === saved.id)!
+          if (row.validateStatus !== "passed") {
+            row.validateStatus = saved.status
+            row.validateRunRoot = saved.runRoot
+            row.validateCampaignDir = saved.runRoot
+            row.validateProtocolFault = false
+          }
+        }
+      } else {
       const regressions: string[] = []
       await runValidationBatch({
         cwd: input.cwd,
         state,
         eligible,
-        mergedSkillDir,
+        mergedSkillDir: journal?.candidateRoot ?? mergedSkillDir,
         rounds,
         limit,
         regressions,
@@ -156,6 +177,8 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput,
       // 新协议故障先停止，不能进入旧式Skill修补烧额度。
       if (eligible.some((row) => row.validateProtocolFault)) throw new Error("Protocol replay infrastructure fault; inspect before repair")
       initialReplay = replaySnapshot(state.instances, eligible, regressions)
+      await journal?.save(initialReplay)
+      }
       acceptanceStatus = initialReplay.failed === 0 ? "replay_passed" : "replay_failed"
     } else {
       acceptanceStatus = "merge_only"
