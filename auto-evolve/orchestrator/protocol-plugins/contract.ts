@@ -27,6 +27,7 @@ export interface Check extends Binding {
   required: boolean
   mechanism: "script" | "judge"
   privateInputs?: string[]
+  feedback?: "status_only" | "checker_message"
 }
 
 export interface PhaseProtocol {

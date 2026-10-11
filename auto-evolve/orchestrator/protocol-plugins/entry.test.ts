@@ -75,6 +75,20 @@ test("entry freezes and resumes exact linked project/protocol", async () => {
   await expect(prepareEntry(f.run, f.entry, f.runtime)).rejects.toThrow("Cannot change")
 })
 
+test("Campaign training summary hides raw checker message but preserves actual receipt", async () => {
+  const f = await fixture("rejected")
+  const result = await campaignAcceptance({ campaignRoot: f.run, campaignID: "fixture", roundNumber: 1,
+    runID: "round", entry: f.entry, candidateRoot: path.join(f.root, "candidate"),
+    attemptRoot: path.join(f.root, "attempt"), resultPath: path.join(f.root, "result.json") }, f.runtime)
+  expect(result.validatorResults[0].summary).toBe("Declared skill check content: rejected")
+  expect(result.validatorResults[0].summary).not.toContain("fixture verdict")
+  const receipt = JSON.parse(await readFile(result.protocolReceiptPath, "utf8"))
+  expect(receipt.checks[0].message).toBe("fixture verdict")
+  const training = await readFile(result.validatorResults[0].rawOutputPath!, "utf8")
+  expect(training).not.toContain("fixture verdict")
+  expect(result.validatorResults[0].evidenceRefs).not.toContain(result.protocolReceiptPath)
+})
+
 test("Campaign result collision blocks before checker and preserves existing evidence", async () => {
   const f = await fixture()
   const resultPath = path.join(f.root, "existing-result.json")

@@ -8,7 +8,7 @@ function shape(value: unknown, keys: string[], label: string) {
 }
 
 function settings(binding: Binding): Settings {
-  shape(binding, ["id", "version", "settings", "name", "target", "stage", "required", "mechanism", "privateInputs"], "binding")
+  shape(binding, ["id", "version", "settings", "name", "target", "stage", "required", "mechanism", "privateInputs", "feedback"], "binding")
   const value = binding.settings
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Explicit plugin settings required")
   function check(item: unknown) {
@@ -79,6 +79,9 @@ export function compile(input: unknown, registry: Registry): Snapshot {
         throw new Error(`Invalid or duplicate check: ${phase}`)
       }
       names.add(check.name)
+      if (check.feedback !== undefined && !["status_only", "checker_message"].includes(check.feedback)) {
+        throw new Error("Invalid checker feedback policy")
+      }
       if (check.privateInputs !== undefined) strings(check.privateInputs, "private input bindings", true)
       if (check.target === "product" && check.stage !== "after_execution") throw new Error("Product check before execution")
       if (plan.claim === "skill_check" && (check.target !== "skill" || check.stage !== "before_execution")) {

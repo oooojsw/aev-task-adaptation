@@ -6,6 +6,7 @@ import { copyCandidate, readCandidate } from "./candidate"
 import { writeJsonAtomic } from "../atomic-write"
 import type { Runtime } from "./runtime"
 import { canonical, fingerprint } from "./identity"
+import { trainingCheckMessage } from "./training-feedback"
 type Receipt = Awaited<ReturnType<typeof runEntry>>
 
 export type RepairAuthor = (input: { candidateRoot: string; entries: string[];
@@ -93,7 +94,8 @@ export async function mergeRepair(input: { parentRunRoot: string; parentEntry: E
     const request: Parameters<RepairAuthor>[0] = { candidateRoot: draft,
       entries: skill.entries.map((item) => item.path), mode: input.mode,
       feedback: { status: "rejected", checks: feedback.checks.filter((item) => item.required && item.status === "rejected")
-        .map((item) => ({ name: item.name, target: item.target, message: item.message })) } }
+        .map((item) => ({ name: item.name, target: item.target,
+          message: trainingCheckMessage(parent.protocol, feedback.phase, item) })) } }
     await writeJsonAtomic(path.join(root, "author.request.json"), request)
     const author = await input.author(request)
     await writeJsonAtomic(path.join(root, "author.result.json"), author)

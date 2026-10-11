@@ -14,7 +14,7 @@ async function fixture(repair = false, failure?: "test_rejection" | "replay_faul
   await mkdir(pack, { recursive: true })
   await writeFile(path.join(pack, "public.txt"), "Public problem")
   const project = { id: "generic", version: "1", skillFormats: ["text"], productKinds: ["text"], materialKinds: ["text"] }
-  const check = { id: "fixture", version: "1", name: "check", required: true, mechanism: "script", settings: {} }
+  const check = { id: "fixture", version: "1", name: "check", required: true, mechanism: "script", settings: {}, feedback: "checker_message" }
   const phase = { claim: "skill_check", checks: [{ ...check, target: "skill", stage: "before_execution" }] }
   const manifestPath = path.join(pack, "manifest.json")
   const selectionPath = path.join(root, "selection.json")

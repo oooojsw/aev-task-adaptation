@@ -4,9 +4,10 @@ import { mkdir, readFile } from "node:fs/promises"
 import { writeJsonAtomic } from "../atomic-write"
 import { pathExists } from "../fs"
 import type { LongTaskValidatorResult } from "../long-task/contract"
-import { runEntry, type Entry } from "./entry"
+import { prepareEntry, runEntry, type Entry } from "./entry"
 import { selectedRuntime } from "./selected-runtime"
 import type { Runtime } from "./runtime"
+import { trainingCheckMessage } from "./training-feedback"
 
 export async function campaignAcceptance(input: {
   campaignRoot: string
@@ -31,7 +32,17 @@ export async function campaignAcceptance(input: {
   if (await pathExists(input.resultPath)) throw new Error("Campaign acceptance result already exists; inspect original evidence")
   const engine = runtime ?? await selectedRuntime(path.join(input.campaignRoot, "protocol-backends"), input.cwd, input.entry)
   const receipt = await runEntry(input.campaignRoot, input.entry, input.candidateRoot, input.attemptRoot, engine)
+  const prepared = await prepareEntry(input.campaignRoot, input.entry, engine)
+  if (!prepared) throw new Error("Frozen feedback protocol required")
   const receiptPath = path.join(input.attemptRoot, "protocol.receipt.json")
+  const trainingPath = path.join(input.attemptRoot, "protocol.training-feedback.json")
+  const trainingChecks = receipt.checks.map((check) => ({ name: check.name, target: check.target,
+    required: check.required, status: check.status,
+    message: trainingCheckMessage(prepared.protocol, input.entry.phase, check) }))
+  // 训练侧证据引用只指向反馈视图，原始回执仍供审计保存。
+  await writeJsonAtomic(trainingPath, { schema: "aev.training-feedback.v1", task: receipt.task,
+    phase: receipt.phase, protocolFingerprint: receipt.protocolFingerprint, status: receipt.status,
+    claim: receipt.claim, executed: receipt.executed, checks: trainingChecks })
   const passed = receipt.status === "passed"
   const failureKind = passed ? undefined : receipt.status === "rejected" ? "product_failure" as const
     : receipt.status === "data_error" ? "dataset_failure" as const : "infrastructure_failure" as const
@@ -41,19 +52,19 @@ export async function campaignAcceptance(input: {
     passed: check.status === "passed", blocking: check.required,
     ...(check.status === "passed" ? {} : { failureKind: check.status === "rejected" ? "product_failure" as const
       : check.status === "data_error" ? "dataset_failure" as const : "validator_infrastructure" as const }),
-    summary: check.message, details: [], evidenceRefs: [receiptPath], rawOutputPath: receiptPath,
+    summary: trainingCheckMessage(prepared.protocol, input.entry.phase, check), details: [], evidenceRefs: [trainingPath], rawOutputPath: trainingPath,
   }))
   // 执行故障也留一个阻断结果，但不把它伪装成Skill内容拒绝。
   if (!passed && !validatorResults.some((item) => item.blocking && !item.passed)) validatorResults.push({
     id: randomUUID(), runID: input.runID, unitID: `protocol:${input.entry.taskID}`, attempt: input.roundNumber,
     validatorID: "protocol-execution", validatorType: "script", createdAt: new Date().toISOString(),
     passed: false, blocking: true, failureKind: "validator_infrastructure", summary: receipt.message,
-    details: [], evidenceRefs: [receiptPath], rawOutputPath: receiptPath,
+    details: [], evidenceRefs: [trainingPath], rawOutputPath: trainingPath,
   })
   const result = { campaignID: input.campaignID, roundNumber: input.roundNumber, runID: input.runID,
     passed, failureKind, summary: receipt.message, validatorResults,
     acceptanceMode: "protocol_plugins", blankEvalSkipped: !receipt.executed,
-    validationPackageRoot: input.candidateRoot, bundlePath: receiptPath,
+    validationPackageRoot: input.candidateRoot, bundlePath: trainingPath,
     blankEvalResultPath: undefined as string | undefined, blankEvalRunDir: undefined as string | undefined,
     preBlankValidationStageResultPath: undefined as string | undefined,
     blankAgentEvidenceBundlePath: undefined as string | undefined,
