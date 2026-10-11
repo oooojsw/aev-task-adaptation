@@ -2139,7 +2139,11 @@ async function seedCampaignCurrentPendingPackage(input: {
   seedTarget: LongTaskCampaignSeedTarget | undefined
   declaredSkill?: SkillBinding
 }) {
-  if (!input.seedTarget) return
+  if (!input.seedTarget) {
+    // 新协议可从零学习；只创建目录，不伪造合格候选。
+    if (input.declaredSkill) await ensureDirectory(input.currentRoot)
+    return
+  }
   if (input.declaredSkill) {
     if (await hasCandidate(input.currentRoot, input.declaredSkill)) return
     await copyCandidate(input.seedTarget.seedPath, input.currentRoot, input.declaredSkill)
@@ -3532,7 +3536,9 @@ async function runCampaignSuggestionTask(input: {
     title: input.title,
     ...(input.baseSpec.protocolTraining && input.trainingRole ? { runtimeBudget: trainingRuntimeBudget(input.baseSpec, input.trainingRole) } : {}),
     prompt: input.prompt,
-    concurrencyScope: `long-task-campaign:${input.baseSpec.id ?? input.baseSpec.taskFamily ?? input.campaignSpec.title}`,
+    // 新协议允许无id/taskFamily；此请求并未接收campaignSpec。
+    concurrencyScope: `long-task-campaign:${input.baseSpec.id ?? input.baseSpec.taskFamily ??
+      (input.baseSpec.protocolPlugins ? input.baseSpec.title : (input as unknown as { campaignSpec: LongTaskCampaignSpec }).campaignSpec.title)}`,
     referencePaths: uniqueStrings(input.referencePaths),
     attachedFiles: uniqueStrings(input.attachedFiles ?? []),
     permissionReadPaths: uniqueStrings(input.permissionReadPaths),
