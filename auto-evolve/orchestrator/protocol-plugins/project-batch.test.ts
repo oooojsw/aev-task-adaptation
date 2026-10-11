@@ -138,6 +138,45 @@ test("selected rewrite repair changes whole Skill and still requires final repla
   expect(f.counts()).toEqual({ checks: 6, answers: 1, authors: 2, learners: 1 })
 })
 
+test("disabled source replay skips checks without changing held-out execution or completed reuse", async () => {
+  const f = await fixture()
+  f.input.config.sourceReplay = false
+  f.input.config.replayMustPass = false
+  const first = await runProjectBatch(f.input, f.dependencies)
+  expect(first.status).toBe("completed")
+  expect(first.progress.outcomes).not.toHaveProperty("replay")
+  expect(first.progress.outcomes.test).toMatchObject({ total: 1, passed: 1 })
+  expect(f.counts()).toEqual({ checks: 3, answers: 1, authors: 1, learners: 1 })
+  expect((await runProjectBatch(f.input, f.dependencies)).status).toBe("completed")
+  expect(f.counts()).toEqual({ checks: 3, answers: 1, authors: 1, learners: 1 })
+})
+
+test("repair mode mismatch and legacy rewrite block before new checks or author calls", async () => {
+  const f = await fixture()
+  const first = await runProjectBatch(f.input, f.dependencies)
+  const author = { ...f.input.config.pipeline.mergeAuthor, mode: "rewrite" as const }
+  const input = { cwd: f.root, state: first.state, validateLimit: 1,
+    filter: (row: { role: string; status: string }) => row.role === "train" && row.status === "passed",
+    repair: { enabled: true, mode: "append_only" as const, maxAttemptsPerCase: 1, protocolAuthor: author } }
+  await expect(runCoordinatorPhase3Validate(input, { protocolRuntime: f.dependencies.runtime,
+    createDriver: f.dependencies.createDriver })).rejects.toThrow("mode mismatch")
+  expect(f.counts()).toEqual({ checks: 4, answers: 1, authors: 1, learners: 1 })
+  const row = first.state.instances.find((item) => item.role === "train")!
+  const specPath = path.join(row.sourceTaskRoot, "spec.json")
+  const saved = await readFile(specPath, "utf8")
+  const spec = JSON.parse(saved)
+  delete spec.protocolPlugins
+  await writeFile(specPath, JSON.stringify(spec))
+  try {
+    await expect(runCoordinatorPhase3Validate({ ...input, repair: { ...input.repair, mode: "rewrite" } },
+      { protocolRuntime: f.dependencies.runtime, createDriver: f.dependencies.createDriver }))
+      .rejects.toThrow("Legacy replay does not support rewrite")
+    expect(f.counts()).toEqual({ checks: 4, answers: 1, authors: 1, learners: 1 })
+  } finally {
+    await writeFile(specPath, saved)
+  }
+})
+
 test("actual batch repairs rejected replay then fully replays before held-out test", async () => {
   const f = await fixture(true)
   const first = await runProjectBatch(f.input, f.dependencies)
