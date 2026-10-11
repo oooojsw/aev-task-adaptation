@@ -186,9 +186,10 @@ test("NBA actual Campaign batch learns merges replays and tests without repeated
 for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLeads: 2 },
   { rejectedLeads: 0, fault: "scoring_error" }, { rejectedLeads: 0, fault: "data_error" },
   { rejectedLeads: 0, execution: true }, { rejectedLeads: 1, execution: true },
+  { rejectedLeads: 0, execution: true, seeded: true },
   { rejectedLeads: 0, execution: true, fault: "execution_error" }])
-test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
-  const { rejectedLeads, fault, execution } = scenario
+test(`actual Campaign learner ${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
+  const { rejectedLeads, fault, execution, seeded } = scenario
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   await mkdir(root, { recursive: true })
   const key = `__campaignOffline_${randomUUID().replaceAll("-", "")}`
@@ -208,6 +209,11 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
     await input.onSpawn?.()
     if (input.title.startsWith("Campaign Lead")) leads++
     if (input.title.startsWith("Campaign Lead")) {
+      if (seeded && leads === 1) {
+        const current = input.permissionReadPaths.find((file: string) => file.replaceAll("\\", "/").endsWith("/pending-expert-package/current"))
+        expect(current).toBeDefined()
+        expect(await readFile(path.join(current, "rules.txt"), "utf8")).toBe("Seeded reusable rule")
+      }
       for (const edit of input.permissionEditPaths ?? []) expect(input.permissionReadPaths).toContain(edit)
       if (execution && leads > 1) {
         expect(input.prompt).toContain("A product rejection means the generated answer failed")
@@ -281,7 +287,13 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
     protocolPlugins: { schema: "aev.protocol-entry.v1", selectionPath: path.join(root, "selection.json"),
       projectManifestPath: path.join(root, "manifest.json"), taskID: "source", phase: "source" } }))
   const campaign = path.join(root, "campaign.json")
-  await writeFile(campaign, JSON.stringify({ title: "Offline Campaign", baseSpecPath: specPath, mode: "graph_iterative", maxRounds: rejectedLeads === 2 ? 2 : 1, seedTargets: [] }))
+  const seedRoot = path.join(root, "initial-candidate")
+  if (seeded) {
+    await mkdir(seedRoot)
+    await writeFile(path.join(seedRoot, "rules.txt"), "Seeded reusable rule")
+  }
+  await writeFile(campaign, JSON.stringify({ title: "Offline Campaign", baseSpecPath: specPath, mode: "graph_iterative", maxRounds: rejectedLeads === 2 ? 2 : 1,
+    seedTargets: seeded ? [{ seedPath: seedRoot, targetPath: path.join(root, "author-workspace"), kind: "experience_workspace", resetOnStart: true }] : [] }))
   const previous = process.env.AUTO_EVOLVE_SKIP_STALE_HEAL
   process.env.AUTO_EVOLVE_SKIP_STALE_HEAL = "1"
   try {
