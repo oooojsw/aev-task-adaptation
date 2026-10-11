@@ -1,10 +1,11 @@
 import path from "node:path"
-import { mkdir, open } from "node:fs/promises"
+import { mkdir, open, readFile } from "node:fs/promises"
 import { prepareEntry, runEntry, type Entry } from "./entry"
 import { deriveEntry } from "./derive-entry"
 import { copyCandidate, readCandidate } from "./candidate"
 import { writeJsonAtomic } from "../atomic-write"
 import type { Runtime } from "./runtime"
+import { canonical } from "./identity"
 type Receipt = Awaited<ReturnType<typeof runEntry>>
 
 export type RepairAuthor = (input: { candidateRoot: string; entries: string[];
@@ -12,7 +13,7 @@ export type RepairAuthor = (input: { candidateRoot: string; entries: string[];
   mode: "append_only" | "rewrite" }) => Promise<{ completed: boolean; evidence: string[] }>
 
 export async function mergeRepair(input: { parentRunRoot: string; parentEntry: Entry;
-  repairRoot: string; candidateRoot: string; initial: Receipt; maxAttempts: number;
+  repairRoot: string; candidateRoot: string; initial: Receipt; initialReceiptPath: string; maxAttempts: number;
   mode: "append_only" | "rewrite"; runtime: Runtime; author: RepairAuthor }) {
   if (!path.isAbsolute(input.repairRoot) || !Number.isSafeInteger(input.maxAttempts) || input.maxAttempts < 1 ||
       !["append_only", "rewrite"].includes(input.mode)) throw new Error("Explicit bounded repair configuration required")
@@ -21,6 +22,30 @@ export async function mergeRepair(input: { parentRunRoot: string; parentEntry: E
   if (!parent || !parent.protocol.selection.protocol.phases.replay) throw new Error("Explicit replay protocol required for repair")
   const skill = parent.project.pack.skill
   const base = await readCandidate(input.candidateRoot, skill)
+  if (!path.isAbsolute(input.initialReceiptPath) || path.basename(input.initialReceiptPath) !== "protocol.receipt.json") {
+    throw new Error("Persisted rejection receipt required")
+  }
+  await readFile(path.join(path.dirname(input.initialReceiptPath), "protocol.started.claim"))
+  const saved = JSON.parse((await readFile(input.initialReceiptPath, "utf8")).replace(/^\uFEFF/, ""))
+  if (canonical(saved) !== canonical(input.initial) || saved.schema !== "aev.protocol-receipt.v1" ||
+      saved.protocolFingerprint !== parent.protocol.fingerprint || saved.task !== input.parentEntry.taskID ||
+      saved.phase === "test" || !parent.protocol.selection.protocol.phases[saved.phase as "source" | "merge" | "replay"] ||
+      !saved.checks.some((check: { required: boolean; status: string }) => check.required && check.status === "rejected")) {
+    throw new Error("Repair rejection receipt identity mismatch")
+  }
+  const actual = base.metadata.map((item) => ({ id: item.id, kind: item.kind, sha256: item.sha256, length: item.bytes }))
+    .sort((a, b) => a.id.localeCompare(b.id))
+  if (canonical(saved.evidence.skill) !== canonical(actual)) throw new Error("Rejected Skill differs from repair candidate")
+  const task = parent.project.pack.tasks.find((item) => item.id === saved.task)
+  if (!task || task.split !== "train") throw new Error("Repair requires frozen training task")
+  for (const role of ["materials", "privateInputs"] as const) {
+    const expected = task[role].map((item) => {
+      const file = parent.project.artifacts.find((artifact) => artifact.path === item.path)
+      if (!file) throw new Error("Missing frozen repair input")
+      return { id: item.id, kind: item.kind, sha256: file.sha256, length: file.bytes }
+    }).sort((a, b) => a.id.localeCompare(b.id))
+    if (canonical(saved.evidence[role]) !== canonical(expected)) throw new Error("Repair task input receipt mismatch")
+  }
   let feedback = input.initial
   for (let attempt = 1; attempt <= input.maxAttempts; attempt++) {
     const root = path.join(input.repairRoot, `attempt-${String(attempt).padStart(2, "0")}`)
