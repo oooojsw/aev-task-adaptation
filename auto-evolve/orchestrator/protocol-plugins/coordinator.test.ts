@@ -79,3 +79,47 @@ test("real coordinator removed protocol cannot start legacy blank execution", as
   expect(saved.instances[0].validateProtocolFault).toBe(true)
   expect(saved.phase).toBe("phase3_validate")
 })
+
+test("real coordinator recovery reuses completed verdict and blocks candidate drift", async () => {
+  for (const status of ["passed", "rejected"] as const) {
+    const f = await fixture(status)
+    const input = { cwd: f.root, state: f.state }
+    const first = await runCoordinatorPhase3Validate(input, { protocolRuntime: f.runtime })
+    const file = path.join(f.state.runRoot, "phase3-validate", "task", "protocol-run", "attempt", "protocol.receipt.json")
+    const bytes = await readFile(file)
+    const second = await runCoordinatorPhase3Validate(input, { protocolRuntime: f.runtime })
+    expect(second.passed).toBe(first.passed)
+    expect(second.failed).toBe(first.failed)
+    expect(second.regressions).toEqual(first.regressions)
+    expect(f.calls()).toBe(1)
+    expect(await readFile(file)).toEqual(bytes)
+    await writeFile(path.join(f.state.mergedSkillDir!, "rules.txt"), "Changed merged rules")
+    await expect(runCoordinatorPhase3Validate(input, { protocolRuntime: f.runtime })).rejects.toThrow("infrastructure fault")
+    expect(f.calls()).toBe(1)
+    expect(f.state.instances[0].validateProtocolFault).toBe(true)
+    expect(await readFile(file)).toEqual(bytes)
+  }
+})
+
+test("real coordinator recovery never repeats completed scoring fault", async () => {
+  const f = await fixture("scoring_error")
+  for (let round = 0; round < 2; round++) {
+    await expect(runCoordinatorPhase3Validate({ cwd: f.root, state: f.state }, { protocolRuntime: f.runtime }))
+      .rejects.toThrow("infrastructure fault")
+    expect(f.calls()).toBe(1)
+    expect(f.state.instances[0].validateProtocolFault).toBe(true)
+  }
+})
+
+test("real coordinator interrupted claim blocks before any new checker call", async () => {
+  const f = await fixture("passed")
+  const attempt = path.join(f.state.runRoot, "phase3-validate", "task", "protocol-run", "attempt")
+  await mkdir(attempt, { recursive: true })
+  const claim = path.join(attempt, "protocol.started.claim")
+  await writeFile(claim, "Unfinished invocation witness")
+  await expect(runCoordinatorPhase3Validate({ cwd: f.root, state: f.state }, { protocolRuntime: f.runtime }))
+    .rejects.toThrow("infrastructure fault")
+  expect(f.calls()).toBe(0)
+  expect(await readFile(claim, "utf8")).toBe("Unfinished invocation witness")
+  expect(f.state.instances[0].validateProtocolFault).toBe(true)
+})
