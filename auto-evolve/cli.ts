@@ -1009,6 +1009,18 @@ async function main() {
     case "run-skillsbench":
       await commandRunSkillsBench(args)
       return
+    case "run-protocol-project": {
+      const configFile = getOption(args, "--config")
+      const output = getOption(args, "--out")
+      if (!configFile || !output) throw new Error("Required: --config <batch-config> --out <run-root>")
+      const { readFile } = await import("node:fs/promises")
+      const { runProjectBatch } = await import("./orchestrator/protocol-plugins/project-batch")
+      const cwd = path.basename(process.cwd()) === "auto-evolve" ? path.dirname(process.cwd()) : process.cwd()
+      const config = JSON.parse((await readFile(path.resolve(cwd, configFile), "utf8")).replace(/^\uFEFF/, ""))
+      const result = await runProjectBatch({ cwd, runRoot: path.resolve(cwd, output), config })
+      console.log(`Project batch: ${result.status}; ${path.resolve(cwd, output)}`)
+      return
+    }
     case "prepare-protocol-project": {
       const required = (flag: string) => {
         const value = getOption(args, flag)

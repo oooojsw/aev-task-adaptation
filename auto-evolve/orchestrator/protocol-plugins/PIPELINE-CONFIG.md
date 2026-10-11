@@ -65,3 +65,49 @@ identity is resumed, not replaced, and incomplete launches require inspection.
 Live attachments remain running. Generic instance IDs use hash-based storage slots
 without changing legacy directories. This bridge is boundary-fixture tested only;
 the generic batch CLI and actual complete fanout/harvest pipeline are not yet verified.
+
+## Generic batch entry (development milestone)
+
+`run-protocol-project --config <batch-config.json> --out <absolute-run-root>`
+connects prepared tasks to learning, merge, optional source replay/repair and test.
+Use the same config and output directory to continue; never create a replacement
+run to bypass an incomplete claim. Configuration:
+
+```json
+{
+  "schema": "aev.project-batch.v1",
+  "tasksPath": "E:/example/prepared/project-tasks.json",
+  "rounds": 4,
+  "fanoutLimit": 1,
+  "requireAllSources": true,
+  "sourceReplay": true,
+  "replayMustPass": true,
+  "repairAttempts": 0,
+  "finalTest": true,
+  "pipeline": {
+    "schema": "aev.protocol-pipeline.v1",
+    "mergeAuthor": {
+      "model": "provider/model",
+      "expectedModel": "provider/model",
+      "timeoutMs": 600000,
+      "maxInputBytes": 200000
+    }
+  }
+}
+```
+
+No inline secrets. Model values are placeholders. The training Campaign retains
+the existing training-side host configuration; this entry does not yet provide a
+complete per-role model/budget configuration. Merge currently uses the declared
+entry merge adapter, not all legacy merge strategies. Repair currently requires
+an explicit append-only author. Unsupported settings block rather than substitute.
+`requireAllSources` gates training-source admission; `replayMustPass` separately
+gates replay before deployment. Tests never receive a repair author.
+
+Batch invocation has an exclusive claim. Normal exit releases only its own nonce;
+crash remnants require owner/evidence inspection, never blind deletion or PID-only
+takeover. Source specs, inventory, protocol, config and final candidate are checked
+on recovery. A completed batch adds no model calls. Offline integration exercises
+actual harvest/merge/replay/test with fixed learner/author replies. Real Campaign
+interior, NBA equivalence, resource ledger, other merge adapters and deployment
+acceptance remain pending; this milestone is not full project acceptance.
