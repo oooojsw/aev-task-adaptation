@@ -5,12 +5,14 @@ import { compile } from "./compile"
 import { canonical, fingerprint } from "./identity"
 import { prepareEntry, type Entry } from "./entry"
 import type { Runtime } from "./runtime"
+import { validateTraining, type TrainingConfig } from "./training"
 
 export async function prepareProjectTasks(input: { manifestPath: string; selectionPath: string;
-  destination: string; trainingGoal: string }, runtime: Runtime) {
+  destination: string; trainingGoal: string; training?: TrainingConfig }, runtime: Runtime) {
   if (![input.manifestPath, input.selectionPath, input.destination].every((value) => typeof value === "string" && path.isAbsolute(value)) ||
       typeof input.trainingGoal !== "string" || !input.trainingGoal.trim()) throw new Error("Explicit project task paths and training goal required")
   const project = await loadPack(input.manifestPath)
+  const training = input.training ? validateTraining(input.training) : undefined
   const protocol = compile(JSON.parse((await readFile(input.selectionPath, "utf8")).replace(/^\uFEFF/, "")), runtime.registry)
   if (canonical(project.pack.project) !== canonical(protocol.selection.project) ||
       project.pack.skill.format !== protocol.selection.run.skillFormat) throw new Error("Project task protocol mismatch")
@@ -33,9 +35,9 @@ export async function prepareProjectTasks(input: { manifestPath: string; selecti
     const entry: Entry = { schema: "aev.protocol-entry.v1", projectManifestPath: input.manifestPath,
       selectionPath: input.selectionPath, taskID: task.id, phase: task.split === "test" ? "test" : "source" }
     await prepareEntry(path.join(taskRoot, "preflight"), entry, runtime)
-    const spec = { title: `${project.pack.project.id}: ${task.id}`, goal: input.trainingGoal,
+    const spec = { id: task.id, taskFamily: project.pack.project.id, title: `${project.pack.project.id}: ${task.id}`, goal: input.trainingGoal,
       materials: task.materials.map((file) => ({ label: file.id, path: path.join(project.root, file.path) })),
-      validators: [], protocolPlugins: entry }
+      validators: [], protocolPlugins: entry, ...(training && task.split === "train" ? { protocolTraining: training } : {}) }
     const specPath = path.join(taskRoot, "spec.json")
     await writeFile(specPath, JSON.stringify(spec, null, 2), { flag: "wx" })
     rows.push({ id: task.id, role: task.split, sourceTaskRoot: taskRoot, specPath,
@@ -44,6 +46,7 @@ export async function prepareProjectTasks(input: { manifestPath: string; selecti
   await verifyPack(project)
   const result = { schema: "aev.project-tasks.v1", projectFingerprint: project.fingerprint,
     protocolFingerprint: protocol.fingerprint, trainingGoal: input.trainingGoal, tasks: rows,
+    ...(training ? { training } : {}),
     excludedValidationUIDs: project.pack.tasks.filter((task) => task.split === "validation").map((task) => task.id) }
   await writeFile(path.join(target, "project-tasks.json"), JSON.stringify(result, null, 2), { flag: "wx" })
   return result

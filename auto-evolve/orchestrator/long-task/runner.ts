@@ -15,6 +15,7 @@ import type {
   LongTaskWorkUnit,
 } from "./contract"
 import { DEFAULT_LONG_TASK_BUDGETS } from "./contract"
+import { trainingExecution, trainingRuntimeBudget, verifyTraining } from "../protocol-plugins/training"
 import {
   appendArchiveRecord,
   appendFailurePacket,
@@ -1164,7 +1165,8 @@ async function runPlanningSession(input: {
   onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const config = await loadConfig(input.configPathCwd)
-  const selection = resolveModelSelection(config, "solve", input.spec.planning)
+  await verifyTraining(input.spec, input.configPathCwd, config)
+  const selection = resolveModelSelection(config, "solve", trainingExecution(input.spec, "planner", input.spec.planning))
   const planningContextPaths = selectLongTaskPlanningContext(input.spec)
   const capabilityPaths = capabilityReferencePaths(input.spec)
   const capabilityFiles = capabilityAttachedFiles(input.spec)
@@ -1224,6 +1226,7 @@ async function runPlanningSession(input: {
     cwd: input.cwd,
     config,
     title: input.phase === "plan" ? "Long Task Graph Bootstrap" : "Long Task Graph Replan",
+    ...(input.spec.protocolTraining ? { runtimeBudget: trainingRuntimeBudget(input.spec, "planner") } : {}),
     prompt,
     concurrencyScope: `long-task:${input.spec.id ?? input.spec.taskFamily ?? input.spec.title}`,
     referencePaths: access.referencePaths,
@@ -1289,7 +1292,8 @@ async function executeWorkUnit(input: {
   onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const config = await loadConfig(input.configPathCwd)
-  const selection = resolveModelSelection(config, "solve", input.spec.execution)
+  await verifyTraining(input.spec, input.configPathCwd, config)
+  const selection = resolveModelSelection(config, "solve", trainingExecution(input.spec, "executor", input.spec.execution))
   const graph = bumpLongTaskWorkUnitAttempt(activateLongTaskWorkUnit(input.graph, input.unit.id), input.unit.id)
   const activeUnit = graph.units.find((item) => item.id === input.unit.id)!
   const attempt = activeUnit.attemptCount
@@ -1367,6 +1371,7 @@ async function executeWorkUnit(input: {
     cwd: input.cwd,
     config,
     title: `Long Task Execute ${activeUnit.id}`,
+    ...(input.spec.protocolTraining ? { runtimeBudget: trainingRuntimeBudget(input.spec, "executor") } : {}),
     prompt,
     concurrencyScope: `long-task:${input.spec.id ?? input.spec.taskFamily ?? input.spec.title}`,
     referencePaths: access.referencePaths,

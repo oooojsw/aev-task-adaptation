@@ -1041,6 +1041,7 @@ async function main() {
       const runtime = await selectedRuntime(destination + ".backends", process.cwd(), {
         schema: "aev.protocol-entry.v1", projectManifestPath: manifestPath, selectionPath, taskID: task.id, phase: "source" })
       const result = await prepareProjectTasks({ manifestPath, selectionPath, destination,
+        training: getOption(args, "--training-config") ? JSON.parse((await readFile(required("--training-config"), "utf8")).replace(/^\uFEFF/, "")) : undefined,
         trainingGoal: (await readFile(goalFile, "utf8")).replace(/^\uFEFF/, "") }, runtime)
       console.log(`Prepared ${result.tasks.length} tasks; no model execution. ${destination}`)
       return

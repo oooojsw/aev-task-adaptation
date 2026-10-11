@@ -111,3 +111,19 @@ on recovery. A completed batch adds no model calls. Offline integration exercise
 actual harvest/merge/replay/test with fixed learner/author replies. Real Campaign
 interior, NBA equivalence, resource ledger, other merge adapters and deployment
 acceptance remain pending; this milestone is not full project acceptance.
+
+## Opt-in training roles and work budgets
+
+`prepare-protocol-project` additionally accepts `--training-config <file>`.
+Schema `aev.protocol-training.v1`: `roles` explicitly includes planner, executor,
+worker, lead, reviewer and diagnostician, each with `model` and finite `timeoutMs`;
+optional `agent`/`variant` use the existing model resolver. `budgets` includes all
+six existing LongTask work-count limits. These are not total-token/output budgets.
+Campaign freezes selection and host/config/private-profile fingerprint, checking
+them before requests. Inner specs retain the binding. Adding config to an existing
+unconfigured Campaign, removing frozen config or changing model/budget/host blocks.
+Absent config retains old selection and no additional runtimeBudget request field.
+Source tasks alone carry training config; test execution uses its own protocol.
+Timeout uses the original OpenCode watchdog. Actual complete Campaign, owned-process
+cancellation and resource accounting remain pending. Offline role-builder tests
+replace host/config/artifact boundaries and do not prove real model invocation.

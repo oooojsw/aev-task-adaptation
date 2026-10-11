@@ -64,6 +64,7 @@ export async function runProjectBatch(input: { cwd: string; runRoot: string; con
     const spec = (await loadLongTaskSpec(row.specPath)).spec
     const entry = spec.protocolPlugins
     if (!entry || entry.taskID !== row.id || entry.phase !== (row.role === "test" ? "test" : "source")) throw new Error("Prepared task split/entry mismatch")
+    if (canonical(spec.protocolTraining ?? null) !== canonical(row.role === "train" ? tasks.training ?? null : null)) throw new Error("Prepared training config drift")
     runtime ??= await selectedRuntime(input.runRoot + ".backends", input.cwd, entry)
     const prepared = await prepareEntry(path.join(row.sourceTaskRoot, "preflight"), entry, runtime)
     if (prepared?.project.fingerprint !== tasks.projectFingerprint || prepared.protocol.fingerprint !== tasks.protocolFingerprint) throw new Error("Prepared project/protocol fingerprint drift")

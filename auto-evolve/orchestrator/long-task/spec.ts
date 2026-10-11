@@ -13,6 +13,8 @@ import { DEFAULT_LONG_TASK_BUDGETS } from "./contract"
 import { pathExists, readJsonFile } from "../fs"
 import { assertNoBlankAgentAudience } from "../validation-engine/registry"
 import { validateEntry } from "../protocol-plugins/entry"
+import { validateTraining } from "../protocol-plugins/training"
+import { canonical } from "../protocol-plugins/identity"
 
 export interface LoadLongTaskSpecOptions {
   allowMissingInitialExpertContextPaths?: boolean
@@ -595,6 +597,10 @@ export async function loadLongTaskSpec(
   const raw = await readJsonFile<Record<string, unknown>>(resolvedSpecPath)
   const baseDir = path.dirname(resolvedSpecPath)
   const protocolPlugins = raw.protocolPlugins === undefined ? undefined : validateEntry(raw.protocolPlugins)
+  const protocolTraining = raw.protocolTraining === undefined ? undefined : validateTraining(raw.protocolTraining)
+  if (protocolTraining && !protocolPlugins) throw new Error("Explicit training config requires protocol plugins")
+  if (protocolTraining && raw.budgets !== undefined && canonical(raw.budgets) !== canonical(protocolTraining.budgets)) throw new Error("Conflicting training work budgets")
+  if (raw.protocolTrainingRoot !== undefined && (!protocolTraining || typeof raw.protocolTrainingRoot !== "string" || !path.isAbsolute(raw.protocolTrainingRoot))) throw new Error("Invalid frozen training root")
   if (protocolPlugins && (raw.blankEvalExecutor !== undefined || raw.campaignFinalAcceptanceMode !== undefined ||
       normalizeStringArray(raw.blankEvalValidatorProfiles).length)) throw new Error("Plugin acceptance cannot mix legacy formal acceptance configuration")
 
@@ -788,12 +794,14 @@ export async function loadLongTaskSpec(
     blankEvalValidatorProfiles,
     campaignFinalAcceptanceMode: protocolPlugins ? undefined : campaignFinalAcceptanceMode,
     protocolPlugins,
+    protocolTraining,
+    protocolTrainingRoot: raw.protocolTrainingRoot as string | undefined,
     blankEvalExecutor: blankEvalExecutor as LongTaskSpec["blankEvalExecutor"],
     validators,
     planning,
     execution,
     validation,
-    budgets: normalizeBudgets(raw.budgets),
+    budgets: protocolTraining?.budgets ?? normalizeBudgets(raw.budgets),
     disableCompletionValidators,
     shadowMemoryScope: isObject(raw.shadowMemoryScope)
       ? {

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto"
 import { prepareProjectTasks } from "./project-tasks"
 import { Runtime } from "./runtime"
 import { loadLongTaskSpec } from "../long-task/spec"
+import { TRAINING_ROLES, type TrainingConfig } from "./training"
 
 async function fixture() {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -58,4 +59,19 @@ test("generic project mismatch or unsafe destination blocks without output", asy
   selection.project.id = "generic"
   await writeFile(f.input.selectionPath, JSON.stringify(selection))
   await expect(prepareProjectTasks({ ...f.input, destination: path.join(f.root, "pack", "output") }, f.runtime)).rejects.toThrow("outside")
+})
+
+test("prepared project applies training roles only to source tasks and freezes their budget", async () => {
+  const f = await fixture()
+  const training: TrainingConfig = { schema: "aev.protocol-training.v1", roles: Object.fromEntries(TRAINING_ROLES.map((role) =>
+    [role, { model: `fixture/${role}`, timeoutMs: 1000 }])) as TrainingConfig["roles"],
+    budgets: { maxAttemptsPerUnit: 2, maxTotalUnitAttempts: 8, maxGraphReplans: 1, maxValidatorCalls: 10, maxNoProgressCycles: 2, maxUnitsPerGraph: 5 } }
+  const output = await prepareProjectTasks({ ...f.input, training }, f.runtime)
+  expect(output.training).toEqual(training)
+  const source = (await loadLongTaskSpec(output.tasks[0].specPath)).spec
+  const heldout = (await loadLongTaskSpec(output.tasks[1].specPath)).spec
+  expect(source.id).toBe(output.tasks[0].id)
+  expect(source.protocolTraining).toEqual(training)
+  expect(source.budgets).toEqual(training.budgets)
+  expect(heldout.protocolTraining).toBeUndefined()
 })

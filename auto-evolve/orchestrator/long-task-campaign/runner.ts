@@ -1,5 +1,6 @@
 ﻿import path from "node:path"
 import process from "node:process"
+import { freezeTraining, verifyTraining, trainingExecution, trainingRuntimeBudget, type TrainingRole } from "../protocol-plugins/training"
 import { randomUUID } from "node:crypto"
 import { cp, lstat, readdir, rm } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -3497,6 +3498,7 @@ export function buildGeneratedRoundSpec(input: {
 }
 
 async function runCampaignSuggestionTask(input: {
+  trainingRole?: TrainingRole
   cwd: string
   baseSpec: LongTaskSpec
   title: string
@@ -3514,11 +3516,15 @@ async function runCampaignSuggestionTask(input: {
   onPulse?: OpencodeTaskInput["onPulse"]
 }) {
   const config = await loadConfig(input.cwd)
-  const selection = resolveModelSelection(config, input.selectionPhase, input.execution)
+  await verifyTraining(input.baseSpec, input.cwd, config)
+  if (input.baseSpec.protocolTraining && !input.trainingRole) throw new Error("Explicit campaign training role required")
+  const selection = resolveModelSelection(config, input.selectionPhase,
+    input.trainingRole ? trainingExecution(input.baseSpec, input.trainingRole, input.execution) : input.execution)
   const task = await runOpencodeTask({
     cwd: input.cwd,
     config,
     title: input.title,
+    ...(input.baseSpec.protocolTraining && input.trainingRole ? { runtimeBudget: trainingRuntimeBudget(input.baseSpec, input.trainingRole) } : {}),
     prompt: input.prompt,
     concurrencyScope: `long-task-campaign:${input.baseSpec.id ?? input.baseSpec.taskFamily ?? input.campaignSpec.title}`,
     referencePaths: uniqueStrings(input.referencePaths),
@@ -3872,6 +3878,7 @@ async function runCampaignWorkers(input: {
         title: `Campaign Worker ${role} ${roundID(input.roundNumber)}`,
         prompt,
         selectionPhase: "planning",
+        trainingRole: "worker",
         execution: input.baseSpec.planning ?? input.baseSpec.execution,
         referencePaths: access.referencePaths,
         permissionReadPaths: access.permissionReadPaths,
@@ -3995,6 +4002,7 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     title: `Campaign Worker ${role} ${roundID(input.roundNumber)} ${input.passID}`,
     prompt,
     selectionPhase: "planning",
+    trainingRole: "diagnostician",
     execution: input.baseSpec.planning ?? input.baseSpec.execution,
     referencePaths: access.referencePaths,
     permissionReadPaths: access.permissionReadPaths,
@@ -4234,6 +4242,7 @@ async function runCampaignLead(input: {
     title: `Campaign Lead ${roundID(input.roundNumber)}`,
     prompt,
     selectionPhase: "solve",
+    trainingRole: "lead",
     execution: input.baseSpec.execution,
     referencePaths: access.referencePaths,
     permissionReadPaths: access.permissionReadPaths,
@@ -4344,6 +4353,7 @@ async function runCampaignReviewer(input: {
     title: `Campaign Reviewer ${roundID(input.roundNumber)}`,
     prompt,
     selectionPhase: "validation",
+    trainingRole: "reviewer",
     execution: input.baseSpec.validation ?? input.baseSpec.execution,
     referencePaths: access.referencePaths,
     permissionReadPaths: access.permissionReadPaths,
@@ -4485,6 +4495,10 @@ async function prepareCampaignProtocol(root: string, spec: LongTaskSpec, existin
   const binding = await prepareEntry(root, spec.protocolPlugins,
     await selectedRuntime(path.join(root, "protocol-backends"), cwd, spec.protocolPlugins))
   if (binding) spec.protocolAuthorContext = authorContext(binding.entry, binding.protocol, binding.project)
+  if (existing && spec.protocolTraining && !await pathExists(path.join(root, "protocol-training"))) {
+    throw new Error("Cannot enable training config on an existing unconfigured Campaign")
+  }
+  spec.protocolTrainingRoot = await freezeTraining(root, spec.protocolTraining, cwd)
 }
 
 async function runCampaignFinalAcceptance(input: {
