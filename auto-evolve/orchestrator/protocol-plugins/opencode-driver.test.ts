@@ -13,6 +13,8 @@ async function fixture() {
   const profile = path.join(root, "auto-evolve", ".opencode-private")
   await mkdir(profile, { recursive: true })
   await writeFile(path.join(profile, "profile.json"), '{"fixture":true}')
+  await writeFile(path.join(root, "material"), "Public material")
+  await mkdir(path.join(root, "workspace"))
   return { cwd: root, profile, evidenceRoot: path.join(root, "evidence") }
 }
 const request = (root: string): ToolRequest => ({ workDir: root, model: "fixture/model", prompt: "Public input",
@@ -93,6 +95,17 @@ test("already aborted driver cannot invoke OpenCode", async () => {
   abort.abort()
   await expect(driver.invoke(request(f.cwd), abort.signal)).rejects.toThrow("aborted")
   expect(calls).toBe(0)
+})
+
+test("malformed permissions block before backend call and started claim", async () => {
+  const f = await fixture()
+  let calls = 0
+  const driver = await opencodeDriver({ ...f, load: async () => structuredClone(DEFAULT_CONFIG),
+    invoke: async (input) => { calls++; return response(input) } })
+  await expect(driver.invoke({ ...request(f.cwd), readPaths: [] }, new AbortController().signal)).rejects.toThrow("nonempty")
+  await expect(driver.invoke({ ...request(f.cwd), editPaths: [path.dirname(f.cwd)] }, new AbortController().signal)).rejects.toThrow("escaped")
+  expect(calls).toBe(0)
+  await expect(readdir(f.evidenceRoot)).rejects.toThrow()
 })
 
 test("backend throw retains sanitized failure and blocks automatic resend", async () => {

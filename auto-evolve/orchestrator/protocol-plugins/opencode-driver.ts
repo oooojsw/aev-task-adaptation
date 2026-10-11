@@ -9,6 +9,7 @@ import type { AutoEvolveConfig } from "../schema"
 import type { OpencodeTaskInput, OpencodeTaskRun } from "../opencode"
 import type { InvokeTool } from "./tool-session"
 import { backendUsage } from "./backend-usage"
+import { validateToolRequest } from "./tool-request-boundary"
 
 export async function opencodeDriver(options: { cwd: string; evidenceRoot: string;
   load?: (cwd: string) => Promise<AutoEvolveConfig>;
@@ -37,11 +38,13 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     const source = await readFile(fileURLToPath(new URL("../opencode.ts", import.meta.url)))
     const own = await readFile(fileURLToPath(import.meta.url))
     const usageSource = await readFile(fileURLToPath(new URL("./backend-usage.ts", import.meta.url)))
+    const boundarySource = await readFile(fileURLToPath(new URL("./tool-request-boundary.ts", import.meta.url)))
     const retryPolicy = await readFile(fileURLToPath(new URL("../opencode-retry-policy.ts", import.meta.url)))
     const key = fingerprint({ cwd, profile, files: files.sort((a, b) => a.path.localeCompare(b.path)),
       config: normalized, source: createHash("sha256").update(source).digest("hex"),
       own: createHash("sha256").update(own).digest("hex"),
       usageSource: createHash("sha256").update(usageSource).digest("hex"),
+      boundarySource: createHash("sha256").update(boundarySource).digest("hex"),
       retryPolicy: createHash("sha256").update(retryPolicy).digest("hex") })
     return { key, config: normalized }
   }
@@ -51,8 +54,10 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     if (currentProfile !== profile || (await identity()).key !== frozen.key) throw new Error("OpenCode host/config/profile fingerprint changed")
   }
   const run: InvokeTool = async (request, signal) => {
+    request = structuredClone(request)
     await preflight()
     if (signal.aborted) throw new Error("Tool execution already aborted")
+    await validateToolRequest(request)
     const dir = path.join(options.evidenceRoot, fingerprint({ host: frozen.key, request }))
     await mkdir(dir, { recursive: true })
     const claim = await open(path.join(dir, "started.claim"), "wx")
