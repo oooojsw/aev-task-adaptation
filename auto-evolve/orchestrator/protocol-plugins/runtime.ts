@@ -40,6 +40,7 @@ export type Execute = (input: PublicInputs & { settings: Settings }) => Promise<
   product?: { kind: string; bytes: Uint8Array }
   usage?: { inputTokens?: number; outputTokens?: number }
   message?: string
+  reused?: boolean
 }>
 
 export type Evaluate = (input: PublicInputs & {
@@ -121,10 +122,12 @@ export class Runtime {
     const checks: Array<{ name: string; required: boolean; status: Outcome; message: string; inputFingerprint: string }> = []
     let product: Artifact | undefined
     let usage: { inputTokens?: number; outputTokens?: number } | undefined
+    let reused = false
     const publicInputs = () => ({ task: task.id, phase, skill: copy(skill), materials: copy(materials) })
     const receipt = (status: Outcome, message: string, executed: boolean, attempted = false) => ({
       schema: "aev.protocol-receipt.v1" as const, task: task.id, phase, claim: plan.claim,
-      protocolFingerprint: resolved.fingerprint, status, message, executed, executionAttempted: attempted, evidence,
+      protocolFingerprint: resolved.fingerprint, status, message, executed, executionAttempted: attempted,
+      executionReused: reused, evidence,
       checks, ...(product ? { product: metadata([product])[0] } : {}), ...(usage ? { usage } : {}),
     })
     const evaluate = async (stage: Check["stage"]) => {
@@ -170,6 +173,7 @@ export class Runtime {
     }
     product = artifact("execution-product", result.product.kind, result.product.bytes)
     usage = result.usage
+    reused = result.reused === true
     const post = await evaluate("after_execution")
     return receipt(post, post === "passed" ? "Declared execution and scoring passed" : "Post-execution checks did not pass", true, true)
   }
