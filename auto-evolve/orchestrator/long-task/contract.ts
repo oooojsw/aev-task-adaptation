@@ -225,6 +225,7 @@ export interface LongTaskSpec {
   campaignFinalAcceptanceMode?: "blank_agent" | "validators_only"
   // 新协议显式启用；旧配置缺省继续原验收链路。
   protocolPlugins?: import("../protocol-plugins/entry").Entry
+  protocolAuthorContext?: import("../protocol-plugins/author-context").AuthorContext
   // 可选单次执行端；缺省保留原工具会话验收。
   blankEvalExecutor?: {
     kind: "single_turn_http"

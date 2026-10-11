@@ -4,6 +4,7 @@ import type {
   LongTaskCampaignWorkerSuggestion,
 } from "./contract"
 import type { BlankAcceptanceDiagnosisProfile } from "../schema"
+import { protocolRolePrompt, type AuthorContext } from "../protocol-plugins/author-context"
 
 function bullet(items: string[]) {
   return items.length ? items.map((item) => `- ${item}`).join("\n") : "- none"
@@ -136,6 +137,7 @@ function blankAcceptanceDiagnosisProfileRules(profile?: BlankAcceptanceDiagnosis
 }
 
 export function buildCampaignWorkerPrompt(input: {
+  protocolContext?: AuthorContext
   blankEvalExecutorKind?: "single_turn_http"
   title: string
   roundNumber: number
@@ -158,6 +160,7 @@ export function buildCampaignWorkerPrompt(input: {
   /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank workers. */
   expertOracleReadPaths?: string[]
 }) {
+  if (input.protocolContext) return protocolRolePrompt("worker", { ...input, protocolContext: input.protocolContext })
   return [
     "You are a campaign worker agent inside a multi-round long-task learning campaign.",
     ...blankExecutorProtocolLines(input.blankEvalExecutorKind),
@@ -240,6 +243,7 @@ export function buildCampaignWorkerPrompt(input: {
 }
 
 export function buildCampaignLeadPrompt(input: {
+  protocolContext?: AuthorContext
   blankEvalExecutorKind?: "single_turn_http"
   title: string
   roundNumber: number
@@ -264,6 +268,7 @@ export function buildCampaignLeadPrompt(input: {
   /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank lead. */
   expertOracleReadPaths?: string[]
 }) {
+  if (input.protocolContext) return protocolRolePrompt("lead", { ...input, protocolContext: input.protocolContext })
   return [
     "You are the campaign lead for a multi-round long-task learning campaign.",
     ...blankExecutorProtocolLines(input.blankEvalExecutorKind),
@@ -388,6 +393,7 @@ export function buildCampaignLeadPrompt(input: {
 }
 
 export function buildCampaignReviewerPrompt(input: {
+  protocolContext?: AuthorContext
   blankEvalExecutorKind?: "single_turn_http"
   title: string
   roundNumber: number
@@ -405,6 +411,7 @@ export function buildCampaignReviewerPrompt(input: {
   /** Exact-file oracle read paths (result.private.json, etc.) for non-Blank reviewer. */
   expertOracleReadPaths?: string[]
 }) {
+  if (input.protocolContext) return protocolRolePrompt("reviewer", { ...input, protocolContext: input.protocolContext })
   return [
     "You are the round reviewer for a multi-round long-task learning campaign.",
     ...blankExecutorProtocolLines(input.blankEvalExecutorKind),

@@ -35,6 +35,7 @@ import { runBlankEval } from "../blank-eval/runner"
 import { campaignAcceptance } from "../protocol-plugins/campaign-acceptance"
 import { prepareEntry } from "../protocol-plugins/entry"
 import { builtins } from "../protocol-plugins/builtins"
+import { authorContext, protocolAuthorLines } from "../protocol-plugins/author-context"
 import {
   defaultReuseForPolicy,
   hashFileIfExists,
@@ -3438,7 +3439,9 @@ export function buildGeneratedRoundSpec(input: {
   return {
     ...input.baseSpec,
     // 内层也必须知道验收执行模式，避免修复不存在的工具故障。
-    goal: input.baseSpec.blankEvalExecutor?.kind === "single_turn_http"
+    goal: input.baseSpec.protocolAuthorContext
+      ? [input.baseSpec.goal, ...protocolAuthorLines(input.baseSpec.protocolAuthorContext)].join("\n")
+      : input.baseSpec.blankEvalExecutor?.kind === "single_turn_http"
       ? [input.baseSpec.goal, ...blankExecutorProtocolLines("single_turn_http"),
           "Author/planner/executor may use their original tools to derive a solution and revise Skill; the no-tool restriction applies ONLY to blank acceptance.",
           "The host campaign controller launches blank acceptance after candidate preparation. Do not launch a second blank evaluation or repair a zero-tool-call condition yourself.",
@@ -3802,6 +3805,7 @@ async function runCampaignWorkers(input: {
             accessManifestPath: path.join(stageDir, "access-manifest.json"),
           })
         : buildCampaignWorkerPrompt({
+        protocolContext: input.baseSpec.protocolAuthorContext,
         blankEvalExecutorKind: input.baseSpec.blankEvalExecutor?.kind,
         title: input.campaignSpec.title,
         roundNumber: input.roundNumber,
@@ -3927,6 +3931,7 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     blankAcceptanceConfig.diagnosisProfiles[blankAcceptanceConfig.defaultDiagnosisProfile] ??
     blankAcceptanceConfig.diagnosisProfiles.auto
   const prompt = buildCampaignWorkerPrompt({
+    protocolContext: input.baseSpec.protocolAuthorContext,
     blankEvalExecutorKind: input.baseSpec.blankEvalExecutor?.kind,
     title: input.campaignSpec.title,
     roundNumber: input.roundNumber,
@@ -4158,6 +4163,7 @@ async function runCampaignLead(input: {
         nextCandidateRoot: input.nextPendingPackageRoot,
       })
     : buildCampaignLeadPrompt({
+    protocolContext: input.baseSpec.protocolAuthorContext,
     blankEvalExecutorKind: input.baseSpec.blankEvalExecutor?.kind,
     title: input.campaignSpec.title,
     roundNumber: input.roundNumber,
@@ -4280,6 +4286,7 @@ async function runCampaignReviewer(input: {
         accessManifestPath: path.join(stageDir, "access-manifest.json"),
       })
     : buildCampaignReviewerPrompt({
+    protocolContext: input.baseSpec.protocolAuthorContext,
     blankEvalExecutorKind: input.baseSpec.blankEvalExecutor?.kind,
     title: input.campaignSpec.title,
     roundNumber: input.roundNumber,
@@ -4455,7 +4462,8 @@ async function prepareCampaignProtocol(root: string, spec: LongTaskSpec, existin
   if (!spec.protocolPlugins && !prepared) return
   // 已存在的旧campaign不能因后来加配置被接管或自动迁移。
   if (existing && spec.protocolPlugins && !prepared) throw new Error("Cannot enable protocol plugins on existing legacy campaign")
-  await prepareEntry(root, spec.protocolPlugins, await builtins(path.join(root, "protocol-backends")))
+  const binding = await prepareEntry(root, spec.protocolPlugins, await builtins(path.join(root, "protocol-backends")))
+  if (binding) spec.protocolAuthorContext = authorContext(binding.entry, binding.protocol, binding.project)
 }
 
 async function runCampaignFinalAcceptance(input: {
