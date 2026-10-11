@@ -47,7 +47,11 @@ test("driver freezes host config and sends explicit single-attempt no-shell requ
   const result = await driver.invoke(request(f.cwd), new AbortController().signal)
   expect(result.completed).toBe(true)
   expect(result.actualModel).toBe("fixture/model")
-  expect(result.evidence).toHaveLength(1)
+  expect(result.evidence).toHaveLength(2)
+  const accounting = JSON.parse(await readFile(result.evidence![1], "utf8"))
+  expect(accounting).toMatchObject({ status: "completed", inputTokens: null, outputTokens: null,
+    fee: null, reused: false, usageSource: "missing" })
+  expect(accounting.elapsedMs).toBeGreaterThanOrEqual(0)
   await expect(driver.invoke(request(f.cwd), new AbortController().signal)).rejects.toThrow()
   expect(calls).toBe(1)
 })
@@ -63,6 +67,22 @@ test("profile or config drift blocks before cached reuse or backend invocation",
   await writeFile(path.join(f.profile, "profile.json"), '{"fixture":"changed"}')
   await expect(driver.invoke(request(f.cwd), new AbortController().signal)).rejects.toThrow("fingerprint")
   expect(calls).toBe(0)
+})
+
+test("driver forwards reported session tokens and binds persisted result bytes", async () => {
+  const f = await fixture()
+  const driver = await opencodeDriver({ ...f, load: async () => structuredClone(DEFAULT_CONFIG), invoke: async (input) => {
+    const run = response(input)
+    run.selectedAgent = undefined
+    run.result.events = [{ type: "step_finish", part: { tokens: { input: 12, output: 3 }, cost: 0.25 } }]
+    return run
+  } })
+  const result = await driver.invoke(request(f.cwd), new AbortController().signal)
+  expect(result.usage).toEqual({ inputTokens: 12, outputTokens: 3 })
+  const accounting = JSON.parse(await readFile(result.evidence![1], "utf8"))
+  expect(accounting).toMatchObject({ inputTokens: 12, outputTokens: 3, usageSource: "step_finish", fee: null })
+  expect(accounting.rawResultSha256).toMatch(/^[a-f0-9]{64}$/)
+  expect(accounting.steps[0].rawCost).toBe(0.25)
 })
 
 test("already aborted driver cannot invoke OpenCode", async () => {
@@ -87,6 +107,9 @@ test("backend throw retains sanitized failure and blocks automatic resend", asyn
   const body = await readFile(path.join(f.evidenceRoot, dirs[0], "failure.json"), "utf8")
   expect(JSON.parse(body).status).toBe("infrastructure_error")
   expect(body).not.toContain("sensitive-fixture-value")
+  const accounting = await readFile(path.join(f.evidenceRoot, dirs[0], "invocation.accounting.json"), "utf8")
+  expect(JSON.parse(accounting)).toMatchObject({ status: "infrastructure_error", inputTokens: null, fee: null })
+  expect(accounting).not.toContain("sensitive-fixture-value")
   await expect(driver.invoke(request(f.cwd), new AbortController().signal)).rejects.toThrow()
   expect(calls).toBe(1)
 })

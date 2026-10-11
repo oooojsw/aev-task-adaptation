@@ -27,3 +27,15 @@ missing or modified accounting blocks reuse.
 Raw reply/verdict evidence remains unchanged. A failure during accounting or
 checkpoint persistence preserves receipt and interrupted failure evidence, and
 does not silently resend potentially charged work.
+
+## OpenCode backend invocation records
+
+The opt-in driver writes invocation.accounting.json for success, incomplete
+return and caught failure. It binds persisted task-result.json bytes, request
+and host identity, model, timestamps and elapsed duration. Raw observed step
+input/output, reasoning/cache tokens and native cost remain separate; currency
+is unknown and fee=null. Totals propagate into acceptance accounting only when
+every observed step reports that component. Missing/invalid/overflow stays unknown.
+Incomplete status cannot prove a provider reported every step. Merge/repair driver
+evidence retains this record too. This is not consolidated Campaign/full-run
+accounting. Earlier development evidence is not rewritten.

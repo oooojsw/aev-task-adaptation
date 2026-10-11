@@ -8,6 +8,7 @@ import { writeJsonAtomic } from "../atomic-write"
 import type { AutoEvolveConfig } from "../schema"
 import type { OpencodeTaskInput, OpencodeTaskRun } from "../opencode"
 import type { InvokeTool } from "./tool-session"
+import { backendUsage } from "./backend-usage"
 
 export async function opencodeDriver(options: { cwd: string; evidenceRoot: string;
   load?: (cwd: string) => Promise<AutoEvolveConfig>;
@@ -35,10 +36,12 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     const normalized = JSON.parse(JSON.stringify(config)) as AutoEvolveConfig
     const source = await readFile(fileURLToPath(new URL("../opencode.ts", import.meta.url)))
     const own = await readFile(fileURLToPath(import.meta.url))
+    const usageSource = await readFile(fileURLToPath(new URL("./backend-usage.ts", import.meta.url)))
     const retryPolicy = await readFile(fileURLToPath(new URL("../opencode-retry-policy.ts", import.meta.url)))
     const key = fingerprint({ cwd, profile, files: files.sort((a, b) => a.path.localeCompare(b.path)),
       config: normalized, source: createHash("sha256").update(source).digest("hex"),
       own: createHash("sha256").update(own).digest("hex"),
+      usageSource: createHash("sha256").update(usageSource).digest("hex"),
       retryPolicy: createHash("sha256").update(retryPolicy).digest("hex") })
     return { key, config: normalized }
   }
@@ -54,6 +57,14 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     await mkdir(dir, { recursive: true })
     const claim = await open(path.join(dir, "started.claim"), "wx")
     await claim.close()
+    const startedAt = new Date().toISOString()
+    const clock = performance.now()
+    const record = async (fields: Record<string, unknown>) => writeJsonAtomic(path.join(dir, "invocation.accounting.json"), {
+      schema: "aev.backend-invocation-accounting.v1", host: frozen.key, requestFingerprint: fingerprint(request),
+      requestedModel: request.model, startedAt, finishedAt: new Date().toISOString(),
+      elapsedMs: Math.max(0, Math.round(performance.now() - clock)), reused: false,
+      fee: null, ...fields,
+    })
     try {
     // 每次传副本，避免宿主修改冻结配置影响后续请求。
     const result = await invoke({ cwd, workDir: request.workDir, config: structuredClone(frozen.config),
@@ -68,14 +79,23 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     const resolved = result.result.modelResolution
     // 这里只认宿主记录的实际模型解析，不把请求别名当回显证据。
     const actualModel = resolved ? `${resolved.providerID}/${resolved.modelID}` : ""
+    const reported = backendUsage(result.result.events)
+    const completed = result.result.exitCode === 0 && !signal.aborted
+    await record({ status: completed ? "completed" : "incomplete", actualModel,
+      exitCode: result.result.exitCode, usageSource: reported.steps.length ? "step_finish" : "missing",
+      inputTokens: reported.inputTokens, outputTokens: reported.outputTokens, steps: reported.steps,
+      rawResultSha256: createHash("sha256").update(await readFile(path.join(dir, "task-result.json"))).digest("hex"),
+      errorKind: completed ? null : "backend_incomplete" })
     return { completed: result.result.exitCode === 0 && !signal.aborted,
-      actualModel, evidence: [path.join(dir, "task-result.json")] }
+      actualModel, usage: reported.usage, evidence: [path.join(dir, "task-result.json"), path.join(dir, "invocation.accounting.json")] }
     } catch (error) {
       // 不保存异常原文，避免上游错误携带凭证；开始标记仍阻断重发。
       await writeJsonAtomic(path.join(dir, "failure.json"), {
         status: "infrastructure_error", host: frozen.key, aborted: signal.aborted,
         errorKind: error instanceof Error ? "backend_error" : "non_error_throw",
       })
+      await record({ status: "infrastructure_error", actualModel: null, inputTokens: null, outputTokens: null,
+        usageSource: "missing", steps: [], errorKind: signal.aborted ? "aborted" : "backend_error" })
       throw new Error("OpenCode protocol invocation failed; inspect driver failure evidence", { cause: error })
     }
   }
