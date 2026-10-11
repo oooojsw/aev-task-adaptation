@@ -16,6 +16,23 @@ function jsonFence(input: unknown) {
   return "```json\n" + JSON.stringify(input, null, 2) + "\n```"
 }
 
+function protocolTrainingScopeLines(spec: LongTaskSpec) {
+  if (!spec.protocolPlugins) return [] as string[]
+  if (spec.protocolPlugins.phase === "test") throw new Error("Held-out test cannot become an author work graph")
+  // 作者先完成并返回，平台才能验收，禁止等待父任务形成死锁。
+  return [
+    "Selected-protocol training-side work boundary:",
+    `This graph belongs to author work for phase ${spec.protocolPlugins.phase}, task ${spec.protocolPlugins.taskID}.`,
+    "The graph produces candidate Skill, reusable analysis and declared author artifacts only.",
+    "Formal protocol checks and any configured independent execution/scoring belong to the host AFTER these work units return.",
+    "Do not create units whose goal is to run a blank agent, launch formal acceptance, repair the scorer, or wait for host acceptance.",
+    "If a current unit asks for a host-owned step, prepare its candidate/input artifacts and return; do not execute or await that step.",
+    "Never poll or sleep waiting for this parent run/campaign to finish: the parent is waiting for your response before it can grade.",
+    "claimed_success describes completion of this author unit, never a claim that formal acceptance passed.",
+    "If author artifacts cannot be completed, return explicit blockers; do not monitor the host process or manufacture acceptance evidence.",
+  ]
+}
+
 function describePathRefs(
   refs: { path: string; label?: string; role?: string }[],
   fallback = "- none",
@@ -110,6 +127,7 @@ export function buildLongTaskPlanningPrompt(input: {
   const completionValidatorIDs = input.spec.validators.filter((item) => item.required !== false).map((item) => item.id)
   return [
     "You are bootstrapping the initial work graph for a validator-driven long task.",
+    ...protocolTrainingScopeLines(input.spec),
     "",
     `Spec path: ${input.specPath}`,
     `Planning output path: ${input.planningOutputPath}`,
@@ -205,6 +223,7 @@ export function buildLongTaskExecutionPrompt(input: {
   const relevantValidators = input.spec.validators.filter((validator) => input.unit.validatorIDs.includes(validator.id))
   return [
     "You are executing one work unit inside a validator-driven long task.",
+    ...protocolTrainingScopeLines(input.spec),
     "",
     "Global goal:",
     input.spec.goal.trim(),
@@ -290,9 +309,13 @@ export function buildLongTaskExecutionPrompt(input: {
     "- Produce the expected artifacts for the current unit whenever the unit calls for explicit intermediate outputs.",
     "- If the current unit has no formal validators, satisfy the check plan by creating the expected artifacts and leaving concise structured scratch evidence.",
     "- Read the retry bundle carefully, especially recent failures, relevant learning units, run-global operational context, and relevant shadow memory. Repeated mistakes should change your next move.",
-    "- Do not declare orchestrator or campaign-lead 'stuck' based only on a stale heartbeat timestamp or a missing execute/ directory during an in-flight attempt.",
-    "- For an in-flight attempt, seeing only retry_input_bundle.json can be normal before task artifacts are flushed; treat this as unknown state, not proof of no-spawn.",
-    "- If you suspect runtime stall, label it as a hypothesis unless you have hard evidence (for example: owner process not alive, repeated no-progress checks over time, or explicit runtime timeout/error).",
+    ...(input.spec.protocolPlugins ? [
+      "- Platform liveness/monitoring is not an author obligation. Do not inspect or await parent status, PID, heartbeat or acceptance files while your own unit is in flight.",
+    ] : [
+      "- Do not declare orchestrator or campaign-lead 'stuck' based only on a stale heartbeat timestamp or a missing execute/ directory during an in-flight attempt.",
+      "- For an in-flight attempt, seeing only retry_input_bundle.json can be normal before task artifacts are flushed; treat this as unknown state, not proof of no-spawn.",
+      "- If you suspect runtime stall, label it as a hypothesis unless you have hard evidence (for example: owner process not alive, repeated no-progress checks over time, or explicit runtime timeout/error).",
+    ]),
     "- Treat the formal expert package as a live shared surface. If you stabilize a rule, method, blocker, or package gap, write it into the formal package instead of leaving it only in local notes.",
     "- If this unit is mainly inspection, extraction, comparison, or evidence gathering, keep raw source-instance findings in workspace scratch evidence instead of promoting them directly into the formal expert package.",
     "- Only synthesis/finalization/package-authoring units should rewrite canonical package files such as manifest.md or surface_contract.json.",
@@ -400,6 +423,7 @@ export function buildLongTaskReplanPrompt(input: {
 
   return [
     "You are replanning the remaining work graph for a validator-driven long task.",
+    ...protocolTrainingScopeLines(input.spec),
     "",
     `Replan output path: ${input.replanOutputPath}`,
     "",

@@ -320,6 +320,12 @@ test(`actual Campaign learner ${scenario.seeded ? "seeded " : ""}${scenario.exec
     await writeFile(path.join(root, "resource-summary-audit.json"), JSON.stringify(resourceSummary, null, 2))
     expect(calls.some((title) => title.startsWith("Long Task Execute"))).toBe(true)
     for (const request of roleRequests) {
+      if (request.title.startsWith("Long Task Graph") || request.title.startsWith("Long Task Execute")) {
+        expect(request.prompt).toContain("Selected-protocol training-side work boundary")
+        expect(request.prompt).toContain("parent is waiting for your response before it can grade")
+        expect(request.prompt).toContain("claimed_success describes completion of this author unit")
+        expect(request.prompt).not.toContain("If you suspect runtime stall")
+      }
       expect(request.prompt).not.toContain("PRIVATE_CAMPAIGN_LABEL")
       for (const allowed of [...request.reads, ...request.edits]) {
         const rel = path.relative(allowed, privateFile)
