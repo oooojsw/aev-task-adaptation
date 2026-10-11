@@ -2,6 +2,7 @@ import path from "node:path"
 import { readFile, realpath } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { productEvidenceName } from "./runtime"
+import type { Phase } from "./contract"
 
 export async function protocolFeedbackEvidence(feedbackPath?: string) {
   if (!feedbackPath) return [] as string[]
@@ -25,4 +26,23 @@ export async function protocolFeedbackEvidence(feedbackPath?: string) {
     paths.push(file)
   }
   return paths
+}
+
+export async function previousProtocolFeedback(campaignRoot: string, roundNumber: number, taskID: string, phase: Phase) {
+  if (!path.isAbsolute(campaignRoot) || !Number.isSafeInteger(roundNumber) || roundNumber < 1 || !taskID) {
+    throw new Error("Explicit previous feedback identity required")
+  }
+  if (roundNumber <= 1) return undefined
+  const round = path.join(campaignRoot, "rounds", `round-${String(roundNumber - 1).padStart(3, "0")}`)
+  const result = JSON.parse((await readFile(path.join(round, "final-acceptance", "result.json"), "utf8")).replace(/^\uFEFF/, ""))
+  const file = result.protocolTrainingResultPath
+  if (result.acceptanceMode !== "protocol_plugins" || result.roundNumber !== roundNumber - 1 ||
+      typeof file !== "string" || !path.isAbsolute(file)) throw new Error("Previous protocol feedback identity missing")
+  const relative = path.relative(round, file)
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error("Previous feedback path escape")
+  const paths = await protocolFeedbackEvidence(file)
+  const view = JSON.parse((await readFile(paths[0], "utf8")).replace(/^\uFEFF/, ""))
+  if (view.task !== taskID || view.phase !== phase) throw new Error("Previous feedback task mismatch")
+  // 跨轮继续使用真实公开答卷，不退回旧空白工具证据格式。
+  return file as string
 }

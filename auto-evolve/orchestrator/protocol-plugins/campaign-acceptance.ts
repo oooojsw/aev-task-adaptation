@@ -10,6 +10,7 @@ import type { Runtime } from "./runtime"
 import { productEvidenceName } from "./runtime"
 import { trainingCheckMessage } from "./training-feedback"
 import { canonical } from "./identity"
+import { protocolRepairDirective } from "./failure-routing"
 
 export async function campaignAcceptance(input: {
   campaignRoot: string
@@ -56,7 +57,9 @@ export async function campaignAcceptance(input: {
     passed: check.status === "passed", blocking: check.required,
     ...(check.status === "passed" ? {} : { failureKind: check.status === "rejected" ? "product_failure" as const
       : check.status === "data_error" ? "dataset_failure" as const : "validator_infrastructure" as const }),
-    summary: trainingCheckMessage(prepared.protocol, input.entry.phase, check), details: [], evidenceRefs: [trainingPath], rawOutputPath: trainingPath,
+    summary: trainingCheckMessage(prepared.protocol, input.entry.phase, check),
+    details: protocolRepairDirective(check) ? [protocolRepairDirective(check)!.actionableFix] : [],
+    evidenceRefs: [trainingPath], rawOutputPath: trainingPath,
   }))
   // 执行故障也留一个阻断结果，但不把它伪装成Skill内容拒绝。
   if (!passed && !validatorResults.some((item) => item.blocking && !item.passed)) validatorResults.push({
@@ -69,6 +72,7 @@ export async function campaignAcceptance(input: {
   const result = { campaignID: input.campaignID, roundNumber: input.roundNumber, runID: input.runID,
     passed, failureKind, summary: receipt.message, validatorResults,
     acceptanceMode: "protocol_plugins", blankEvalSkipped: !receipt.executed,
+    protocolChecks: receipt.checks.map(({ name, target, required, status }) => ({ name, target, required, status })),
     validationPackageRoot: input.candidateRoot, bundlePath: trainingPath,
     blankEvalResultPath: undefined as string | undefined, blankEvalRunDir: undefined as string | undefined,
     preBlankValidationStageResultPath: undefined as string | undefined,

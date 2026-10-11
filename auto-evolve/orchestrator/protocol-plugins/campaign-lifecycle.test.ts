@@ -186,6 +186,7 @@ test("NBA actual Campaign batch learns merges replays and tests without repeated
 for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLeads: 2 },
   { rejectedLeads: 0, fault: "scoring_error" }, { rejectedLeads: 0, fault: "data_error" },
   { rejectedLeads: 0, execution: true }, { rejectedLeads: 1, execution: true },
+  { rejectedLeads: 2, execution: true },
   { rejectedLeads: 0, execution: true, seeded: true },
   { rejectedLeads: 0, execution: true, fault: "execution_error" }])
 test(`actual Campaign learner ${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
@@ -332,6 +333,13 @@ test(`actual Campaign learner ${scenario.seeded ? "seeded " : ""}${scenario.exec
       expect(request.reads.some((file) => file.endsWith("expert-oracle-bundle.json"))).toBe(false)
     }
     expect(leads).toBe(rejectedLeads + 1)
+    if (rejectedLeads && !fault) {
+      const tickets = JSON.parse(await readFile(path.join(result.campaignDir, "dispatch-tickets.json"), "utf8"))
+      expect(tickets.tickets.some((ticket: { key: string }) => ticket.key === `skill:${execution ? "product" : "skill"}:content`)).toBe(true)
+      expect(tickets.tickets.some((ticket: { title: string }) => ticket.title.startsWith("Repair validator"))).toBe(false)
+      const laterLeads = roleRequests.filter(item => item.title.startsWith("Campaign Lead")).slice(1)
+      expect(laterLeads.every(item => item.prompt.includes("Host alone"))).toBe(true)
+    }
     expect(result.roundsCompleted).toBe(rejectedLeads === 2 ? 2 : 1)
     if (rejectedLeads === 2) expect(calls.some((title) => title.startsWith("Long Task Graph"))).toBe(true)
     const roundsRoot = path.join(result.campaignDir, "rounds")
@@ -342,7 +350,8 @@ test(`actual Campaign learner ${scenario.seeded ? "seeded " : ""}${scenario.exec
     expect(new Set(values.map((value) => value.protocolFingerprint)).size).toBe(1)
     expect(values.every((value) => value.claim === (execution ? "task_execution" : "skill_check") &&
       value.executed === Boolean(execution && fault !== "execution_error"))).toBe(true)
-    expect(httpCalls).toBe(execution ? rejectedLeads + 1 : 0)
+    expect(httpCalls).toBe(execution ? Math.min(rejectedLeads, 1) + 1 : 0)
+    if (execution && rejectedLeads === 2) expect(values.map(value => value.executionReused)).toEqual([false, true, false])
     if (!fault) {
       const count = calls.length
       const requests = httpCalls

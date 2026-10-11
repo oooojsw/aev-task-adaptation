@@ -37,7 +37,8 @@ import { campaignAcceptance, verifyCompletedCampaignAcceptance } from "../protoc
 import { prepareEntry } from "../protocol-plugins/entry"
 import { selectedRuntime } from "../protocol-plugins/selected-runtime"
 import { authorContext, protocolAuthorLines } from "../protocol-plugins/author-context"
-import { protocolFeedbackEvidence } from "../protocol-plugins/feedback-evidence"
+import { protocolFeedbackEvidence, previousProtocolFeedback } from "../protocol-plugins/feedback-evidence"
+import { protocolRepairDirective, type ProtocolRepairCheck } from "../protocol-plugins/failure-routing"
 import { copyCandidate, hasCandidate, type SkillBinding } from "../protocol-plugins/candidate"
 import {
   defaultReuseForPolicy,
@@ -1213,6 +1214,8 @@ function mergeDispatchTicketsFromFinalAcceptance(input: {
   finalAcceptance: {
     passed: boolean
     summary: string
+    acceptanceMode?: string
+    protocolChecks?: ProtocolRepairCheck[]
     validatorResults: Array<{
       validatorID: string
       passed: boolean
@@ -1240,10 +1243,20 @@ function mergeDispatchTicketsFromFinalAcceptance(input: {
   } else {
     const failedResults = input.finalAcceptance.validatorResults.filter((item) => !item.passed)
     for (const failed of failedResults) {
-      const key = normalizeDispatchTicketKey(`validator:${failed.validatorID}`)
+      let directive: ReturnType<typeof protocolRepairDirective>
+      if (input.finalAcceptance.acceptanceMode === "protocol_plugins") {
+        const check = input.finalAcceptance.protocolChecks?.find(item => item.name === failed.validatorID)
+        if (!check) {
+          if (failed.validatorID === "protocol-execution") continue
+          throw new Error("Protocol repair check identity missing")
+        }
+        directive = protocolRepairDirective(check)
+        if (!directive) continue
+      }
+      const key = normalizeDispatchTicketKey(directive?.key ?? `validator:${failed.validatorID}`)
       const current = next.get(key)
       const actionableFix =
-        failed.details.find((item) => item.trim().length > 0) ??
+        directive?.actionableFix ?? failed.details.find((item) => item.trim().length > 0) ??
         failed.summary ??
         "Apply the failed validator feedback and re-run acceptance."
       const issue = failed.summary || input.finalAcceptance.summary
@@ -1271,7 +1284,7 @@ function mergeDispatchTicketsFromFinalAcceptance(input: {
         lastSeenRound: input.roundNumber,
         occurrenceCount: 1,
         validatorID: failed.validatorID,
-        title: `Repair validator ${failed.validatorID}`,
+        title: directive?.title ?? `Repair validator ${failed.validatorID}`,
         issue: short(issue, 220),
         actionableFix: short(actionableFix, 220),
         evidenceRefs: compactRefs([...failed.evidenceRefs, input.feedbackPath]),
@@ -4060,7 +4073,8 @@ function buildRepairChecklistFromFinalAcceptance(
     for (const detail of details) {
       items.push(`  -> ${detail}`)
     }
-    const fixHint = validatorRepairHint(validatorID, details)
+    // 新协议按检查对象修订，不再靠验证器名字推测修复目标。
+    const fixHint = result.acceptanceMode === "protocol_plugins" ? "" : validatorRepairHint(validatorID, details)
     if (fixHint) items.push(`  REPAIR_HINT: ${fixHint}`)
   }
   return items
@@ -5398,8 +5412,13 @@ export async function runLongTaskCampaign(input: {
 
         const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths)
         // Step 10: workers need the latest blank-agent evidence from previous round's failure.
-        const latestBlankEvidence = await readLatestBlankAgentEvidenceBundlePath(campaignPaths.root)
-        const latestBlankEvidenceReadPaths = latestBlankEvidence
+        const priorProtocolFeedback = baseSpec.protocolPlugins
+          ? await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase) : undefined
+        const latestBlankEvidence = baseSpec.protocolPlugins
+          ? priorProtocolFeedback ? path.join(path.dirname(priorProtocolFeedback), "protocol.training-feedback.json") : undefined
+          : await readLatestBlankAgentEvidenceBundlePath(campaignPaths.root)
+        const latestBlankEvidenceReadPaths = baseSpec.protocolPlugins
+          ? await protocolFeedbackEvidence(priorProtocolFeedback) : latestBlankEvidence
           ? await readBlankAgentEvidenceReadablePaths(latestBlankEvidence)
           : []
         // Step 10b: workers may also read oracle paths from the latest final acceptance.
@@ -5481,7 +5500,7 @@ export async function runLongTaskCampaign(input: {
         let reviewerSuggestion: LongTaskCampaignReviewSuggestion | undefined
         let finalAcceptance: Awaited<ReturnType<typeof runCampaignFinalAcceptance>> | undefined
         let reviewerInputPath = latestReviewerSuggestionPath
-        let finalAcceptanceFeedbackPath: string | undefined
+        let finalAcceptanceFeedbackPath: string | undefined = priorProtocolFeedback
         const maxAcceptancePassesPerRound = 2
 
         for (let passIndex = 1; passIndex <= maxAcceptancePassesPerRound; passIndex += 1) {
@@ -5544,7 +5563,7 @@ export async function runLongTaskCampaign(input: {
 
           // Build repair checklist from previous pass failure for pass-02 lead
           let repairChecklist: string[] | undefined
-          if (passIndex >= 2 && finalAcceptanceFeedbackPath) {
+          if ((passIndex >= 2 || baseSpec.protocolPlugins) && finalAcceptanceFeedbackPath) {
             try {
               const prevResult = await readJsonFile<Record<string, unknown>>(finalAcceptanceFeedbackPath)
               repairChecklist = buildRepairChecklistFromFinalAcceptance(prevResult)
@@ -6383,8 +6402,13 @@ export async function resumeLongTaskCampaign(input: {
         )
 
         const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths)
-        const latestBlankEvidence = await readLatestBlankAgentEvidenceBundlePath(campaignPaths.root)
-        const latestBlankEvidenceReadPaths = latestBlankEvidence
+        const priorProtocolFeedback = baseSpec.protocolPlugins
+          ? await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase) : undefined
+        const latestBlankEvidence = baseSpec.protocolPlugins
+          ? priorProtocolFeedback ? path.join(path.dirname(priorProtocolFeedback), "protocol.training-feedback.json") : undefined
+          : await readLatestBlankAgentEvidenceBundlePath(campaignPaths.root)
+        const latestBlankEvidenceReadPaths = baseSpec.protocolPlugins
+          ? await protocolFeedbackEvidence(priorProtocolFeedback) : latestBlankEvidence
           ? await readBlankAgentEvidenceReadablePaths(latestBlankEvidence)
           : []
         // Collect oracle read paths from the latest final acceptance (replay-style campaign).
@@ -6465,7 +6489,7 @@ export async function resumeLongTaskCampaign(input: {
         let reviewerSuggestion: LongTaskCampaignReviewSuggestion | undefined
         let finalAcceptance: Awaited<ReturnType<typeof runCampaignFinalAcceptance>> | undefined
         let reviewerInputPath = latestReviewerSuggestionPath
-        let finalAcceptanceFeedbackPath: string | undefined
+        let finalAcceptanceFeedbackPath: string | undefined = priorProtocolFeedback
         const maxAcceptancePassesPerRound = 2
 
         for (let passIndex = 1; passIndex <= maxAcceptancePassesPerRound; passIndex += 1) {
@@ -6528,7 +6552,7 @@ export async function resumeLongTaskCampaign(input: {
 
           // Build repair checklist from previous pass failure for pass-02 lead
           let repairChecklist: string[] | undefined
-          if (passIndex >= 2 && finalAcceptanceFeedbackPath) {
+          if ((passIndex >= 2 || baseSpec.protocolPlugins) && finalAcceptanceFeedbackPath) {
             try {
               const prevResult = await readJsonFile<Record<string, unknown>>(finalAcceptanceFeedbackPath)
               repairChecklist = buildRepairChecklistFromFinalAcceptance(prevResult)
