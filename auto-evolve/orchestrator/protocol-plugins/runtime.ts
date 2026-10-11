@@ -119,7 +119,7 @@ export class Runtime {
     }
     if (plan.executor && !this.executors.has(identity(plan.executor))) throw new Error(`Missing executor handler: ${plan.executor.id}`)
     const evidence = { skill: metadata(skill), materials: metadata(materials), privateInputs: metadata(privateInputs) }
-    const checks: Array<{ name: string; required: boolean; status: Outcome; message: string; inputFingerprint: string }> = []
+    const checks: Array<{ name: string; target: Check["target"]; stage: Check["stage"]; mechanism: Check["mechanism"]; required: boolean; status: Outcome; message: string; inputFingerprint: string }> = []
     let product: Artifact | undefined
     let usage: { inputTokens?: number; outputTokens?: number } | undefined
     let reused = false
@@ -148,7 +148,8 @@ export class Runtime {
           // 插件异常是评分故障，不将故障当作Skill失败。
           result = { status: "scoring_error" as const, message: "Checker failed; inspect plugin evidence" }
         }
-        checks.push({ name: check.name, required: check.required, ...result, inputFingerprint: key })
+        checks.push({ name: check.name, target: check.target, stage: check.stage, mechanism: check.mechanism,
+          required: check.required, ...result, inputFingerprint: key })
         if (result.status === "scoring_error" || result.status === "data_error") return result.status
         if (check.required && result.status === "rejected") return "rejected" as const
       }
