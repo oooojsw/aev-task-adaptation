@@ -20,5 +20,14 @@ It never imports or executes the upstream API runner. Six cases distinguish mode
 This verifies scoring equivalence only, not prompt/context/runtime equivalence.
 
 Both adapters require an explicit product and a separate valid gold artifact.
+The product check must declare `privateInputs: ["gold"]`; merely placing the
+gold artifact in a project pack does not grant every checker access to it.
 Malformed labels or artifact fingerprints yield data_error, not an ordinary
 Skill rejection. No task-specific numbers or NBA logic enter AEV core modules.
+
+nba-protocol.test.ts exercises the real pack builder, HTTP transport to a local
+fixture server, Python process, runtime, receipts and caches. The model is a fixed
+reply fixture, not a real LLM. Requests exclude private gold and unused source
+metadata. Switching scorer scripts reuses the actual product and token evidence;
+held-out task identity produces its own request. Missing explicit gold binding
+cannot pass. This does not certify the full training/merge chain on NBA.
