@@ -129,6 +129,7 @@ import { resolveModelSelection } from "../model-selection"
 import { runOpencodeTask } from "../opencode"
 import type { OpencodeTaskInput } from "../opencode"
 import { writeTaskArtifacts } from "../task-artifacts"
+import { runProtocolTrainingTask } from "../protocol-plugins/training-invocation"
 import type { ExecutionSpec, ModelPhase } from "../schema"
 import { campaignRoundRuntimeScope, cleanupRuntimeProcessScope, terminateProcessTree } from "../runtime-process-registry"
 import { defaultRunHealthPolicy, readCampaignHealth } from "../run-health"
@@ -3530,7 +3531,8 @@ async function runCampaignSuggestionTask(input: {
   if (input.baseSpec.protocolTraining && !input.trainingRole) throw new Error("Explicit campaign training role required")
   const selection = resolveModelSelection(config, input.selectionPhase,
     input.trainingRole ? trainingExecution(input.baseSpec, input.trainingRole, input.execution) : input.execution)
-  const task = await runOpencodeTask({
+  const task = await runProtocolTrainingTask({ enabled: Boolean(input.baseSpec.protocolPlugins), stageDir: input.stageDir,
+    role: input.trainingRole ?? input.phase }, {
     cwd: input.cwd,
     config,
     title: input.title,
@@ -3553,7 +3555,7 @@ async function runCampaignSuggestionTask(input: {
       stageDir: input.stageDir,
       phase: input.phase,
     },
-  })
+  }, runOpencodeTask)
   const artifactPaths = await writeTaskArtifacts(input.stageDir, task, {
     phase: input.phase,
   })

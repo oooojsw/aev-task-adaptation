@@ -18,6 +18,22 @@ or tool turns. This ledger covers acceptance adapters only: training roles,
 merge authors, repair authors and backend failures before a receipt need their
 own ledgers. It is not a full-run cost or token-budget enforcement report.
 
+## Opt-in Campaign training records
+
+New protocol Campaigns wrap planner, executor and Campaign suggestion calls with
+runProtocolTrainingTask. Each invocation gets a unique protocol-invocations
+directory, started claim/metadata, immutable-location raw task result and atomic
+accounting.json. Same-stage legitimate diagnostic/revision calls get separate
+records; this recorder does not decide retries or bypass controller recovery.
+Legacy disabled branch calls the original backend without creating these files.
+Backend throw records sanitized error category, elapsed time and unknown tokens.
+Reported step tokens and actual model resolution use the same backend parser as
+the independent driver. Missing synthetic/live usage is null, not zero. Session
+incomplete reports describe observed steps, not guaranteed full charged usage.
+Campaign lifecycle fixtures check ledger count equals actual training boundary
+calls. This is per-invocation evidence, not yet a consolidated full-run ledger or
+aggregate token-limit enforcement. Existing historical calls are not backfilled.
+
 Complete earlier development checkpoints without an accounting field remain
 read-only and eligible for existing identity-checked reuse. No historical tokens
 are retroactively invented, and no scoring/execution is rerun to fill missing

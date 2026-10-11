@@ -88,6 +88,7 @@ import {
 import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
+import { runProtocolTrainingTask } from "../protocol-plugins/training-invocation"
 import { extractJsonObject } from "./json-extract"
 import { cleanupRuntimeProcessScope, longTaskRunRuntimeScope } from "../runtime-process-registry"
 import {
@@ -1222,7 +1223,7 @@ async function runPlanningSession(input: {
       })
     : basePrompt
 
-  const task = await runOpencodeTask({
+  const task = await runProtocolTrainingTask({ enabled: Boolean(input.spec.protocolPlugins), stageDir: draftPaths.root, role: "planner" }, {
     cwd: input.cwd,
     config,
     title: input.phase === "plan" ? "Long Task Graph Bootstrap" : "Long Task Graph Replan",
@@ -1248,7 +1249,7 @@ async function runPlanningSession(input: {
       taskKind: input.phase === "plan" ? "long_task_plan" : "long_task_replan",
       methodID: input.spec.reversePropagation?.recipeID,
     },
-  })
+  }, runOpencodeTask)
 
   await writeTaskArtifacts(draftPaths.root, task, {
     phase: input.phase === "plan" ? "long_task_plan" : "long_task_replan",
@@ -1367,7 +1368,7 @@ async function executeWorkUnit(input: {
     await input.onActivation?.()
   })
 
-  const task = await runOpencodeTask({
+  const task = await runProtocolTrainingTask({ enabled: Boolean(input.spec.protocolPlugins), stageDir: attemptPaths.executeDir, role: "executor" }, {
     cwd: input.cwd,
     config,
     title: `Long Task Execute ${activeUnit.id}`,
@@ -1392,7 +1393,7 @@ async function executeWorkUnit(input: {
       attempt,
       methodID: input.spec.reversePropagation?.recipeID,
     },
-  })
+  }, runOpencodeTask)
 
   await writeTaskArtifacts(attemptPaths.executeDir, task, {
     phase: "long_task_execute",

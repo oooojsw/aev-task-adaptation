@@ -277,6 +277,15 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
     const result = await actual.runLongTaskCampaign({ cwd: root, specPath: campaign, forceNew: true })
     await writeFile(path.join(root, "observed-result.json"), JSON.stringify({ result, calls }, null, 2))
     expect(result.status).toBe(fault ? "failed" : "verified_success")
+    const accountingFiles = (await readdir(root, { recursive: true })).filter((file) =>
+      /\/protocol-invocations\/[^/]+\/accounting\.json$/.test(file.replaceAll("\\", "/")))
+    const accounting = await Promise.all(accountingFiles.map(async (file) => JSON.parse(await readFile(path.join(root, file), "utf8"))))
+    expect(accounting).toHaveLength(calls.length)
+    expect(accounting.every((item) => item.status === "completed" && item.inputTokens === null && item.outputTokens === null)).toBe(true)
+    expect(accounting.some((item) => item.role === "executor")).toBe(true)
+    expect(accounting.some((item) => item.role === "lead")).toBe(true)
+    if (rejectedLeads === 2) expect(accounting.some((item) => item.role === "planner")).toBe(true)
+    await writeFile(path.join(root, "training-accounting-audit.json"), JSON.stringify({ calls: calls.length, accountingFiles, accounting }, null, 2))
     expect(calls.some((title) => title.startsWith("Long Task Execute"))).toBe(true)
     for (const request of roleRequests) {
       expect(request.prompt).not.toContain("PRIVATE_CAMPAIGN_LABEL")

@@ -20,7 +20,7 @@ Authoritative goal: E:/project/AEV-RuleArena-NBA/aev-single-turn/ACCEPTANCE-PLUG
 | Scoring switch reuses actual answer | cache.test.ts, nba-protocol.test.ts | Version/config changes are intentional new scoring identities |
 | Old defaults, requests and outcomes | Prompt/coordinator/merger/fanout checks plus legacy-campaign.test.ts compares requests, blank specs and terminal states/resume using each version's dependency sources | Fixed receipts, identified source task and seeded package; not every old configuration or interrupted nonterminal recovery |
 | NBA outside new core | projects/nba/pack.test.ts, actual Campaign batch, project-boundary.test.ts inventories tracked core and hashes | Pre-existing blank-eval/single-turn.ts NBA tag stays byte-identical to baseline; lexical inventory is not universal semantic proof |
-| Every call resource/error evidence | attempt-accounting.test.ts, opencode-driver.test.ts | Training/merge/repair author usage/time and pre-receipt errors not fully consolidated |
+| Every call resource/error evidence | attempt-accounting.test.ts, opencode-driver.test.ts, training-invocation.test.ts; actual Campaign ledger count audit | Main training roles now record usage/time/prereceipt errors; full consolidation and other optional model-checker/reverse-propagation calls remain open |
 | Safe recovery | batch-recovery.test.ts plus exclusive claims/cache tests | Supervisor unlock never authorizes incomplete call resend |
 | Backup, Git and rollback | E:/project/AEV-protocol-plugins-20261011 baseline manifest and Git worktree | Final release and documented rollback acceptance remain open |
 
