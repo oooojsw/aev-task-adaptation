@@ -10,6 +10,7 @@ import { deriveEntry } from "./derive-entry"
 import { instanceReplay, ProtocolReplayFault } from "./instance-replay"
 import { mergeRepair } from "./merge-repair"
 import { instanceRepair } from "./instance-repair"
+import { mergeContext } from "./merge-context"
 
 async function fixture(status: "passed" | "rejected" | "scoring_error" | "data_error" = "passed") {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -90,6 +91,43 @@ test("completed fault cannot be reused or resent", async () => {
   await runEntry(f.run, f.entry, path.join(f.root, "candidate"), attempt, f.runtime)
   await expect(runEntry(f.run, f.entry, path.join(f.root, "candidate"), attempt, f.runtime, { reuseCompleted: true })).rejects.toThrow("verdict")
   expect(f.calls()).toBe(1)
+})
+
+test("merge context uses arbitrary declared entries and accepted source identity", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.merge = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  const candidate = path.join(f.root, "candidate")
+  const attempt = path.join(f.root, "attempt")
+  await writeFile(path.join(candidate, "private-note.txt"), "Never attach this")
+  await runEntry(f.run, f.entry, candidate, attempt, f.runtime)
+  const input = { parentRunRoot: f.run, entry: f.entry, outputRoot: path.join(f.root, "merged"),
+    sources: [{ id: "task", candidateRoot: candidate, receiptPath: path.join(attempt, "protocol.receipt.json") }], runtime: f.runtime }
+  const context = await mergeContext(input)
+  expect(context.readPaths).toEqual([path.join(candidate, "rules.txt")])
+  expect(context.editPaths).toEqual([path.join(input.outputRoot, "rules.txt")])
+  expect(context.prompt).not.toContain("private-note.txt")
+  expect(context.prompt).not.toContain(input.sources[0].receiptPath)
+  expect(context.contract.sources[0].executed).toBe(false)
+  expect(await mergeContext(input)).toEqual(context)
+  await writeFile(path.join(candidate, "rules.txt"), "Unaccepted replacement")
+  await expect(mergeContext(input)).rejects.toThrow("identity mismatch")
+  expect(f.calls()).toBe(1)
+})
+
+test("merge context refuses rejected and duplicate sources", async () => {
+  for (const status of ["passed", "rejected"] as const) {
+    const f = await fixture(status)
+    f.selection.protocol.phases.merge = structuredClone(f.selection.protocol.phases.source!)
+    await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+    const candidate = path.join(f.root, "candidate")
+    const attempt = path.join(f.root, "attempt")
+    await runEntry(f.run, f.entry, candidate, attempt, f.runtime)
+    const source = { id: "task", candidateRoot: candidate, receiptPath: path.join(attempt, "protocol.receipt.json") }
+    await expect(mergeContext({ parentRunRoot: f.run, entry: f.entry, outputRoot: path.join(f.root, "merged"),
+      sources: status === "passed" ? [source, source] : [source], runtime: f.runtime })).rejects.toThrow()
+    expect(f.calls()).toBe(1)
+  }
 })
 
 test("derived replay preserves complete frozen selection and lineage", async () => {
