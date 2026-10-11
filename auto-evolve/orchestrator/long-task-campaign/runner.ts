@@ -5400,7 +5400,7 @@ export async function runLongTaskCampaign(input: {
           "final-acceptance",
           "result.json",
         )
-        if (await pathExists(latestFinalAcceptancePath)) {
+        if (!baseSpec.protocolPlugins && await pathExists(latestFinalAcceptancePath)) {
           try {
             const prev = await readJsonFile<Record<string, unknown>>(latestFinalAcceptancePath)
             if (typeof prev.expertOracleBundlePath === "string") {
@@ -5512,7 +5512,7 @@ export async function runLongTaskCampaign(input: {
             if (Array.isArray(fa.expertOracleReadPaths)) {
               currentOracleReadPaths = fa.expertOracleReadPaths as string[]
             }
-            if (Array.isArray(fa.validatorResults)) {
+            if (!baseSpec.protocolPlugins && Array.isArray(fa.validatorResults)) {
               const vrs = fa.validatorResults as Array<Record<string, unknown>>
               if (!currentOracleBundlePath || currentOracleReadPaths.length === 0) {
                 const oracleBundle = await writeExpertOracleBundleFromValidatorResults({
@@ -5687,6 +5687,10 @@ export async function runLongTaskCampaign(input: {
             onPulse: pulseCampaignRound,
           })
           await writeJsonFile(roundPaths.finalAcceptanceResultPath, finalAcceptance)
+          // 训练反馈与审计恢复分开，避免回执路径进入修订工单。
+          const trainingFeedbackPath = baseSpec.protocolPlugins
+            ? String((finalAcceptance as Record<string, unknown>).protocolTrainingResultPath)
+            : acceptancePassResultPath
           await appendAcceptanceExperienceV2({
             markdownPath: campaignPaths.acceptanceExperiencePath,
             jsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
@@ -5694,12 +5698,12 @@ export async function runLongTaskCampaign(input: {
             passIndex,
             runID: runResult.runID,
             result: finalAcceptance,
-            resultPath: acceptancePassResultPath,
+            resultPath: trainingFeedbackPath,
           })
           dispatchTickets = mergeDispatchTicketsFromFinalAcceptance({
             previous: dispatchTickets,
             roundNumber,
-            feedbackPath: acceptancePassResultPath,
+            feedbackPath: trainingFeedbackPath,
             finalAcceptance,
           })
           await writeJsonFile(campaignPaths.dispatchTicketsPath, dispatchTickets)
@@ -5712,7 +5716,7 @@ export async function runLongTaskCampaign(input: {
             roundNumber,
           })
           await writeLongTaskCampaignRoutingControl(campaignPaths, routingAfterAcceptance)
-          finalAcceptanceFeedbackPath = acceptancePassResultPath
+          finalAcceptanceFeedbackPath = trainingFeedbackPath
           const acceptanceInfrastructureFailure = finalAcceptance.failureKind === "infrastructure_failure"
           const acceptanceDatasetFailure = finalAcceptance.failureKind === "dataset_failure"
           if (!finalAcceptance.passed && !acceptanceInfrastructureFailure && !acceptanceDatasetFailure) {
@@ -5819,7 +5823,9 @@ export async function runLongTaskCampaign(input: {
           lastRoundSummaryPath: finalizedRoundRecord.roundSummaryPath,
           lastRunHardVerified,
           lastFinalAcceptancePassed: finalAcceptance?.passed === true,
-          lastFinalAcceptanceResultPath: finalAcceptanceFeedbackPath,
+          lastFinalAcceptanceResultPath: baseSpec.protocolPlugins && finalAcceptance
+            ? String((finalAcceptance as Record<string, unknown>).protocolAuditResultPath)
+            : finalAcceptanceFeedbackPath,
           lastRoundClosure,
           lastGateFailureKind,
           lastGateFailureSummary,
@@ -6378,7 +6384,7 @@ export async function resumeLongTaskCampaign(input: {
           "final-acceptance",
           "result.json",
         )
-        if (await pathExists(latestFinalAcceptancePath)) {
+        if (!baseSpec.protocolPlugins && await pathExists(latestFinalAcceptancePath)) {
           try {
             const prev = await readJsonFile<Record<string, unknown>>(latestFinalAcceptancePath)
             if (typeof prev.expertOracleBundlePath === "string") {
@@ -6490,7 +6496,7 @@ export async function resumeLongTaskCampaign(input: {
             if (Array.isArray(fa.expertOracleReadPaths)) {
               currentOracleReadPaths = fa.expertOracleReadPaths as string[]
             }
-            if (Array.isArray(fa.validatorResults)) {
+            if (!baseSpec.protocolPlugins && Array.isArray(fa.validatorResults)) {
               const vrs = fa.validatorResults as Array<Record<string, unknown>>
               if (!currentOracleBundlePath || currentOracleReadPaths.length === 0) {
                 const oracleBundle = await writeExpertOracleBundleFromValidatorResults({
@@ -6639,6 +6645,10 @@ export async function resumeLongTaskCampaign(input: {
             onPulse: pulseCampaignRound,
           })
           await writeJsonFile(roundPaths.finalAcceptanceResultPath, finalAcceptance)
+          // 训练反馈与审计恢复分开，避免回执路径进入修订工单。
+          const trainingFeedbackPath = baseSpec.protocolPlugins
+            ? String((finalAcceptance as Record<string, unknown>).protocolTrainingResultPath)
+            : acceptancePassResultPath
           await appendAcceptanceExperienceV2({
             markdownPath: campaignPaths.acceptanceExperiencePath,
             jsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
@@ -6646,12 +6656,12 @@ export async function resumeLongTaskCampaign(input: {
             passIndex,
             runID: runResult.runID,
             result: finalAcceptance,
-            resultPath: acceptancePassResultPath,
+            resultPath: trainingFeedbackPath,
           })
           dispatchTickets = mergeDispatchTicketsFromFinalAcceptance({
             previous: dispatchTickets,
             roundNumber,
-            feedbackPath: acceptancePassResultPath,
+            feedbackPath: trainingFeedbackPath,
             finalAcceptance,
           })
           await writeJsonFile(campaignPaths.dispatchTicketsPath, dispatchTickets)
@@ -6664,7 +6674,7 @@ export async function resumeLongTaskCampaign(input: {
             roundNumber,
           })
           await writeLongTaskCampaignRoutingControl(campaignPaths, routingAfterAcceptance)
-          finalAcceptanceFeedbackPath = acceptancePassResultPath
+          finalAcceptanceFeedbackPath = trainingFeedbackPath
           const acceptanceInfrastructureFailure = finalAcceptance.failureKind === "infrastructure_failure"
           const acceptanceDatasetFailure = finalAcceptance.failureKind === "dataset_failure"
           if (!finalAcceptance.passed && !acceptanceInfrastructureFailure && !acceptanceDatasetFailure) {
@@ -6771,7 +6781,9 @@ export async function resumeLongTaskCampaign(input: {
           lastRoundSummaryPath: finalizedRoundRecord.roundSummaryPath,
           lastRunHardVerified,
           lastFinalAcceptancePassed: finalAcceptance?.passed === true,
-          lastFinalAcceptanceResultPath: finalAcceptanceFeedbackPath,
+          lastFinalAcceptanceResultPath: baseSpec.protocolPlugins && finalAcceptance
+            ? String((finalAcceptance as Record<string, unknown>).protocolAuditResultPath)
+            : finalAcceptanceFeedbackPath,
           lastRoundClosure,
           lastGateFailureKind,
           lastGateFailureSummary,

@@ -179,9 +179,12 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
   config.monitorConfig.enabled = false
   config.monitorConfig.autoStart = false
   const calls: string[] = []
+  const roleRequests: Array<{ title: string; prompt: string; reads: string[] }> = []
   let leads = 0
   holder[key] = { async loadConfig() { return config }, async runOpencodeTask(input: any) {
     calls.push(input.title)
+    roleRequests.push({ title: input.title, prompt: input.prompt,
+      reads: [...(input.referencePaths ?? []), ...(input.permissionReadPaths ?? [])] })
     await input.onSpawn?.()
     if (input.title.startsWith("Campaign Lead")) leads++
     for (const edit of input.permissionEditPaths ?? []) {
@@ -252,6 +255,11 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
     await writeFile(path.join(root, "observed-result.json"), JSON.stringify({ result, calls }, null, 2))
     expect(result.status).toBe(fault ? "failed" : "verified_success")
     expect(calls.some((title) => title.startsWith("Long Task Execute"))).toBe(true)
+    for (const request of roleRequests.filter((item) => item.title.startsWith("Campaign"))) {
+      expect(request.reads.some((file) => file.endsWith("protocol.receipt.json"))).toBe(false)
+      expect(request.prompt).not.toContain("protocol.receipt.json")
+      expect(request.reads.some((file) => file.endsWith("expert-oracle-bundle.json"))).toBe(false)
+    }
     expect(leads).toBe(rejectedLeads + 1)
     expect(result.roundsCompleted).toBe(rejectedLeads === 2 ? 2 : 1)
     if (rejectedLeads === 2) expect(calls.some((title) => title.startsWith("Long Task Graph"))).toBe(true)
@@ -272,6 +280,15 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
       expect(httpCalls).toBe(requests)
       const state = JSON.parse(await readFile(path.join(result.campaignDir, "campaign.json"), "utf8"))
       const accepted = JSON.parse(await readFile(state.lastFinalAcceptanceResultPath, "utf8"))
+      const feedbackFile = accepted.protocolTrainingResultPath
+      const originalFeedback = await readFile(feedbackFile)
+      await writeFile(feedbackFile, JSON.stringify({ ...JSON.parse(originalFeedback.toString()), summary: "Altered training feedback" }))
+      try {
+        await expect(actual.resumeLongTaskCampaign({ cwd: root, campaignID: result.campaignID, specPath: campaign }))
+          .rejects.toThrow("training feedback drift")
+        expect(calls).toHaveLength(count)
+        expect(httpCalls).toBe(requests)
+      } finally { await writeFile(feedbackFile, originalFeedback) }
       const file = path.join(accepted.validationPackageRoot, "rules.txt")
       const original = await readFile(file)
       await writeFile(file, "Unverified changed rule")

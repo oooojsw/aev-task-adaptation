@@ -87,6 +87,10 @@ test("Campaign training summary hides raw checker message but preserves actual r
   const training = await readFile(result.validatorResults[0].rawOutputPath!, "utf8")
   expect(training).not.toContain("fixture verdict")
   expect(result.validatorResults[0].evidenceRefs).not.toContain(result.protocolReceiptPath)
+  const trainingResult = await readFile(result.protocolTrainingResultPath, "utf8")
+  expect(trainingResult).not.toContain(result.protocolReceiptPath.replaceAll("\\", "\\\\"))
+  expect(JSON.parse(trainingResult)).not.toHaveProperty("protocolReceiptPath")
+  expect(JSON.parse(trainingResult)).not.toHaveProperty("protocolAuditResultPath")
 })
 
 test("Campaign result collision blocks before checker and preserves existing evidence", async () => {

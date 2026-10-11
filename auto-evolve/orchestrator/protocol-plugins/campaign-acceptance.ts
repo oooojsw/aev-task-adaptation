@@ -8,6 +8,7 @@ import { prepareEntry, runEntry, type Entry } from "./entry"
 import { selectedRuntime } from "./selected-runtime"
 import type { Runtime } from "./runtime"
 import { trainingCheckMessage } from "./training-feedback"
+import { canonical } from "./identity"
 
 export async function campaignAcceptance(input: {
   campaignRoot: string
@@ -61,6 +62,7 @@ export async function campaignAcceptance(input: {
     passed: false, blocking: true, failureKind: "validator_infrastructure", summary: receipt.message,
     details: [], evidenceRefs: [trainingPath], rawOutputPath: trainingPath,
   })
+  const protocolTrainingResultPath = `${input.resultPath}.training.json`
   const result = { campaignID: input.campaignID, roundNumber: input.roundNumber, runID: input.runID,
     passed, failureKind, summary: receipt.message, validatorResults,
     acceptanceMode: "protocol_plugins", blankEvalSkipped: !receipt.executed,
@@ -72,7 +74,10 @@ export async function campaignAcceptance(input: {
     validatorPartitions: { surfaceValidatorIDs: receipt.checks.filter((item) =>
       item.target === "skill").map((item) => item.name), legacyBlankAgentValidatorIDs: [] as string[],
       productValidatorIDs: receipt.checks.filter((item) => item.target === "product").map((item) => item.name) },
-    protocolReceiptPath: receiptPath, protocolClaim: receipt.claim, createdAt: new Date().toISOString() }
+    protocolReceiptPath: receiptPath, protocolClaim: receipt.claim,
+    protocolTrainingResultPath, protocolAuditResultPath: input.resultPath, createdAt: new Date().toISOString() }
+  const { protocolReceiptPath: _, protocolAuditResultPath: __, ...trainingResult } = result
+  await writeJsonAtomic(protocolTrainingResultPath, trainingResult)
   await writeJsonAtomic(input.resultPath, result)
   return result
 }
@@ -87,9 +92,13 @@ export async function verifyCompletedCampaignAcceptance(input: {
   if (!path.isAbsolute(input.resultPath) || relative === ".." || relative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relative) || result.campaignID !== input.campaignID || result.roundNumber !== input.roundNumber ||
     result.runID !== input.runID || result.passed !== true || result.acceptanceMode !== "protocol_plugins" ||
-    result.protocolReceiptPath !== receiptPath || result.validationPackageRoot !== input.candidateRoot) {
+    result.protocolReceiptPath !== receiptPath || result.validationPackageRoot !== input.candidateRoot ||
+    result.protocolAuditResultPath !== input.resultPath || result.protocolTrainingResultPath !== `${input.resultPath}.training.json`) {
     throw new Error("Completed Campaign acceptance identity drift")
   }
+  const { protocolReceiptPath: _, protocolAuditResultPath: __, ...expectedTraining } = result
+  const training = JSON.parse((await readFile(result.protocolTrainingResultPath, "utf8")).replace(/^\uFEFF/, ""))
+  if (canonical(training) !== canonical(expectedTraining)) throw new Error("Completed Campaign training feedback drift")
   // 缺少冻结证据只能阻断，不能让复用入口悄悄发出新请求。
   if (!await pathExists(receiptPath) || !await pathExists(path.join(path.dirname(receiptPath), "protocol.completed.json"))) {
     throw new Error("Completed Campaign acceptance evidence missing")
