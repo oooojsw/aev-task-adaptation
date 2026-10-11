@@ -64,7 +64,7 @@ export async function initialReplayJournal(input: { runRoot: string; candidateRo
     }
     completed = body
   } catch (error) { if (readCompleted || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
-  return { candidateRoot: snapshot.candidateRoot, completed,
+  return { candidateRoot: snapshot.candidateRoot, get completed() { return completed },
     async save(result: unknown) {
       const rows = []
       for (const row of input.eligible) {

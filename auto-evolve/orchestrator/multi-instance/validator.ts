@@ -142,9 +142,10 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput,
     let finalReplay: ReplaySnapshot | undefined
     let acceptanceStatus: MergeAcceptanceStatus = "not_run"
     let accepted = false
+    let journal: Awaited<ReturnType<typeof initialReplayJournal>>
 
     if (hasMergeAcceptanceStage(stages, "initial_replay")) {
-      const journal = await initialReplayJournal({ runRoot: state.runRoot, candidateRoot: mergedSkillDir,
+      journal = await initialReplayJournal({ runRoot: state.runRoot, candidateRoot: mergedSkillDir,
         cwd: input.cwd, eligible, runtime: dependencies?.protocolRuntime,
         config: { stages, successCriterion, rounds, limit, repair: input.repair ? {
           enabled: input.repair.enabled, mode: input.repair.mode,
@@ -153,15 +154,13 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput,
           finalReplaySlotName: input.acceptancePolicy?.finalReplaySlotName ?? null } })
       if (journal?.completed) {
         initialReplay = journal.completed.result as ReplaySnapshot
-        // 保留已修补通过状态；未晋级来源恢复原始拒绝证据。
+        // 先恢复初始逐题事实，再按修补检查点重建晋级与累计次数。
         for (const saved of journal.completed.rows) {
           const row = eligible.find((item) => item.id === saved.id)!
-          if (row.validateStatus !== "passed") {
-            row.validateStatus = saved.status
-            row.validateRunRoot = saved.runRoot
-            row.validateCampaignDir = saved.runRoot
-            row.validateProtocolFault = false
-          }
+          row.validateStatus = saved.status
+          row.validateRunRoot = saved.runRoot
+          row.validateCampaignDir = saved.runRoot
+          row.validateProtocolFault = false
         }
       } else {
       const regressions: string[] = []
@@ -192,6 +191,11 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput,
       input.repair?.enabled &&
       input.repair.mode === "append_only"
     ) {
+      // 从不可变起点顺序复用修补，不能因当前状态跳过已完成统计。
+      if (journal) {
+        mergedSkillDir = journal.candidateRoot
+        state.mergedSkillDir = mergedSkillDir
+      }
       state.phase = "phase4_repair"
       await saveCoordinatorState(state)
       const targets = eligible.filter((row) => row.role !== "test" && row.validateStatus === "failed")

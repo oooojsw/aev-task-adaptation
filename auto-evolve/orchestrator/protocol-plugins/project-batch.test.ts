@@ -8,7 +8,7 @@ import { prepareProjectTasks } from "./project-tasks"
 import { runProjectBatch, validateProjectBatch, type ProjectBatchConfig } from "./project-batch"
 import { runCoordinatorPhase3Validate } from "../multi-instance/validator"
 
-async function fixture(repair = false, failure?: "test_rejection" | "replay_fault") {
+async function fixture(repair = false, failure?: "test_rejection" | "replay_fault", trainCount = 1) {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   const pack = path.join(root, "pack")
   await mkdir(pack, { recursive: true })
@@ -20,7 +20,8 @@ async function fixture(repair = false, failure?: "test_rejection" | "replay_faul
   const selectionPath = path.join(root, "selection.json")
   await writeFile(manifestPath, JSON.stringify({ schema: "aev.project-pack.v1", project,
     skill: { format: "text", entries: [{ id: "rules", kind: "text", path: "rules.txt" }] },
-    tasks: ["train", "test"].map((split) => ({ id: split, split,
+    tasks: [...Array.from({ length: trainCount }, (_, index) => ({ id: index ? `train-${index + 1}` : "train", split: "train" })),
+      { id: "test", split: "test" }].map(({ id, split }) => ({ id, split,
       materials: [{ id: "public", kind: "text", path: "public.txt" }], privateInputs: [] })) }))
   await writeFile(selectionPath, JSON.stringify({ schema: "aev.protocol-plugins.v1", project,
     run: { skillFormat: "text", productKind: "text", materialKinds: ["text"] },
@@ -35,8 +36,9 @@ async function fixture(repair = false, failure?: "test_rejection" | "replay_faul
     targets: ["skill", "product"], mechanisms: ["script"], productKinds: ["text"], validate() {} }, async (input) => {
     checks++
     if (input.phase === "replay" && failure === "replay_fault") return { status: "scoring_error", message: "Fixture scorer unavailable" }
-    const rejected = repair && input.phase === "replay" && !Buffer.from(input.candidate[0].bytes).toString().includes("repaired")
-    return { status: rejected || (input.phase === "test" && failure === "test_rejection") ? "rejected" : "passed", message: "Fixture" }
+    const required = input.task === "train" ? "repaired" : `repaired-${input.task}`
+    const rejected = repair && input.phase === "replay" && !Buffer.from(input.candidate[0].bytes).toString().includes(required)
+    return { status: rejected || (input.phase === "test" && failure === "test_rejection") ? "rejected" : "passed", message: `Fixture ${input.task}` }
   }).addExecutor({ id: "fixture-executor", version: "1", implementation: "b".repeat(64), skillFormats: ["text"],
     productKinds: ["text"], materialKinds: ["text"], validate() {} }, async () => {
     answers++; return { status: "completed", product: { kind: "text", bytes: Buffer.from("42") } }
@@ -54,7 +56,7 @@ async function fixture(repair = false, failure?: "test_rejection" | "replay_faul
     learners++
     const campaignSpec = JSON.parse(await readFile(input.specPath, "utf8"))
     const spec = JSON.parse(await readFile(campaignSpec.baseSpecPath, "utf8"))
-    const campaign = path.join(root, "campaign")
+    const campaign = path.join(root, `campaign-${spec.protocolPlugins.taskID}`)
     const candidate = path.join(campaign, "candidate")
     await mkdir(candidate, { recursive: true })
     await writeFile(path.join(candidate, "rules.txt"), "Reusable rules")
@@ -70,7 +72,8 @@ async function fixture(repair = false, failure?: "test_rejection" | "replay_faul
   const createDriver = async () => ({ implementation: "c".repeat(64), preflight: async () => {},
     invoke: async (request: { editPaths: string[]; prompt: string }) => {
       authors++
-      const body = request.prompt.startsWith("Revise only") ? (await readFile(request.editPaths[0], "utf8")) + "\nrepaired" : "Merged reusable rules"
+      const rule = request.prompt.includes("Fixture train-2") ? "repaired-train-2" : "repaired"
+      const body = request.prompt.startsWith("Revise only") ? (await readFile(request.editPaths[0], "utf8")) + "\n" + rule : "Merged reusable rules"
       await writeFile(request.editPaths[0], body)
       return { completed: true, actualModel: "fixture/author", evidence: [] }
     } })
@@ -121,6 +124,17 @@ test("actual batch repairs rejected replay then fully replays before held-out te
   expect(await readFile(path.join(initial.candidateRoot, "rules.txt"), "utf8")).toBe("Merged reusable rules")
   expect((await runProjectBatch(f.input, f.dependencies)).status).toBe("completed")
   expect(f.counts()).toEqual({ checks: 6, answers: 1, authors: 2, learners: 1 })
+  const replayAgain = await runCoordinatorPhase3Validate({ cwd: f.root, state: first.state, validateLimit: 1,
+    filter: (row) => row.role === "train" && row.status === "passed",
+    acceptancePolicy: { stages: f.input.config.replayStages, successCriterion: "all_pass" },
+    repair: { enabled: true, mode: "append_only", maxAttemptsPerCase: 2, protocolAuthor: f.input.config.pipeline.repairAuthor } },
+    { protocolRuntime: f.dependencies.runtime, createDriver: f.dependencies.createDriver })
+  expect(replayAgain.repairAttempts).toBe(1)
+  expect(replayAgain.repairFixed).toBe(1)
+  expect(replayAgain.initialReplay).toEqual(replay.initialReplay)
+  expect(replayAgain.finalReplay).toEqual(replay.finalReplay)
+  expect(replayAgain.mergedSkillDir).toBe(replay.mergedSkillDir)
+  expect(f.counts()).toEqual({ checks: 6, answers: 1, authors: 2, learners: 1 })
   expect(() => validateProjectBatch({ ...f.input.config, replayStages: ["initial_replay", "made_up"] })).toThrow("replay stages")
   expect(() => validateProjectBatch({ ...f.input.config, replayStages: ["initial_replay"] })).toThrow("replay stages")
 })
@@ -157,6 +171,35 @@ test("scoring fault cannot trigger repair and held-out rejection never calls aut
   const result = await runProjectBatch(heldout.input, heldout.dependencies)
   expect(result.progress.outcomes.test).toMatchObject({ failed: 1, passed: 0, repairAttempts: 0, repairFixed: 0 })
   expect(heldout.counts()).toEqual({ checks: 6, answers: 1, authors: 2, learners: 1 })
+})
+
+test("two-source repair reconstructs ordered promotions from completed evidence after state loss", async () => {
+  const f = await fixture(true, undefined, 2)
+  const first = await runProjectBatch(f.input, f.dependencies)
+  const originalOutcome = first.progress.outcomes.replay
+  expect(originalOutcome.initialReplay).toMatchObject({ failed: 2, passed: 0 })
+  expect(originalOutcome.finalReplay).toMatchObject({ failed: 0, passed: 2 })
+  expect(originalOutcome.repairAttempts).toBe(2)
+  expect(f.counts()).toEqual({ checks: 11, answers: 1, authors: 3, learners: 2 })
+  const snapshot = JSON.parse(await readFile(path.join(first.state.runRoot, "protocol-validation-journal/train/initial.snapshot.json"), "utf8"))
+  // 模拟晋级状态未落盘，已完成作者及验收证据仍保留。
+  first.state.mergedSkillDir = snapshot.candidateRoot
+  for (const row of first.state.instances.filter((item) => item.role === "train")) {
+    row.validateStatus = undefined
+    row.validateRunRoot = undefined
+    row.validateCampaignDir = undefined
+  }
+  const resumed = await runCoordinatorPhase3Validate({ cwd: f.root, state: first.state, validateLimit: 1,
+    filter: (row) => row.role === "train" && row.status === "passed",
+    acceptancePolicy: { stages: f.input.config.replayStages, successCriterion: "all_pass" },
+    repair: { enabled: true, mode: "append_only", maxAttemptsPerCase: 2, protocolAuthor: f.input.config.pipeline.repairAuthor } },
+    { protocolRuntime: f.dependencies.runtime, createDriver: f.dependencies.createDriver })
+  expect(resumed.repairAttempts).toBe(2)
+  expect(resumed.repairFixed).toBe(2)
+  expect(resumed.initialReplay).toEqual(originalOutcome.initialReplay)
+  expect(resumed.finalReplay).toEqual(originalOutcome.finalReplay)
+  expect(resumed.mergedSkillDir).toBe(originalOutcome.mergedSkillDir)
+  expect(f.counts()).toEqual({ checks: 11, answers: 1, authors: 3, learners: 2 })
 })
 
 test("concurrent batch invocation cannot duplicate learning or overwrite active state", async () => {
