@@ -50,6 +50,7 @@ import {
 } from "./merge-acceptance-policy"
 import { buildAccessProfile } from "../access-profile"
 import { instanceReplay, ProtocolReplayFault } from "../protocol-plugins/instance-replay"
+import { instanceRepair, type ProtocolRepairAuthorConfig } from "../protocol-plugins/instance-repair"
 
 export interface RunValidateInput {
   cwd: string
@@ -66,6 +67,7 @@ export interface RunValidateInput {
     maxAttemptsPerCase: number
     promptPath?: string
     contractPath?: string
+    protocolAuthor?: ProtocolRepairAuthorConfig
   }
   acceptancePolicy?: {
     stages?: MergeAcceptanceStage[]
@@ -432,8 +434,22 @@ async function runOneRepair(input: {
   const sourceSpecPath = path.join(input.instance.sourceTaskRoot, "spec.json")
   if (await pathExists(sourceSpecPath)) {
     const source = await readJsonFile<{ protocolPlugins?: unknown }>(sourceSpecPath)
-    // 新协议修补尚未适配，禁止落入固定INDEX/CORE的旧修补。
-    if (source.protocolPlugins) throw new Error("Protocol-aware merge repair not yet configured; no legacy repair fallback")
+    if (source.protocolPlugins) {
+      if (!input.instance.campaignDir || !input.instance.validateRunRoot || !input.repair.protocolAuthor) {
+        throw new Error("Frozen parent, rejection receipt and explicit protocol author required; no legacy repair fallback")
+      }
+      const result = await instanceRepair({ cwd: input.cwd, sourceTaskRoot: input.instance.sourceTaskRoot,
+        parentRunRoot: input.instance.campaignDir, candidateRoot: input.mergedSkillDir,
+        initialReceiptPath: path.join(input.instance.validateRunRoot, "attempt", "protocol.receipt.json"),
+        repairRoot: path.join(input.state.runRoot, "phase4-repair", input.instance.id),
+        maxAttempts: input.repair.maxAttemptsPerCase, author: input.repair.protocolAuthor })
+      if (result.fixed) {
+        input.state.mergedSkillDir = result.candidateRoot
+        input.instance.validateStatus = "passed"
+        await saveCoordinatorState(input.state)
+      }
+      return { attempts: result.attempts, fixed: result.fixed }
+    }
   }
   const root = path.join(input.state.runRoot, "phase4-repair", input.instance.id)
   await ensureDirectory(root)

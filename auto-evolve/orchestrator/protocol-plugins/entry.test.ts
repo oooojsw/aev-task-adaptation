@@ -9,6 +9,7 @@ import { campaignAcceptance } from "./campaign-acceptance"
 import { deriveEntry } from "./derive-entry"
 import { instanceReplay, ProtocolReplayFault } from "./instance-replay"
 import { mergeRepair } from "./merge-repair"
+import { instanceRepair } from "./instance-repair"
 
 async function fixture(status: "passed" | "rejected" | "scoring_error" | "data_error" = "passed") {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -140,6 +141,35 @@ test("repair refuses stale candidate or altered rejection before author call", a
   await writeFile(path.join(f.root, "candidate", "rules.txt"), "different candidate")
   await expect(mergeRepair(options)).rejects.toThrow("differs from repair candidate")
   expect(calls).toBe(0)
+})
+
+test("instance repair author receives staged public material and declared edits only", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.replay = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  await writeFile(path.join(f.root, "spec.json"), JSON.stringify({ title: "Repair fixture", goal: "Reusable skill",
+    materials: [{ path: "public.txt", label: "public" }], validators: [], protocolPlugins: f.entry }))
+  const runtime = new Runtime().addChecker({ id: "check", version: "1", implementation: "d".repeat(64),
+    targets: ["skill"], mechanisms: ["script"], productKinds: ["text"], validate() {} }, async (input) => ({
+    status: Buffer.from(input.candidate[0].bytes).toString().includes("repaired") ? "passed" : "rejected", message: "Reusable correction needed" }))
+  await runEntry(f.run, f.entry, path.join(f.root, "candidate"), path.join(f.root, "initial"), runtime)
+  let calls = 0
+  const result = await instanceRepair({ cwd: f.root, sourceTaskRoot: f.root, parentRunRoot: f.run,
+    candidateRoot: path.join(f.root, "candidate"), repairRoot: path.join(f.root, "repair"),
+    initialReceiptPath: path.join(f.root, "initial", "protocol.receipt.json"), maxAttempts: 2,
+    author: { model: "fixture/model", expectedModel: "fixture/model", timeoutMs: 1000, maxInputBytes: 10000, mode: "append_only" } },
+    { runtime, createDriver: async () => ({ implementation: "e".repeat(64), preflight: async () => {}, invoke: async (request) => {
+      calls++
+      expect(request.allowShell).toBe(false)
+      expect(request.maxAttempts).toBe(1)
+      expect(request.editPaths).toEqual([path.join(request.workDir, "rules.txt")])
+      expect(request.readPaths.some((file) => file.includes("author-public"))).toBe(true)
+      expect(request.readPaths).not.toContain(path.join(f.root, "public.txt"))
+      await writeFile(path.join(request.workDir, "rules.txt"), "Reusable rule\nrepaired")
+      return { completed: true, actualModel: "fixture/model", evidence: [] }
+    } }) })
+  expect(result.fixed).toBe(true)
+  expect(calls).toBe(1)
 })
 
 test("instance replay routes explicit protocol and does not use legacy blank executor", async () => {
