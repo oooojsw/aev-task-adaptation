@@ -3781,6 +3781,8 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
       fallback: projectConfig.mergeConfig.asLite.environment,
       optionName: "--lite-environment",
       expected: "officeqa or spreadsheetbench",
+      // 显式枚举别名，修复旧解析缺参；不改变数据集或评分规则。
+      aliases: { officeqa: "officeqa", spreadsheetbench: "spreadsheetbench" },
     }),
     splitDir: getOption(args, "--lite-split-dir") ?? projectConfig.mergeConfig.asLite.splitDir,
     dataRoot: getOption(args, "--lite-data-root") ?? projectConfig.mergeConfig.asLite.dataRoot,
@@ -3803,6 +3805,7 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
       fallback: projectConfig.mergeConfig.asLite.gateMetric,
       optionName: "--lite-gate-metric",
       expected: "hard or soft",
+      aliases: { hard: "hard", soft: "soft" },
     }),
   }
   const mergeBackendConfig = {
