@@ -135,7 +135,7 @@ test("undeclared phase does not fall back", async () => {
 test("path outside declared roots blocked", async () => {
   const rt = runtime()
   const input = await task()
-  input.skill[0].path = path.resolve("auto-evolve/orchestrator/protocol-plugins/runtime.ts")
+  input.skill[0].path = path.join(import.meta.dir, "runtime.ts")
   await expect(rt.run(compile(selection(), rt.registry), "source", input)).rejects.toThrow("outside")
 })
 

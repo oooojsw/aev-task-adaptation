@@ -34,7 +34,9 @@ plugins receive copies so their mutations do not change subsequent scoring input
 
 ## Still required for the full objective
 
-- Concrete project adapter, including NBA, task/split manifest and official scorer.
+- Actual NBA dataset preparation and upstream scorer equivalence verification.
+  The explicit project-pack loader and NBA public-prompt/private-label converter
+  now exist, tested with synthetic datasets; this is not a completed live campaign.
 - OpenCode tool-execution adapter and independent model-judge adapter.
 - Real-provider verification, unified resource ledger integration and explicit
   audited recovery authorization for incomplete calls.
@@ -52,7 +54,8 @@ because they are fixtures, not live execution plugins.
 ## Test
 
 ```powershell
-bun test ./auto-evolve/orchestrator/protocol-plugins/
+cd auto-evolve/orchestrator/protocol-plugins
+bun test . ../../projects/nba/pack.test.ts
 ```
 
 The current tests exercise this foundation, not the whole AEV system. They do not
