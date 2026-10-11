@@ -16,6 +16,7 @@ import type { Runtime } from "./runtime"
 import type { opencodeDriver } from "./opencode-driver"
 import { readCandidate, type SkillBinding } from "./candidate"
 import type { MergeAcceptanceStage } from "../multi-instance/merge-acceptance-policy"
+import { readCurrentProcessCreationTick } from "../process-identity"
 
 export interface ProjectBatchConfig {
   schema: "aev.project-batch.v1"
@@ -104,7 +105,9 @@ export async function runProjectBatch(input: { cwd: string; runRoot: string; con
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("Project batch invocation active or interrupted; inspect owner before recovery")
     throw error
   }
-  await lease.writeFile(JSON.stringify({ nonce, pid: process.pid, startedAt: new Date().toISOString() }))
+  const ownerCreationTick = await readCurrentProcessCreationTick()
+  await lease.writeFile(JSON.stringify({ nonce, pid: process.pid, startedAt: new Date().toISOString(),
+    ...(ownerCreationTick ? { ownerCreationTick } : {}) }))
   await lease.close()
   // 同一批次只有一个推进者；异常退出残留锁须先核查，不自动抢占。
   try {

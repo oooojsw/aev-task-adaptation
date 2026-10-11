@@ -79,6 +79,9 @@ function printHelp() {
   init
     Ensure the auto-evolve workspace, templates, and knowledge files exist.
 
+  recover-protocol-batch-lease --out <run-root> --expected-nonce <inspected-nonce>
+    Archive only a proven stopped protocol batch owner's lease. No model calls.
+
   validate
     Validate auto-evolve/config.json and every dataset case.
 
@@ -627,7 +630,8 @@ async function commandRunMultiInstance(args: string[]) {
 
   const { runCoordinatorPhase2Merge } = await import("./orchestrator/multi-instance/merger")
   console.log("Phase 2 (merge) starting…")
-  const mergeOut = await runCoordinatorPhase2Merge({ cwd, state, protocolAuthor: pipeline?.mergeAuthor })
+  const mergeOut = await runCoordinatorPhase2Merge({ cwd, state, protocolAuthor: pipeline?.mergeAuthor,
+    protocolMergeStrategy: pipeline?.mergeStrategy })
   console.log("Phase 2 complete:")
   console.log(`  merged skill: ${mergeOut.mergedSkillDir}`)
   console.log(`  contributed : ${mergeOut.contributingInstances.join(", ") || "(none)"}`)
@@ -1009,6 +1013,15 @@ async function main() {
     case "run-skillsbench":
       await commandRunSkillsBench(args)
       return
+    case "recover-protocol-batch-lease": {
+      const root = getOption(args, "--out")
+      const nonce = getOption(args, "--expected-nonce")
+      if (!root || !nonce) throw new Error("Required: --out <run-root> --expected-nonce <inspected-owner-nonce>")
+      const { recoverBatchLease } = await import("./orchestrator/protocol-plugins/batch-recovery")
+      const result = await recoverBatchLease({ runRoot: path.resolve(process.cwd(), root), expectedNonce: nonce })
+      console.log(`Stopped owner lease archived: ${result.recoveryRoot}; no model calls started`)
+      return
+    }
     case "run-protocol-project": {
       const configFile = getOption(args, "--config")
       const output = getOption(args, "--out")
