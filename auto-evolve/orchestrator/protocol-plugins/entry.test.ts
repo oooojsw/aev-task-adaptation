@@ -9,7 +9,7 @@ import { campaignAcceptance } from "./campaign-acceptance"
 import { deriveEntry } from "./derive-entry"
 import { instanceReplay, ProtocolReplayFault } from "./instance-replay"
 import { mergeRepair } from "./merge-repair"
-import { instanceRepair } from "./instance-repair"
+import { instanceRepair, instanceRepairCurrent } from "./instance-repair"
 import { mergeContext } from "./merge-context"
 import { runCoordinatorPhase2Merge } from "../multi-instance/merger"
 import type { CoordinatorState } from "../multi-instance/contract"
@@ -421,6 +421,51 @@ test("instance repair author receives staged public material and declared edits 
     } }) })
   expect(result.fixed).toBe(true)
   expect(calls).toBe(1)
+})
+
+test("later repair rechecks current merged bytes and reuses matching baseline", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.replay = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  await writeFile(path.join(f.root, "spec.json"), JSON.stringify({ title: "Current repair", goal: "Reusable rules",
+    materials: [{ path: "public.txt", label: "public" }], validators: [], protocolPlugins: f.entry }))
+  let checks = 0
+  let authors = 0
+  let scoringFault = false
+  const runtime = new Runtime().addChecker({ id: "check", version: "1", implementation: "d".repeat(64),
+    targets: ["skill"], mechanisms: ["script"], productKinds: ["text"], validate() {} }, async (input) => {
+    checks++
+    return { status: scoringFault ? "scoring_error" : Buffer.from(input.candidate[0].bytes).toString().includes("repaired") ? "passed" : "rejected",
+      message: "Current candidate verdict" }
+  })
+  await runEntry(f.run, f.entry, path.join(f.root, "candidate"), path.join(f.root, "initial"), runtime)
+  const options = { cwd: f.root, sourceTaskRoot: f.root, parentRunRoot: f.run,
+    candidateRoot: path.join(f.root, "candidate"), repairRoot: path.join(f.root, "repair"),
+    initialReceiptPath: path.join(f.root, "initial", "protocol.receipt.json"), maxAttempts: 2,
+    author: { model: "fixture/model", expectedModel: "fixture/model", timeoutMs: 1000, maxInputBytes: 10000, mode: "append_only" as const } }
+  const deps = { runtime, createDriver: async () => ({ implementation: "e".repeat(64), preflight: async () => {}, invoke: async (request: any) => {
+    authors++
+    const file = path.join(request.workDir, "rules.txt")
+    await writeFile(file, (await readFile(file, "utf8")) + "\nrepaired")
+    return { completed: true, actualModel: "fixture/model", evidence: [] }
+  } }) }
+  await writeFile(path.join(options.candidateRoot, "rules.txt"), "Prior other-task revision")
+  const first = await instanceRepairCurrent(options, deps)
+  expect(first.fixed).toBe(true)
+  expect(checks).toBe(3)
+  expect(authors).toBe(1)
+  expect(await instanceRepairCurrent(options, deps)).toEqual(first)
+  expect(checks).toBe(3)
+  expect(authors).toBe(1)
+  await writeFile(path.join(options.candidateRoot, "rules.txt"), "Already repaired by another task")
+  const passed = await instanceRepairCurrent(options, deps)
+  expect(passed.attempts).toBe(0)
+  expect(authors).toBe(1)
+  expect(checks).toBe(4)
+  scoringFault = true
+  await writeFile(path.join(options.candidateRoot, "rules.txt"), "Another revision requiring recheck")
+  await expect(instanceRepairCurrent(options, deps)).rejects.toThrow("baseline fault")
+  expect(authors).toBe(1)
 })
 
 test("instance replay routes explicit protocol and does not use legacy blank executor", async () => {

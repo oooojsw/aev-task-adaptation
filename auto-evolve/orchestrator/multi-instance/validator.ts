@@ -50,7 +50,7 @@ import {
 } from "./merge-acceptance-policy"
 import { buildAccessProfile } from "../access-profile"
 import { instanceReplay, ProtocolReplayFault } from "../protocol-plugins/instance-replay"
-import { instanceRepair, type ProtocolRepairAuthorConfig } from "../protocol-plugins/instance-repair"
+import { instanceRepairCurrent, type ProtocolRepairAuthorConfig } from "../protocol-plugins/instance-repair"
 import type { Runtime } from "../protocol-plugins/runtime"
 
 export interface RunValidateInput {
@@ -449,7 +449,7 @@ async function runOneRepair(input: {
       if (!input.instance.campaignDir || !input.instance.validateRunRoot || !input.repair.protocolAuthor) {
         throw new Error("Frozen parent, rejection receipt and explicit protocol author required; no legacy repair fallback")
       }
-      const result = await instanceRepair({ cwd: input.cwd, sourceTaskRoot: input.instance.sourceTaskRoot,
+      const result = await instanceRepairCurrent({ cwd: input.cwd, sourceTaskRoot: input.instance.sourceTaskRoot,
         parentRunRoot: input.instance.campaignDir, candidateRoot: input.mergedSkillDir,
         initialReceiptPath: path.join(input.instance.validateRunRoot, "attempt", "protocol.receipt.json"),
         repairRoot: path.join(input.state.runRoot, "phase4-repair", instanceSlot(input.instance)),

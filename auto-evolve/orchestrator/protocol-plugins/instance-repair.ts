@@ -9,6 +9,8 @@ import { mergeRepair } from "./merge-repair"
 import { writeFileAtomic, writeJsonAtomic } from "../atomic-write"
 import { canonical, fingerprint } from "./identity"
 import { createHash } from "node:crypto"
+import { readCandidate } from "./candidate"
+import { instanceReplay } from "./instance-replay"
 import type { Runtime } from "./runtime"
 
 export interface ProtocolRepairAuthorConfig {
@@ -17,6 +19,49 @@ export interface ProtocolRepairAuthorConfig {
   timeoutMs: number
   maxInputBytes: number
   mode: "append_only" | "rewrite"
+}
+
+export async function instanceRepairCurrent(input: Parameters<typeof instanceRepair>[0],
+  dependencies?: Parameters<typeof instanceRepair>[1]) {
+  const { spec } = await loadLongTaskSpec(path.join(input.sourceTaskRoot, "spec.json"), { allowMissingInitialExpertContextPaths: true })
+  if (!spec.protocolPlugins) throw new Error("Explicit protocol repair entry required")
+  const runtime = dependencies?.runtime ?? await selectedRuntime(path.join(input.repairRoot, "protocol-backends"), input.cwd, spec.protocolPlugins)
+  const parent = await prepareEntry(input.parentRunRoot, spec.protocolPlugins, runtime)
+  if (!parent) throw new Error("Frozen protocol repair parent required")
+  if (!path.isAbsolute(input.initialReceiptPath) || path.basename(input.initialReceiptPath) !== "protocol.receipt.json") {
+    throw new Error("Persisted rejection receipt required")
+  }
+  await readFile(path.join(path.dirname(input.initialReceiptPath), "protocol.started.claim"))
+  const initial = JSON.parse((await readFile(input.initialReceiptPath, "utf8")).replace(/^\uFEFF/, ""))
+  if (initial.schema !== "aev.protocol-receipt.v1" || initial.status !== "rejected" ||
+      initial.task !== spec.protocolPlugins.taskID || initial.protocolFingerprint !== parent.protocol.fingerprint ||
+      initial.phase === "test") throw new Error("Repair rejection receipt identity mismatch")
+  const task = parent.project.pack.tasks.find((item) => item.id === initial.task)
+  if (!task || task.split !== "train") throw new Error("Repair requires frozen training task")
+  for (const role of ["materials", "privateInputs"] as const) {
+    const expected = task[role].map((item) => {
+      const artifact = parent.project.artifacts.find((file) => file.path === item.path)
+      if (!artifact) throw new Error("Missing frozen repair input")
+      return { id: item.id, kind: item.kind, sha256: artifact.sha256, length: artifact.bytes }
+    }).sort((a, b) => a.id.localeCompare(b.id))
+    if (canonical(initial.evidence[role]) !== canonical(expected)) throw new Error("Repair task input receipt mismatch")
+  }
+  const candidate = await readCandidate(input.candidateRoot, parent.project.pack.skill)
+  const actual = candidate.metadata.map((item) => ({ id: item.id, kind: item.kind, sha256: item.sha256, length: item.bytes }))
+    .sort((a, b) => a.id.localeCompare(b.id))
+  if (canonical(initial.evidence.skill) === canonical(actual)) return instanceRepair(input, dependencies)
+  // 前题修补改变全局正文后，后一题必须针对当前版本重新验收。
+  const root = path.join(input.repairRoot, "current-candidate", candidate.fingerprint)
+  const replay = await instanceReplay({ cwd: input.cwd, sourceTaskRoot: input.sourceTaskRoot,
+    parentRunRoot: input.parentRunRoot, candidateRoot: input.candidateRoot,
+    slotDir: path.join(root, "baseline"), role: "train" }, runtime)
+  if (!replay || replay.infrastructureFailure) throw new Error("Current repair baseline fault; no author calls")
+  if ((await readCandidate(input.candidateRoot, parent.project.pack.skill)).fingerprint !== candidate.fingerprint) {
+    throw new Error("Current repair candidate changed during baseline")
+  }
+  if (replay.passed) return { fixed: true, attempts: 0, candidateRoot: input.candidateRoot, receipt: replay.receipt }
+  return instanceRepair({ ...input, repairRoot: path.join(root, "repair"),
+    initialReceiptPath: path.join(replay.runRoot, "attempt", "protocol.receipt.json") }, dependencies)
 }
 
 export async function instanceRepair(input: { cwd: string; sourceTaskRoot: string; parentRunRoot: string;
