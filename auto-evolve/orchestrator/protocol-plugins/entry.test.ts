@@ -74,6 +74,30 @@ test("entry freezes and resumes exact linked project/protocol", async () => {
   await expect(prepareEntry(f.run, f.entry, f.runtime)).rejects.toThrow("Cannot change")
 })
 
+test("Campaign result collision blocks before checker and preserves existing evidence", async () => {
+  const f = await fixture()
+  const resultPath = path.join(f.root, "existing-result.json")
+  const original = JSON.stringify({ passed: false, source: "original acceptance" })
+  await writeFile(resultPath, original)
+  await expect(campaignAcceptance({ campaignRoot: f.run, campaignID: "fixture", roundNumber: 2,
+    runID: "next-round", entry: f.entry, candidateRoot: path.join(f.root, "candidate"),
+    attemptRoot: path.join(f.root, "new-attempt"), resultPath }, f.runtime)).rejects.toThrow("already exists")
+  expect(f.calls()).toBe(0)
+  expect(await readFile(resultPath, "utf8")).toBe(original)
+  await expect(readFile(path.join(f.root, "new-attempt", "protocol.receipt.json"))).rejects.toThrow()
+})
+
+test("Campaign interrupted result claim cannot trigger automatic resend", async () => {
+  const f = await fixture()
+  const resultPath = path.join(f.root, "interrupted-result.json")
+  await mkdir(`${resultPath}.claim`)
+  await expect(campaignAcceptance({ campaignRoot: f.run, campaignID: "fixture", roundNumber: 1,
+    runID: "interrupted", entry: f.entry, candidateRoot: path.join(f.root, "candidate"),
+    attemptRoot: path.join(f.root, "next-attempt"), resultPath }, f.runtime)).rejects.toThrow("already claimed")
+  expect(f.calls()).toBe(0)
+  await expect(readFile(resultPath)).rejects.toThrow()
+})
+
 test("Campaign acceptance revisions bind fresh Skill bytes and preserve prior rejection", async () => {
   const f = await fixture()
   const seen: string[] = []
