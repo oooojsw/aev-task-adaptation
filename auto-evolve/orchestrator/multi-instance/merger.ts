@@ -73,6 +73,7 @@ export async function runCoordinatorPhase2Merge(input: RunMergerInput,
     const result = await mergeStage({ cwd: input.cwd, runRoot: path.join(mergeDir(state.runRoot), "protocol-merge"),
       config: protocol }, dependencies)
     state.mergedSkillDir = result.mergedSkillDir
+    state.protocolMergeParentRunRoot = path.join(result.mergerRunDir, "acceptance")
     state.postMergeValidationStatus = "passed"
     state.postMergeValidationResultPath = result.postMergeValidationResultPath
     state.postMergeValidationSummary = "Declared merge protocol passed; claim recorded in receipt"

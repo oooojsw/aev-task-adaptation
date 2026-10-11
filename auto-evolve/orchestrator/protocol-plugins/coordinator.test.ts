@@ -123,3 +123,53 @@ test("real coordinator interrupted claim blocks before any new checker call", as
   expect(await readFile(claim, "utf8")).toBe("Unfinished invocation witness")
   expect(f.state.instances[0].validateProtocolFault).toBe(true)
 })
+
+test("held-out coordinator uses frozen merge parent and never repairs test rejection", async () => {
+  for (const verdict of ["passed", "rejected"] as const) {
+    const f = await fixture("passed")
+    const selection = JSON.parse(await readFile(path.join(f.root, "selection.json"), "utf8"))
+    selection.protocol.phases.merge = selection.protocol.phases.source
+    selection.protocol.phases.test = { claim: "task_execution",
+      executor: { id: "test-executor", version: "1", settings: {} },
+      checks: [{ id: "test-check", version: "1", name: "score", required: true,
+        target: "product", stage: "after_execution", mechanism: "script", settings: {} }] }
+    await writeFile(path.join(f.root, "selection.json"), JSON.stringify(selection))
+    const manifest = JSON.parse(await readFile(path.join(f.root, "manifest.json"), "utf8"))
+    manifest.tasks.push({ ...manifest.tasks[0], id: "heldout", split: "test" })
+    await writeFile(path.join(f.root, "manifest.json"), JSON.stringify(manifest))
+    let executions = 0
+    let scores = 0
+    f.runtime.addExecutor({ id: "test-executor", version: "1", implementation: "b".repeat(64),
+      skillFormats: ["text"], productKinds: ["text"], materialKinds: ["text"], validate() {} }, async () => {
+      executions++; return { status: "completed", product: { kind: "text", bytes: Buffer.from("42") } }
+    }).addChecker({ id: "test-check", version: "1", implementation: "c".repeat(64),
+      targets: ["product"], mechanisms: ["script"], productKinds: ["text"], validate() {} }, async () => {
+      scores++; return { status: verdict, message: "Test verdict" }
+    })
+    const entry: Entry = { schema: "aev.protocol-entry.v1", selectionPath: path.join(f.root, "selection.json"),
+      projectManifestPath: path.join(f.root, "manifest.json"), taskID: "task", phase: "merge" }
+    const parent = path.join(f.root, "merge-acceptance")
+    await prepareEntry(parent, entry, f.runtime)
+    await writeFile(path.join(f.root, "spec.json"), JSON.stringify({ title: "Held-out", goal: "Answer",
+      materials: [{ label: "public", path: "public.txt" }], validators: [],
+      protocolPlugins: { ...entry, taskID: "heldout", phase: "test" } }))
+    f.state.protocolMergeParentRunRoot = parent
+    f.state.instances = [{ id: "heldout", sourceTaskRoot: f.root, engine: "skillsbench", role: "test",
+      status: "queued", rounds: 0 }]
+    const input = { cwd: f.root, state: f.state, filter: () => true,
+      repair: { enabled: true, mode: "append_only" as const, maxAttemptsPerCase: 2 } }
+    const first = await runCoordinatorPhase3Validate(input, { protocolRuntime: f.runtime })
+    expect(first.passed).toBe(verdict === "passed" ? 1 : 0)
+    expect(first.regressions).toEqual([])
+    const run = JSON.parse(await readFile(path.join(f.state.runRoot, "phase3-validate", "heldout", "run.json"), "utf8"))
+    expect(run.executed).toBe(true)
+    expect(run.claim).toBe("task_execution")
+    await runCoordinatorPhase3Validate(input, { protocolRuntime: f.runtime })
+    expect(executions).toBe(1)
+    expect(scores).toBe(1)
+    await writeFile(path.join(f.state.mergedSkillDir!, "rules.txt"), "Different deployment")
+    await expect(runCoordinatorPhase3Validate(input, { protocolRuntime: f.runtime })).rejects.toThrow("infrastructure fault")
+    expect(executions).toBe(1)
+    expect(scores).toBe(1)
+  }
+})

@@ -335,7 +335,9 @@ async function runOneValidation(
 
   try {
     const protocol = await instanceReplay({ cwd, sourceTaskRoot: instance.sourceTaskRoot,
-      parentRunRoot: instance.campaignDir, candidateRoot: mergedSkillDir, slotDir, role: instance.role }, protocolRuntime)
+      parentRunRoot: instance.role === "test" ? state.protocolMergeParentRunRoot : instance.campaignDir,
+      candidateRoot: mergedSkillDir, slotDir, role: instance.role,
+      deploymentRoot: path.join(state.runRoot, "protocol-test-deployment") }, protocolRuntime)
     if (protocol) {
       instance.validateStatus = protocol.passed ? "passed" : "failed"
       instance.validateProtocolFault = protocol.infrastructureFailure

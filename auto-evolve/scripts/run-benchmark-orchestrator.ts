@@ -2132,9 +2132,9 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
   state.phase = "test"
   await persistState(stateFile, scorecardFile, state)
   const test =
-    config.evalRunner === "direct-chat"
+    !config.protocolRun && config.evalRunner === "direct-chat"
       ? await runDirectChatHeldoutTest(config, testIDs, merge.mergedSkillDir)
-      : config.evalRunner === "opt-direct-chat"
+      : !config.protocolRun && config.evalRunner === "opt-direct-chat"
         ? await runSkillOptNativeProductEval(config, testIDs, merge.mergedSkillDir, "valid_unseen", "opt-direct-chat-test")
         : await runCoordinatorPhase3Validate({
           cwd: repoRoot,
@@ -2145,7 +2145,7 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
         })
   state.test = { passed: test.passed, total: test.total, failed: test.failed }
   const testOutputName =
-    config.evalRunner === "direct-chat"
+    config.protocolRun ? "protocol-test-output.json" : config.evalRunner === "direct-chat"
       ? "direct-chat-test-output.json"
       : config.evalRunner === "opt-direct-chat"
         ? "opt-direct-chat-test-output.json"
