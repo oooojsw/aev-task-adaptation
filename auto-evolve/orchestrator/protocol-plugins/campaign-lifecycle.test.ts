@@ -10,7 +10,11 @@ export async function buildOfflineCampaign(root: string, boundaryKey: string) {
   const entry = path.join(root, "campaign-entry.ts")
   await writeFile(entry, `export { runLongTaskCampaign, resumeLongTaskCampaign } from ${JSON.stringify(path.join(orchestrator, "long-task-campaign/runner.ts"))};
 export { runOpencodeTask } from ${JSON.stringify(path.join(orchestrator, "opencode.ts"))};
-export { loadConfig, DEFAULT_CONFIG } from ${JSON.stringify(path.join(orchestrator, "schema.ts"))};`)
+export { loadConfig, DEFAULT_CONFIG } from ${JSON.stringify(path.join(orchestrator, "schema.ts"))};
+export { buildNbaPack } from ${JSON.stringify(path.resolve(import.meta.dir, "../../projects/nba/pack.ts"))};
+export { prepareProjectTasks } from ${JSON.stringify(path.join(orchestrator, "protocol-plugins/project-tasks.ts"))};
+export { runProjectBatch } from ${JSON.stringify(path.join(orchestrator, "protocol-plugins/project-batch.ts"))};
+export { builtins } from ${JSON.stringify(path.join(orchestrator, "protocol-plugins/builtins.ts"))};`)
   const replaced = new Set<string>()
   const built = await Bun.build({ entrypoints: [entry], target: "bun", packages: "external",
     // 避免同名.ts优先解析，必须导入独立的离线打包产物。
@@ -59,6 +63,105 @@ test("actual Campaign bundle routes model calls through mandatory offline bounda
     await expect(actual.loadConfig(root)).rejects.toThrow("Offline boundary missing")
     expect(calls).toBe(1)
   } finally { delete holder[key] }
+}, 30000)
+
+test("NBA actual Campaign batch learns merges replays and tests without repeated calls", async () => {
+  const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
+  await mkdir(root, { recursive: true })
+  const key = `__campaignOffline_${randomUUID().replaceAll("-", "")}`
+  const actual = await buildOfflineCampaign(root, key)
+  const holder = globalThis as Record<string, any>
+  const config = structuredClone(actual.DEFAULT_CONFIG)
+  config.monitorConfig.enabled = false
+  config.monitorConfig.autoStart = false
+  let trainingCalls = 0
+  holder[key] = { async loadConfig() { return config }, async runOpencodeTask(input: any) {
+    trainingCalls++
+    await input.onSpawn?.()
+    if (input.title.startsWith("Campaign Lead")) for (const dir of input.permissionEditPaths ?? []) {
+      if (!dir.endsWith(".json")) { await mkdir(dir, { recursive: true }); await writeFile(path.join(dir, "skill.txt"), "Reusable legality procedure") }
+    }
+    const responseText = JSON.stringify(input.title.startsWith("Long Task Graph") ? { completion_validator_ids: [],
+      units: [{ id: "explore", title: "Explore rules", goal: "Explore", inputs: [], depends_on: [], expected_artifacts: [],
+        claim: "Explored", check_plan: "Host acceptance follows", validator_ids: [], retry_budget: 1 }] }
+      : { claimed_success: true, claim_statement: "Fixture exploration", summary: "Reusable procedure", blockers: [] })
+    return { title: input.title, prompt: input.prompt, selectedModel: input.model, referencedPaths: input.referencePaths ?? [],
+      attachedFiles: [], promptInlineFiles: [], permissionReadPaths: input.permissionReadPaths ?? [], permissionEditPaths: input.permissionEditPaths ?? [],
+      result: { exitCode: 0, stdout: responseText, stderr: "", events: [], responseText, toolFailures: [] } }
+  } }
+  const original = path.join(root, "original")
+  await mkdir(original)
+  await writeFile(path.join(original, "manifest.json"), JSON.stringify({ split: { train: ["source-1", "source-2"], test: ["heldout"] } }))
+  for (const [split, ids] of [["train", ["source-1", "source-2"]], ["test", ["heldout"]]] as const) {
+    for (const role of ["public", "private-answers"]) await mkdir(path.join(original, role, split), { recursive: true })
+    for (const id of ids) {
+      await writeFile(path.join(original, "public", split, `${id}.json`), JSON.stringify({ system_prompt: "Public NBA rules", user_prompt: `Public operation ${id}` }))
+      await writeFile(path.join(original, "private-answers", split, `${id}.json`), JSON.stringify({ answer: false, private_note: "PRIVATE_BATCH_LABEL" }))
+    }
+  }
+  const pack = await actual.buildNbaPack(original, path.join(root, "pack"))
+  const credentialEnv = `AEV_BATCH_FIXTURE_${randomUUID().replaceAll("-", "").toUpperCase()}`
+  let httpCalls = 0
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const body = await request.json() as any
+    httpCalls++
+    expect(body.tools).toBeUndefined()
+    expect(JSON.stringify(body)).not.toContain("PRIVATE_BATCH_LABEL")
+    return Response.json({ model: body.model, choices: [{ finish_reason: "stop", message: { content: "Answer: False" } }],
+      usage: { prompt_tokens: 20, completion_tokens: 3 } })
+  } })
+  process.env[credentialEnv] = "synthetic-local-test"
+  const previous = process.env.AUTO_EVOLVE_SKIP_STALE_HEAL
+  process.env.AUTO_EVOLVE_SKIP_STALE_HEAL = "1"
+  try {
+    const python = "C:/Users/ZhuanZ/miniconda3/python.exe"
+    const scorer = path.resolve(import.meta.dir, "../../projects/nba/official-scorer.py")
+    const hash = async (file: string) => createHash("sha256").update(await readFile(file)).digest("hex")
+    const mergeChecker = path.join(root, "merge-check.py")
+    await writeFile(mergeChecker, 'import json\nprint(json.dumps({"status":"passed","message":"fixture merge gate"}))\n')
+    const settings = async (script: string) => ({ command: python, commandSHA256: await hash(python), script,
+      scriptSHA256: await hash(script), timeoutMs: 10000, maxOutputBytes: 4096 })
+    const phase = { claim: "task_execution", executor: { id: "http-text-chat", version: "1", settings: {
+      dialect: "openai_chat", url: server.url.origin + "/v1/chat/completions", allowedOrigins: [server.url.origin],
+      model: "offline-nba", expectedModel: "offline-nba", credentialEnv, systemInput: "system", userInputs: ["user"],
+      skillPlacement: "system", maxTokens: 100, maxInputBytes: 10000, maxResponseBytes: 4096, temperature: 0, timeoutMs: 2000 } },
+      checks: [{ id: "script-json-checker", version: "1", name: "nba", target: "product", stage: "after_execution",
+        required: true, mechanism: "script", privateInputs: ["gold"], settings: await settings(scorer) }] }
+    const selectionPath = path.join(root, "selection.json")
+    await writeFile(selectionPath, JSON.stringify({ schema: "aev.protocol-plugins.v1", project: pack.pack.project,
+      run: { skillFormat: "text", productKind: "text", materialKinds: ["text"] }, protocol: { id: "nba-batch", version: "1",
+        phases: { source: phase, replay: phase, test: phase, merge: { claim: "skill_check", checks: [{ id: "script-json-checker",
+          version: "1", name: "merge", target: "skill", stage: "before_execution", required: true, mechanism: "script", settings: await settings(mergeChecker) }] } } } }))
+    await actual.prepareProjectTasks({ manifestPath: path.join(root, "pack/manifest.json"), selectionPath,
+      destination: path.join(root, "prepared"), trainingGoal: "Learn reusable legality rules" }, await actual.builtins(path.join(root, "prepare-backends")))
+    let authors = 0
+    const input = { cwd: root, runRoot: path.join(root, "batch"), config: { schema: "aev.project-batch.v1",
+      tasksPath: path.join(root, "prepared/project-tasks.json"), rounds: 2, fanoutLimit: 1, requireAllSources: true,
+      sourceReplay: true, replayMustPass: true, repairAttempts: 0, finalTest: true,
+      pipeline: { schema: "aev.protocol-pipeline.v1", mergeAuthor: { model: "fixture/author", expectedModel: "fixture/author",
+        timeoutMs: 1000, maxInputBytes: 100000 } } } }
+    const dependencies = { createDriver: async () => ({ implementation: "c".repeat(64), preflight: async () => {},
+      invoke: async (request: { editPaths: string[] }) => {
+        authors++; for (const file of request.editPaths) await writeFile(file, "Merged reusable legality procedure")
+        return { completed: true, actualModel: "fixture/author", evidence: [] }
+      } }) }
+    const first = await actual.runProjectBatch(input, dependencies)
+    await writeFile(path.join(root, "batch-observed.json"), JSON.stringify({ status: first.status, trainingCalls, httpCalls, authors }, null, 2))
+    expect(first.status).toBe("completed")
+    expect(first.state.instances.filter((row: any) => row.role === "train" && row.status === "passed")).toHaveLength(2)
+    expect(first.progress.outcomes.test.passed).toBe(1)
+    expect(httpCalls).toBe(5)
+    expect(authors).toBe(1)
+    const before = trainingCalls
+    expect((await actual.runProjectBatch(input, dependencies)).status).toBe("completed")
+    expect(trainingCalls).toBe(before)
+    expect(httpCalls).toBe(5)
+    expect(authors).toBe(1)
+  } finally {
+    delete holder[key]; delete process.env[credentialEnv]; server.stop(true)
+    if (previous === undefined) delete process.env.AUTO_EVOLVE_SKIP_STALE_HEAL
+    else process.env.AUTO_EVOLVE_SKIP_STALE_HEAL = previous
+  }
 }, 30000)
 
 for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLeads: 2 },
