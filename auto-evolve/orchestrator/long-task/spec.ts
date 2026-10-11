@@ -12,6 +12,7 @@ import type {
 import { DEFAULT_LONG_TASK_BUDGETS } from "./contract"
 import { pathExists, readJsonFile } from "../fs"
 import { assertNoBlankAgentAudience } from "../validation-engine/registry"
+import { validateEntry } from "../protocol-plugins/entry"
 
 export interface LoadLongTaskSpecOptions {
   allowMissingInitialExpertContextPaths?: boolean
@@ -593,6 +594,9 @@ export async function loadLongTaskSpec(
   const resolvedSpecPath = path.resolve(specPath)
   const raw = await readJsonFile<Record<string, unknown>>(resolvedSpecPath)
   const baseDir = path.dirname(resolvedSpecPath)
+  const protocolPlugins = raw.protocolPlugins === undefined ? undefined : validateEntry(raw.protocolPlugins)
+  if (protocolPlugins && (raw.blankEvalExecutor !== undefined || raw.campaignFinalAcceptanceMode !== undefined ||
+      normalizeStringArray(raw.blankEvalValidatorProfiles).length)) throw new Error("Plugin acceptance cannot mix legacy formal acceptance configuration")
 
   const materials = normalizePathRefs(raw.materials).map((item) => ({
     ...item,
@@ -614,7 +618,10 @@ export async function loadLongTaskSpec(
   const campaignExplorationTreePath = normalizeMaybeString(raw.campaignExplorationTreePath)
   const campaignWorkingMemoryPath = normalizeMaybeString(raw.campaignWorkingMemoryPath)
   const campaignRoutingControlPath = normalizeMaybeString(raw.campaignRoutingControlPath)
-  const configValidationProfiles = await loadConfigValidationProfiles()
+  // 新链路不继承本机隐式验收配置，显式轮内检查仍保留。
+  const configValidationProfiles = protocolPlugins
+    ? { validatorProfiles: [] as string[], blankEvalValidatorProfiles: [] as string[], profilesRoot: DEFAULT_VALIDATOR_PROFILES_ROOT }
+    : await loadConfigValidationProfiles()
   const validatorProfiles = uniqueStrings([
     ...normalizeStringArray(raw.validatorProfiles),
     ...configValidationProfiles.validatorProfiles,
@@ -779,7 +786,8 @@ export async function loadLongTaskSpec(
     capabilities,
     validatorProfiles,
     blankEvalValidatorProfiles,
-    campaignFinalAcceptanceMode,
+    campaignFinalAcceptanceMode: protocolPlugins ? undefined : campaignFinalAcceptanceMode,
+    protocolPlugins,
     blankEvalExecutor: blankEvalExecutor as LongTaskSpec["blankEvalExecutor"],
     validators,
     planning,
@@ -835,7 +843,7 @@ export async function loadLongTaskSpec(
   if (!spec.materials.length) {
     throw new Error(`Long-task spec must include at least one material: ${resolvedSpecPath}`)
   }
-  if (!spec.validators.length) {
+  if (!spec.validators.length && !protocolPlugins) {
     throw new Error(`Long-task spec must include at least one validator: ${resolvedSpecPath}`)
   }
 
