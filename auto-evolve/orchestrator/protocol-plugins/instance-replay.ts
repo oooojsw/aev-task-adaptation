@@ -7,11 +7,12 @@ import { selectedRuntime } from "./selected-runtime"
 import type { Runtime } from "./runtime"
 import { readFile } from "node:fs/promises"
 import { freezeDeployment } from "./deployment"
+import { regressionEvidence } from "./regression-evidence"
 
 export class ProtocolReplayFault extends Error {}
 
 export async function instanceReplay(input: { cwd: string; sourceTaskRoot: string; parentRunRoot?: string;
-  candidateRoot: string; slotDir: string; role: "train" | "test"; deploymentRoot?: string }, injected?: Runtime) {
+  candidateRoot: string; slotDir: string; role: "train" | "test"; deploymentRoot?: string; sourceReceiptPath?: string }, injected?: Runtime) {
   const specPath = path.join(input.sourceTaskRoot, "spec.json")
   const frozenParent = input.parentRunRoot && await pathExists(path.join(input.parentRunRoot, "protocol-plugins", "entry.snapshot.json"))
   if (!await pathExists(specPath)) {
@@ -44,8 +45,10 @@ export async function instanceReplay(input: { cwd: string; sourceTaskRoot: strin
     runRoot, phase: input.role === "test" ? "test" : "replay", taskID: spec.protocolPlugins.taskID, runtime })
   const receipt = await runEntry(runRoot, entry, input.candidateRoot, path.join(runRoot, "attempt"), runtime, { reuseCompleted: true })
   if (deployment) await freezeDeployment(deployment)
+  const preservation = input.role === "train" ? await regressionEvidence({ taskID: spec.protocolPlugins.taskID,
+    sourceReceiptPath: input.sourceReceiptPath, protocol: parent.protocol, replay: receipt }) : undefined
   return { receipt, runRoot, passed: receipt.status === "passed",
-    infrastructureFailure: !["passed", "rejected"].includes(receipt.status) }
+    preservation, infrastructureFailure: !["passed", "rejected"].includes(receipt.status) }
   } catch (cause) {
     throw new ProtocolReplayFault("Protocol replay stopped; inspect frozen entry and attempt evidence", { cause })
   }

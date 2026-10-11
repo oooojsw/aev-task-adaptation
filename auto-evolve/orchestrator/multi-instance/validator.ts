@@ -337,6 +337,7 @@ async function runOneValidation(
     const protocol = await instanceReplay({ cwd, sourceTaskRoot: instance.sourceTaskRoot,
       parentRunRoot: instance.role === "test" ? state.protocolMergeParentRunRoot : instance.campaignDir,
       candidateRoot: mergedSkillDir, slotDir, role: instance.role,
+      sourceReceiptPath: instance.harvestedProtocolReceiptPath,
       deploymentRoot: path.join(state.runRoot, "protocol-test-deployment") }, protocolRuntime)
     if (protocol) {
       instance.validateStatus = protocol.passed ? "passed" : "failed"
@@ -346,8 +347,9 @@ async function runOneValidation(
       await writeJsonFile(path.join(slotDir, "run.json"), { instanceID: instance.id,
         passed: protocol.passed, protocolStatus: protocol.receipt.status,
         claim: protocol.receipt.claim, executed: protocol.receipt.executed,
+        preservation: protocol.preservation,
         runRoot: protocol.runRoot, infrastructureFailure: protocol.infrastructureFailure })
-      if (!protocol.infrastructureFailure && !protocol.passed && instance.role !== "test" && instance.status === "passed") {
+      if (!protocol.infrastructureFailure && protocol.preservation?.regression && instance.role !== "test" && instance.status === "passed") {
         regressions.push(instance.id)
       }
       await saveCoordinatorState(state)

@@ -45,7 +45,7 @@ test("real coordinator records protocol replay and source rejection accurately",
     const result = await runCoordinatorPhase3Validate({ cwd: f.root, state: f.state }, { protocolRuntime: f.runtime })
     expect(result.passed).toBe(status === "passed" ? 1 : 0)
     expect(result.failed).toBe(status === "rejected" ? 1 : 0)
-    expect(result.regressions).toEqual(status === "rejected" ? ["task"] : [])
+    expect(result.regressions).toEqual([])
     expect(f.state.phase).toBe("completed")
     const run = JSON.parse(await readFile(path.join(f.state.runRoot, "phase3-validate", "task", "run.json"), "utf8"))
     expect(run.executed).toBe(false)
