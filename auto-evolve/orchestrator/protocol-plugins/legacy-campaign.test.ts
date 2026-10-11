@@ -10,7 +10,7 @@ const baseline = "7d8b7d36d4f5357fb69b4079393cd4f3e28d2293"
 async function build(root: string, key: string, old: boolean) {
   const entry = path.join(root, "entry.ts")
   const orchestrator = path.join(repo, "auto-evolve/orchestrator")
-  await writeFile(entry, `export {runLongTaskCampaign} from ${JSON.stringify(path.join(orchestrator, "long-task-campaign/runner.ts"))};
+  await writeFile(entry, `export {runLongTaskCampaign, resumeLongTaskCampaign} from ${JSON.stringify(path.join(orchestrator, "long-task-campaign/runner.ts"))};
 export {DEFAULT_CONFIG} from ${JSON.stringify(path.join(orchestrator, "schema.ts"))};`)
   const sources: string[] = []
   const output = await Bun.build({ entrypoints: [entry], target: "bun", packages: "external", outdir: root,
@@ -45,7 +45,8 @@ if (!b) throw new Error("Missing offline boundary"); return b.${name}(...args); 
   return import(pathToFileURL(output.outputs[0].path).href)
 }
 
-for (const passed of [true, false]) test(`complete legacy Campaign ${passed ? "pass" : "reject"} matches baseline`, async () => {
+for (const scenario of [{ name: "pass", rejects: 0, rounds: 1 }, { name: "reject", rejects: 100, rounds: 1 },
+  { name: "cross-round revision", rejects: 2, rounds: 2 }]) test(`complete legacy Campaign ${scenario.name} matches baseline`, async () => {
   const observations: any[] = []
   for (const old of [true, false]) {
     const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -65,12 +66,16 @@ for (const passed of [true, false]) test(`complete legacy Campaign ${passed ? "p
       if (input.title.startsWith("Campaign Lead")) for (const dir of input.permissionEditPaths ?? []) {
         if (!dir.endsWith(".json")) { await mkdir(dir, { recursive: true }); await writeFile(path.join(dir, "README.md"), "Reusable procedure") }
       }
-      const responseText = JSON.stringify({ claimed_success: true, claim_statement: "Fixture work complete", summary: "Reusable procedure", blockers: [] })
+      const responseText = JSON.stringify(input.title.startsWith("Long Task Graph") ? { completion_validator_ids: [],
+        units: [{ id: "reexplore", title: "Reexplore", goal: "Revise procedure", inputs: [], depends_on: [], expected_artifacts: [],
+          claim: "Explored", check_plan: "Host acceptance", validator_ids: [], retry_budget: 1 }] }
+        : { claimed_success: true, claim_statement: "Fixture work complete", summary: "Reusable procedure", blockers: [] })
       return { title: input.title, prompt: input.prompt, selectedModel: input.model, referencedPaths: input.referencePaths ?? [],
         attachedFiles: [], promptInlineFiles: [], permissionReadPaths: input.permissionReadPaths ?? [], permissionEditPaths: input.permissionEditPaths ?? [],
         result: { exitCode: 0, stdout: responseText, stderr: "", events: [], responseText, toolFailures: [] } }
     }, async runBlankEval(input: any) {
       blanks.push({ ...input, spec: JSON.parse(await readFile(input.specPath, "utf8")) })
+      const passed = blanks.length > scenario.rejects
       return { passed, summary: "Fixed receipt", runDir: input.runRoot, resultPath: path.join(input.runRoot, "result.json"),
         sessionExecutionReportPath: path.join(input.runRoot, "session.json"),
         validatorResults: [{ validatorID: "product", passed, summary: "Fixed receipt", evidenceRefs: [], details: [], failureKind: passed ? undefined : "product_failure" }] }
@@ -86,7 +91,7 @@ for (const passed of [true, false]) test(`complete legacy Campaign ${passed ? "p
     const seed = path.join(root, "seed")
     await mkdir(seed)
     await writeFile(path.join(seed, "README.md"), "Initial reusable procedure")
-    await writeFile(specPath, JSON.stringify({ title: "Legacy Campaign", baseSpecPath: path.join(root, "spec.json"), mode: "graph_iterative", maxRounds: 1,
+    await writeFile(specPath, JSON.stringify({ title: "Legacy Campaign", baseSpecPath: path.join(root, "spec.json"), mode: "graph_iterative", maxRounds: scenario.rounds,
       seedTargets: [{ seedPath: seed, targetPath: path.join(root, "expert"), kind: "experience_workspace" }] }))
     const previous = process.env.AUTO_EVOLVE_SKIP_STALE_HEAL
     process.env.AUTO_EVOLVE_SKIP_STALE_HEAL = "1"
@@ -95,7 +100,18 @@ for (const passed of [true, false]) test(`complete legacy Campaign ${passed ? "p
       const state = JSON.parse(await readFile(path.join(result.campaignDir, "campaign.json"), "utf8"))
       await writeFile(path.join(root, "raw-observed.json"), JSON.stringify({ result, state, requests, blanks }, null, 2))
       expect(blanks.length, state.lastSummary).toBeGreaterThan(0)
-      expect(result.status).toBe(passed ? "verified_success" : "round_limit_reached")
+      expect(result.status).toBe(scenario.rejects < 100 ? "verified_success" : "round_limit_reached")
+      expect(result.roundsCompleted).toBe(scenario.rounds)
+      if (scenario.rounds > 1) {
+        expect(blanks).toHaveLength(3)
+        expect(requests.some((request) => request.title.startsWith("Long Task Graph"))).toBe(true)
+        expect(requests.some((request) => request.title.includes("round-002"))).toBe(true)
+      }
+      const callsBeforeResume = { model: requests.length, blank: blanks.length }
+      const resumed = await actual.resumeLongTaskCampaign({ cwd: root, campaignID: result.campaignID, specPath })
+      expect(resumed.status).toBe(result.status)
+      expect(requests).toHaveLength(callsBeforeResume.model)
+      expect(blanks).toHaveLength(callsBeforeResume.blank)
       const normalize = (value: any) => JSON.parse(JSON.stringify(value, (name, item) => {
         if (["createdAt", "updatedAt", "heartbeatAt", "durationMs", "startedAt", "completedAt", "ownerPID", "ownerCreationTick"].includes(name)) return undefined
         if (typeof item !== "string") return item
@@ -104,7 +120,7 @@ for (const passed of [true, false]) test(`complete legacy Campaign ${passed ? "p
           .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, "<TIME>")
           .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, "<UUID>")
       }))
-      const observed = normalize({ requests, blanks, result, state })
+      const observed = normalize({ requests, blanks, result, state, resumed, callsBeforeResume })
       await writeFile(path.join(root, "legacy-observed.json"), JSON.stringify(observed, null, 2))
       observations.push(observed)
     } finally {
