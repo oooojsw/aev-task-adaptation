@@ -51,6 +51,7 @@ import {
 import { buildAccessProfile } from "../access-profile"
 import { instanceReplay, ProtocolReplayFault } from "../protocol-plugins/instance-replay"
 import { instanceRepair, type ProtocolRepairAuthorConfig } from "../protocol-plugins/instance-repair"
+import type { Runtime } from "../protocol-plugins/runtime"
 
 export interface RunValidateInput {
   cwd: string
@@ -101,7 +102,8 @@ export interface ValidateOutcome {
   durationMs: number
 }
 
-export async function runCoordinatorPhase3Validate(input: RunValidateInput): Promise<ValidateOutcome> {
+export async function runCoordinatorPhase3Validate(input: RunValidateInput,
+  dependencies?: { protocolRuntime?: Runtime }): Promise<ValidateOutcome> {
   const state = input.state
   state.phase = "phase3_validate"
   await saveCoordinatorState(state)
@@ -149,6 +151,7 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput): Pro
         rounds,
         limit,
         regressions,
+        protocolRuntime: dependencies?.protocolRuntime,
       })
       // 新协议故障先停止，不能进入旧式Skill修补烧额度。
       if (eligible.some((row) => row.validateProtocolFault)) throw new Error("Protocol replay infrastructure fault; inspect before repair")
@@ -205,6 +208,7 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput): Pro
         limit,
         regressions: finalRegressions,
         slotName: input.acceptancePolicy?.finalReplaySlotName ?? "final-full-replay",
+        protocolRuntime: dependencies?.protocolRuntime,
       })
       if (eligible.some((row) => row.validateProtocolFault)) throw new Error("Protocol final replay fault; inspect before promotion")
       finalReplay = replaySnapshot(state.instances, eligible, finalRegressions)
@@ -265,6 +269,7 @@ async function runValidationBatch(input: {
   limit: number
   regressions: string[]
   slotName?: string
+  protocolRuntime?: Runtime
 }) {
   const inFlight = new Set<Promise<unknown>>()
   for (const instance of input.eligible) {
@@ -279,6 +284,7 @@ async function runValidationBatch(input: {
       input.rounds,
       input.regressions,
       input.slotName,
+      input.protocolRuntime,
     ).finally(() => inFlight.delete(job))
     inFlight.add(job)
   }
@@ -314,6 +320,7 @@ async function runOneValidation(
   rounds: number,
   regressions: string[],
   slotName?: string,
+  protocolRuntime?: Runtime,
 ) {
   instance.validateStatus = "running"
   await saveCoordinatorState(state)
@@ -328,7 +335,7 @@ async function runOneValidation(
 
   try {
     const protocol = await instanceReplay({ cwd, sourceTaskRoot: instance.sourceTaskRoot,
-      parentRunRoot: instance.campaignDir, candidateRoot: mergedSkillDir, slotDir, role: instance.role })
+      parentRunRoot: instance.campaignDir, candidateRoot: mergedSkillDir, slotDir, role: instance.role }, protocolRuntime)
     if (protocol) {
       instance.validateStatus = protocol.passed ? "passed" : "failed"
       instance.validateProtocolFault = protocol.infrastructureFailure
