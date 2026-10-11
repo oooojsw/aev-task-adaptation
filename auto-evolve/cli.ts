@@ -412,6 +412,7 @@ async function commandRunSkillsBench(args: string[]) {
   // Ensure cwd is repo root (parent of auto-evolve/), not the auto-evolve/ subdirectory itself.
   const cwd = path.basename(process.cwd()) === "auto-evolve" ? path.dirname(process.cwd()) : process.cwd()
 
+
   // Resolve task root: check for SkillLearnBench-style nested layout first.
   // SkillLearnBench places instances under <root>/tasks/<family>/<instance>/
   // while the plain skillsbench layout uses <root>/tasks/<task>/ directly.
@@ -490,6 +491,11 @@ async function commandRunMultiInstance(args: string[]) {
   }
 
   const cwd = path.basename(process.cwd()) === "auto-evolve" ? path.dirname(process.cwd()) : process.cwd()
+
+  const { loadPipeline, freezePipeline } = await import("./orchestrator/protocol-plugins/pipeline-config")
+  const protocolFile = getOption(args, "--protocol-run-config")
+  const pipeline = protocolFile ? await loadPipeline(path.resolve(cwd, protocolFile)) : undefined
+  if (pipeline && repairAttempts > 0 && !pipeline.repairAuthor) throw new Error("Protocol repair author required, or set --repair-attempts 0")
 
   // Discover the available instance task roots for this bench+task.
   // Layout differences:
@@ -570,6 +576,8 @@ async function commandRunMultiInstance(args: string[]) {
   const runID = coordinatorRunID(label)
   const runRoot = path.join(cwd, "auto-evolve", "runtime-state", "multi-instance-runs", runID)
 
+  await freezePipeline(runRoot, pipeline)
+
   const state = await createCoordinatorRun({
     cwd,
     runRoot,
@@ -619,7 +627,7 @@ async function commandRunMultiInstance(args: string[]) {
 
   const { runCoordinatorPhase2Merge } = await import("./orchestrator/multi-instance/merger")
   console.log("Phase 2 (merge) starting…")
-  const mergeOut = await runCoordinatorPhase2Merge({ cwd, state })
+  const mergeOut = await runCoordinatorPhase2Merge({ cwd, state, protocolAuthor: pipeline?.mergeAuthor })
   console.log("Phase 2 complete:")
   console.log(`  merged skill: ${mergeOut.mergedSkillDir}`)
   console.log(`  contributed : ${mergeOut.contributingInstances.join(", ") || "(none)"}`)
@@ -647,6 +655,7 @@ async function commandRunMultiInstance(args: string[]) {
             enabled: true,
             mode: "append_only",
             maxAttemptsPerCase: repairAttempts,
+            protocolAuthor: pipeline?.repairAuthor,
           }
         : undefined,
   })

@@ -14,6 +14,8 @@ import {
   type HierarchicalReplayLevels,
 } from "../orchestrator/multi-instance/hierarchical-merger"
 import { runCoordinatorPhase3Validate } from "../orchestrator/multi-instance/validator"
+import { loadPipeline, freezePipeline, type PipelineConfig } from "../orchestrator/protocol-plugins/pipeline-config"
+import { harvest } from "../orchestrator/protocol-plugins/harvest"
 import {
   mergeAcceptanceRunsReplay,
   mergeAcceptanceUsesStrictGate,
@@ -270,6 +272,7 @@ type BenchmarkConfig = {
   hierarchicalMergePromptPath?: string
   hierarchicalMergeRepairPromptPath?: string
   mergeContractPath?: string
+  protocolRun?: PipelineConfig
 }
 
 type BenchmarkSummary = {
@@ -537,6 +540,7 @@ const VALUE_OPTIONS = new Set([
   "--skillopt-workers",
   "--mode",
   "--out",
+  "--protocol-run-config",
   "--repair-attempts",
   "--replay-concurrency",
   "--resume-mode",
@@ -1919,6 +1923,13 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
             ? "The pending expert package is retained as negative evidence for hierarchical merge."
             : "No pending expert package was available; merge receives diagnostic metadata only.",
         ].join(" ")
+    if (config.protocolRun && inst.status === "passed") {
+      if (!inst.campaignDir) throw new Error("Accepted protocol source campaign missing")
+      const got = await harvest({ cwd: repoRoot, campaignRoot: inst.campaignDir, taskID: inst.id,
+        targetRoot: path.join(config.outDir, "protocol-source-skills", inst.id) })
+      inst.harvestedSkillPath = got.candidateRoot
+      inst.harvestedProtocolReceiptPath = got.receiptPath
+    }
   }
   await saveCoordinatorState(stateRun)
 
@@ -2023,6 +2034,7 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
           state: stateRun,
           promptPath: config.mergePromptPath,
           contractPath: config.mergeContractPath,
+          protocolAuthor: config.protocolRun?.mergeAuthor,
         })
   stateRun.mergedSkillDir = merge.mergedSkillDir
   await saveCoordinatorState(stateRun)
@@ -2066,6 +2078,7 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
               enabled: true,
               mode: "append_only",
               maxAttemptsPerCase: config.repairAttempts,
+              protocolAuthor: config.protocolRun?.repairAuthor,
               promptPath: config.mergeRepairPromptPath,
               contractPath: config.mergeContractPath,
             }
@@ -2801,6 +2814,13 @@ function parseHierarchicalMergeConfig(args: string[]): Pick<BenchmarkConfig, "me
 }
 
 export async function runTaskPackBenchmark(config: BenchmarkConfig) {
+  if (config.protocolRun && ((config.mergeExecutionMode ?? "legacy_script") !== "legacy_script" || config.mergeStrategy !== "flat")) {
+    throw new Error("Selected merge adapter does not yet support protocol pipeline; no fallback")
+  }
+  if (config.protocolRun && config.repairAttempts > 0 && !config.protocolRun.repairAuthor) {
+    throw new Error("Explicit protocol repair author required, or disable repair attempts")
+  }
+  await freezePipeline(config.outDir, config.protocolRun)
   const trainIDsAll = config.taskIDs ?? (await readIDs(config.trainSplit))
   const testIDsAll = config.testTaskIDs ?? (config.testSplit && existsSync(config.testSplit) ? await readIDs(config.testSplit) : [])
   const trainIDs = config.trainLimit ? trainIDsAll.slice(0, config.trainLimit) : trainIDsAll
@@ -3786,6 +3806,8 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
     }),
   }
   const mergeBackendConfig = {
+    protocolRun: getOption(args, "--protocol-run-config")
+      ? await loadPipeline(path.resolve(repoRoot, getOption(args, "--protocol-run-config")!)) : undefined,
     mergeExecutionMode,
     mergeAsLongTask,
     mergeAsSkillOpt,
