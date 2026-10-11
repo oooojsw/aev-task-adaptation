@@ -42,6 +42,7 @@ test("driver freezes host config and sends explicit single-attempt no-shell requ
     expect(input.infrastructureAttempts).toBe(1)
     expect(input.allowShell).toBe(false)
     expect(input.isolateHostRuntime).toBe(true)
+    expect(input.sourceHost).toBe(true)
     expect(input.permissionEditPaths).toEqual(request(f.cwd).editPaths)
     expect(input.permissionExternalPaths).toEqual([f.cwd, path.join(f.cwd, "workspace")])
     expect(input.runtimeBudget?.hardTimeoutMs).toBe(1000)

@@ -1,5 +1,5 @@
 import path from "node:path"
-import { mkdir, open, readFile } from "node:fs/promises"
+import { mkdir, open, readFile, lstat } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import type { OpencodeTaskInput, OpencodeTaskRun } from "../opencode"
 import { writeJsonAtomic } from "../atomic-write"
@@ -9,6 +9,16 @@ import { backendUsage } from "./backend-usage"
 export async function runProtocolTrainingTask(options: { enabled: boolean; stageDir: string; role: string },
   request: OpencodeTaskInput, invoke: (request: OpencodeTaskInput) => Promise<OpencodeTaskRun>): Promise<OpencodeTaskRun> {
   if (!options.enabled) return invoke(request)
+  // 新训练与独立执行使用同一冻结源码宿主，旧入口保持不变。
+  const external = new Set<string>()
+  for (const file of [...request.permissionReadPaths ?? [], ...request.permissionEditPaths ?? []]) {
+    const info = await lstat(file).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      return null
+    })
+    external.add(info?.isDirectory() ? file : path.dirname(file))
+  }
+  request = { ...request, sourceHost: true, permissionExternalPaths: [...external] }
   const dir = path.join(options.stageDir, "protocol-invocations", randomUUID())
   await mkdir(dir, { recursive: true })
   // 同阶段可有多次正常修订，每次留独立账，恢复仍由控制器决定。
@@ -17,7 +27,7 @@ export async function runProtocolTrainingTask(options: { enabled: boolean; stage
   const startedAt = new Date().toISOString()
   const clock = performance.now()
   const requestFingerprint = fingerprint({ role: options.role, title: request.title, prompt: request.prompt,
-    model: request.model ?? null, variant: request.variant ?? null, runtimeBudget: request.runtimeBudget ?? null,
+    model: request.model ?? null, variant: request.variant ?? null, runtimeBudget: request.runtimeBudget ?? null, sourceHost: true,
     references: request.referencePaths ?? [], reads: request.permissionReadPaths ?? [], edits: request.permissionEditPaths ?? [] })
   const identity = { schema: "aev.training-invocation-accounting.v1", role: options.role, requestFingerprint,
     requestedModel: request.model ?? null, startedAt, reused: false, fee: null }

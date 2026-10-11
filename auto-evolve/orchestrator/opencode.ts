@@ -164,6 +164,8 @@ export interface OpencodeTaskInput {
   permissionEditPaths?: string[]
   /** Opt-in external-directory traversal; file read/edit grants still apply. */
   permissionExternalPaths?: string[]
+  /** Opt-in source host; legacy executable resolution remains unchanged. */
+  sourceHost?: boolean
   model?: string
   agent?: string
   variant?: string
@@ -1113,10 +1115,18 @@ async function runOpencodeTaskOnce(
     ...(isolatedRuntime?.env ?? {}),
   }
 
-  const opencodeCmd = await resolveOpencodeCommand(input.cwd)
+  const opencodeCmd = input.sourceHost ? process.execPath : await resolveOpencodeCommand(input.cwd)
+  const sourceEntry = path.join(input.cwd, "packages", "opencode", "src", "index.ts")
+  const sourceArgs = input.sourceHost
+    ? ["run", "--cwd", path.join(input.cwd, "packages", "opencode"), "--conditions=browser", sourceEntry]
+    : []
+  // 新协议绑定当前源码，避免误用全局旧程序的权限实现。
+  if (input.sourceHost && (typeof Bun === "undefined" || !(await pathExists(sourceEntry)))) {
+    throw new Error("Explicit Bun source host and entry required")
+  }
   const taskWorkDir = path.resolve(input.workDir ?? input.cwd)
   const dirArg = process.platform === "win32" ? taskWorkDir.replace(/\\/g, "/") : taskWorkDir
-  const args = [opencodeCmd, "run", "--pure", "--format", "json", "--dir", dirArg, "--title", input.title]
+  const args = [opencodeCmd, ...sourceArgs, "run", "--pure", "--format", "json", "--dir", dirArg, "--title", input.title]
 
   const runtimeAgent = normalizeAgentForRuntime(selectedAgent)
 
@@ -1227,6 +1237,7 @@ async function runOpencodeTaskOnce(
       cwd: taskWorkDir,
       env: {
         ...runtimeEnv,
+        ...(input.sourceHost ? { OPENCODE_AEV_ABSOLUTE_PERMISSIONS: "1" } : {}),
         OPENCODE_CONFIG_DIR: overrideConfigDir,
         ...(typeof input.config.modelConfig.limits.requestsPerMinute === "number"
           ? {

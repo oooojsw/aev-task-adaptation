@@ -14,6 +14,7 @@ import { Deferred, Effect, Layer, Schema, ServiceMap } from "effect"
 import os from "os"
 import z from "zod"
 import { evaluate as evalRule } from "./evaluate"
+import { aevPathPattern } from "./aev-path-pattern"
 import { PermissionID } from "./schema"
 
 export namespace Permission {
@@ -169,7 +170,9 @@ export namespace Permission {
         let needsAsk = false
 
         for (const pattern of request.patterns) {
-          const rule = evaluate(request.permission, pattern, ruleset, approved)
+          const target = aevPathPattern(request.permission, pattern, Instance.worktree,
+            process.env.OPENCODE_AEV_ABSOLUTE_PERMISSIONS === "1")
+          const rule = evaluate(request.permission, target, ruleset, approved)
           log.info("evaluated", { permission: request.permission, pattern, action: rule })
           if (rule.action === "deny") {
             return yield* new DeniedError({

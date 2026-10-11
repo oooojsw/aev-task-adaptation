@@ -34,6 +34,25 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     await visit(profile)
     if (!files.length) throw new Error("Explicit private OpenCode profile required")
     const config = await load(cwd)
+    const hostFiles: Array<{ path: string; sha256: string }> = []
+    async function visitHost(dir: string) {
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        const file = path.join(dir, entry.name)
+        if (entry.isSymbolicLink()) throw new Error("Source host links unsupported")
+        if (entry.isDirectory()) await visitHost(file)
+        else if (entry.isFile()) hostFiles.push({ path: path.relative(cwd, file).replace(/\\/g, "/"),
+          sha256: createHash("sha256").update(await readFile(file)).digest("hex") })
+      }
+    }
+    // 真实后端冻结宿主源码；测试注入不能冒充真实宿主。
+    if (!options.invoke) {
+      for (const dir of ["packages/opencode/src", "packages/plugin/src", "packages/sdk/js/src", "packages/util/src"]) {
+        await visitHost(path.join(cwd, dir))
+      }
+      for (const file of ["package.json", "bun.lock", "packages/opencode/package.json", "packages/opencode/tsconfig.json", "packages/opencode/bunfig.toml"]) {
+        hostFiles.push({ path: file, sha256: createHash("sha256").update(await readFile(path.join(cwd, file))).digest("hex") })
+      }
+    }
     const normalized = JSON.parse(JSON.stringify(config)) as AutoEvolveConfig
     const source = await readFile(fileURLToPath(new URL("../opencode.ts", import.meta.url)))
     const own = await readFile(fileURLToPath(import.meta.url))
@@ -41,6 +60,8 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     const boundarySource = await readFile(fileURLToPath(new URL("./tool-request-boundary.ts", import.meta.url)))
     const retryPolicy = await readFile(fileURLToPath(new URL("../opencode-retry-policy.ts", import.meta.url)))
     const key = fingerprint({ cwd, profile, files: files.sort((a, b) => a.path.localeCompare(b.path)),
+      sourceHost: { kind: options.invoke ? "injected-test-boundary" : "bun-source", executable: process.execPath,
+        version: typeof Bun === "undefined" ? null : Bun.version, files: hostFiles.sort((a, b) => a.path.localeCompare(b.path)) },
       config: normalized, source: createHash("sha256").update(source).digest("hex"),
       own: createHash("sha256").update(own).digest("hex"),
       usageSource: createHash("sha256").update(usageSource).digest("hex"),
@@ -81,7 +102,7 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     try {
     // 每次传副本，避免宿主修改冻结配置影响后续请求。
     const result = await invoke({ cwd, workDir: request.workDir, config: structuredClone(frozen.config),
-      title: "Protocol independent tool execution", prompt: request.prompt, model: request.model,
+      title: "Protocol independent tool execution", prompt: request.prompt, model: request.model, sourceHost: true,
       referencePaths: request.readPaths, permissionReadPaths: request.readPaths,
       permissionEditPaths: request.editPaths, allowShell: false, isolateHostRuntime: true,
       permissionExternalPaths: [...externalPaths],
