@@ -6,6 +6,7 @@ import { prepareEntry, runEntry, validateEntry, type Entry } from "./entry"
 import type { Selection } from "./contract"
 import { Runtime } from "./runtime"
 import { campaignAcceptance } from "./campaign-acceptance"
+import { deriveEntry } from "./derive-entry"
 
 async function fixture(status: "passed" | "rejected" | "scoring_error" | "data_error" = "passed") {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -63,6 +64,35 @@ test("entry freezes and resumes exact linked project/protocol", async () => {
   f.selection.protocol.version = "2"
   await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
   await expect(prepareEntry(f.run, f.entry, f.runtime)).rejects.toThrow("Cannot change")
+})
+
+test("derived replay preserves complete frozen selection and lineage", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.replay = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  await prepareEntry(f.run, f.entry, f.runtime)
+  const options = { parentRunRoot: f.run, parentEntry: f.entry, runRoot: path.join(f.root, "replay"),
+    phase: "replay" as const, taskID: "task", runtime: f.runtime }
+  const entry = await deriveEntry(options)
+  expect(entry.phase).toBe("replay")
+  expect(entry.selectionPath).toBe(f.entry.selectionPath)
+  expect(await deriveEntry(options)).toEqual(entry)
+  const receipt = await runEntry(options.runRoot, entry, path.join(f.root, "candidate"), path.join(f.root, "replay-attempt"), f.runtime)
+  expect(receipt.claim).toBe("skill_check")
+  expect(receipt.executed).toBe(false)
+  expect(f.calls()).toBe(1)
+})
+
+test("undeclared replay and test on training UID cannot inherit source acceptance", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.test = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  await prepareEntry(f.run, f.entry, f.runtime)
+  const options = { parentRunRoot: f.run, parentEntry: f.entry, runRoot: path.join(f.root, "derived"),
+    taskID: "task", runtime: f.runtime }
+  await expect(deriveEntry({ ...options, phase: "replay" })).rejects.toThrow("Task/phase mismatch")
+  await expect(deriveEntry({ ...options, phase: "test" })).rejects.toThrow("Task/phase mismatch")
+  expect(f.calls()).toBe(0)
 })
 
 test("entry saves actual candidate receipt and blocks duplicate attempt", async () => {
