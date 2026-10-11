@@ -51,6 +51,38 @@ test("NBA label schema problem is data error, not ordinary rejection", async () 
   expect((await plugin.evaluate(await input("Answer: False", { answer: "false" }))).status).toBe("data_error")
 })
 
+test("NBA official scoring is separately selected and does not alter existing last-answer mode", async () => {
+  const plugin = await scriptChecker(await root())
+  const official = fileURLToPath(new URL("../../projects/nba/official-scorer.py", import.meta.url))
+  for (const [text, local, upstream] of [
+    ["answer: false", "passed", "rejected"],
+    ["Answer: Falsehood", "rejected", "passed"],
+    ["Answer: False\nAnswer: True. Illegal Operation: A. Problematic Team: B", "rejected", "passed"],
+  ]) {
+    const value = await input(text, { answer: false })
+    expect((await plugin.evaluate(value)).status).toBe(local)
+    Object.assign(value.settings, { script: official, scriptSHA256: await hash(official) })
+    expect((await plugin.evaluate(value)).status).toBe(upstream)
+  }
+  const invalid = await input("Answer: False", { answer: "false" })
+  Object.assign(invalid.settings, { script: official, scriptSHA256: await hash(official) })
+  expect((await plugin.evaluate(invalid)).status).toBe("data_error")
+})
+
+test("NBA official adapter matches pinned upstream scoring statements on fixed edge cases", async () => {
+  const file = fileURLToPath(new URL("../../projects/nba/scoring-equivalence.py", import.meta.url))
+  const process = Bun.spawn([python, file], { stdout: "pipe", stderr: "pipe", env: {
+    SystemRoot: globalThis.process.env.SystemRoot, PYTHONIOENCODING: "utf-8", PYTHONDONTWRITEBYTECODE: "1" } })
+  const output = await new Response(process.stdout).text()
+  const errors = await new Response(process.stderr).text()
+  expect(await process.exited).toBe(0)
+  expect(errors).toBe("")
+  const result = JSON.parse(output)
+  expect(result.equivalent).toBe(true)
+  expect(result.cases).toBe(22)
+  expect(result.differences).toHaveLength(6)
+})
+
 test("interpreter/scorer fingerprint drift blocks invocation", async () => {
   const plugin = await scriptChecker(await root())
   const value = await input("Answer: False", { answer: false })
