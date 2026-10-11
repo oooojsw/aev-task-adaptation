@@ -28,6 +28,7 @@ test("HTTP adapter sends one request without NBA/OpenCode assumptions", async ()
   const plugin = await httpChat({ evidenceRoot, credential: () => "synthetic-fixture", transport: async (_url, options) => {
     calls++
     expect(options?.redirect).toBe("error")
+    expect((options as RequestInit & { timeout: false }).timeout).toBe(false)
     const body = JSON.parse(String(options?.body))
     expect(body.tools).toBeUndefined()
     expect(body.messages[0].content).toContain("Original public system")
@@ -57,6 +58,28 @@ test("Anthropic mode preserves explicit system/user and checks completion", asyn
   const input = request()
   input.settings.dialect = "anthropic_messages"
   expect((await plugin.execute(input)).status).toBe("completed")
+})
+
+test("disabling socket idle timeout retains the explicit protocol deadline", async () => {
+  let aborted = false
+  let calls = 0
+  const plugin = await httpChat({ evidenceRoot: root(), credential: () => "synthetic-fixture",
+    transport: async (_url, options) => {
+      calls++
+      expect((options as RequestInit & { timeout: false }).timeout).toBe(false)
+      return await new Promise<Response>((_resolve, reject) => {
+        const signal = options!.signal!
+        signal.addEventListener("abort", () => {
+          aborted = true
+          reject(new Error("synthetic timeout"))
+        }, { once: true })
+      })
+    } })
+  const input = request()
+  input.settings.timeoutMs = 20
+  expect((await plugin.execute(input)).status).toBe("execution_error")
+  expect(aborted).toBe(true)
+  expect(calls).toBe(1)
 })
 
 test("wrong model, output cap and tool call are infrastructure failures", async () => {

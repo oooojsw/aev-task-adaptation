@@ -1,0 +1,25 @@
+diff --git a/lib/index.js b/lib/index.js
+index 0000000000000000000000000000000000000000..0000000000000000000000000000000000000000 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -44,7 +44,8 @@ Object.defineProperty(exports, "unreleasedLabels", {
+ });
+ var _browserslist = require("browserslist");
+ var _helperValidatorOption = require("@babel/helper-validator-option");
+ var _lruCache = require("lru-cache");
++const _LRUCache = _lruCache.LRUCache || _lruCache.default || _lruCache;
+ var _utils = require("./utils.js");
+ var _targets = require("./targets.js");
+ var _options = require("./options.js");
+@@ -137,10 +138,10 @@ function resolveTargets(queries, env) {
+   const resolved = _browserslist(queries, {
+     mobileToDesktop: true,
+     env
+   });
+   return getLowestVersions(resolved);
+ }
+-const targetsCache = new _lruCache({
++const targetsCache = new _LRUCache({
+   max: 64
+ });
+ function resolveTargetsCached(queries, env) {

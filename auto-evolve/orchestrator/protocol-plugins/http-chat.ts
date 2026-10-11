@@ -153,10 +153,11 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), cfg.timeoutMs)
     try {
-      const response = await transport(cfg.url, { method: "POST", redirect: "error", signal: controller.signal,
+      // 禁默认空闲超时，长回答仍受协议总时限约束。
+      const response = await transport(cfg.url, { method: "POST", redirect: "error", timeout: false, signal: controller.signal,
         headers: cfg.dialect === "anthropic_messages"
           ? { "content-type": "application/json", "x-api-key": secret, "anthropic-version": "2023-06-01" }
-          : { "content-type": "application/json", authorization: `Bearer ${secret}` }, body: wire })
+          : { "content-type": "application/json", authorization: `Bearer ${secret}` }, body: wire } as RequestInit & { timeout: false })
       const raw = await bounded(response, cfg.maxResponseBytes)
       await writeFileAtomic(path.join(dir, "response.raw.txt"), raw)
       await writeJsonAtomic(path.join(dir, "response.meta.json"), { status: response.status, requestFingerprint: key,
