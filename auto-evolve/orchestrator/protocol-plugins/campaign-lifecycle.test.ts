@@ -61,7 +61,10 @@ test("actual Campaign bundle routes model calls through mandatory offline bounda
   } finally { delete holder[key] }
 }, 30000)
 
-for (const revision of [false, true]) test(`actual Campaign learner ${revision ? "rejects revises and reaccepts" : "reaches protocol acceptance"} with offline model receipts`, async () => {
+for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLeads: 2 },
+  { rejectedLeads: 0, fault: "scoring_error" }, { rejectedLeads: 0, fault: "data_error" }])
+test(`actual Campaign learner ${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
+  const { rejectedLeads, fault } = scenario
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   await mkdir(root, { recursive: true })
   const key = `__campaignOffline_${randomUUID().replaceAll("-", "")}`
@@ -79,10 +82,14 @@ for (const revision of [false, true]) test(`actual Campaign learner ${revision ?
     for (const edit of input.permissionEditPaths ?? []) {
       if (edit.endsWith("rules.txt")) { await mkdir(path.dirname(edit), { recursive: true }); await writeFile(edit, "Reusable rule") }
       if (input.title.startsWith("Campaign Lead") && !edit.endsWith(".json")) {
-        await mkdir(edit, { recursive: true }); await writeFile(path.join(edit, "rules.txt"), revision && leads === 1 ? "Incomplete rule" : "Reusable rule")
+        await mkdir(edit, { recursive: true }); await writeFile(path.join(edit, "rules.txt"), leads <= rejectedLeads ? "Incomplete rule" : "Reusable rule")
       }
     }
-    const responseText = JSON.stringify({ claimed_success: true, claim_statement: "Fixture exploration complete",
+    const responseText = JSON.stringify(input.title.startsWith("Long Task Graph") ? {
+      planner_summary: "Fixture replanning", completion_validator_ids: [], units: [{ id: "reexplore", title: "Reexplore",
+        goal: "Revise reusable rules", inputs: [], depends_on: [], expected_artifacts: [], claim: "Explored",
+        check_plan: "Formal protocol follows", validator_ids: [], retry_budget: 1 }] } : {
+      claimed_success: true, claim_statement: "Fixture exploration complete",
       summary: "Fixture reusable rule", blockers: [], updated_files: [], suggestions: [] })
     return { title: input.title, prompt: input.prompt, selectedModel: input.model,
       referencedPaths: input.referencePaths ?? [], attachedFiles: [], promptInlineFiles: [],
@@ -93,6 +100,7 @@ for (const revision of [false, true]) test(`actual Campaign learner ${revision ?
   const python = "C:/Users/ZhuanZ/miniconda3/python.exe"
   const script = path.join(root, "check.py")
   await writeFile(script, 'import json,sys\np=json.load(open(sys.argv[1],encoding="utf-8-sig"))\ns=open(p["candidate"][0]["path"],encoding="utf-8").read()\nprint(json.dumps({"status":"passed" if s=="Reusable rule" else "rejected","message":"fixture content gate"}))\n')
+  if (fault) await writeFile(script, `import json\nprint(json.dumps({"status":${JSON.stringify(fault)},"message":"fixture failure"}))\n`)
   const hash = async (file: string) => createHash("sha256").update(await readFile(file)).digest("hex")
   await writeFile(path.join(root, "public.txt"), "Public rules")
   await writeFile(path.join(root, "selection.json"), JSON.stringify({ schema: "aev.protocol-plugins.v1", project,
@@ -111,22 +119,31 @@ for (const revision of [false, true]) test(`actual Campaign learner ${revision ?
     protocolPlugins: { schema: "aev.protocol-entry.v1", selectionPath: path.join(root, "selection.json"),
       projectManifestPath: path.join(root, "manifest.json"), taskID: "source", phase: "source" } }))
   const campaign = path.join(root, "campaign.json")
-  await writeFile(campaign, JSON.stringify({ title: "Offline Campaign", baseSpecPath: specPath, mode: "graph_iterative", maxRounds: 1, seedTargets: [] }))
+  await writeFile(campaign, JSON.stringify({ title: "Offline Campaign", baseSpecPath: specPath, mode: "graph_iterative", maxRounds: rejectedLeads === 2 ? 2 : 1, seedTargets: [] }))
   const previous = process.env.AUTO_EVOLVE_SKIP_STALE_HEAL
   process.env.AUTO_EVOLVE_SKIP_STALE_HEAL = "1"
   try {
     const result = await actual.runLongTaskCampaign({ cwd: root, specPath: campaign, forceNew: true })
     await writeFile(path.join(root, "observed-result.json"), JSON.stringify({ result, calls }, null, 2))
-    expect(result.status).toBe("verified_success")
+    expect(result.status).toBe(fault ? "failed" : "verified_success")
     expect(calls.some((title) => title.startsWith("Long Task Execute"))).toBe(true)
-    expect(leads).toBe(revision ? 2 : 1)
+    expect(leads).toBe(rejectedLeads + 1)
+    expect(result.roundsCompleted).toBe(rejectedLeads === 2 ? 2 : 1)
+    if (rejectedLeads === 2) expect(calls.some((title) => title.startsWith("Long Task Graph"))).toBe(true)
     const roundsRoot = path.join(result.campaignDir, "rounds")
     const receipts = (await readdir(roundsRoot, { recursive: true })).filter((file) => file.endsWith("protocol.receipt.json")).sort()
-    expect(receipts).toHaveLength(revision ? 2 : 1)
+    expect(receipts).toHaveLength(rejectedLeads + 1)
     const values = await Promise.all(receipts.map(async (file) => JSON.parse(await readFile(path.join(roundsRoot, file), "utf8"))))
-    expect(values.map((value) => value.status)).toEqual(revision ? ["rejected", "passed"] : ["passed"])
+    expect(values.map((value) => value.status)).toEqual(fault ? [fault] : [...Array(rejectedLeads).fill("rejected"), "passed"])
+    expect(new Set(values.map((value) => value.protocolFingerprint)).size).toBe(1)
     expect(values.every((value) => value.claim === "skill_check" && value.executed === false)).toBe(true)
-    if (revision) expect(values[0].evidence.skill[0].sha256).not.toBe(values[1].evidence.skill[0].sha256)
+    if (rejectedLeads) expect(values[0].evidence.skill[0].sha256).not.toBe(values.at(-1).evidence.skill[0].sha256)
+    if (fault) {
+      const state = JSON.parse(await readFile(path.join(result.campaignDir, "campaign.json"), "utf8"))
+      expect(state.lastGateFailureKind).toBe(fault === "data_error" ? "dataset_failure" : "infrastructure_failure")
+      expect(calls.filter((title) => title.startsWith("Campaign Lead"))).toHaveLength(1)
+      expect(calls.some((title) => /diagnos/i.test(title))).toBe(false)
+    }
   } finally {
     delete holder[key]
     if (previous === undefined) delete process.env.AUTO_EVOLVE_SKIP_STALE_HEAL
