@@ -1,6 +1,6 @@
 import path from "node:path"
 import { randomUUID } from "node:crypto"
-import { mkdir } from "node:fs/promises"
+import { mkdir, readFile } from "node:fs/promises"
 import { writeJsonAtomic } from "../atomic-write"
 import { pathExists } from "../fs"
 import type { LongTaskValidatorResult } from "../long-task/contract"
@@ -64,4 +64,27 @@ export async function campaignAcceptance(input: {
     protocolReceiptPath: receiptPath, protocolClaim: receipt.claim, createdAt: new Date().toISOString() }
   await writeJsonAtomic(input.resultPath, result)
   return result
+}
+
+export async function verifyCompletedCampaignAcceptance(input: {
+  campaignRoot: string; cwd: string; campaignID: string; roundNumber: number;
+  runID: string; entry: Entry; candidateRoot: string; resultPath: string;
+}) {
+  const result = JSON.parse((await readFile(input.resultPath, "utf8")).replace(/^\uFEFF/, ""))
+  const receiptPath = path.join(path.dirname(input.resultPath), "protocol.receipt.json")
+  const relative = path.relative(input.campaignRoot, input.resultPath)
+  if (!path.isAbsolute(input.resultPath) || relative === ".." || relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative) || result.campaignID !== input.campaignID || result.roundNumber !== input.roundNumber ||
+    result.runID !== input.runID || result.passed !== true || result.acceptanceMode !== "protocol_plugins" ||
+    result.protocolReceiptPath !== receiptPath || result.validationPackageRoot !== input.candidateRoot) {
+    throw new Error("Completed Campaign acceptance identity drift")
+  }
+  // 缺少冻结证据只能阻断，不能让复用入口悄悄发出新请求。
+  if (!await pathExists(receiptPath) || !await pathExists(path.join(path.dirname(receiptPath), "protocol.completed.json"))) {
+    throw new Error("Completed Campaign acceptance evidence missing")
+  }
+  const runtime = await selectedRuntime(path.join(input.campaignRoot, "protocol-backends"), input.cwd, input.entry)
+  const receipt = await runEntry(input.campaignRoot, input.entry, input.candidateRoot, path.dirname(receiptPath), runtime,
+    { reuseCompleted: true })
+  if (receipt.status !== "passed" || result.protocolClaim !== receipt.claim) throw new Error("Completed Campaign acceptance verdict drift")
 }

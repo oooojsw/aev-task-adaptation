@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdir, readFile, writeFile, readdir } from "node:fs/promises"
+import { mkdir, readFile, writeFile, readdir, rename } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -161,6 +161,29 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
     expect(values.every((value) => value.claim === (execution ? "task_execution" : "skill_check") &&
       value.executed === Boolean(execution && fault !== "execution_error"))).toBe(true)
     expect(httpCalls).toBe(execution ? rejectedLeads + 1 : 0)
+    if (!fault) {
+      const count = calls.length
+      const requests = httpCalls
+      expect((await actual.resumeLongTaskCampaign({ cwd: root, campaignID: result.campaignID, specPath: campaign })).status).toBe("verified_success")
+      expect(calls).toHaveLength(count)
+      expect(httpCalls).toBe(requests)
+      const state = JSON.parse(await readFile(path.join(result.campaignDir, "campaign.json"), "utf8"))
+      const accepted = JSON.parse(await readFile(state.lastFinalAcceptanceResultPath, "utf8"))
+      const file = path.join(accepted.validationPackageRoot, "rules.txt")
+      const original = await readFile(file)
+      await writeFile(file, "Unverified changed rule")
+      await expect(actual.resumeLongTaskCampaign({ cwd: root, campaignID: result.campaignID, specPath: campaign })).rejects.toThrow("identity")
+      expect(calls).toHaveLength(count)
+      expect(httpCalls).toBe(requests)
+      await writeFile(file, original)
+      const receiptFile = accepted.protocolReceiptPath
+      await rename(receiptFile, `${receiptFile}.fixture-saved`)
+      try {
+        await expect(actual.resumeLongTaskCampaign({ cwd: root, campaignID: result.campaignID, specPath: campaign })).rejects.toThrow("evidence missing")
+        expect(calls).toHaveLength(count)
+        expect(httpCalls).toBe(requests)
+      } finally { await rename(`${receiptFile}.fixture-saved`, receiptFile) }
+    }
     if (rejectedLeads) expect(values[0].evidence.skill[0].sha256).not.toBe(values.at(-1).evidence.skill[0].sha256)
     if (fault) {
       const state = JSON.parse(await readFile(path.join(result.campaignDir, "campaign.json"), "utf8"))

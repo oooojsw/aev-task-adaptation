@@ -33,7 +33,7 @@ import { readOperationalContext, resolveExistingLongTaskRun } from "../long-task
 import { loadLongTaskSpec } from "../long-task/spec"
 import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { runBlankEval } from "../blank-eval/runner"
-import { campaignAcceptance } from "../protocol-plugins/campaign-acceptance"
+import { campaignAcceptance, verifyCompletedCampaignAcceptance } from "../protocol-plugins/campaign-acceptance"
 import { prepareEntry } from "../protocol-plugins/entry"
 import { selectedRuntime } from "../protocol-plugins/selected-runtime"
 import { authorContext, protocolAuthorLines } from "../protocol-plugins/author-context"
@@ -5931,6 +5931,13 @@ export async function resumeLongTaskCampaign(input: {
   }
 
   if (existingState.status === "verified_success" || existingState.status === "round_limit_reached") {
+    if (baseSpec.protocolPlugins && existingState.status === "verified_success") {
+      if (!existingState.lastFinalAcceptanceResultPath || !existingState.lastRunID) throw new Error("Completed Campaign acceptance identity missing")
+      await verifyCompletedCampaignAcceptance({ campaignRoot: campaignPaths.root, cwd: input.cwd,
+        campaignID: input.campaignID, roundNumber: existingState.currentRound, runID: existingState.lastRunID,
+        entry: baseSpec.protocolPlugins, candidateRoot: campaignPaths.pendingCurrentRoot,
+        resultPath: existingState.lastFinalAcceptanceResultPath })
+    }
     return toCampaignRunResult({
       campaignID: input.campaignID,
       campaignPaths,
