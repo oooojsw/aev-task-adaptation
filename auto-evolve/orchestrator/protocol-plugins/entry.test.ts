@@ -8,6 +8,7 @@ import { Runtime } from "./runtime"
 import { campaignAcceptance } from "./campaign-acceptance"
 import { deriveEntry } from "./derive-entry"
 import { instanceReplay, ProtocolReplayFault } from "./instance-replay"
+import { mergeRepair } from "./merge-repair"
 
 async function fixture(status: "passed" | "rejected" | "scoring_error" | "data_error" = "passed") {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -81,6 +82,44 @@ test("derived replay preserves complete frozen selection and lineage", async () 
   const receipt = await runEntry(options.runRoot, entry, path.join(f.root, "candidate"), path.join(f.root, "replay-attempt"), f.runtime)
   expect(receipt.claim).toBe("skill_check")
   expect(receipt.executed).toBe(false)
+  expect(f.calls()).toBe(1)
+})
+
+test("protocol merge repair uses declared entry and promotes only verified bytes", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.replay = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  const runtime = new Runtime().addChecker({ id: "check", version: "1", implementation: "d".repeat(64),
+    targets: ["skill"], mechanisms: ["script"], productKinds: ["text"], validate() {} }, async (input) => ({
+    status: Buffer.from(input.candidate[0].bytes).toString().includes("repaired") ? "passed" : "rejected", message: "Add reusable repair rule" }))
+  const initial = await runEntry(f.run, f.entry, path.join(f.root, "candidate"), path.join(f.root, "initial"), runtime)
+  const result = await mergeRepair({ parentRunRoot: f.run, parentEntry: f.entry, repairRoot: path.join(f.root, "repair"),
+    candidateRoot: path.join(f.root, "candidate"), initial, maxAttempts: 2, mode: "append_only", runtime,
+    author: async (input) => {
+      expect(input.entries).toEqual(["rules.txt"])
+      await writeFile(path.join(input.candidateRoot, "rules.txt"), "Reusable rule\nrepaired")
+      return { completed: true, evidence: [] }
+    } })
+  expect(result.fixed).toBe(true)
+  expect(result.attempts).toBe(1)
+  expect(await readFile(path.join(f.root, "candidate", "rules.txt"), "utf8")).toBe("Reusable rule")
+})
+
+test("repair cannot start from scoring fault or silently violate append-only", async () => {
+  const f = await fixture("scoring_error")
+  f.selection.protocol.phases.replay = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  const initial = await runEntry(f.run, f.entry, path.join(f.root, "candidate"), path.join(f.root, "initial"), f.runtime)
+  let calls = 0
+  await expect(mergeRepair({ parentRunRoot: f.run, parentEntry: f.entry, repairRoot: path.join(f.root, "repair"),
+    candidateRoot: path.join(f.root, "candidate"), initial, maxAttempts: 2, mode: "rewrite", runtime: f.runtime,
+    author: async () => { calls++; return { completed: true, evidence: [] } } })).rejects.toThrow("ordinary non-test rejection")
+  expect(calls).toBe(0)
+  const rejected = { ...initial, status: "rejected" as const }
+  const result = await mergeRepair({ parentRunRoot: f.run, parentEntry: f.entry, repairRoot: path.join(f.root, "append"),
+    candidateRoot: path.join(f.root, "candidate"), initial: rejected, maxAttempts: 1, mode: "append_only", runtime: f.runtime,
+    author: async (input) => { await writeFile(path.join(input.candidateRoot, "rules.txt"), "overwritten"); return { completed: true, evidence: [] } } })
+  expect(result.fixed).toBe(false)
   expect(f.calls()).toBe(1)
 })
 
