@@ -62,9 +62,11 @@ test("actual Campaign bundle routes model calls through mandatory offline bounda
 }, 30000)
 
 for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLeads: 2 },
-  { rejectedLeads: 0, fault: "scoring_error" }, { rejectedLeads: 0, fault: "data_error" }])
-test(`actual Campaign learner ${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
-  const { rejectedLeads, fault } = scenario
+  { rejectedLeads: 0, fault: "scoring_error" }, { rejectedLeads: 0, fault: "data_error" },
+  { rejectedLeads: 0, execution: true }, { rejectedLeads: 1, execution: true },
+  { rejectedLeads: 0, execution: true, fault: "execution_error" }])
+test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
+  const { rejectedLeads, fault, execution } = scenario
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   await mkdir(root, { recursive: true })
   const key = `__campaignOffline_${randomUUID().replaceAll("-", "")}`
@@ -100,17 +102,37 @@ test(`actual Campaign learner ${scenario.fault ?? `accepts after ${scenario.reje
   const python = "C:/Users/ZhuanZ/miniconda3/python.exe"
   const script = path.join(root, "check.py")
   await writeFile(script, 'import json,sys\np=json.load(open(sys.argv[1],encoding="utf-8-sig"))\ns=open(p["candidate"][0]["path"],encoding="utf-8").read()\nprint(json.dumps({"status":"passed" if s=="Reusable rule" else "rejected","message":"fixture content gate"}))\n')
-  if (fault) await writeFile(script, `import json\nprint(json.dumps({"status":${JSON.stringify(fault)},"message":"fixture failure"}))\n`)
+  if (fault && fault !== "execution_error") await writeFile(script, `import json\nprint(json.dumps({"status":${JSON.stringify(fault)},"message":"fixture failure"}))\n`)
   const hash = async (file: string) => createHash("sha256").update(await readFile(file)).digest("hex")
   await writeFile(path.join(root, "public.txt"), "Public rules")
+  await writeFile(path.join(root, "system.txt"), "Independent public execution")
+  const credentialEnv = `AEV_CAMPAIGN_FIXTURE_${randomUUID().replaceAll("-", "").toUpperCase()}`
+  let httpCalls = 0
+  const server = execution ? Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const body = await request.json() as any
+    httpCalls++
+    expect(body.tools).toBeUndefined()
+    expect(body.model).toBe("offline-consumer")
+    if (fault === "execution_error") return Response.json({ error: "fixture unavailable" }, { status: 503 })
+    const text = body.messages.map((item: any) => item.content).join("\n")
+    return Response.json({ model: body.model, choices: [{ finish_reason: "stop", message: {
+      content: text.includes("Incomplete rule") ? "Incomplete rule" : "Reusable rule" } }],
+      usage: { prompt_tokens: 20, completion_tokens: 3 } })
+  } }) : undefined
+  if (execution) process.env[credentialEnv] = "synthetic-local-test"
+  const executor = server ? { id: "http-text-chat", version: "1", settings: { dialect: "openai_chat",
+    url: server.url.origin + "/v1/chat/completions", allowedOrigins: [server.url.origin],
+    model: "offline-consumer", expectedModel: "offline-consumer", credentialEnv, systemInput: "system", userInputs: ["public"],
+    skillPlacement: "system", maxTokens: 100, maxInputBytes: 10000, maxResponseBytes: 4096, temperature: 0, timeoutMs: 2000 } } : undefined
   await writeFile(path.join(root, "selection.json"), JSON.stringify({ schema: "aev.protocol-plugins.v1", project,
     run: { skillFormat: "text", productKind: "text", materialKinds: ["text"] }, protocol: { id: "fixture", version: "1",
-      phases: { source: { claim: "skill_check", checks: [{ id: "script-json-checker", version: "1", name: "content",
-        target: "skill", stage: "before_execution", required: true, mechanism: "script", settings: {
+      phases: { source: { claim: execution ? "task_execution" : "skill_check", executor, checks: [{ id: "script-json-checker", version: "1", name: "content",
+        target: execution ? "product" : "skill", stage: execution ? "after_execution" : "before_execution", required: true, mechanism: "script", settings: {
           command: python, commandSHA256: await hash(python), script, scriptSHA256: await hash(script), timeoutMs: 10000, maxOutputBytes: 4096 } }] } } } }))
   await writeFile(path.join(root, "manifest.json"), JSON.stringify({ schema: "aev.project-pack.v1", project,
     skill: { format: "text", entries: [{ id: "rules", kind: "text", path: "rules.txt" }] },
-    tasks: [{ id: "source", split: "train", materials: [{ id: "public", kind: "text", path: "public.txt" }], privateInputs: [] }] }))
+    tasks: [{ id: "source", split: "train", materials: [{ id: "public", kind: "text", path: "public.txt" },
+      { id: "system", kind: "text", path: "system.txt" }], privateInputs: [] }] }))
   const specPath = path.join(root, "spec.json")
   await writeFile(specPath, JSON.stringify({ title: "Offline learning", goal: "Learn reusable public rules",
     materials: [{ label: "public", path: "public.txt" }], validators: [],
@@ -136,7 +158,9 @@ test(`actual Campaign learner ${scenario.fault ?? `accepts after ${scenario.reje
     const values = await Promise.all(receipts.map(async (file) => JSON.parse(await readFile(path.join(roundsRoot, file), "utf8"))))
     expect(values.map((value) => value.status)).toEqual(fault ? [fault] : [...Array(rejectedLeads).fill("rejected"), "passed"])
     expect(new Set(values.map((value) => value.protocolFingerprint)).size).toBe(1)
-    expect(values.every((value) => value.claim === "skill_check" && value.executed === false)).toBe(true)
+    expect(values.every((value) => value.claim === (execution ? "task_execution" : "skill_check") &&
+      value.executed === Boolean(execution && fault !== "execution_error"))).toBe(true)
+    expect(httpCalls).toBe(execution ? rejectedLeads + 1 : 0)
     if (rejectedLeads) expect(values[0].evidence.skill[0].sha256).not.toBe(values.at(-1).evidence.skill[0].sha256)
     if (fault) {
       const state = JSON.parse(await readFile(path.join(result.campaignDir, "campaign.json"), "utf8"))
@@ -145,6 +169,8 @@ test(`actual Campaign learner ${scenario.fault ?? `accepts after ${scenario.reje
       expect(calls.some((title) => /diagnos/i.test(title))).toBe(false)
     }
   } finally {
+    server?.stop(true)
+    delete process.env[credentialEnv]
     delete holder[key]
     if (previous === undefined) delete process.env.AUTO_EVOLVE_SKIP_STALE_HEAL
     else process.env.AUTO_EVOLVE_SKIP_STALE_HEAL = previous
