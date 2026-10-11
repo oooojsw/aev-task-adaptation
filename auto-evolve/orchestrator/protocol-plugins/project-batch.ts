@@ -15,6 +15,7 @@ import type { ProjectCampaignDriver } from "./project-campaign"
 import type { Runtime } from "./runtime"
 import type { opencodeDriver } from "./opencode-driver"
 import { readCandidate, type SkillBinding } from "./candidate"
+import type { MergeAcceptanceStage } from "../multi-instance/merge-acceptance-policy"
 
 export interface ProjectBatchConfig {
   schema: "aev.project-batch.v1"
@@ -25,6 +26,7 @@ export interface ProjectBatchConfig {
   sourceReplay: boolean
   replayMustPass: boolean
   repairAttempts: number
+  replayStages?: MergeAcceptanceStage[]
   finalTest: boolean
   pipeline: PipelineConfig
 }
@@ -32,7 +34,7 @@ export interface ProjectBatchConfig {
 export function validateProjectBatch(value: unknown): ProjectBatchConfig {
   const cfg = structuredClone(value) as ProjectBatchConfig
   if (!cfg || typeof cfg !== "object" || Array.isArray(cfg) || cfg.schema !== "aev.project-batch.v1" ||
-      Object.keys(cfg).some((key) => !["schema", "tasksPath", "rounds", "fanoutLimit", "requireAllSources", "sourceReplay", "replayMustPass", "repairAttempts", "finalTest", "pipeline"].includes(key)) ||
+      Object.keys(cfg).some((key) => !["schema", "tasksPath", "rounds", "fanoutLimit", "requireAllSources", "sourceReplay", "replayMustPass", "repairAttempts", "replayStages", "finalTest", "pipeline"].includes(key)) ||
       typeof cfg.tasksPath !== "string" || !path.isAbsolute(cfg.tasksPath) ||
       ![cfg.rounds, cfg.fanoutLimit].every((n) => Number.isSafeInteger(n) && n > 0) ||
       !Number.isSafeInteger(cfg.repairAttempts) || cfg.repairAttempts < 0 ||
@@ -41,6 +43,12 @@ export function validateProjectBatch(value: unknown): ProjectBatchConfig {
     throw new Error("Explicit valid project batch config required")
   }
   cfg.pipeline = validatePipeline(cfg.pipeline)
+  if (cfg.replayStages !== undefined && (!cfg.sourceReplay || !Array.isArray(cfg.replayStages) ||
+      !cfg.replayStages.includes("initial_replay") || new Set(cfg.replayStages).size !== cfg.replayStages.length ||
+      cfg.replayStages.some((stage) => !["initial_replay", "repair_promote", "final_full_replay", "strict_acceptance_gate"].includes(stage)) ||
+      (cfg.repairAttempts > 0 && !cfg.replayStages.includes("repair_promote")))) {
+    throw new Error("Explicit compatible replay stages required")
+  }
   if (cfg.repairAttempts > 0 && (!cfg.sourceReplay || cfg.pipeline.repairAuthor?.mode !== "append_only")) {
     throw new Error("Project batch repair requires source replay and explicit append-only author")
   }
@@ -162,8 +170,9 @@ export async function runProjectBatch(input: { cwd: string; runRoot: string; con
   if (progress.stage === "replay") {
     const result = await runCoordinatorPhase3Validate({ cwd: input.cwd, state, validateLimit: cfg.fanoutLimit,
       filter: (row) => row.role === "train" && row.status === "passed",
+      ...(cfg.replayStages ? { acceptancePolicy: { stages: cfg.replayStages, successCriterion: "all_pass" as const } } : {}),
       repair: { enabled: cfg.repairAttempts > 0, mode: "append_only", maxAttemptsPerCase: cfg.repairAttempts,
-        protocolAuthor: cfg.pipeline.repairAuthor } }, { protocolRuntime: runtime })
+        protocolAuthor: cfg.pipeline.repairAuthor } }, { protocolRuntime: runtime, createDriver: dependencies?.createDriver })
     progress.outcomes.replay = result
     if (cfg.replayMustPass && !result.accepted) { await save(); return { status: "replay_gate_blocked", state, progress } }
     progress.stage = cfg.finalTest ? "test" : "completed"; await save()

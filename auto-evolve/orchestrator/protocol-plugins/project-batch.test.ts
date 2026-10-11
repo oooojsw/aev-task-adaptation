@@ -8,7 +8,7 @@ import { prepareProjectTasks } from "./project-tasks"
 import { runProjectBatch, validateProjectBatch, type ProjectBatchConfig } from "./project-batch"
 import { runCoordinatorPhase3Validate } from "../multi-instance/validator"
 
-async function fixture() {
+async function fixture(repair = false, failure?: "test_rejection" | "replay_fault") {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   const pack = path.join(root, "pack")
   await mkdir(pack, { recursive: true })
@@ -32,8 +32,11 @@ async function fixture() {
   let authors = 0
   let learners = 0
   const runtime = new Runtime().addChecker({ id: "fixture", version: "1", implementation: "a".repeat(64),
-    targets: ["skill", "product"], mechanisms: ["script"], productKinds: ["text"], validate() {} }, async () => {
-    checks++; return { status: "passed", message: "Fixture" }
+    targets: ["skill", "product"], mechanisms: ["script"], productKinds: ["text"], validate() {} }, async (input) => {
+    checks++
+    if (input.phase === "replay" && failure === "replay_fault") return { status: "scoring_error", message: "Fixture scorer unavailable" }
+    const rejected = repair && input.phase === "replay" && !Buffer.from(input.candidate[0].bytes).toString().includes("repaired")
+    return { status: rejected || (input.phase === "test" && failure === "test_rejection") ? "rejected" : "passed", message: "Fixture" }
   }).addExecutor({ id: "fixture-executor", version: "1", implementation: "b".repeat(64), skillFormats: ["text"],
     productKinds: ["text"], materialKinds: ["text"], validate() {} }, async () => {
     answers++; return { status: "completed", product: { kind: "text", bytes: Buffer.from("42") } }
@@ -42,6 +45,11 @@ async function fixture() {
   const config: ProjectBatchConfig = { schema: "aev.project-batch.v1", tasksPath: path.join(root, "prepared", "project-tasks.json"),
     rounds: 2, fanoutLimit: 1, requireAllSources: true, sourceReplay: true, replayMustPass: true, repairAttempts: 0, finalTest: true,
     pipeline: { schema: "aev.protocol-pipeline.v1", mergeAuthor: { model: "fixture/author", expectedModel: "fixture/author", timeoutMs: 1000, maxInputBytes: 100000 } } }
+  if (repair) {
+    config.repairAttempts = 2
+    config.replayStages = ["initial_replay", "repair_promote", "final_full_replay", "strict_acceptance_gate"]
+    config.pipeline.repairAuthor = { model: "fixture/author", expectedModel: "fixture/author", timeoutMs: 1000, maxInputBytes: 100000, mode: "append_only" }
+  }
   const projectDriver = { async start(input: { specPath: string }) {
     learners++
     const campaignSpec = JSON.parse(await readFile(input.specPath, "utf8"))
@@ -60,8 +68,10 @@ async function fixture() {
     return { campaignID: "fixed", campaignDir: campaign, status: "verified_success", terminal: true }
   }, async resume() { throw new Error("Completed batch must not resume learning") } }
   const createDriver = async () => ({ implementation: "c".repeat(64), preflight: async () => {},
-    invoke: async (request: { editPaths: string[] }) => {
-      authors++; await writeFile(request.editPaths[0], "Merged reusable rules")
+    invoke: async (request: { editPaths: string[]; prompt: string }) => {
+      authors++
+      const body = request.prompt.startsWith("Revise only") ? (await readFile(request.editPaths[0], "utf8")) + "\nrepaired" : "Merged reusable rules"
+      await writeFile(request.editPaths[0], body)
       return { completed: true, actualModel: "fixture/author", evidence: [] }
     } })
   return { root, input: { cwd: root, runRoot: path.join(root, "batch"), config },
@@ -95,6 +105,26 @@ test("batch configuration changes block before additional calls and unsupported 
   expect(() => validateProjectBatch({ ...f.input.config, fanoutLimit: 0 })).toThrow("valid project")
 })
 
+test("actual batch repairs rejected replay then fully replays before held-out test", async () => {
+  const f = await fixture(true)
+  const first = await runProjectBatch(f.input, f.dependencies)
+  expect(first.status).toBe("completed")
+  const replay = first.progress.outcomes.replay
+  expect(replay.initialReplay).toMatchObject({ passed: 0, failed: 1 })
+  expect(replay.finalReplay).toMatchObject({ passed: 1, failed: 0 })
+  expect(replay.repairAttempts).toBe(1)
+  expect(replay.repairFixed).toBe(1)
+  expect(replay.accepted).toBe(true)
+  expect(f.counts()).toEqual({ checks: 6, answers: 1, authors: 2, learners: 1 })
+  expect(await readFile(path.join(first.state.mergedSkillDir!, "rules.txt"), "utf8")).toBe("Merged reusable rules\nrepaired")
+  const initial = JSON.parse(await readFile(path.join(first.state.runRoot, "protocol-validation-journal/train/initial.snapshot.json"), "utf8"))
+  expect(await readFile(path.join(initial.candidateRoot, "rules.txt"), "utf8")).toBe("Merged reusable rules")
+  expect((await runProjectBatch(f.input, f.dependencies)).status).toBe("completed")
+  expect(f.counts()).toEqual({ checks: 6, answers: 1, authors: 2, learners: 1 })
+  expect(() => validateProjectBatch({ ...f.input.config, replayStages: ["initial_replay", "made_up"] })).toThrow("replay stages")
+  expect(() => validateProjectBatch({ ...f.input.config, replayStages: ["initial_replay"] })).toThrow("replay stages")
+})
+
 test("actual outer replay resumes initial checkpoint without new checks and blocks altered evidence", async () => {
   const f = await fixture()
   const first = await runProjectBatch(f.input, f.dependencies)
@@ -115,6 +145,18 @@ test("actual outer replay resumes initial checkpoint without new checks and bloc
   await writeFile(path.join(first.state.mergedSkillDir!, "rules.txt"), "Changed original initial candidate")
   await expect(runCoordinatorPhase3Validate(input, { protocolRuntime: f.dependencies.runtime })).rejects.toThrow("candidate drift")
   expect(f.counts()).toEqual({ checks: 4, answers: 1, authors: 1, learners: 1 })
+})
+
+test("scoring fault cannot trigger repair and held-out rejection never calls author", async () => {
+  const fault = await fixture(true, "replay_fault")
+  await expect(runProjectBatch(fault.input, fault.dependencies)).rejects.toThrow("infrastructure fault")
+  expect(fault.counts()).toEqual({ checks: 3, answers: 0, authors: 1, learners: 1 })
+  await expect(runProjectBatch(fault.input, fault.dependencies)).rejects.toThrow()
+  expect(fault.counts()).toEqual({ checks: 3, answers: 0, authors: 1, learners: 1 })
+  const heldout = await fixture(true, "test_rejection")
+  const result = await runProjectBatch(heldout.input, heldout.dependencies)
+  expect(result.progress.outcomes.test).toMatchObject({ failed: 1, passed: 0, repairAttempts: 0, repairFixed: 0 })
+  expect(heldout.counts()).toEqual({ checks: 6, answers: 1, authors: 2, learners: 1 })
 })
 
 test("concurrent batch invocation cannot duplicate learning or overwrite active state", async () => {

@@ -1,5 +1,22 @@
 # Explicit pipeline runtime configuration
 
+## Explicit source replay depth (2026-10-11)
+
+ProjectBatchConfig optionally accepts replayStages. Absence preserves the existing
+opt-in batch defaults; explicit stages must include initial_replay, contain only
+initial_replay/repair_promote/final_full_replay/strict_acceptance_gate, and include
+repair_promote when repairAttempts is positive. A complete strict replay selection:
+
+```json
+"replayStages": ["initial_replay", "repair_promote", "final_full_replay", "strict_acceptance_gate"]
+```
+
+Repair author receives the selected runtime/backend, not a silently recreated
+default backend. Offline batch integration now covers rejection, append-only
+repair, full replay, held-out test, completed-run reuse, scorer fault blocking,
+and held-out rejection without author work. Learning/model boundaries still use
+fixed fixtures; real Campaign lifecycle and mid-repair crash recovery are pending.
+
 Development-only integration; complete source/merge/replay/test acceptance is not
 yet certified. No live model call is implied by this document.
 

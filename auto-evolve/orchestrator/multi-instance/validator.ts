@@ -53,6 +53,7 @@ import { instanceReplay, ProtocolReplayFault } from "../protocol-plugins/instanc
 import { instanceRepairCurrent, type ProtocolRepairAuthorConfig } from "../protocol-plugins/instance-repair"
 import type { Runtime } from "../protocol-plugins/runtime"
 import { initialReplayJournal } from "../protocol-plugins/validation-journal"
+import { opencodeDriver } from "../protocol-plugins/opencode-driver"
 
 export interface RunValidateInput {
   cwd: string
@@ -104,7 +105,7 @@ export interface ValidateOutcome {
 }
 
 export async function runCoordinatorPhase3Validate(input: RunValidateInput,
-  dependencies?: { protocolRuntime?: Runtime }): Promise<ValidateOutcome> {
+  dependencies?: { protocolRuntime?: Runtime; createDriver?: typeof opencodeDriver }): Promise<ValidateOutcome> {
   const state = input.state
   state.phase = "phase3_validate"
   await saveCoordinatorState(state)
@@ -202,6 +203,7 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput,
           mergedSkillDir,
           rounds,
           repair: input.repair,
+          protocolDependencies: dependencies,
         })
         repairAttempts += got.attempts
         if (got.fixed) {
@@ -464,6 +466,7 @@ async function runOneRepair(input: {
   mergedSkillDir: string
   rounds: number
   repair: NonNullable<RunValidateInput["repair"]>
+  protocolDependencies?: { protocolRuntime?: Runtime; createDriver?: typeof opencodeDriver }
 }) {
   const sourceSpecPath = path.join(input.instance.sourceTaskRoot, "spec.json")
   if (await pathExists(sourceSpecPath)) {
@@ -476,7 +479,9 @@ async function runOneRepair(input: {
         parentRunRoot: input.instance.campaignDir, candidateRoot: input.mergedSkillDir,
         initialReceiptPath: path.join(input.instance.validateRunRoot, "attempt", "protocol.receipt.json"),
         repairRoot: path.join(input.state.runRoot, "phase4-repair", instanceSlot(input.instance)),
-        maxAttempts: input.repair.maxAttemptsPerCase, author: input.repair.protocolAuthor })
+        maxAttempts: input.repair.maxAttemptsPerCase, author: input.repair.protocolAuthor },
+        input.protocolDependencies?.protocolRuntime ? { runtime: input.protocolDependencies.protocolRuntime,
+          createDriver: input.protocolDependencies.createDriver ?? opencodeDriver } : undefined)
       if (result.fixed) {
         input.state.mergedSkillDir = result.candidateRoot
         input.instance.validateStatus = "passed"
