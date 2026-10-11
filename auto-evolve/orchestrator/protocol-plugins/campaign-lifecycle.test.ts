@@ -75,8 +75,11 @@ test("NBA actual Campaign batch learns merges replays and tests without repeated
   config.monitorConfig.enabled = false
   config.monitorConfig.autoStart = false
   let trainingCalls = 0
+  const grants: Array<{ title: string; prompt: string; reads: string[]; edits: string[] }> = []
   holder[key] = { async loadConfig() { return config }, async runOpencodeTask(input: any) {
     trainingCalls++
+    grants.push({ title: input.title, prompt: input.prompt, reads: [...(input.permissionReadPaths ?? [])],
+      edits: [...(input.permissionEditPaths ?? [])] })
     await input.onSpawn?.()
     if (input.title.startsWith("Campaign Lead")) for (const dir of input.permissionEditPaths ?? []) {
       if (!dir.endsWith(".json")) { await mkdir(dir, { recursive: true }); await writeFile(path.join(dir, "skill.txt"), "Reusable legality procedure") }
@@ -152,6 +155,21 @@ test("NBA actual Campaign batch learns merges replays and tests without repeated
     expect(first.progress.outcomes.test.passed).toBe(1)
     expect(httpCalls).toBe(5)
     expect(authors).toBe(1)
+    const privateFiles = pack.pack.tasks.flatMap((task: any) => task.privateInputs.map((file: any) => path.join(root, "pack", file.path)))
+    const contains = (parent: string, file: string) => {
+      const rel = path.relative(parent, file)
+      return !rel || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
+    }
+    expect(privateFiles).toHaveLength(3)
+    expect(grants.some((grant) => grant.title.startsWith("Campaign Lead"))).toBe(true)
+    expect(grants.some((grant) => grant.title.startsWith("Long Task Graph"))).toBe(true)
+    for (const grant of grants) {
+      expect(grant.prompt).not.toContain("PRIVATE_BATCH_LABEL")
+      for (const allowed of [...grant.reads, ...grant.edits]) {
+        for (const privateFile of privateFiles) expect(contains(allowed, privateFile)).toBe(false)
+      }
+    }
+    await writeFile(path.join(root, "training-permission-audit.json"), JSON.stringify({ grants, privateFiles }, null, 2))
     const before = trainingCalls
     expect((await actual.runProjectBatch(input, dependencies)).status).toBe("completed")
     expect(trainingCalls).toBe(before)
@@ -179,12 +197,13 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
   config.monitorConfig.enabled = false
   config.monitorConfig.autoStart = false
   const calls: string[] = []
-  const roleRequests: Array<{ title: string; prompt: string; reads: string[] }> = []
+  const roleRequests: Array<{ title: string; prompt: string; reads: string[]; edits: string[] }> = []
   let leads = 0
   holder[key] = { async loadConfig() { return config }, async runOpencodeTask(input: any) {
     calls.push(input.title)
     roleRequests.push({ title: input.title, prompt: input.prompt,
-      reads: [...(input.referencePaths ?? []), ...(input.permissionReadPaths ?? [])] })
+      reads: [...(input.referencePaths ?? []), ...(input.permissionReadPaths ?? [])],
+      edits: [...(input.permissionEditPaths ?? [])] })
     await input.onSpawn?.()
     if (input.title.startsWith("Campaign Lead")) leads++
     for (const edit of input.permissionEditPaths ?? []) {
@@ -207,11 +226,14 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
   const project = { id: "campaign-fixture", version: "1", skillFormats: ["text"], productKinds: ["text"], materialKinds: ["text"] }
   const python = "C:/Users/ZhuanZ/miniconda3/python.exe"
   const script = path.join(root, "check.py")
-  await writeFile(script, 'import json,sys\np=json.load(open(sys.argv[1],encoding="utf-8-sig"))\ns=open(p["candidate"][0]["path"],encoding="utf-8").read()\nprint(json.dumps({"status":"passed" if s=="Reusable rule" else "rejected","message":"fixture content gate"}))\n')
+  await writeFile(script, 'import json,sys\np=json.load(open(sys.argv[1],encoding="utf-8-sig"))\ng=json.load(open(p["privateInputs"][0]["path"],encoding="utf-8-sig"))\nassert g["marker"]=="PRIVATE_CAMPAIGN_LABEL"\ns=open(p["candidate"][0]["path"],encoding="utf-8").read()\nprint(json.dumps({"status":"passed" if s=="Reusable rule" else "rejected","message":"fixture content gate"}))\n')
   if (fault && fault !== "execution_error") await writeFile(script, `import json\nprint(json.dumps({"status":${JSON.stringify(fault)},"message":"fixture failure"}))\n`)
   const hash = async (file: string) => createHash("sha256").update(await readFile(file)).digest("hex")
   await writeFile(path.join(root, "public.txt"), "Public rules")
   await writeFile(path.join(root, "system.txt"), "Independent public execution")
+  const privateFile = path.join(root, "private", "gold.json")
+  await mkdir(path.dirname(privateFile))
+  await writeFile(privateFile, JSON.stringify({ marker: "PRIVATE_CAMPAIGN_LABEL" }))
   const credentialEnv = `AEV_CAMPAIGN_FIXTURE_${randomUUID().replaceAll("-", "").toUpperCase()}`
   let httpCalls = 0
   const server = execution ? Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
@@ -219,6 +241,7 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
     httpCalls++
     expect(body.tools).toBeUndefined()
     expect(body.model).toBe("offline-consumer")
+    expect(JSON.stringify(body)).not.toContain("PRIVATE_CAMPAIGN_LABEL")
     if (fault === "execution_error") return Response.json({ error: "fixture unavailable" }, { status: 503 })
     const text = body.messages.map((item: any) => item.content).join("\n")
     return Response.json({ model: body.model, choices: [{ finish_reason: "stop", message: {
@@ -233,12 +256,12 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
   await writeFile(path.join(root, "selection.json"), JSON.stringify({ schema: "aev.protocol-plugins.v1", project,
     run: { skillFormat: "text", productKind: "text", materialKinds: ["text"] }, protocol: { id: "fixture", version: "1",
       phases: { source: { claim: execution ? "task_execution" : "skill_check", executor, checks: [{ id: "script-json-checker", version: "1", name: "content",
-        target: execution ? "product" : "skill", stage: execution ? "after_execution" : "before_execution", required: true, mechanism: "script", settings: {
+        target: execution ? "product" : "skill", stage: execution ? "after_execution" : "before_execution", required: true, mechanism: "script", privateInputs: ["gold"], settings: {
           command: python, commandSHA256: await hash(python), script, scriptSHA256: await hash(script), timeoutMs: 10000, maxOutputBytes: 4096 } }] } } } }))
   await writeFile(path.join(root, "manifest.json"), JSON.stringify({ schema: "aev.project-pack.v1", project,
     skill: { format: "text", entries: [{ id: "rules", kind: "text", path: "rules.txt" }] },
     tasks: [{ id: "source", split: "train", materials: [{ id: "public", kind: "text", path: "public.txt" },
-      { id: "system", kind: "text", path: "system.txt" }], privateInputs: [] }] }))
+      { id: "system", kind: "text", path: "system.txt" }], privateInputs: [{ id: "gold", kind: "json", path: "private/gold.json" }] }] }))
   const specPath = path.join(root, "spec.json")
   await writeFile(specPath, JSON.stringify({ title: "Offline learning", goal: "Learn reusable public rules",
     materials: [{ label: "public", path: "public.txt" }], validators: [],
@@ -255,6 +278,14 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
     await writeFile(path.join(root, "observed-result.json"), JSON.stringify({ result, calls }, null, 2))
     expect(result.status).toBe(fault ? "failed" : "verified_success")
     expect(calls.some((title) => title.startsWith("Long Task Execute"))).toBe(true)
+    for (const request of roleRequests) {
+      expect(request.prompt).not.toContain("PRIVATE_CAMPAIGN_LABEL")
+      for (const allowed of [...request.reads, ...request.edits]) {
+        const rel = path.relative(allowed, privateFile)
+        expect(!rel || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))).toBe(false)
+      }
+    }
+    await writeFile(path.join(root, "role-permission-audit.json"), JSON.stringify({ privateFile, roleRequests }, null, 2))
     for (const request of roleRequests.filter((item) => item.title.startsWith("Campaign"))) {
       expect(request.reads.some((file) => file.endsWith("protocol.receipt.json"))).toBe(false)
       expect(request.prompt).not.toContain("protocol.receipt.json")

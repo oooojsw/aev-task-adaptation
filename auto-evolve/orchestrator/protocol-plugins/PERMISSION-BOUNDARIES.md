@@ -42,3 +42,18 @@ Remaining audit: actual complete host tool calls, Campaign role read directories
 and private-data visibility. This guard does not
 provide OS process isolation or solve link replacement races during execution.
 No production deployment or historical evidence modification is implied.
+
+## Campaign role path audit
+
+Actual Campaign lifecycle fixtures now include synthetic private gold material
+bound to the real Python scorer. Both Skill-check and HTTP-product-check cases
+cover pass, one rejection, two rejections across rounds, scoring/data faults and
+HTTP failure. Every captured training request's read/reference/edit grants are
+checked for containment of the private file; prompts and HTTP payloads must not
+include its synthetic marker. The NBA complete batch independently audits its
+three private inputs against training grants. Per-fixture audit JSON is retained.
+
+This proves the tested actual controllers construct disjoint declared grants and
+the scorer can receive its private binding. Fixed model boundaries do not execute
+host shell/tool reads, so it does not prove unrestricted shell isolation or every
+custom role/plugin configuration. Those are distinct from directory-grant checks.
