@@ -48,7 +48,8 @@ export type Evaluate = (input: PublicInputs & {
   privateInputs: Artifact[]
   settings: Settings
   check: Pick<Check, "name" | "target" | "stage" | "mechanism">
-}) => Promise<{ status: "passed" | "rejected" | "scoring_error" | "data_error"; message: string }>
+}) => Promise<{ status: "passed" | "rejected" | "scoring_error" | "data_error"; message: string;
+  usage?: { inputTokens?: number; outputTokens?: number }; reused?: boolean }>
 
 function metadata(input: Artifact[]) {
   return input.map(({ bytes: _, ...item }) => item)
@@ -119,7 +120,8 @@ export class Runtime {
     }
     if (plan.executor && !this.executors.has(identity(plan.executor))) throw new Error(`Missing executor handler: ${plan.executor.id}`)
     const evidence = { skill: metadata(skill), materials: metadata(materials), privateInputs: metadata(privateInputs) }
-    const checks: Array<{ name: string; target: Check["target"]; stage: Check["stage"]; mechanism: Check["mechanism"]; required: boolean; status: Outcome; message: string; inputFingerprint: string }> = []
+    const checks: Array<{ name: string; target: Check["target"]; stage: Check["stage"]; mechanism: Check["mechanism"]; required: boolean; status: Outcome; message: string; inputFingerprint: string;
+      usage?: { inputTokens?: number; outputTokens?: number }; reused?: boolean }> = []
     let product: Artifact | undefined
     let usage: { inputTokens?: number; outputTokens?: number } | undefined
     let reused = false

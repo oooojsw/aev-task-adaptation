@@ -4,10 +4,10 @@ import { createHash } from "node:crypto"
 import { writeJsonAtomic } from "../atomic-write"
 import { canonical, fingerprint } from "./identity"
 import { identity } from "./registry"
-import type { Identity, Json } from "./contract"
+import type { Identity, Json, Settings } from "./contract"
 import type { Artifact, Evaluate, Execute } from "./runtime"
 
-type Plugin = Identity & { implementation: string }
+type Plugin = Identity & { implementation: string; validate?: (settings: Settings) => void }
 interface Stored {
   schema: "aev.plugin-cache.v1"
   request: string
@@ -58,7 +58,9 @@ async function store(dir: string, key: string, body: Json) {
 function plugin(value: Plugin) {
   identity(value)
   if (!/^[a-f0-9]{64}$/.test(value.implementation)) throw new Error("Actual plugin implementation identity required")
-  return JSON.parse(canonical(value)) as Plugin
+  // 校验函数属于执行接口，不属于可序列化的版本与能力指纹。
+  const { validate: _, ...descriptor } = value
+  return JSON.parse(canonical(descriptor)) as Plugin
 }
 
 export function cachedExecution(root: string, descriptor: Plugin, handler: Execute): Execute {
@@ -110,7 +112,8 @@ export function cachedScoring(root: string, descriptor: Plugin, handler: Evaluat
       if (!["passed", "rejected"].includes(String(result.status)) || typeof result.message !== "string") {
         throw new Error("Invalid cached scoring receipt")
       }
-      return { status: result.status as "passed" | "rejected", message: result.message }
+      return { status: result.status as "passed" | "rejected", message: result.message,
+        ...(result.usage ? { usage: result.usage as { inputTokens?: number; outputTokens?: number } } : {}), reused: true }
     }
     try {
       const result = await handler(input)
@@ -120,7 +123,7 @@ export function cachedScoring(root: string, descriptor: Plugin, handler: Evaluat
         })
         return result ?? { status: "scoring_error", message: "Invalid scoring reply" }
       }
-      await store(entry.dir, key, { status: result.status, message: result.message })
+      await store(entry.dir, key, { status: result.status, message: result.message, ...(result.usage ? { usage: result.usage } : {}) })
       return result
     } catch (err) {
       await writeJsonAtomic(path.join(entry.dir, "failure.json"), {
