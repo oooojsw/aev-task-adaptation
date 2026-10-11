@@ -225,6 +225,15 @@ test("real merger accepts arbitrary entries and recovers without author or check
     .toMatchObject({ ...first, reused: true })
   expect(calls).toBe(1)
   expect(f.calls()).toBe(2)
+  for (const filename of ["author.request.json", "author.result.json"]) {
+    const file = path.join(first.mergerRunDir, filename)
+    const original = await readFile(file)
+    await writeFile(file, JSON.stringify({ ...JSON.parse(original.toString("utf8")), modifiedEvidence: true }))
+    await expect(runCoordinatorPhase2Merge(input, dependencies)).rejects.toThrow("author evidence drift")
+    expect(calls).toBe(1)
+    expect(f.calls()).toBe(2)
+    await writeFile(file, original)
+  }
   await writeFile(path.join(first.mergedSkillDir, "rules.txt"), "Changed deployment")
   await expect(runCoordinatorPhase2Merge(input, dependencies)).rejects.toThrow("output drift")
   expect(calls).toBe(1)

@@ -77,9 +77,11 @@ export async function mergeStage(input: { cwd: string; runRoot: string; config: 
     // 开始标记先落盘；半完成作者调用只能核查，不能自动重发。
     const claim = await open(path.join(input.runRoot, "author.started.claim"), "wx")
     await claim.close()
-    const result = await driver.invoke({ workDir: output, prompt: staged.prompt, model: author.model,
+    const request = { workDir: output, prompt: staged.prompt, model: author.model,
       readPaths: staged.readPaths, editPaths: staged.editPaths, allowShell: false,
-      timeoutMs: author.timeoutMs, maxAttempts: 1 }, new AbortController().signal)
+      timeoutMs: author.timeoutMs, maxAttempts: 1 }
+    await writeJsonAtomic(path.join(input.runRoot, "author.request.json"), request)
+    const result = await driver.invoke(request, new AbortController().signal)
     await writeJsonAtomic(path.join(input.runRoot, "author.result.json"), result)
     if (!result.completed || result.actualModel !== author.expectedModel) throw new Error("Merge author incomplete or wrong model")
     if ((await mergeContext({ ...cfg, sources, outputRoot: output, runtime })).fingerprint !== staged.fingerprint) {
@@ -90,9 +92,13 @@ export async function mergeStage(input: { cwd: string; runRoot: string; config: 
     }
   }
   const candidate = await readCandidate(output, prepared.project.pack.skill)
+  const authorRequest = fingerprint(JSON.parse((await readFile(path.join(input.runRoot, "author.request.json"), "utf8")).replace(/^\uFEFF/, "")))
+  const authorResult = fingerprint(JSON.parse((await readFile(path.join(input.runRoot, "author.result.json"), "utf8")).replace(/^\uFEFF/, "")))
   if (reused) {
     const saved = JSON.parse((await readFile(completed, "utf8")).replace(/^\uFEFF/, ""))
     if (saved.binding !== fingerprint(binding) || saved.candidate !== candidate.fingerprint) throw new Error("Completed merge output drift")
+    // 输出未变也要核验作者证据，防止恢复使用被改写的回执。
+    if (saved.authorRequest !== authorRequest || saved.authorResult !== authorResult) throw new Error("Completed merge author evidence drift")
   }
   const receipt = await runEntry(path.join(input.runRoot, "acceptance"), entry, output,
     path.join(input.runRoot, "acceptance", "attempt"), runtime, { reuseCompleted: reused })
@@ -100,7 +106,10 @@ export async function mergeStage(input: { cwd: string; runRoot: string; config: 
   if ((await readCandidate(output, prepared.project.pack.skill)).fingerprint !== candidate.fingerprint) {
     throw new Error("Merge output changed during acceptance")
   }
-  if (!reused) await writeJsonAtomic(completed, { binding: fingerprint(binding), candidate: candidate.fingerprint })
+  const currentRequest = fingerprint(JSON.parse((await readFile(path.join(input.runRoot, "author.request.json"), "utf8")).replace(/^\uFEFF/, "")))
+  const currentResult = fingerprint(JSON.parse((await readFile(path.join(input.runRoot, "author.result.json"), "utf8")).replace(/^\uFEFF/, "")))
+  if (currentRequest !== authorRequest || currentResult !== authorResult) throw new Error("Merge author evidence changed during acceptance")
+  if (!reused) await writeJsonAtomic(completed, { binding: fingerprint(binding), candidate: candidate.fingerprint, authorRequest, authorResult })
   return { mergedSkillDir: output, contributingInstances: cfg.sources.map((source) => source.id),
     mergerRunDir: input.runRoot, postMergeValidationResultPath: path.join(input.runRoot, "acceptance", "attempt", "protocol.receipt.json"),
     postMergeValidationPassed: true, reused }
