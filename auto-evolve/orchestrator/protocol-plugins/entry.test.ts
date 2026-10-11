@@ -15,6 +15,7 @@ import { runCoordinatorPhase2Merge } from "../multi-instance/merger"
 import type { CoordinatorState } from "../multi-instance/contract"
 import { mergeStage } from "./merge-stage"
 import { harvest } from "./harvest"
+import { mergeWithStrategy } from "./merge-strategy"
 
 async function fixture(status: "passed" | "rejected" | "scoring_error" | "data_error" = "passed") {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -209,6 +210,46 @@ test("merge source requires unchanged completion receipt and no interrupted mark
   await writeFile(path.join(attempt, "protocol.failure.json"), JSON.stringify({ status: "interrupted" }))
   await expect(mergeContext(input)).rejects.toThrow("incomplete")
   expect(f.calls()).toBe(1)
+})
+
+test("hierarchical strategy groups three sources and resumes each group without calls", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.merge = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  const manifest = JSON.parse(await readFile(f.entry.projectManifestPath, "utf8"))
+  manifest.tasks = ["task", "task-two", "task-three"].map((id) => ({ ...manifest.tasks[0], id }))
+  await writeFile(f.entry.projectManifestPath, JSON.stringify(manifest))
+  const sources = []
+  for (const [index, task] of manifest.tasks.entries()) {
+    const attempt = path.join(f.root, `source-${index}-attempt`)
+    await runEntry(index === 0 ? f.run : path.join(f.root, `source-${index}`),
+      { ...f.entry, taskID: task.id }, path.join(f.root, "candidate"), attempt, f.runtime)
+    sources.push({ id: task.id, candidateRoot: path.join(f.root, "candidate"),
+      receiptPath: path.join(attempt, "protocol.receipt.json") })
+  }
+  let authors = 0
+  const dependencies = { runtime: f.runtime, createDriver: async () => ({ implementation: "a".repeat(64),
+    preflight: async () => {}, invoke: async (request: { editPaths: string[] }) => {
+      authors++
+      await writeFile(request.editPaths[0], `Hierarchical reusable guidance ${authors}`)
+      return { completed: true, actualModel: "fixture/author", evidence: [] }
+    } }) }
+  const input = { cwd: f.root, runRoot: path.join(f.root, "hierarchy"),
+    strategy: { kind: "hierarchical" as const, groupSize: 2 }, config: { parentRunRoot: f.run,
+      entry: f.entry, sources, author: { model: "fixture/author", expectedModel: "fixture/author",
+        timeoutMs: 1000, maxInputBytes: 100000 } } }
+  const result = await mergeWithStrategy(input, dependencies)
+  expect(result.contributingInstances).toEqual(["task", "task-two", "task-three"])
+  expect(authors).toBe(3)
+  expect(f.calls()).toBe(6)
+  expect((await mergeWithStrategy(input, dependencies)).reused).toBe(true)
+  expect(authors).toBe(3)
+  expect(f.calls()).toBe(6)
+  await expect(mergeWithStrategy({ ...input, strategy: { kind: "hierarchical", groupSize: 3 } }, dependencies))
+    .rejects.toThrow("configuration drift")
+  await expect(mergeWithStrategy({ ...input, strategy: undefined }, dependencies)).rejects.toThrow("removed or changed")
+  await expect(mergeWithStrategy({ ...input, strategy: { kind: "flat" } }, dependencies)).rejects.toThrow("removed or changed")
+  expect(authors).toBe(3)
 })
 
 test("completed intermediate merge feeds next layer with original UID and no repeated calls", async () => {

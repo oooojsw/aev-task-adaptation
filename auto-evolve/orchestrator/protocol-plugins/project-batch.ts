@@ -163,7 +163,8 @@ export async function runProjectBatch(input: { cwd: string; runRoot: string; con
     progress.stage = "merge"; await save()
   }
   if (progress.stage === "merge") {
-    progress.outcomes.merge = await runCoordinatorPhase2Merge({ cwd: input.cwd, state, protocolAuthor: cfg.pipeline.mergeAuthor },
+    progress.outcomes.merge = await runCoordinatorPhase2Merge({ cwd: input.cwd, state, protocolAuthor: cfg.pipeline.mergeAuthor,
+      protocolMergeStrategy: cfg.pipeline.mergeStrategy },
       { runtime, createDriver: dependencies?.createDriver })
     progress.stage = cfg.sourceReplay ? "replay" : cfg.finalTest ? "test" : "completed"; await save()
   }

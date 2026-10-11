@@ -98,6 +98,21 @@ test("generic batch traverses real harvest/merge/replay/test and completion resu
   expect(f.counts()).toEqual({ checks: 4, answers: 1, authors: 1, learners: 1 })
 })
 
+test("batch selected hierarchy reaches replay and held-out test with unchanged original sources", async () => {
+  const f = await fixture(false, undefined, 3)
+  f.input.config.pipeline.mergeStrategy = { kind: "hierarchical", groupSize: 2 }
+  const first = await runProjectBatch(f.input, f.dependencies)
+  expect(first.status).toBe("completed")
+  expect(first.progress.outcomes.merge.contributingInstances).toEqual(["train", "train-2", "train-3"])
+  expect(f.counts()).toEqual({ checks: 10, answers: 1, authors: 3, learners: 3 })
+  expect((await runProjectBatch(f.input, f.dependencies)).status).toBe("completed")
+  expect(f.counts()).toEqual({ checks: 10, answers: 1, authors: 3, learners: 3 })
+  await expect(runProjectBatch({ ...f.input, config: { ...f.input.config,
+    pipeline: { ...f.input.config.pipeline, mergeStrategy: { kind: "flat" } } } }, f.dependencies))
+    .rejects.toThrow("configuration drift")
+  expect(f.counts()).toEqual({ checks: 10, answers: 1, authors: 3, learners: 3 })
+})
+
 test("batch configuration changes block before additional calls and unsupported repair is explicit", async () => {
   const f = await fixture()
   await runProjectBatch(f.input, f.dependencies)

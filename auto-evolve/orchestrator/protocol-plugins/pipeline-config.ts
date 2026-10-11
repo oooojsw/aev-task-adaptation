@@ -4,19 +4,22 @@ import { writeJsonAtomic } from "../atomic-write"
 import { canonical, fingerprint, immutable } from "./identity"
 import type { ProtocolMergeConfig } from "./merge-stage"
 import type { ProtocolRepairAuthorConfig } from "./instance-repair"
+import { validateMergeStrategy, type MergeStrategy } from "./merge-strategy"
 
 export interface PipelineConfig {
   schema: "aev.protocol-pipeline.v1"
   mergeAuthor: ProtocolMergeConfig["author"]
   repairAuthor?: ProtocolRepairAuthorConfig
+  mergeStrategy?: MergeStrategy
 }
 
 export function validatePipeline(value: unknown): PipelineConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid protocol pipeline config")
   const cfg = structuredClone(value) as PipelineConfig
-  if (cfg.schema !== "aev.protocol-pipeline.v1" || Object.keys(cfg).some((key) => !["schema", "mergeAuthor", "repairAuthor"].includes(key))) {
+  if (cfg.schema !== "aev.protocol-pipeline.v1" || Object.keys(cfg).some((key) => !["schema", "mergeAuthor", "repairAuthor", "mergeStrategy"].includes(key))) {
     throw new Error("Unknown protocol pipeline field or schema")
   }
+  if (cfg.mergeStrategy !== undefined) cfg.mergeStrategy = validateMergeStrategy(cfg.mergeStrategy)
   for (const [role, author] of [["merge", cfg.mergeAuthor], ["repair", cfg.repairAuthor]] as const) {
     if (role === "repair" && author === undefined) continue
     if (!author || typeof author !== "object" || Array.isArray(author) ||

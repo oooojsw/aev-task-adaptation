@@ -34,6 +34,17 @@ test("pipeline partial claim and orphan snapshot block rather than recreate", as
   }
 })
 
+test("pipeline freezes explicit hierarchy and rejects unknown or nonshrinking groups", async () => {
+  const dir = root()
+  const cfg: PipelineConfig = { ...config, mergeStrategy: { kind: "hierarchical", groupSize: 2 } }
+  expect((await freezePipeline(dir, cfg))?.mergeStrategy).toEqual(cfg.mergeStrategy)
+  await expect(freezePipeline(dir, { ...cfg, mergeStrategy: { kind: "hierarchical", groupSize: 3 } })).rejects.toThrow("drift")
+  for (const strategy of [{ kind: "hierarchical", groupSize: 1 }, { kind: "hierarchical", groupSize: Infinity },
+    { kind: "flat", groupSize: 2 }, { kind: "guess" }, null]) {
+    expect(() => validatePipeline({ ...config, mergeStrategy: strategy })).toThrow()
+  }
+})
+
 test("pipeline file uses explicit path and reads UTF8 BOM without defaults", async () => {
   const dir = root()
   await mkdir(dir, { recursive: true })
