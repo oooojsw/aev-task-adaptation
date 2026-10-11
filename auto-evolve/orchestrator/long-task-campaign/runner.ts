@@ -36,6 +36,7 @@ import { campaignAcceptance } from "../protocol-plugins/campaign-acceptance"
 import { prepareEntry } from "../protocol-plugins/entry"
 import { builtins } from "../protocol-plugins/builtins"
 import { authorContext, protocolAuthorLines } from "../protocol-plugins/author-context"
+import { copyCandidate, hasCandidate, type SkillBinding } from "../protocol-plugins/candidate"
 import {
   defaultReuseForPolicy,
   hashFileIfExists,
@@ -2063,8 +2064,12 @@ async function copySurfaceContractRequiredPaths(sourceRoot: string, targetRoot: 
 async function copyExperienceWorkspaceRoot(
   sourceRoot: string,
   targetRoot: string,
-  options: { includeSurfaceContractRequiredPaths?: boolean } = {},
+  options: { includeSurfaceContractRequiredPaths?: boolean; declaredSkill?: SkillBinding } = {},
 ) {
+  if (options.declaredSkill) {
+    await copyCandidate(sourceRoot, targetRoot, options.declaredSkill)
+    return
+  }
   const snapshot = await readExperienceWorkspace(experienceSnapshotFromRoot(sourceRoot))
   await resetPath(targetRoot)
   await writeExperienceWorkspaceSnapshot(targetRoot, snapshot)
@@ -2131,8 +2136,14 @@ function enforceCampaignTruthPaths(input: {
 async function seedCampaignCurrentPendingPackage(input: {
   currentRoot: string
   seedTarget: LongTaskCampaignSeedTarget | undefined
+  declaredSkill?: SkillBinding
 }) {
   if (!input.seedTarget) return
+  if (input.declaredSkill) {
+    if (await hasCandidate(input.currentRoot, input.declaredSkill)) return
+    await copyCandidate(input.seedTarget.seedPath, input.currentRoot, input.declaredSkill)
+    return
+  }
   const entryCandidates = ["manifest.md", "INDEX.md", "README.md", "index.md", "ENTRY.md"]
   for (const candidate of entryCandidates) {
     if (await pathExists(path.join(input.currentRoot, candidate))) return
@@ -3597,7 +3608,8 @@ async function resolvePendingPackageEntryFile(pendingCurrentRoot: string): Promi
   }
 }
 
-export async function hasEvolvedPendingPackage(pendingCurrentRoot: string, allowReadmeOnly = false): Promise<boolean> {
+export async function hasEvolvedPendingPackage(pendingCurrentRoot: string, allowReadmeOnly = false, declaredSkill?: SkillBinding): Promise<boolean> {
+  if (declaredSkill) return hasCandidate(pendingCurrentRoot, declaredSkill)
   // Check surface_contract.json first to find where the entry file should be
   const entryRel = await resolvePendingPackageEntryFile(pendingCurrentRoot)
   if (entryRel) return true
@@ -3626,13 +3638,15 @@ async function prepareCampaignRoundState(input: {
       primarySeed &&
       seedTarget.targetPath === primarySeed.targetPath &&
       (seedTarget.kind ?? "experience_workspace") === "experience_workspace" &&
-      (await hasEvolvedPendingPackage(input.campaignPaths.pendingCurrentRoot, input.baseSpec.blankEvalExecutor?.kind === "single_turn_http"))
+      (await hasEvolvedPendingPackage(input.campaignPaths.pendingCurrentRoot, input.baseSpec.blankEvalExecutor?.kind === "single_turn_http", input.baseSpec.protocolAuthorContext?.skill))
     ) {
-      await copyExperienceWorkspaceRoot(input.campaignPaths.pendingCurrentRoot, seedTarget.targetPath)
+      await copyExperienceWorkspaceRoot(input.campaignPaths.pendingCurrentRoot, seedTarget.targetPath,
+        { declaredSkill: input.baseSpec.protocolAuthorContext?.skill })
       continue
     }
     if ((seedTarget.kind ?? "experience_workspace") === "experience_workspace") {
-      await copyExperienceWorkspaceRoot(seedTarget.seedPath, seedTarget.targetPath)
+      await copyExperienceWorkspaceRoot(seedTarget.seedPath, seedTarget.targetPath,
+        { declaredSkill: primarySeed?.targetPath === seedTarget.targetPath ? input.baseSpec.protocolAuthorContext?.skill : undefined })
       continue
     }
     await copyPathIntoTarget(seedTarget.seedPath, seedTarget.targetPath)
@@ -3708,12 +3722,14 @@ async function seedRoundPendingPackageFromCurrent(input: {
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   allowReadmeOnly?: boolean
+  declaredSkill?: SkillBinding
 }) {
-  if (!(await hasEvolvedPendingPackage(input.campaignPaths.pendingCurrentRoot, input.allowReadmeOnly))) {
+  if (!(await hasEvolvedPendingPackage(input.campaignPaths.pendingCurrentRoot, input.allowReadmeOnly, input.declaredSkill))) {
     await ensureDirectory(input.roundPaths.pendingPackageSnapshotRoot)
     return
   }
-  await copyExperienceWorkspaceRoot(input.campaignPaths.pendingCurrentRoot, input.roundPaths.pendingPackageSnapshotRoot)
+  await copyExperienceWorkspaceRoot(input.campaignPaths.pendingCurrentRoot, input.roundPaths.pendingPackageSnapshotRoot,
+    { declaredSkill: input.declaredSkill })
 }
 
 async function seedRoundExplorationTreeFromCurrent(input: {
@@ -4188,6 +4204,9 @@ async function runCampaignLead(input: {
   })
   const access = profileAccess ?? await buildCampaignRoleAccessView({
     role: "lead",
+    editPaths: input.baseSpec.protocolPlugins
+      ? [input.nextPendingPackageRoot, input.nextExplorationTreePath, input.nextRoutingControlPath]
+      : undefined,
     basePaths: [
       input.runTraceDigestPath,
       input.previousPendingPackageRoot,
@@ -4937,12 +4956,13 @@ async function promoteRoundPendingAndTreeToCurrent(input: {
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
   allowReadmeOnly?: boolean
+  declaredSkill?: SkillBinding
 }) {
-  if (await hasEvolvedPendingPackage(input.roundPaths.pendingPackageSnapshotRoot, input.allowReadmeOnly)) {
+  if (await hasEvolvedPendingPackage(input.roundPaths.pendingPackageSnapshotRoot, input.allowReadmeOnly, input.declaredSkill)) {
     await copyExperienceWorkspaceRoot(
       input.roundPaths.pendingPackageSnapshotRoot,
       input.campaignPaths.pendingCurrentRoot,
-      { includeSurfaceContractRequiredPaths: true },
+      { includeSurfaceContractRequiredPaths: true, declaredSkill: input.declaredSkill },
     )
   }
   const currentTree = await readLongTaskCampaignExplorationTree(input.campaignPaths)
@@ -5063,6 +5083,7 @@ export async function runLongTaskCampaign(input: {
   }
   enforceCampaignTruthPaths({ campaignPaths })
   await seedCampaignCurrentPendingPackage({
+    declaredSkill: baseSpec.protocolAuthorContext?.skill,
     currentRoot: campaignPaths.pendingCurrentRoot,
     seedTarget: primaryExperienceWorkspaceSeedTarget(campaignSpec.seedTargets),
   })
@@ -5107,6 +5128,7 @@ export async function runLongTaskCampaign(input: {
         await seedRoundPendingPackageFromCurrent({
           campaignPaths,
           roundPaths,
+          declaredSkill: baseSpec.protocolAuthorContext?.skill,
           allowReadmeOnly: baseSpec.blankEvalExecutor?.kind === "single_turn_http",
         })
         await seedRoundExplorationTreeFromCurrent({
@@ -5566,6 +5588,7 @@ export async function runLongTaskCampaign(input: {
           await promoteRoundPendingAndTreeToCurrent({
             campaignPaths,
             roundPaths,
+            declaredSkill: baseSpec.protocolAuthorContext?.skill,
             allowReadmeOnly: baseSpec.blankEvalExecutor?.kind === "single_turn_http",
           })
 
@@ -6057,6 +6080,7 @@ export async function resumeLongTaskCampaign(input: {
         await seedRoundPendingPackageFromCurrent({
           campaignPaths,
           roundPaths,
+          declaredSkill: baseSpec.protocolAuthorContext?.skill,
           allowReadmeOnly: baseSpec.blankEvalExecutor?.kind === "single_turn_http",
         })
         await seedRoundExplorationTreeFromCurrent({
@@ -6509,6 +6533,7 @@ export async function resumeLongTaskCampaign(input: {
           await promoteRoundPendingAndTreeToCurrent({
             campaignPaths,
             roundPaths,
+            declaredSkill: baseSpec.protocolAuthorContext?.skill,
             allowReadmeOnly: baseSpec.blankEvalExecutor?.kind === "single_turn_http",
           })
 
