@@ -46,3 +46,15 @@ claim; it is not promoted into a task-execution claim.
 
 Completed merge recovery verifies author evidence, output and protocol verdict.
 Interrupted author calls require inspection and are never automatically resent.
+
+## Generic project preparation (development only)
+
+`prepare-protocol-project --manifest <absolute-manifest> --selection <absolute-selection>
+--out <new-directory> --training-goal-file <goal-file>` prepares task specs without
+model execution. Train/test roles come from the frozen project; validation IDs are
+recorded as excluded, never silently reassigned. Task directories use numeric slots
+so arbitrary project IDs cannot become path traversal. Training specs contain public
+materials only; private scorer bindings remain in the project manifest. Existing
+destinations block, including partial preparation; no overwrite or automatic resume.
+This command prepares specs, not a full batch learning pipeline. Generic Campaign
+dispatch and whole-pipeline acceptance are still pending.

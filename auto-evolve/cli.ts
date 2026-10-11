@@ -1009,6 +1009,30 @@ async function main() {
     case "run-skillsbench":
       await commandRunSkillsBench(args)
       return
+    case "prepare-protocol-project": {
+      const required = (flag: string) => {
+        const value = getOption(args, flag)
+        if (!value) throw new Error(`Missing required option: ${flag}`)
+        return path.resolve(process.cwd(), value)
+      }
+      const manifestPath = required("--manifest")
+      const selectionPath = required("--selection")
+      const destination = required("--out")
+      const goalFile = required("--training-goal-file")
+      const { readFile } = await import("node:fs/promises")
+      const { prepareProjectTasks } = await import("./orchestrator/protocol-plugins/project-tasks")
+      const { selectedRuntime } = await import("./orchestrator/protocol-plugins/selected-runtime")
+      const { loadPack } = await import("./orchestrator/protocol-plugins/project-pack")
+      const project = await loadPack(manifestPath)
+      const task = project.pack.tasks.find((item) => item.split === "train")
+      if (!task) throw new Error("Project requires training tasks")
+      const runtime = await selectedRuntime(destination + ".backends", process.cwd(), {
+        schema: "aev.protocol-entry.v1", projectManifestPath: manifestPath, selectionPath, taskID: task.id, phase: "source" })
+      const result = await prepareProjectTasks({ manifestPath, selectionPath, destination,
+        trainingGoal: (await readFile(goalFile, "utf8")).replace(/^\uFEFF/, "") }, runtime)
+      console.log(`Prepared ${result.tasks.length} tasks; no model execution. ${destination}`)
+      return
+    }
     case "run-multi-instance":
       await commandRunMultiInstance(args)
       return
