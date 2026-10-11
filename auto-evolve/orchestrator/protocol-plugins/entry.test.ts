@@ -95,7 +95,7 @@ test("protocol merge repair uses declared entry and promotes only verified bytes
     status: Buffer.from(input.candidate[0].bytes).toString().includes("repaired") ? "passed" : "rejected", message: "Add reusable repair rule" }))
   const initial = await runEntry(f.run, f.entry, path.join(f.root, "candidate"), path.join(f.root, "initial"), runtime)
   const result = await mergeRepair({ parentRunRoot: f.run, parentEntry: f.entry, repairRoot: path.join(f.root, "repair"),
-    candidateRoot: path.join(f.root, "candidate"), initial, initialReceiptPath: path.join(f.root, "initial", "protocol.receipt.json"), maxAttempts: 2, mode: "append_only", runtime,
+    candidateRoot: path.join(f.root, "candidate"), initial, initialReceiptPath: path.join(f.root, "initial", "protocol.receipt.json"), maxAttempts: 2, mode: "append_only", runtime, authorIdentity: "a".repeat(64),
     author: async (input) => {
       expect(input.entries).toEqual(["rules.txt"])
       await writeFile(path.join(input.candidateRoot, "rules.txt"), "Reusable rule\nrepaired")
@@ -113,7 +113,7 @@ test("repair cannot start from scoring fault or silently violate append-only", a
   const initial = await runEntry(f.run, f.entry, path.join(f.root, "candidate"), path.join(f.root, "initial"), f.runtime)
   let calls = 0
   await expect(mergeRepair({ parentRunRoot: f.run, parentEntry: f.entry, repairRoot: path.join(f.root, "repair"),
-    candidateRoot: path.join(f.root, "candidate"), initial, initialReceiptPath: path.join(f.root, "initial", "protocol.receipt.json"), maxAttempts: 2, mode: "rewrite", runtime: f.runtime,
+    candidateRoot: path.join(f.root, "candidate"), initial, initialReceiptPath: path.join(f.root, "initial", "protocol.receipt.json"), maxAttempts: 2, mode: "rewrite", runtime: f.runtime, authorIdentity: "a".repeat(64),
     author: async () => { calls++; return { completed: true, evidence: [] } } })).rejects.toThrow("ordinary non-test rejection")
   expect(calls).toBe(0)
   const g = await fixture("rejected")
@@ -121,7 +121,7 @@ test("repair cannot start from scoring fault or silently violate append-only", a
   await writeFile(g.entry.selectionPath, JSON.stringify(g.selection))
   const rejected = await runEntry(g.run, g.entry, path.join(g.root, "candidate"), path.join(g.root, "initial"), g.runtime)
   const result = await mergeRepair({ parentRunRoot: g.run, parentEntry: g.entry, repairRoot: path.join(g.root, "append"),
-    candidateRoot: path.join(g.root, "candidate"), initial: rejected, initialReceiptPath: path.join(g.root, "initial", "protocol.receipt.json"), maxAttempts: 1, mode: "append_only", runtime: g.runtime,
+    candidateRoot: path.join(g.root, "candidate"), initial: rejected, initialReceiptPath: path.join(g.root, "initial", "protocol.receipt.json"), maxAttempts: 1, mode: "append_only", runtime: g.runtime, authorIdentity: "a".repeat(64),
     author: async (input) => { await writeFile(path.join(input.candidateRoot, "rules.txt"), "overwritten"); return { completed: true, evidence: [] } } })
   expect(result.fixed).toBe(false)
   expect(g.calls()).toBe(1)
@@ -135,12 +135,44 @@ test("repair refuses stale candidate or altered rejection before author call", a
   let calls = 0
   const options = { parentRunRoot: f.run, parentEntry: f.entry, repairRoot: path.join(f.root, "repair"),
     candidateRoot: path.join(f.root, "candidate"), initial, initialReceiptPath: path.join(f.root, "initial", "protocol.receipt.json"),
-    maxAttempts: 1, mode: "rewrite" as const, runtime: f.runtime,
+    maxAttempts: 1, mode: "rewrite" as const, runtime: f.runtime, authorIdentity: "a".repeat(64),
     author: async () => { calls++; return { completed: true, evidence: [] } } }
   await expect(mergeRepair({ ...options, initial: { ...initial, task: "other" } })).rejects.toThrow("identity mismatch")
   await writeFile(path.join(f.root, "candidate", "rules.txt"), "different candidate")
   await expect(mergeRepair(options)).rejects.toThrow("differs from repair candidate")
   expect(calls).toBe(0)
+})
+
+test("repair resumes completed acceptance and rejects configuration drift or interrupted author", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.replay = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  const runtime = new Runtime().addChecker({ id: "check", version: "1", implementation: "d".repeat(64),
+    targets: ["skill"], mechanisms: ["script"], productKinds: ["text"], validate() {} }, async (input) => ({
+    status: Buffer.from(input.candidate[0].bytes).toString().includes("repaired") ? "passed" : "rejected", message: "Reusable correction needed" }))
+  const initial = await runEntry(f.run, f.entry, path.join(f.root, "candidate"), path.join(f.root, "initial"), runtime)
+  let calls = 0
+  const options = { parentRunRoot: f.run, parentEntry: f.entry, repairRoot: path.join(f.root, "repair"),
+    candidateRoot: path.join(f.root, "candidate"), initial, initialReceiptPath: path.join(f.root, "initial", "protocol.receipt.json"),
+    maxAttempts: 2, mode: "rewrite" as const, runtime, authorIdentity: "a".repeat(64),
+    author: async (request: { candidateRoot: string }) => {
+      calls++; await writeFile(path.join(request.candidateRoot, "rules.txt"), "repaired")
+      return { completed: true, evidence: [] }
+    } }
+  const first = await mergeRepair(options)
+  expect(await mergeRepair(options)).toEqual(first)
+  expect(calls).toBe(1)
+  await expect(mergeRepair({ ...options, authorIdentity: "b".repeat(64) })).rejects.toThrow("configuration changed")
+  await expect(mergeRepair({ ...options, maxAttempts: 3 })).rejects.toThrow("configuration changed")
+  const interrupted = { ...options, repairRoot: path.join(f.root, "interrupted"), author: async () => {
+    calls++; throw new Error("interrupted")
+  } }
+  await expect(mergeRepair(interrupted)).rejects.toThrow("interrupted")
+  await expect(mergeRepair(interrupted)).rejects.toThrow()
+  expect(calls).toBe(2)
+  await writeFile(path.join(first.candidateRoot, "rules.txt"), "changed after acceptance")
+  await expect(mergeRepair(options)).rejects.toThrow("checkpoint identity changed")
+  expect(calls).toBe(2)
 })
 
 test("instance repair author receives staged public material and declared edits only", async () => {

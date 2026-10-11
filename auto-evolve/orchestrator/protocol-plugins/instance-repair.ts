@@ -7,7 +7,7 @@ import { selectedRuntime } from "./selected-runtime"
 import { opencodeDriver } from "./opencode-driver"
 import { mergeRepair } from "./merge-repair"
 import { writeFileAtomic, writeJsonAtomic } from "../atomic-write"
-import { canonical } from "./identity"
+import { canonical, fingerprint } from "./identity"
 import { createHash } from "node:crypto"
 import type { Runtime } from "./runtime"
 
@@ -35,8 +35,12 @@ export async function instanceRepair(input: { cwd: string; sourceTaskRoot: strin
   if (!prepared) throw new Error("Frozen protocol repair parent required")
   const task = await taskFromPack(prepared.project, spec.protocolPlugins.taskID, "replay", input.candidateRoot)
   const initial = JSON.parse((await readFile(input.initialReceiptPath, "utf8")).replace(/^\uFEFF/, ""))
-  let driver: Awaited<ReturnType<typeof opencodeDriver>> | undefined
+  if (initial.status !== "rejected") throw new Error("Only ordinary rejection may start repair author")
+  const driver = await (dependencies?.createDriver ?? opencodeDriver)({ cwd: input.cwd,
+    evidenceRoot: path.join(input.repairRoot, "author-backend") })
+  await driver.preflight()
   return mergeRepair({ ...input, parentEntry: spec.protocolPlugins, initial, mode: cfg.mode, runtime,
+    authorIdentity: fingerprint({ config: cfg, backend: driver.implementation }),
     author: async (request) => {
       // 作者只接公开材料和声明Skill；不挂载评分私有目录。
       const folder = path.join(path.dirname(request.candidateRoot), "author-public")
@@ -61,8 +65,6 @@ export async function instanceRepair(input: { cwd: string; sourceTaskRoot: strin
         "Do not change evaluators, fetch private answers, or claim acceptance yourself.",
         canonical({ ...request, materials })].join("\n")
       if (total + Buffer.byteLength(prompt) > cfg.maxInputBytes) throw new Error("Repair author input budget exceeded")
-      driver ??= await (dependencies?.createDriver ?? opencodeDriver)({ cwd: input.cwd,
-        evidenceRoot: path.join(input.repairRoot, "author-backend") })
       await driver.preflight()
       await writeJsonAtomic(path.join(folder, "binding.json"), { backend: driver.implementation, model: cfg.model,
         expectedModel: cfg.expectedModel, timeoutMs: cfg.timeoutMs, maxInputBytes: cfg.maxInputBytes })
