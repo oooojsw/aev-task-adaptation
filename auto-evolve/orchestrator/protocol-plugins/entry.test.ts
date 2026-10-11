@@ -7,6 +7,7 @@ import type { Selection } from "./contract"
 import { Runtime } from "./runtime"
 import { campaignAcceptance } from "./campaign-acceptance"
 import { deriveEntry } from "./derive-entry"
+import { instanceReplay, ProtocolReplayFault } from "./instance-replay"
 
 async function fixture(status: "passed" | "rejected" | "scoring_error" | "data_error" = "passed") {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -81,6 +82,36 @@ test("derived replay preserves complete frozen selection and lineage", async () 
   expect(receipt.claim).toBe("skill_check")
   expect(receipt.executed).toBe(false)
   expect(f.calls()).toBe(1)
+})
+
+test("instance replay routes explicit protocol and does not use legacy blank executor", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.replay = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  await writeFile(path.join(f.root, "spec.json"), JSON.stringify({ title: "Replay fixture", goal: "Reusable skill",
+    materials: [{ path: "public.txt", label: "public" }], validators: [], protocolPlugins: f.entry }))
+  await prepareEntry(f.run, f.entry, f.runtime)
+  const result = await instanceReplay({ cwd: f.root, sourceTaskRoot: f.root, parentRunRoot: f.run,
+    candidateRoot: path.join(f.root, "candidate"), slotDir: path.join(f.root, "slot"), role: "train" }, f.runtime)
+  expect(result?.passed).toBe(true)
+  expect(result?.receipt.executed).toBe(false)
+  expect(result?.infrastructureFailure).toBe(false)
+  expect(f.calls()).toBe(1)
+  await expect(instanceReplay({ cwd: f.root, sourceTaskRoot: f.root,
+    candidateRoot: path.join(f.root, "candidate"), slotDir: path.join(f.root, "missing"), role: "train" }, f.runtime))
+    .rejects.toBeInstanceOf(ProtocolReplayFault)
+})
+
+test("legacy instance spec is not reinterpreted by protocol replay", async () => {
+  const f = await fixture()
+  await writeFile(path.join(f.root, "spec.json"), JSON.stringify({ title: "Legacy fixture" }))
+  expect(await instanceReplay({ cwd: f.root, sourceTaskRoot: f.root,
+    candidateRoot: path.join(f.root, "candidate"), slotDir: path.join(f.root, "slot"), role: "train" }, f.runtime)).toBeUndefined()
+  expect(f.calls()).toBe(0)
+  await prepareEntry(f.run, f.entry, f.runtime)
+  await expect(instanceReplay({ cwd: f.root, sourceTaskRoot: f.root, parentRunRoot: f.run,
+    candidateRoot: path.join(f.root, "candidate"), slotDir: path.join(f.root, "removed"), role: "train" }, f.runtime))
+    .rejects.toBeInstanceOf(ProtocolReplayFault)
 })
 
 test("undeclared replay and test on training UID cannot inherit source acceptance", async () => {

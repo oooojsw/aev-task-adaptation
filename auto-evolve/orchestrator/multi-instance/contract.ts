@@ -68,6 +68,8 @@ export interface InstanceState {
   validateRunRoot?: string
   /** Validation error message if validateStatus is "failed" due to a crash. */
   validateErrorMessage?: string
+  /** New protocol fault blocks repair; it is not a Skill rejection. */
+  validateProtocolFault?: boolean
 }
 
 export interface CoordinatorState {

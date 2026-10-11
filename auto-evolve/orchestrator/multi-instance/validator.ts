@@ -49,6 +49,7 @@ import {
   type MergeAcceptanceSuccessCriterion,
 } from "./merge-acceptance-policy"
 import { buildAccessProfile } from "../access-profile"
+import { instanceReplay, ProtocolReplayFault } from "../protocol-plugins/instance-replay"
 
 export interface RunValidateInput {
   cwd: string
@@ -147,6 +148,8 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput): Pro
         limit,
         regressions,
       })
+      // 新协议故障先停止，不能进入旧式Skill修补烧额度。
+      if (eligible.some((row) => row.validateProtocolFault)) throw new Error("Protocol replay infrastructure fault; inspect before repair")
       initialReplay = replaySnapshot(state.instances, eligible, regressions)
       acceptanceStatus = initialReplay.failed === 0 ? "replay_passed" : "replay_failed"
     } else {
@@ -201,6 +204,7 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput): Pro
         regressions: finalRegressions,
         slotName: input.acceptancePolicy?.finalReplaySlotName ?? "final-full-replay",
       })
+      if (eligible.some((row) => row.validateProtocolFault)) throw new Error("Protocol final replay fault; inspect before promotion")
       finalReplay = replaySnapshot(state.instances, eligible, finalRegressions)
       acceptanceStatus = finalReplay.failed === 0 ? "final_replay_passed" : "final_replay_failed"
     }
@@ -296,6 +300,7 @@ function resetValidationStatus(instances: InstanceState[]) {
     instance.validateCampaignDir = undefined
     instance.validateRunRoot = undefined
     instance.validateErrorMessage = undefined
+    instance.validateProtocolFault = undefined
   }
 }
 
@@ -320,6 +325,23 @@ async function runOneValidation(
   await ensureDirectory(slotDir)
 
   try {
+    const protocol = await instanceReplay({ cwd, sourceTaskRoot: instance.sourceTaskRoot,
+      parentRunRoot: instance.campaignDir, candidateRoot: mergedSkillDir, slotDir, role: instance.role })
+    if (protocol) {
+      instance.validateStatus = protocol.passed ? "passed" : "failed"
+      instance.validateProtocolFault = protocol.infrastructureFailure
+      instance.validateCampaignDir = protocol.runRoot
+      instance.validateRunRoot = protocol.runRoot
+      await writeJsonFile(path.join(slotDir, "run.json"), { instanceID: instance.id,
+        passed: protocol.passed, protocolStatus: protocol.receipt.status,
+        claim: protocol.receipt.claim, executed: protocol.receipt.executed,
+        runRoot: protocol.runRoot, infrastructureFailure: protocol.infrastructureFailure })
+      if (!protocol.infrastructureFailure && !protocol.passed && instance.role !== "test" && instance.status === "passed") {
+        regressions.push(instance.id)
+      }
+      await saveCoordinatorState(state)
+      return
+    }
     const hasTaskToml = await pathExists(path.join(instance.sourceTaskRoot, "task.toml"))
     if (hasTaskToml) {
       const result = await runSkillsBenchTask({
@@ -386,6 +408,7 @@ async function runOneValidation(
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    if (err instanceof ProtocolReplayFault) instance.validateProtocolFault = true
     instance.validateStatus = "failed"
     instance.validateErrorMessage = message
     await writeJsonFile(path.join(slotDir, "run.json"), {
@@ -406,6 +429,12 @@ async function runOneRepair(input: {
   rounds: number
   repair: NonNullable<RunValidateInput["repair"]>
 }) {
+  const sourceSpecPath = path.join(input.instance.sourceTaskRoot, "spec.json")
+  if (await pathExists(sourceSpecPath)) {
+    const source = await readJsonFile<{ protocolPlugins?: unknown }>(sourceSpecPath)
+    // 新协议修补尚未适配，禁止落入固定INDEX/CORE的旧修补。
+    if (source.protocolPlugins) throw new Error("Protocol-aware merge repair not yet configured; no legacy repair fallback")
+  }
   const root = path.join(input.state.runRoot, "phase4-repair", input.instance.id)
   await ensureDirectory(root)
   const max = Math.max(1, input.repair.maxAttemptsPerCase)
