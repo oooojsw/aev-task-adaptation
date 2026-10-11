@@ -3,11 +3,12 @@ import { randomUUID } from "node:crypto"
 import { writeJsonAtomic } from "../atomic-write"
 import type { LongTaskValidatorResult } from "../long-task/contract"
 import { runEntry, type Entry } from "./entry"
-import { builtins } from "./builtins"
+import { selectedRuntime } from "./selected-runtime"
 import type { Runtime } from "./runtime"
 
 export async function campaignAcceptance(input: {
   campaignRoot: string
+  cwd?: string
   campaignID: string
   roundNumber: number
   runID: string
@@ -16,7 +17,7 @@ export async function campaignAcceptance(input: {
   attemptRoot: string
   resultPath: string
 }, runtime?: Runtime) {
-  const engine = runtime ?? await builtins(path.join(input.campaignRoot, "protocol-backends"))
+  const engine = runtime ?? await selectedRuntime(path.join(input.campaignRoot, "protocol-backends"), input.cwd, input.entry)
   const receipt = await runEntry(input.campaignRoot, input.entry, input.candidateRoot, input.attemptRoot, engine)
   const receiptPath = path.join(input.attemptRoot, "protocol.receipt.json")
   const passed = receipt.status === "passed"

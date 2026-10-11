@@ -34,7 +34,7 @@ import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { runBlankEval } from "../blank-eval/runner"
 import { campaignAcceptance } from "../protocol-plugins/campaign-acceptance"
 import { prepareEntry } from "../protocol-plugins/entry"
-import { builtins } from "../protocol-plugins/builtins"
+import { selectedRuntime } from "../protocol-plugins/selected-runtime"
 import { authorContext, protocolAuthorLines } from "../protocol-plugins/author-context"
 import { copyCandidate, hasCandidate, type SkillBinding } from "../protocol-plugins/candidate"
 import {
@@ -4476,12 +4476,14 @@ async function runSurfaceGeneralizationPrecheck(input: {
   }
 }
 
-async function prepareCampaignProtocol(root: string, spec: LongTaskSpec, existing: boolean) {
+async function prepareCampaignProtocol(root: string, spec: LongTaskSpec, existing: boolean, cwd: string) {
   const prepared = await pathExists(path.join(root, "protocol-plugins"))
   if (!spec.protocolPlugins && !prepared) return
   // 已存在的旧campaign不能因后来加配置被接管或自动迁移。
   if (existing && spec.protocolPlugins && !prepared) throw new Error("Cannot enable protocol plugins on existing legacy campaign")
-  const binding = await prepareEntry(root, spec.protocolPlugins, await builtins(path.join(root, "protocol-backends")))
+  if (!spec.protocolPlugins) throw new Error("Protocol entry removed from existing plugin campaign")
+  const binding = await prepareEntry(root, spec.protocolPlugins,
+    await selectedRuntime(path.join(root, "protocol-backends"), cwd, spec.protocolPlugins))
   if (binding) spec.protocolAuthorContext = authorContext(binding.entry, binding.protocol, binding.project)
 }
 
@@ -4508,7 +4510,7 @@ async function runCampaignFinalAcceptance(input: {
   const acceptanceRoot = input.finalAcceptanceRoot ?? input.roundPaths.finalAcceptanceRoot
   const acceptanceResultPath = input.finalAcceptanceResultPath ?? input.roundPaths.finalAcceptanceResultPath
   if (input.baseSpec.protocolPlugins) {
-    return campaignAcceptance({ campaignRoot: input.campaignPaths.root, campaignID: input.campaignID,
+    return campaignAcceptance({ campaignRoot: input.campaignPaths.root, cwd: input.cwd, campaignID: input.campaignID,
       roundNumber: input.roundNumber, runID: input.sourceRunID, entry: input.baseSpec.protocolPlugins,
       candidateRoot: input.pendingPackageRoot, attemptRoot: acceptanceRoot, resultPath: acceptanceResultPath })
   }
@@ -5016,7 +5018,7 @@ export async function runLongTaskCampaign(input: {
       specHash: expectedSpecHash,
     })
     if (existingLiveCampaign) {
-      await prepareCampaignProtocol(existingLiveCampaign.campaignPaths.root, baseSpec, true)
+      await prepareCampaignProtocol(existingLiveCampaign.campaignPaths.root, baseSpec, true, input.cwd)
       return toCampaignRunResult({
         campaignID: existingLiveCampaign.campaignID,
         campaignPaths: existingLiveCampaign.campaignPaths,
@@ -5071,7 +5073,7 @@ export async function runLongTaskCampaign(input: {
   }
 
   await initializeLongTaskCampaign(campaignPaths, initialState)
-  await prepareCampaignProtocol(campaignPaths.root, baseSpec, false)
+  await prepareCampaignProtocol(campaignPaths.root, baseSpec, false, input.cwd)
   if (input.historyContext && input.taskID && input.attemptID) {
     await registerCampaignAttempt({
       outDir: input.historyContext.outDir,
@@ -5882,7 +5884,7 @@ export async function resumeLongTaskCampaign(input: {
   }
   enforceCampaignTruthPaths({ campaignPaths })
   let existingState = await readLongTaskCampaignState(campaignPaths)
-  await prepareCampaignProtocol(campaignPaths.root, baseSpec, true)
+  await prepareCampaignProtocol(campaignPaths.root, baseSpec, true, input.cwd)
   const expectedSpecHash = await hashFileIfExists(campaignSpec.baseSpecPath)
   if (input.historyContext && !isCampaignAuthorizedForContext(existingState, input.historyContext, input.taskID, expectedSpecHash)) {
     throw new Error(
