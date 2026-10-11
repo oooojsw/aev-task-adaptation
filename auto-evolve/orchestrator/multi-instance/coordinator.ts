@@ -25,8 +25,9 @@ import { ensureDirectory, pathExists, writeJsonFile } from "../fs"
 import { OpenCodeGate } from "../opencode-gate"
 import { runSkillsBenchTask } from "../skillsbench-adapter"
 import type { CoordinatorState, InstanceState, FanoutOutcome } from "./contract"
-import { appendCoordinatorLog, fanoutDir, saveCoordinatorState } from "./repository"
+import { appendCoordinatorLog, fanoutDir, saveCoordinatorState, instanceSlot } from "./repository"
 import { harvest } from "../protocol-plugins/harvest"
+import { projectCampaign } from "../protocol-plugins/project-campaign"
 
 export interface InstanceSpec {
   /** Stable id, e.g. "court-form-filling-1". */
@@ -34,7 +35,7 @@ export interface InstanceSpec {
   /** Absolute path to the task root (skillsbench-adapter taskRoot). */
   sourceTaskRoot: string
   /** Engine that knows how to run this instance. */
-  engine: "skillsbench"
+  engine: "skillsbench" | "protocol_project"
   /** SkillsBench/SkillLearnBench top-level root, used for verifier paths. */
   skillsbenchRoot: string
   /** Underlying SkillsBench task id (used by docker tag and run-root naming). */
@@ -136,14 +137,14 @@ export async function runCoordinatorPhase1Fanout(input: RunCoordinatorPhase1Inpu
   const specs: InstanceSpec[] = state.instances.map((i) => ({
     id: i.id,
     sourceTaskRoot: i.sourceTaskRoot,
-    engine: "skillsbench",
+    engine: i.engine,
     skillsbenchRoot: state.options.skillsbenchRoot,
     taskID: skillsbenchTaskIDFromInstance(i),
   }))
 
   for (const spec of specs) {
     const instance = byId.get(spec.id)!
-    if (instance.status !== "queued") continue
+    if (instance.status !== "queued" && !(instance.engine === "protocol_project" && instance.status === "running")) continue
     // Held-out test instances skip Phase 1 entirely. They get marked
     // "skipped" with a special note so Phase 3 still validates them.
     if (instance.role === "test") {
@@ -174,10 +175,13 @@ export async function runCoordinatorPhase1Fanout(input: RunCoordinatorPhase1Inpu
     skipped: state.instances.filter((i) => i.status === "skipped").length,
     durationMs: Date.now() - startedAt,
   }
+  if (state.instances.some((row) => row.engine === "protocol_project")) {
+    summary.running = state.instances.filter((row) => row.status === "running").length
+  }
   await appendCoordinatorLog(
     state,
     "info",
-    `Phase 1 fanout complete: ${summary.passed} passed, ${summary.exhausted} exhausted, ${summary.failed} failed, ${summary.skipped} skipped`,
+    `Phase 1 fanout ${summary.running ? "pending" : "complete"}: ${summary.passed} passed, ${summary.exhausted} exhausted, ${summary.failed} failed, ${summary.skipped} skipped`,
   )
   return summary
 }
@@ -203,7 +207,23 @@ async function runSingleInstance(
   }, 60_000)
 
   try {
-    const result = await runSkillsBenchTask({
+    const project = spec.engine === "protocol_project" ? await projectCampaign({ cwd,
+      taskRoot: spec.sourceTaskRoot, taskID: spec.id, rounds: instance.rounds,
+      launchRoot: path.join(fanoutDir(state.runRoot), instanceSlot(instance), "campaign-launch") }) : undefined
+    if (project) {
+      instance.campaignID = project.campaignID
+      instance.campaignDir = project.campaignDir
+      instance.campaignRunRoot = project.campaignDir
+      if (!project.terminal) {
+        // 健康运行的接管结果不是失败，也不是训练结束。
+        instance.status = "running"
+        await saveCoordinatorState(state)
+        notify?.(instance)
+        return
+      }
+    }
+    const result = project ? { mode: "campaign" as const, runDir: project.campaignDir,
+      runRoot: project.campaignDir, passed: project.status === "verified_success" } : await runSkillsBenchTask({
       cwd,
       // Use absolute taskRoot so SkillLearnBench-style nested layouts
       // (`<root>/tasks/<family>/<instance>`) work alongside the canonical
@@ -225,16 +245,19 @@ async function runSingleInstance(
     }
     instance.campaignDir = result.runDir
     instance.campaignRunRoot = result.runRoot
-    instance.status = result.passed ? "passed" : "exhausted"
+    instance.status = project?.status === "failed" ? "failed" : result.passed ? "passed" : "exhausted"
     instance.finishedAt = new Date().toISOString()
 
     // Snapshot the pending-expert-package into the coordinator run root.
     if (result.runDir) {
+      if (project && !await pathExists(path.join(result.runDir, "protocol-plugins", "entry.snapshot.json"))) {
+        throw new Error("Project Campaign missing frozen protocol; no legacy harvest fallback")
+      }
       if (await pathExists(path.join(result.runDir, "protocol-plugins", "entry.snapshot.json"))) {
         // 新协议只收集实际通过的候选，不能复制未验收current冒充成功。
         if (result.passed) {
           const got = await harvest({ cwd, campaignRoot: result.runDir, taskID: instance.id,
-            targetRoot: path.join(fanoutDir(state.runRoot), instance.id, "protocol-skill") })
+            targetRoot: path.join(fanoutDir(state.runRoot), instanceSlot(instance), "protocol-skill") })
           instance.harvestedSkillPath = got.candidateRoot
           instance.harvestedProtocolReceiptPath = got.receiptPath
         }

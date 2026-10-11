@@ -37,7 +37,7 @@ export interface InstanceState {
   /** Path to the source task root (under skillsbench tasks/, etc). */
   sourceTaskRoot: string
   /** Family of the underlying engine (currently always "skillsbench"). */
-  engine: "skillsbench"
+  engine: "skillsbench" | "protocol_project"
   /**
    * Train instances participate in Phase 1 (their skill feeds the merger).
    * Test instances skip Phase 1 entirely; they are only evaluated in Phase 3
@@ -110,6 +110,7 @@ export interface CoordinatorState {
 }
 
 export interface FanoutOutcome {
+  running?: number
   totalInstances: number
   passed: number
   exhausted: number

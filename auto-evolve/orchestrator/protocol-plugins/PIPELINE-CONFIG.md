@@ -58,3 +58,10 @@ materials only; private scorer bindings remain in the project manifest. Existing
 destinations block, including partial preparation; no overwrite or automatic resume.
 This command prepares specs, not a full batch learning pipeline. Generic Campaign
 dispatch and whole-pipeline acceptance are still pending.
+
+The coordinator now has a `protocol_project` engine bridge to the existing
+graph-iterative Campaign runner. Launch configuration is frozen; recorded Campaign
+identity is resumed, not replaced, and incomplete launches require inspection.
+Live attachments remain running. Generic instance IDs use hash-based storage slots
+without changing legacy directories. This bridge is boundary-fixture tested only;
+the generic batch CLI and actual complete fanout/harvest pipeline are not yet verified.

@@ -13,11 +13,17 @@
 import path from "node:path"
 import { readFile } from "node:fs/promises"
 import { ensureDirectory, pathExists } from "../fs"
-import type { CoordinatorState } from "./contract"
+import type { CoordinatorState, InstanceState } from "./contract"
+import { createHash } from "node:crypto"
 import { writeJsonAtomic } from "../atomic-write"
 
 export function coordinatorStatePath(runRoot: string) {
   return path.join(runRoot, "coordinator-state.json")
+}
+
+export function instanceSlot(instance: Pick<InstanceState, "id" | "engine">) {
+  // 新项目UID是身份而非路径；旧目录布局保持不变。
+  return instance.engine === "protocol_project" ? createHash("sha256").update(instance.id).digest("hex") : instance.id
 }
 
 export function fanoutDir(runRoot: string) {

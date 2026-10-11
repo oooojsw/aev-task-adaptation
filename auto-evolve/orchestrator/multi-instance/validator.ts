@@ -39,7 +39,7 @@ import type {
 } from "../long-task/contract"
 import { runBlankEval } from "../blank-eval/runner"
 import type { CoordinatorState, InstanceState } from "./contract"
-import { appendCoordinatorLog, saveCoordinatorState, validateDir } from "./repository"
+import { appendCoordinatorLog, saveCoordinatorState, validateDir, instanceSlot } from "./repository"
 import {
   hasMergeAcceptanceStage,
   normalizeMergeAcceptanceStages,
@@ -330,7 +330,7 @@ async function runOneValidation(
     `[${instance.id}] ${slotName ? `${slotName} ` : ""}phase3 validation starting`,
   )
 
-  const slotDir = path.join(validateDir(state.runRoot), instance.id, ...(slotName ? [slotName] : []))
+  const slotDir = path.join(validateDir(state.runRoot), instanceSlot(instance), ...(slotName ? [slotName] : []))
   await ensureDirectory(slotDir)
 
   try {
@@ -452,7 +452,7 @@ async function runOneRepair(input: {
       const result = await instanceRepair({ cwd: input.cwd, sourceTaskRoot: input.instance.sourceTaskRoot,
         parentRunRoot: input.instance.campaignDir, candidateRoot: input.mergedSkillDir,
         initialReceiptPath: path.join(input.instance.validateRunRoot, "attempt", "protocol.receipt.json"),
-        repairRoot: path.join(input.state.runRoot, "phase4-repair", input.instance.id),
+        repairRoot: path.join(input.state.runRoot, "phase4-repair", instanceSlot(input.instance)),
         maxAttempts: input.repair.maxAttemptsPerCase, author: input.repair.protocolAuthor })
       if (result.fixed) {
         input.state.mergedSkillDir = result.candidateRoot
@@ -462,7 +462,7 @@ async function runOneRepair(input: {
       return { attempts: result.attempts, fixed: result.fixed }
     }
   }
-  const root = path.join(input.state.runRoot, "phase4-repair", input.instance.id)
+  const root = path.join(input.state.runRoot, "phase4-repair", instanceSlot(input.instance))
   await ensureDirectory(root)
   const max = Math.max(1, input.repair.maxAttemptsPerCase)
   const promptPath =
@@ -562,7 +562,7 @@ async function rerunValidationWithMerged(input: {
   rounds: number
   slotName: string
 }) {
-  const slotDir = path.join(validateDir(input.state.runRoot), input.instance.id, input.slotName)
+  const slotDir = path.join(validateDir(input.state.runRoot), instanceSlot(input.instance), input.slotName)
   await ensureDirectory(slotDir)
 
   const hasTaskToml = await pathExists(path.join(input.instance.sourceTaskRoot, "task.toml"))
