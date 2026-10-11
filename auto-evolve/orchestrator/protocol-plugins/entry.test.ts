@@ -165,6 +165,31 @@ test("completed entry reuse verifies Skill and receipt without checker calls", a
   expect(f.calls()).toBe(1)
 })
 
+test("completed accounting is bound to receipt and cannot change on recovery", async () => {
+  const f = await fixture()
+  const candidate = path.join(f.root, "candidate")
+  const attempt = path.join(f.root, "attempt")
+  await runEntry(f.run, f.entry, candidate, attempt, f.runtime)
+  const file = path.join(attempt, "protocol.accounting.json")
+  const original = await readFile(file)
+  const accounting = JSON.parse(original.toString())
+  expect(accounting.input.unreportedInvocations).toBe(1)
+  expect(accounting.fee).toBeNull()
+  await runEntry(f.run, f.entry, candidate, attempt, f.runtime, { reuseCompleted: true })
+  expect(await readFile(file)).toEqual(original)
+  await writeFile(file, JSON.stringify({ ...accounting, input: { knownTokens: 999, unreportedInvocations: 0 } }))
+  await expect(runEntry(f.run, f.entry, candidate, attempt, f.runtime, { reuseCompleted: true })).rejects.toThrow("accounting evidence drift")
+  expect(f.calls()).toBe(1)
+  await writeFile(file, original)
+  const checkpointFile = path.join(attempt, "protocol.completed.json")
+  const checkpoint = JSON.parse(await readFile(checkpointFile, "utf8"))
+  const { accounting: _, ...oldCheckpoint } = checkpoint
+  await writeFile(checkpointFile, JSON.stringify(oldCheckpoint))
+  await runEntry(f.run, f.entry, candidate, attempt, f.runtime, { reuseCompleted: true })
+  expect(await readFile(file)).toEqual(original)
+  expect(f.calls()).toBe(1)
+})
+
 test("completed fault cannot be reused or resent", async () => {
   const f = await fixture("scoring_error")
   const attempt = path.join(f.root, "attempt")

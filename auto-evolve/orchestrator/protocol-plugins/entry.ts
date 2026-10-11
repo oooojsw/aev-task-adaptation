@@ -8,6 +8,7 @@ import { canonical, fingerprint, immutable } from "./identity"
 import { loadPack, freezePack, resumePack, taskFromPack } from "./project-pack"
 import { freeze, resume } from "./snapshot"
 import type { Runtime } from "./runtime"
+import { attemptAccounting } from "./attempt-accounting"
 
 export interface Entry {
   schema: "aev.protocol-entry.v1"
@@ -95,13 +96,23 @@ export async function runEntry(runRoot: string, entry: Entry, candidateRoot: str
   await mkdir(attemptRoot, { recursive: true })
   const receiptPath = path.join(attemptRoot, "protocol.receipt.json")
   const checkpoint = path.join(attemptRoot, "protocol.completed.json")
+  const accountingPath = path.join(attemptRoot, "protocol.accounting.json")
   if (options.reuseCompleted && await exists(receiptPath)) {
     // 仅复用身份一致的完整判决，故障和半完成调用不自动重发。
     if (!await exists(path.join(attemptRoot, "protocol.started.claim")) ||
         await exists(path.join(attemptRoot, "protocol.failure.json"))) throw new Error("Incomplete attempt; inspect before recovery")
     const saved = JSON.parse((await readFile(checkpoint, "utf8")).replace(/^\uFEFF/, ""))
     const receipt = JSON.parse((await readFile(receiptPath, "utf8")).replace(/^\uFEFF/, ""))
-    if (canonical(saved) !== canonical({ binding, receipt: fingerprint(receipt) }) ||
+    if (saved.receipt !== fingerprint(receipt)) throw new Error("Completed attempt identity or verdict drift")
+    let accountingHash: string | undefined
+    if (saved.accounting !== undefined) {
+      const accounting = JSON.parse((await readFile(accountingPath, "utf8")).replace(/^\uFEFF/, ""))
+      accountingHash = fingerprint(accounting)
+      const expected = attemptAccounting(prepared.protocol, entry.phase, receipt, accounting.elapsedMs)
+      if (canonical(accounting) !== canonical(expected)) throw new Error("Completed accounting evidence drift")
+    }
+    if (canonical(saved) !== canonical({ binding, receipt: fingerprint(receipt),
+      ...(accountingHash ? { accounting: accountingHash } : {}) }) ||
         receipt.task !== task.id || receipt.phase !== entry.phase || receipt.protocolFingerprint !== prepared.protocol.fingerprint ||
         !["passed", "rejected"].includes(receipt.status) || !matches(receipt)) throw new Error("Completed attempt identity or verdict drift")
     return receipt as Awaited<ReturnType<Runtime["run"]>>
@@ -111,12 +122,15 @@ export async function runEntry(runRoot: string, entry: Entry, candidateRoot: str
   // 调用已认领但未完成时，不自动重发可能已计费的请求。
   const claim = await open(path.join(attemptRoot, "protocol.started.claim"), "wx")
   await claim.close()
+  const started = performance.now()
   try {
     const receipt = await runtime.run(prepared.protocol, entry.phase, task)
     await writeJsonAtomic(receiptPath, receipt)
     // 读取与执行之间若输入漂移，保留回执但禁止登记为可复用。
     if (!matches(receipt)) throw new Error("Attempt inputs changed during execution")
-    await writeJsonAtomic(checkpoint, { binding, receipt: fingerprint(receipt) })
+    const accounting = attemptAccounting(prepared.protocol, entry.phase, receipt, performance.now() - started)
+    await writeJsonAtomic(accountingPath, accounting)
+    await writeJsonAtomic(checkpoint, { binding, receipt: fingerprint(receipt), accounting: fingerprint(accounting) })
     return receipt
   } catch (err) {
     await writeJsonAtomic(path.join(attemptRoot, "protocol.failure.json"), { status: "interrupted", message: String(err) })
