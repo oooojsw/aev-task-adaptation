@@ -74,6 +74,39 @@ test("entry freezes and resumes exact linked project/protocol", async () => {
   await expect(prepareEntry(f.run, f.entry, f.runtime)).rejects.toThrow("Cannot change")
 })
 
+test("Campaign acceptance revisions bind fresh Skill bytes and preserve prior rejection", async () => {
+  const f = await fixture()
+  const seen: string[] = []
+  const runtime = new Runtime().addChecker({ id: "check", version: "1", implementation: "e".repeat(64),
+    targets: ["skill"], mechanisms: ["script"], productKinds: ["text"], validate() {} }, async (input) => {
+      const text = new TextDecoder().decode(input.candidate[0].bytes)
+      seen.push(text)
+      return { status: text === "Revised reusable rule" ? "passed" : "rejected", message: text }
+    })
+  const candidateRoot = path.join(f.root, "candidate")
+  const accept = (roundNumber: number) => campaignAcceptance({ campaignRoot: f.run, campaignID: "fixture",
+    roundNumber, runID: `round-${roundNumber}`, entry: f.entry, candidateRoot,
+    attemptRoot: path.join(f.root, `attempt-${roundNumber}`),
+    resultPath: path.join(f.root, `result-${roundNumber}.json`) }, runtime)
+  const first = await accept(1)
+  expect(first.passed).toBe(false)
+  const originalReceipt = await readFile(first.protocolReceiptPath)
+  const originalResult = await readFile(path.join(f.root, "result-1.json"))
+  await writeFile(path.join(candidateRoot, "rules.txt"), "Revised reusable rule")
+  const second = await accept(2)
+  expect(second.passed).toBe(true)
+  expect(second.protocolClaim).toBe("skill_check")
+  expect(second.blankEvalSkipped).toBe(true)
+  expect(seen).toEqual(["Reusable rule", "Revised reusable rule"])
+  const before = JSON.parse(originalReceipt.toString("utf8"))
+  const after = JSON.parse(await readFile(second.protocolReceiptPath, "utf8"))
+  expect(before.evidence.skill[0].sha256).not.toBe(after.evidence.skill[0].sha256)
+  expect(await readFile(first.protocolReceiptPath)).toEqual(originalReceipt)
+  expect(await readFile(path.join(f.root, "result-1.json"))).toEqual(originalResult)
+  await expect(accept(1)).rejects.toThrow()
+  expect(seen).toHaveLength(2)
+})
+
 test("completed entry reuse verifies Skill and receipt without checker calls", async () => {
   const f = await fixture()
   const candidate = path.join(f.root, "candidate")
