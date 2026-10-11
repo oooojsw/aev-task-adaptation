@@ -48,7 +48,8 @@ export function protocolRolePrompt(role: "worker" | "lead" | "reviewer", input: 
   const readableKeys = ["runTracePath", "runTraceDigestPath", "pendingPackageRoot", "previousPendingPackageRoot",
     "explorationTreePath", "previousExplorationTreePath", "workingMemoryPath", "routingControlPath",
     "previousRoutingControlPath", "dispatchTicketsPath", "blankAgentAcceptanceDiagnosisPath",
-    "acceptanceExperiencePath", "finalAcceptanceFeedbackPath", "reviewerSuggestionPath", "workerSuggestionPaths"]
+    "acceptanceExperiencePath", "finalAcceptanceFeedbackPath", "reviewerSuggestionPath", "workerSuggestionPaths", "protocolFeedbackPaths",
+    "blankAgentEvidenceBundlePath", "blankAgentEvidenceReadPaths"]
   const inputs = Object.fromEntries(readableKeys.filter((key) => input[key] !== undefined).map((key) => [key, input[key]]))
   const output = role === "worker" ? { summary: "", findings: [], memory_advice: [], package_advice: [], exploration_advice: [], refs: [] }
     : role === "lead" ? { summary: "", updated_files: [], package_highlights: [], tree_highlights: [], refs: [],
@@ -66,7 +67,10 @@ export function protocolRolePrompt(role: "worker" | "lead" | "reviewer", input: 
       "Remove resolved routing blockers using current evidence; keep runtime directives out of Skill.",
       "Review repair checklist against current receipts; do not fabricate a content change for an infrastructure fault.",
       JSON.stringify({ repairChecklist: input.repairChecklist ?? [] }),
-      "Self-check answer leakage; the reported surface self-check is author advice, not a host check result."] : []),
+      "Self-check answer leakage; the reported surface self-check is author advice, not a host check result.",
+      "A product rejection means the generated answer failed, not that Skill content is prohibited.",
+      "Inspect the declared actual product and public materials before proposing a reusable correction.",
+      "surface_precheck fields describe your Skill self-review only; do not populate them with product-check failures."] : []),
     "Every claim needs current evidence. Keep all JSON paths forward-slash normalized.",
     "Return JSON only, matching this shape:", JSON.stringify(output, null, 2)].join("\n")
 }

@@ -37,6 +37,7 @@ import { campaignAcceptance, verifyCompletedCampaignAcceptance } from "../protoc
 import { prepareEntry } from "../protocol-plugins/entry"
 import { selectedRuntime } from "../protocol-plugins/selected-runtime"
 import { authorContext, protocolAuthorLines } from "../protocol-plugins/author-context"
+import { protocolFeedbackEvidence } from "../protocol-plugins/feedback-evidence"
 import { copyCandidate, hasCandidate, type SkillBinding } from "../protocol-plugins/candidate"
 import {
   defaultReuseForPolicy,
@@ -3967,6 +3968,8 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     blankAcceptanceConfig.diagnosisProfiles[profileID] ??
     blankAcceptanceConfig.diagnosisProfiles[blankAcceptanceConfig.defaultDiagnosisProfile] ??
     blankAcceptanceConfig.diagnosisProfiles.auto
+  const protocolFeedbackPaths = input.baseSpec.protocolPlugins
+    ? await protocolFeedbackEvidence(input.finalAcceptanceFeedbackPath) : []
   const prompt = buildCampaignWorkerPrompt({
     protocolContext: input.baseSpec.protocolAuthorContext,
     blankEvalExecutorKind: input.baseSpec.blankEvalExecutor?.kind,
@@ -3987,6 +3990,7 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
     blankAgentEvidenceReadPaths: input.blankAgentEvidenceReadPaths,
     blankAcceptanceDiagnosisProfile,
+    protocolFeedbackPaths,
     expertOracleBundlePath: input.expertOracleBundlePath,
     expertOracleReadPaths: input.expertOracleReadPaths,
   })
@@ -3995,6 +3999,7 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     basePaths: [
       input.runTracePath,
       input.runTraceDigestPath,
+      ...protocolFeedbackPaths,
       input.pendingPackageRoot,
       input.explorationTreePath,
       input.workingMemoryPath,
@@ -4194,6 +4199,8 @@ async function runCampaignLead(input: {
         },
       })
     : undefined
+  const protocolFeedbackPaths = input.baseSpec.protocolPlugins
+    ? await protocolFeedbackEvidence(input.finalAcceptanceFeedbackPath) : []
   const prompt = profileAccess
     ? buildMultiSkillMergeLeadPrompt({
         roundNumber: input.roundNumber,
@@ -4220,6 +4227,7 @@ async function runCampaignLead(input: {
     acceptanceExperiencePath: input.acceptanceExperiencePath,
     finalAcceptanceFeedbackPath: input.finalAcceptanceFeedbackPath,
     repairChecklist: input.repairChecklist,
+    protocolFeedbackPaths,
     blankAgentEvidenceBundlePath: input.blankAgentEvidenceBundlePath,
     expertOracleBundlePath: input.expertOracleBundlePath,
     expertOracleReadPaths: input.expertOracleReadPaths,
@@ -4231,6 +4239,9 @@ async function runCampaignLead(input: {
       : undefined,
     basePaths: [
       input.runTraceDigestPath,
+      ...protocolFeedbackPaths,
+      // 新候选必须可回读核验，写权限不隐式代表读权限。
+      ...(input.baseSpec.protocolPlugins ? [input.nextPendingPackageRoot, input.nextExplorationTreePath, input.nextRoutingControlPath] : []),
       input.previousPendingPackageRoot,
       input.previousExplorationTreePath,
       input.workingMemoryPath,

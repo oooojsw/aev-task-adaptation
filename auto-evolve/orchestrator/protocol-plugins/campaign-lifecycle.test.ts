@@ -207,6 +207,16 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
       edits: [...(input.permissionEditPaths ?? [])] })
     await input.onSpawn?.()
     if (input.title.startsWith("Campaign Lead")) leads++
+    if (input.title.startsWith("Campaign Lead")) {
+      for (const edit of input.permissionEditPaths ?? []) expect(input.permissionReadPaths).toContain(edit)
+      if (execution && leads > 1) {
+        expect(input.prompt).toContain("A product rejection means the generated answer failed")
+        const productPath = input.permissionReadPaths.find((file: string) => file.endsWith("protocol.product.txt"))
+        expect(productPath).toBeDefined()
+        expect(input.prompt).toContain("protocol.product.txt")
+        expect(await readFile(productPath, "utf8")).toBe("Incomplete rule")
+      }
+    }
     for (const edit of input.permissionEditPaths ?? []) {
       if (edit.endsWith("rules.txt")) { await mkdir(path.dirname(edit), { recursive: true }); await writeFile(edit, "Reusable rule") }
       if (input.title.startsWith("Campaign Lead") && !edit.endsWith(".json")) {
@@ -329,6 +339,18 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
       expect(httpCalls).toBe(requests)
       const state = JSON.parse(await readFile(path.join(result.campaignDir, "campaign.json"), "utf8"))
       const accepted = JSON.parse(await readFile(state.lastFinalAcceptanceResultPath, "utf8"))
+      if (execution) {
+        const productFile = path.join(path.dirname(accepted.protocolReceiptPath), "protocol.product.txt")
+        const productBytes = await readFile(productFile)
+        expect(productBytes.toString()).toBe("Reusable rule")
+        await writeFile(productFile, "Altered answer")
+        try {
+          await expect(actual.resumeLongTaskCampaign({ cwd: root, campaignID: result.campaignID, specPath: campaign }))
+            .rejects.toThrow("public product evidence drift")
+          expect(calls).toHaveLength(count)
+          expect(httpCalls).toBe(requests)
+        } finally { await writeFile(productFile, productBytes) }
+      }
       const feedbackFile = accepted.protocolTrainingResultPath
       const originalFeedback = await readFile(feedbackFile)
       await writeFile(feedbackFile, JSON.stringify({ ...JSON.parse(originalFeedback.toString()), summary: "Altered training feedback" }))

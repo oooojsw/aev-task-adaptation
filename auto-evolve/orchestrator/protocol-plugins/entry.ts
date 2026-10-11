@@ -1,13 +1,14 @@
 import path from "node:path"
 import { createHash } from "node:crypto"
 import { readFile, mkdir, open, access } from "node:fs/promises"
-import { writeJsonAtomic } from "../atomic-write"
+import { writeJsonAtomic, writeFileAtomic } from "../atomic-write"
 import type { Phase, Selection } from "./contract"
 import { compile } from "./compile"
 import { canonical, fingerprint, immutable } from "./identity"
 import { loadPack, freezePack, resumePack, taskFromPack } from "./project-pack"
 import { freeze, resume } from "./snapshot"
 import type { Runtime } from "./runtime"
+import { productEvidenceName } from "./runtime"
 import { attemptAccounting } from "./attempt-accounting"
 
 export interface Entry {
@@ -104,6 +105,13 @@ export async function runEntry(runRoot: string, entry: Entry, candidateRoot: str
     const saved = JSON.parse((await readFile(checkpoint, "utf8")).replace(/^\uFEFF/, ""))
     const receipt = JSON.parse((await readFile(receiptPath, "utf8")).replace(/^\uFEFF/, ""))
     if (saved.receipt !== fingerprint(receipt)) throw new Error("Completed attempt identity or verdict drift")
+    if (saved.product !== undefined) {
+      const bytes = await readFile(path.join(attemptRoot, productEvidenceName(saved.product.kind)))
+      if (!receipt.product || canonical(saved.product) !== canonical(receipt.product) ||
+          bytes.length !== saved.product.length || createHash("sha256").update(bytes).digest("hex") !== saved.product.sha256) {
+        throw new Error("Completed public product evidence drift")
+      }
+    }
     let accountingHash: string | undefined
     if (saved.accounting !== undefined) {
       const accounting = JSON.parse((await readFile(accountingPath, "utf8")).replace(/^\uFEFF/, ""))
@@ -112,7 +120,8 @@ export async function runEntry(runRoot: string, entry: Entry, candidateRoot: str
       if (canonical(accounting) !== canonical(expected)) throw new Error("Completed accounting evidence drift")
     }
     if (canonical(saved) !== canonical({ binding, receipt: fingerprint(receipt),
-      ...(accountingHash ? { accounting: accountingHash } : {}) }) ||
+      ...(accountingHash ? { accounting: accountingHash } : {}),
+      ...(saved.product !== undefined ? { product: saved.product } : {}) }) ||
         receipt.task !== task.id || receipt.phase !== entry.phase || receipt.protocolFingerprint !== prepared.protocol.fingerprint ||
         !["passed", "rejected"].includes(receipt.status) || !matches(receipt)) throw new Error("Completed attempt identity or verdict drift")
     return receipt as Awaited<ReturnType<Runtime["run"]>>
@@ -124,13 +133,19 @@ export async function runEntry(runRoot: string, entry: Entry, candidateRoot: str
   await claim.close()
   const started = performance.now()
   try {
-    const receipt = await runtime.run(prepared.protocol, entry.phase, task)
+    let publishedProduct: { id: string; kind: string; sha256: string; length: number } | undefined
+    const receipt = await runtime.run(prepared.protocol, entry.phase, task, { async onProduct(product) {
+      await writeFileAtomic(path.join(attemptRoot, productEvidenceName(product.kind)), Buffer.from(product.bytes))
+      const { bytes: _, ...metadata } = product
+      publishedProduct = metadata
+    } })
     await writeJsonAtomic(receiptPath, receipt)
     // 读取与执行之间若输入漂移，保留回执但禁止登记为可复用。
     if (!matches(receipt)) throw new Error("Attempt inputs changed during execution")
     const accounting = attemptAccounting(prepared.protocol, entry.phase, receipt, performance.now() - started)
     await writeJsonAtomic(accountingPath, accounting)
-    await writeJsonAtomic(checkpoint, { binding, receipt: fingerprint(receipt), accounting: fingerprint(accounting) })
+    await writeJsonAtomic(checkpoint, { binding, receipt: fingerprint(receipt), accounting: fingerprint(accounting),
+      ...(publishedProduct ? { product: publishedProduct } : {}) })
     return receipt
   } catch (err) {
     await writeJsonAtomic(path.join(attemptRoot, "protocol.failure.json"), { status: "interrupted", message: String(err) })

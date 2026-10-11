@@ -7,6 +7,7 @@ import type { LongTaskValidatorResult } from "../long-task/contract"
 import { prepareEntry, runEntry, type Entry } from "./entry"
 import { selectedRuntime } from "./selected-runtime"
 import type { Runtime } from "./runtime"
+import { productEvidenceName } from "./runtime"
 import { trainingCheckMessage } from "./training-feedback"
 import { canonical } from "./identity"
 
@@ -37,13 +38,15 @@ export async function campaignAcceptance(input: {
   if (!prepared) throw new Error("Frozen feedback protocol required")
   const receiptPath = path.join(input.attemptRoot, "protocol.receipt.json")
   const trainingPath = path.join(input.attemptRoot, "protocol.training-feedback.json")
+  const productPath = receipt.product ? path.join(input.attemptRoot, productEvidenceName(receipt.product.kind)) : undefined
   const trainingChecks = receipt.checks.map((check) => ({ name: check.name, target: check.target,
     required: check.required, status: check.status,
     message: trainingCheckMessage(prepared.protocol, input.entry.phase, check) }))
   // 训练侧证据引用只指向反馈视图，原始回执仍供审计保存。
   await writeJsonAtomic(trainingPath, { schema: "aev.training-feedback.v1", task: receipt.task,
     phase: receipt.phase, protocolFingerprint: receipt.protocolFingerprint, status: receipt.status,
-    claim: receipt.claim, executed: receipt.executed, checks: trainingChecks })
+    claim: receipt.claim, executed: receipt.executed, checks: trainingChecks,
+    ...(productPath ? { product: { ...receipt.product, path: productPath } } : {}) })
   const passed = receipt.status === "passed"
   const failureKind = passed ? undefined : receipt.status === "rejected" ? "product_failure" as const
     : receipt.status === "data_error" ? "dataset_failure" as const : "infrastructure_failure" as const
@@ -69,7 +72,8 @@ export async function campaignAcceptance(input: {
     validationPackageRoot: input.candidateRoot, bundlePath: trainingPath,
     blankEvalResultPath: undefined as string | undefined, blankEvalRunDir: undefined as string | undefined,
     preBlankValidationStageResultPath: undefined as string | undefined,
-    blankAgentEvidenceBundlePath: undefined as string | undefined,
+    blankAgentEvidenceBundlePath: trainingPath as string | undefined,
+    blankAgentEvidenceReadPaths: [trainingPath, ...(productPath ? [productPath] : [])],
     blankAgentReadPaths: [] as string[],
     validatorPartitions: { surfaceValidatorIDs: receipt.checks.filter((item) =>
       item.target === "skill").map((item) => item.name), legacyBlankAgentValidatorIDs: [] as string[],

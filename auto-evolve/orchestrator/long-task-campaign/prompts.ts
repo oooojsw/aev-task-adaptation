@@ -137,6 +137,7 @@ function blankAcceptanceDiagnosisProfileRules(profile?: BlankAcceptanceDiagnosis
 }
 
 export function buildCampaignWorkerPrompt(input: {
+  protocolFeedbackPaths?: string[]
   protocolContext?: AuthorContext
   blankEvalExecutorKind?: "single_turn_http"
   title: string
@@ -243,6 +244,7 @@ export function buildCampaignWorkerPrompt(input: {
 }
 
 export function buildCampaignLeadPrompt(input: {
+  protocolFeedbackPaths?: string[]
   protocolContext?: AuthorContext
   blankEvalExecutorKind?: "single_turn_http"
   title: string

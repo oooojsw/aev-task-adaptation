@@ -20,6 +20,11 @@ export interface Artifact {
   length: number
 }
 
+export function productEvidenceName(kind: string) {
+  // 文本用可读取扩展名；二进制不能伪装成文本答卷。
+  return kind === "text" ? "protocol.product.txt" : "protocol.product.bin"
+}
+
 export interface Task {
   id: string
   skill: InputFile[]
@@ -100,7 +105,8 @@ export class Runtime {
     return this
   }
 
-  async run(snapshot: Snapshot, phase: Phase, task: Task) {
+  async run(snapshot: Snapshot, phase: Phase, task: Task,
+    hooks: { onProduct?: (product: Artifact) => Promise<void> } = {}) {
     const resolved = verify(snapshot, this.registry)
     const plan = resolved.selection.protocol.phases[phase]
     if (!plan) throw new Error(`Undeclared phase: ${phase}`)
@@ -175,6 +181,8 @@ export class Runtime {
       return receipt("execution_error", "Missing or incompatible execution product", false, true)
     }
     product = artifact("execution-product", result.product.kind, result.product.bytes)
+    // 发布实际执行产物，不携带评分器私有输入。
+    await hooks.onProduct?.({ ...product, bytes: new Uint8Array(product.bytes) })
     usage = result.usage
     reused = result.reused === true
     const post = await evaluate("after_execution")
