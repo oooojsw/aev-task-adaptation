@@ -19,7 +19,7 @@ Authoritative goal: E:/project/AEV-RuleArena-NBA/aev-single-turn/ACCEPTANCE-PLUG
 | Held-out cannot repair | project-batch.test.ts scoring-fault/held-out rejection tests | Live task score not measured |
 | Scoring switch reuses actual answer | cache.test.ts, nba-protocol.test.ts | Version/config changes are intentional new scoring identities |
 | Old defaults, requests and outcomes | author-context.test.ts, legacy-coordinator.test.ts, legacy-merger.test.ts, legacy-fanout.test.ts | Complete legacy Campaign lifecycle comparison remains open |
-| NBA outside core | projects/nba/pack.test.ts and NBA actual Campaign batch test | Explicit source-boundary audit remains open |
+| NBA outside new core | projects/nba/pack.test.ts, actual Campaign batch, project-boundary.test.ts inventories tracked core and hashes | Pre-existing blank-eval/single-turn.ts NBA tag stays byte-identical to baseline; lexical inventory is not universal semantic proof |
 | Every call resource/error evidence | attempt-accounting.test.ts, opencode-driver.test.ts | Training/merge/repair author usage/time and pre-receipt errors not fully consolidated |
 | Safe recovery | batch-recovery.test.ts plus exclusive claims/cache tests | Supervisor unlock never authorizes incomplete call resend |
 | Backup, Git and rollback | E:/project/AEV-protocol-plugins-20261011 baseline manifest and Git worktree | Final release and documented rollback acceptance remain open |
