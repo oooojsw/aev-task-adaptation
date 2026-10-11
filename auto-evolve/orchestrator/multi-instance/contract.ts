@@ -58,6 +58,8 @@ export interface InstanceState {
   campaignDir?: string
   /** Resolved path to the per-instance skill snapshot (after fan-out). */
   harvestedSkillPath?: string
+  /** Actual source protocol receipt bound to the harvested Skill. */
+  harvestedProtocolReceiptPath?: string
   /** Last error if status is "failed". */
   errorMessage?: string
   /** Phase 3 validation outcome (set after Phase 3 runs). */

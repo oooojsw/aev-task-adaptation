@@ -14,6 +14,7 @@ import { mergeContext } from "./merge-context"
 import { runCoordinatorPhase2Merge } from "../multi-instance/merger"
 import type { CoordinatorState } from "../multi-instance/contract"
 import { mergeStage } from "./merge-stage"
+import { harvest } from "./harvest"
 
 async function fixture(status: "passed" | "rejected" | "scoring_error" | "data_error" = "passed") {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -162,6 +163,9 @@ test("real merger accepts arbitrary entries and recovers without author or check
   expect(await readFile(path.join(first.mergedSkillDir, "rules.txt"), "utf8")).toBe("Combined reusable rules")
   expect(f.calls()).toBe(2)
   expect(await runCoordinatorPhase2Merge(input, dependencies)).toMatchObject({ ...first, reused: true })
+  state.instances[0].harvestedProtocolReceiptPath = path.join(attempt, "protocol.receipt.json")
+  expect(await runCoordinatorPhase2Merge({ cwd: f.root, state, protocolAuthor: input.protocolMerge.author }, dependencies))
+    .toMatchObject({ ...first, reused: true })
   expect(calls).toBe(1)
   expect(f.calls()).toBe(2)
   await writeFile(path.join(first.mergedSkillDir, "rules.txt"), "Changed deployment")
@@ -214,6 +218,34 @@ test("merge protocol rejection is never promoted and repeated author invocation 
   await expect(mergeStage(input, dependencies)).rejects.toThrow("Merge not accepted: rejected")
   await expect(mergeStage(input, dependencies)).rejects.toThrow()
   expect(calls).toBe(1)
+})
+
+test("source harvest binds actual acceptance and copies only declared files without merge phase", async () => {
+  const f = await fixture()
+  const candidate = path.join(f.run, "candidate")
+  await mkdir(candidate, { recursive: true })
+  await writeFile(path.join(candidate, "rules.txt"), "Reusable rule")
+  await writeFile(path.join(candidate, "private-note.txt"), "Never harvest")
+  const attempt = path.join(f.run, "rounds", "round-001", "final-acceptance")
+  await campaignAcceptance({ campaignRoot: f.run, campaignID: "fixture", roundNumber: 1, runID: "fixture",
+    entry: f.entry, candidateRoot: candidate, attemptRoot: attempt, resultPath: path.join(attempt, "result.json") }, f.runtime)
+  await writeFile(path.join(f.run, "campaign.json"), JSON.stringify({ id: "fixture", currentRound: 1, lastRunID: "fixture",
+    status: "verified_success", lastFinalAcceptancePassed: true,
+    lastFinalAcceptanceResultPath: path.join(attempt, "result.json") }))
+  const input = { cwd: f.root, campaignRoot: f.run, taskID: "task", targetRoot: path.join(f.root, "harvest") }
+  const first = await harvest(input, f.runtime)
+  expect(await harvest(input, f.runtime)).toEqual(first)
+  expect(await readFile(path.join(input.targetRoot, "rules.txt"), "utf8")).toBe("Reusable rule")
+  await expect(readFile(path.join(input.targetRoot, "private-note.txt"))).rejects.toThrow()
+  expect(f.calls()).toBe(1)
+  await writeFile(path.join(candidate, "rules.txt"), "Unaccepted replacement")
+  await expect(harvest(input, f.runtime)).rejects.toThrow("identity mismatch")
+  expect(await readFile(path.join(input.targetRoot, "rules.txt"), "utf8")).toBe("Reusable rule")
+  await writeFile(path.join(candidate, "rules.txt"), "Reusable rule")
+  await writeFile(path.join(f.run, "campaign.json"), JSON.stringify({ id: "wrong-campaign", currentRound: 1, lastRunID: "fixture",
+    status: "verified_success", lastFinalAcceptancePassed: true, lastFinalAcceptanceResultPath: path.join(attempt, "result.json") }))
+  await expect(harvest(input, f.runtime)).rejects.toThrow("acceptance identity")
+  expect(f.calls()).toBe(1)
 })
 
 test("derived replay preserves complete frozen selection and lineage", async () => {

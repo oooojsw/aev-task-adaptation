@@ -31,6 +31,7 @@ import { buildAccessProfile } from "../access-profile"
 import { mergeStage, type ProtocolMergeConfig } from "../protocol-plugins/merge-stage"
 import type { Runtime } from "../protocol-plugins/runtime"
 import type { opencodeDriver } from "../protocol-plugins/opencode-driver"
+import { collectMergeConfig } from "../protocol-plugins/harvest"
 
 export interface RunMergerInput {
   cwd: string
@@ -40,6 +41,7 @@ export interface RunMergerInput {
   /** Optional task-specific merge contract JSON path. */
   contractPath?: string
   protocolMerge?: ProtocolMergeConfig
+  protocolAuthor?: ProtocolMergeConfig["author"]
 }
 
 export interface MergerOutcome {
@@ -58,16 +60,18 @@ const DEFAULT_PROMPT_REL = "methods/recipes/multi-instance/prompts/merge.md"
 export async function runCoordinatorPhase2Merge(input: RunMergerInput,
   dependencies?: { runtime?: Runtime; createDriver?: typeof opencodeDriver }): Promise<MergerOutcome> {
   const state = input.state
-  if (input.protocolMerge) {
+  if (input.protocolMerge && input.protocolAuthor) throw new Error("Choose one explicit protocol merge configuration")
+  const protocol = input.protocolMerge ?? (input.protocolAuthor ? await collectMergeConfig(state, input.protocolAuthor) : undefined)
+  if (protocol) {
     // 显式新协议走独立合同；失败不回落到旧固定包合并。
     const eligible = state.instances.filter((row) => row.role !== "test" && row.status === "passed" && row.harvestedSkillPath)
-    if (!eligible.length || eligible.length !== input.protocolMerge.sources.length ||
-        !eligible.every((row) => input.protocolMerge!.sources.some((source) => source.id === row.id &&
+    if (!eligible.length || eligible.length !== protocol.sources.length ||
+        !eligible.every((row) => protocol.sources.some((source) => source.id === row.id &&
           path.resolve(source.candidateRoot) === path.resolve(row.harvestedSkillPath!)))) throw new Error("Protocol merge source selection mismatch")
     state.phase = "phase2_merge"
     await saveCoordinatorState(state)
     const result = await mergeStage({ cwd: input.cwd, runRoot: path.join(mergeDir(state.runRoot), "protocol-merge"),
-      config: input.protocolMerge }, dependencies)
+      config: protocol }, dependencies)
     state.mergedSkillDir = result.mergedSkillDir
     state.postMergeValidationStatus = "passed"
     state.postMergeValidationResultPath = result.postMergeValidationResultPath

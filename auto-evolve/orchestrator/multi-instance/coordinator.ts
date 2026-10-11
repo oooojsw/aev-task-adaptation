@@ -26,6 +26,7 @@ import { OpenCodeGate } from "../opencode-gate"
 import { runSkillsBenchTask } from "../skillsbench-adapter"
 import type { CoordinatorState, InstanceState, FanoutOutcome } from "./contract"
 import { appendCoordinatorLog, fanoutDir, saveCoordinatorState } from "./repository"
+import { harvest } from "../protocol-plugins/harvest"
 
 export interface InstanceSpec {
   /** Stable id, e.g. "court-form-filling-1". */
@@ -229,6 +230,15 @@ async function runSingleInstance(
 
     // Snapshot the pending-expert-package into the coordinator run root.
     if (result.runDir) {
+      if (await pathExists(path.join(result.runDir, "protocol-plugins", "entry.snapshot.json"))) {
+        // 新协议只收集实际通过的候选，不能复制未验收current冒充成功。
+        if (result.passed) {
+          const got = await harvest({ cwd, campaignRoot: result.runDir, taskID: instance.id,
+            targetRoot: path.join(fanoutDir(state.runRoot), instance.id, "protocol-skill") })
+          instance.harvestedSkillPath = got.candidateRoot
+          instance.harvestedProtocolReceiptPath = got.receiptPath
+        }
+      } else {
       const pendingDir = path.join(result.runDir, "pending-expert-package", "current")
       if (await pathExists(pendingDir)) {
         const harvestRoot = path.join(fanoutDir(state.runRoot), instance.id)
@@ -244,6 +254,7 @@ async function runSingleInstance(
           "warn",
           `[${instance.id}] no pending-expert-package found at ${pendingDir}`,
         )
+      }
       }
     }
   } catch (err) {
