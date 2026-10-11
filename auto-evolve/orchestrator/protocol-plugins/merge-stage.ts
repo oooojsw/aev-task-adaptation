@@ -1,6 +1,6 @@
 import path from "node:path"
 import { mkdir, readFile, open, access, realpath, lstat } from "node:fs/promises"
-import { mergeContext } from "./merge-context"
+import { mergeContext, type MergeSource } from "./merge-context"
 import { copyCandidate, readCandidate } from "./candidate"
 import { prepareEntry, runEntry, type Entry } from "./entry"
 import { deriveEntry } from "./derive-entry"
@@ -13,7 +13,7 @@ import type { Runtime } from "./runtime"
 export interface ProtocolMergeConfig {
   parentRunRoot: string
   entry: Entry
-  sources: Array<{ id: string; candidateRoot: string; receiptPath: string }>
+  sources: MergeSource[]
   author: { model: string; expectedModel: string; timeoutMs: number; maxInputBytes: number }
 }
 
@@ -110,7 +110,7 @@ export async function mergeStage(input: { cwd: string; runRoot: string; config: 
   const currentResult = fingerprint(JSON.parse((await readFile(path.join(input.runRoot, "author.result.json"), "utf8")).replace(/^\uFEFF/, "")))
   if (currentRequest !== authorRequest || currentResult !== authorResult) throw new Error("Merge author evidence changed during acceptance")
   if (!reused) await writeJsonAtomic(completed, { binding: fingerprint(binding), candidate: candidate.fingerprint, authorRequest, authorResult })
-  return { mergedSkillDir: output, contributingInstances: cfg.sources.map((source) => source.id),
+  return { mergedSkillDir: output, contributingInstances: context.contract.sources.flatMap((source) => source.sourceUIDs),
     mergerRunDir: input.runRoot, postMergeValidationResultPath: path.join(input.runRoot, "acceptance", "attempt", "protocol.receipt.json"),
     postMergeValidationPassed: true, reused }
 }

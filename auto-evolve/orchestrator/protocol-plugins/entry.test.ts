@@ -211,6 +211,43 @@ test("merge source requires unchanged completion receipt and no interrupted mark
   expect(f.calls()).toBe(1)
 })
 
+test("completed intermediate merge feeds next layer with original UID and no repeated calls", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.merge = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  const candidate = path.join(f.root, "candidate")
+  const attempt = path.join(f.root, "attempt")
+  await runEntry(f.run, f.entry, candidate, attempt, f.runtime)
+  let authors = 0
+  const dependencies = { runtime: f.runtime, createDriver: async () => ({ implementation: "a".repeat(64),
+    preflight: async () => {}, invoke: async (request: { editPaths: string[] }) => {
+      authors++
+      await writeFile(request.editPaths[0], `Reusable merged rule ${authors}`)
+      return { completed: true, actualModel: "fixture/author", evidence: [] }
+    } }) }
+  const config = { parentRunRoot: f.run, entry: f.entry,
+    sources: [{ id: "task", candidateRoot: candidate, receiptPath: path.join(attempt, "protocol.receipt.json") }],
+    author: { model: "fixture/author", expectedModel: "fixture/author", timeoutMs: 1000, maxInputBytes: 100000 } }
+  const first = await mergeStage({ cwd: f.root, runRoot: path.join(f.root, "level-one"), config }, dependencies)
+  const source = { id: "group-one", mergeRunRoot: first.mergerRunDir,
+    candidateRoot: first.mergedSkillDir, receiptPath: first.postMergeValidationResultPath }
+  const input = { cwd: f.root, runRoot: path.join(f.root, "level-two"), config: { ...config, sources: [source] } }
+  const second = await mergeStage(input, dependencies)
+  expect(second.contributingInstances).toEqual(["task"])
+  expect(authors).toBe(2)
+  expect(f.calls()).toBe(3)
+  expect((await mergeStage(input, dependencies)).reused).toBe(true)
+  expect(authors).toBe(2)
+  expect(f.calls()).toBe(3)
+  await expect(mergeContext({ ...config, sources: [source, config.sources[0]],
+    outputRoot: path.join(f.root, "duplicate"), runtime: f.runtime })).rejects.toThrow("Duplicate original")
+  const reply = path.join(first.mergerRunDir, "author.result.json")
+  await writeFile(reply, JSON.stringify({ completed: true, actualModel: "fixture/author", evidence: ["changed"] }))
+  await expect(mergeStage(input, dependencies)).rejects.toThrow("author evidence drift")
+  expect(authors).toBe(2)
+  expect(f.calls()).toBe(3)
+})
+
 test("real merger accepts arbitrary entries and recovers without author or checker repeat", async () => {
   const f = await fixture()
   f.selection.protocol.phases.merge = structuredClone(f.selection.protocol.phases.source!)
