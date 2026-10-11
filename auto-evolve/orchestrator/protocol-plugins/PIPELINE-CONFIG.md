@@ -15,14 +15,15 @@ Repair author receives the selected runtime/backend, not a silently recreated
 default backend. Offline batch integration now covers rejection, append-only
 repair, full replay, held-out test, completed-run reuse, scorer fault blocking,
 and held-out rejection without author work. Learning/model boundaries still use
-fixed fixtures; real Campaign lifecycle and mid-repair crash recovery are pending.
+fixed fixtures. Actual Campaign lifecycle and ordered repair recovery now have
+offline integration coverage; this does not certify live model behavior.
 
 Development-only integration; complete source/merge/replay/test acceptance is not
 yet certified. No live model call is implied by this document.
 
 The multi-instance CLI and benchmark accept `--protocol-run-config <absolute-json>`.
 Project inputs and acceptance phases remain in the frozen source spec's
-`protocolPlugins` entry; this file selects merge and optional repair authors only.
+`protocolPlugins` entry; this file selects merge strategy and optional repair authors.
 It does not replace the selected executor or judge.
 
 ```json
@@ -53,7 +54,7 @@ The configuration freezes before new training. Removing or changing it on recove
 an incomplete claim, or an orphan snapshot blocks rather than rebuilding defaults.
 No option means legacy behavior for legacy runs; a frozen protocol source cannot
 silently use legacy merging. Benchmark currently supports this branch only with
-the flat scripted merge adapter; other adapters reject before training rather than
+the declared-entry flat or hierarchical merge adapter; other adapters reject before training rather than
 changing the selected strategy. Supporting their protocol boundaries remains work.
 
 Successful source harvesting binds actual final acceptance, copied declared entries
@@ -73,15 +74,16 @@ recorded as excluded, never silently reassigned. Task directories use numeric sl
 so arbitrary project IDs cannot become path traversal. Training specs contain public
 materials only; private scorer bindings remain in the project manifest. Existing
 destinations block, including partial preparation; no overwrite or automatic resume.
-This command prepares specs, not a full batch learning pipeline. Generic Campaign
-dispatch and whole-pipeline acceptance are still pending.
+This command prepares specs, not a full batch learning pipeline. Use the separate
+batch entry below to dispatch Campaign learning and subsequent stages.
 
 The coordinator now has a `protocol_project` engine bridge to the existing
 graph-iterative Campaign runner. Launch configuration is frozen; recorded Campaign
 identity is resumed, not replaced, and incomplete launches require inspection.
 Live attachments remain running. Generic instance IDs use hash-based storage slots
 without changing legacy directories. This bridge is boundary-fixture tested only;
-the generic batch CLI and actual complete fanout/harvest pipeline are not yet verified.
+the actual Campaign batch/fanout/harvest pipeline also has offline integration
+coverage with fixed model replies, localhost HTTP execution and Python scoring.
 
 ## Generic batch entry (development milestone)
 
@@ -117,7 +119,10 @@ No inline secrets. Model values are placeholders. The training Campaign retains
 the existing training-side host configuration; this entry does not yet provide a
 complete per-role model/budget configuration. Merge currently uses the declared
 entry merge adapter, not all legacy merge strategies. Repair currently requires
-an explicit append-only author. Unsupported settings block rather than substitute.
+an explicit author with mode `append_only` or `rewrite`. Rewrite is opt-in and
+only supported for protocol-bound replay sources; legacy repair stays append-only.
+The selected mode is frozen and must match replay configuration. Rewriting does
+not bypass replay or permit held-out feedback repair. Unsupported settings block.
 `requireAllSources` gates training-source admission; `replayMustPass` separately
 gates replay before deployment. Tests never receive a repair author.
 
@@ -126,8 +131,9 @@ crash remnants require owner/evidence inspection, never blind deletion or PID-on
 takeover. Source specs, inventory, protocol, config and final candidate are checked
 on recovery. A completed batch adds no model calls. Offline integration exercises
 actual harvest/merge/replay/test with fixed learner/author replies. Real Campaign
-interior, NBA equivalence, resource ledger, other merge adapters and deployment
-acceptance remain pending; this milestone is not full project acceptance.
+interior and NBA scorer equivalence now have offline tests. Acceptance invocation
+accounting is available, but complete training/author accounting, other merge
+adapters and deployment acceptance remain pending; this is not full acceptance.
 
 ## Opt-in training roles and work budgets
 
@@ -141,6 +147,14 @@ them before requests. Inner specs retain the binding. Adding config to an existi
 unconfigured Campaign, removing frozen config or changing model/budget/host blocks.
 Absent config retains old selection and no additional runtimeBudget request field.
 Source tasks alone carry training config; test execution uses its own protocol.
-Timeout uses the original OpenCode watchdog. Actual complete Campaign, owned-process
-cancellation and resource accounting remain pending. Offline role-builder tests
-replace host/config/artifact boundaries and do not prove real model invocation.
+Timeout uses the original OpenCode watchdog. Actual complete Campaign flow has
+offline coverage; comprehensive cancellation and training resource accounting
+remain pending. Fixed model-boundary tests do not prove real model invocation.
+
+## Verification checkpoint (2026-10-12)
+
+Full offline suite: 224 passed, zero failed, 1266 expectations across 34 files.
+CLI build: 156 modules. This includes selected whole-Skill rewrite, final replay,
+held-out test, completed reuse without calls and legacy replay differential tests.
+Production source has not been deployed or modified. Full compatibility, permission
+and resource-accounting audits remain open; these results are not task scores.

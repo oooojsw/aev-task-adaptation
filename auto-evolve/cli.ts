@@ -657,7 +657,7 @@ async function commandRunMultiInstance(args: string[]) {
       repairAttempts > 0
         ? {
             enabled: true,
-            mode: "append_only",
+            mode: pipeline?.repairAuthor?.mode ?? "append_only",
             maxAttemptsPerCase: repairAttempts,
             protocolAuthor: pipeline?.repairAuthor,
           }

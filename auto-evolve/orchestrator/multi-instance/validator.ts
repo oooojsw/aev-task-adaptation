@@ -66,7 +66,7 @@ export interface RunValidateInput {
   filter?: (instance: InstanceState) => boolean
   repair?: {
     enabled: boolean
-    mode: "append_only"
+    mode: "append_only" | "rewrite"
     maxAttemptsPerCase: number
     promptPath?: string
     contractPath?: string
@@ -138,6 +138,17 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput,
     const filter = input.filter ?? defaultFilter
 
     const eligible = state.instances.filter(filter)
+    if (input.repair?.enabled && input.repair.protocolAuthor && input.repair.mode !== input.repair.protocolAuthor.mode) {
+      throw new Error("Explicit protocol repair mode mismatch")
+    }
+    if (input.repair?.enabled && input.repair.mode === "rewrite") {
+      // 重写只对显式新协议开放，旧修补语义保持只追加。
+      if (!input.repair.protocolAuthor || !eligible.length) throw new Error("Rewrite requires explicit protocol repair author")
+      for (const row of eligible) {
+        const spec = await readJsonFile<{ protocolPlugins?: unknown }>(path.join(row.sourceTaskRoot, "spec.json"))
+        if (!spec.protocolPlugins) throw new Error("Legacy replay does not support rewrite repair")
+      }
+    }
     let initialReplay: ReplaySnapshot | undefined
     let finalReplay: ReplaySnapshot | undefined
     let acceptanceStatus: MergeAcceptanceStatus = "not_run"
@@ -189,7 +200,7 @@ export async function runCoordinatorPhase3Validate(input: RunValidateInput,
     if (
       hasMergeAcceptanceStage(stages, "repair_promote") &&
       input.repair?.enabled &&
-      input.repair.mode === "append_only"
+      (input.repair.mode === "append_only" || (input.repair.mode === "rewrite" && Boolean(input.repair.protocolAuthor)))
     ) {
       // 从不可变起点顺序复用修补，不能因当前状态跳过已完成统计。
       if (journal) {

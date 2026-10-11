@@ -8,7 +8,8 @@ import { prepareProjectTasks } from "./project-tasks"
 import { runProjectBatch, validateProjectBatch, type ProjectBatchConfig } from "./project-batch"
 import { runCoordinatorPhase3Validate } from "../multi-instance/validator"
 
-async function fixture(repair = false, failure?: "test_rejection" | "replay_fault", trainCount = 1) {
+async function fixture(repair = false, failure?: "test_rejection" | "replay_fault", trainCount = 1,
+  repairMode: "append_only" | "rewrite" = "append_only") {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   const pack = path.join(root, "pack")
   await mkdir(pack, { recursive: true })
@@ -50,7 +51,7 @@ async function fixture(repair = false, failure?: "test_rejection" | "replay_faul
   if (repair) {
     config.repairAttempts = 2
     config.replayStages = ["initial_replay", "repair_promote", "final_full_replay", "strict_acceptance_gate"]
-    config.pipeline.repairAuthor = { model: "fixture/author", expectedModel: "fixture/author", timeoutMs: 1000, maxInputBytes: 100000, mode: "append_only" }
+    config.pipeline.repairAuthor = { model: "fixture/author", expectedModel: "fixture/author", timeoutMs: 1000, maxInputBytes: 100000, mode: repairMode }
   }
   const projectDriver = { async start(input: { specPath: string }) {
     learners++
@@ -73,7 +74,9 @@ async function fixture(repair = false, failure?: "test_rejection" | "replay_faul
     invoke: async (request: { editPaths: string[]; prompt: string }) => {
       authors++
       const rule = request.prompt.includes("Fixture train-2") ? "repaired-train-2" : "repaired"
-      const body = request.prompt.startsWith("Revise only") ? (await readFile(request.editPaths[0], "utf8")) + "\n" + rule : "Merged reusable rules"
+      const body = request.prompt.startsWith("Revise only")
+        ? repairMode === "rewrite" ? `Rewritten reusable rule ${rule}` : (await readFile(request.editPaths[0], "utf8")) + "\n" + rule
+        : "Merged reusable rules"
       await writeFile(request.editPaths[0], body)
       return { completed: true, actualModel: "fixture/author", evidence: [] }
     } })
@@ -118,9 +121,21 @@ test("batch configuration changes block before additional calls and unsupported 
   await runProjectBatch(f.input, f.dependencies)
   await expect(runProjectBatch({ ...f.input, config: { ...f.input.config, rounds: 3 } }, f.dependencies)).rejects.toThrow("configuration drift")
   expect(f.counts()).toEqual({ checks: 4, answers: 1, authors: 1, learners: 1 })
-  expect(() => validateProjectBatch({ ...f.input.config, repairAttempts: 1 })).toThrow("append-only")
+  expect(() => validateProjectBatch({ ...f.input.config, repairAttempts: 1 })).toThrow("explicit repair author")
   expect(() => validateProjectBatch({ ...f.input.config, sourceReplay: false })).toThrow("valid project")
   expect(() => validateProjectBatch({ ...f.input.config, fanoutLimit: 0 })).toThrow("valid project")
+})
+
+test("selected rewrite repair changes whole Skill and still requires final replay before test", async () => {
+  const f = await fixture(true, undefined, 1, "rewrite")
+  const first = await runProjectBatch(f.input, f.dependencies)
+  expect(first.status).toBe("completed")
+  expect(first.progress.outcomes.replay.repairFixed).toBe(1)
+  expect(first.progress.outcomes.replay.finalReplay).toMatchObject({ passed: 1, failed: 0 })
+  expect(await readFile(path.join(first.state.mergedSkillDir!, "rules.txt"), "utf8")).toBe("Rewritten reusable rule repaired")
+  expect(f.counts()).toEqual({ checks: 6, answers: 1, authors: 2, learners: 1 })
+  expect((await runProjectBatch(f.input, f.dependencies)).status).toBe("completed")
+  expect(f.counts()).toEqual({ checks: 6, answers: 1, authors: 2, learners: 1 })
 })
 
 test("actual batch repairs rejected replay then fully replays before held-out test", async () => {

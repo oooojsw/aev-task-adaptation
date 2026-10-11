@@ -50,8 +50,8 @@ export function validateProjectBatch(value: unknown): ProjectBatchConfig {
       (cfg.repairAttempts > 0 && !cfg.replayStages.includes("repair_promote")))) {
     throw new Error("Explicit compatible replay stages required")
   }
-  if (cfg.repairAttempts > 0 && (!cfg.sourceReplay || cfg.pipeline.repairAuthor?.mode !== "append_only")) {
-    throw new Error("Project batch repair requires source replay and explicit append-only author")
+  if (cfg.repairAttempts > 0 && (!cfg.sourceReplay || !cfg.pipeline.repairAuthor)) {
+    throw new Error("Project batch repair requires source replay and explicit repair author")
   }
   return cfg
 }
@@ -175,7 +175,7 @@ export async function runProjectBatch(input: { cwd: string; runRoot: string; con
     const result = await runCoordinatorPhase3Validate({ cwd: input.cwd, state, validateLimit: cfg.fanoutLimit,
       filter: (row) => row.role === "train" && row.status === "passed",
       ...(cfg.replayStages ? { acceptancePolicy: { stages: cfg.replayStages, successCriterion: "all_pass" as const } } : {}),
-      repair: { enabled: cfg.repairAttempts > 0, mode: "append_only", maxAttemptsPerCase: cfg.repairAttempts,
+      repair: { enabled: cfg.repairAttempts > 0, mode: cfg.pipeline.repairAuthor?.mode ?? "append_only", maxAttemptsPerCase: cfg.repairAttempts,
         protocolAuthor: cfg.pipeline.repairAuthor } }, { protocolRuntime: runtime, createDriver: dependencies?.createDriver })
     progress.outcomes.replay = result
     if (cfg.replayMustPass && !result.accepted) { await save(); return { status: "replay_gate_blocked", state, progress } }
