@@ -63,9 +63,12 @@ function plugin(value: Plugin) {
   return JSON.parse(canonical(descriptor)) as Plugin
 }
 
-export function cachedExecution(root: string, descriptor: Plugin, handler: Execute): Execute {
+export function cachedExecution(root: string, descriptor: Plugin, handler: Execute,
+  preflight?: (input: Parameters<Execute>[0]) => Promise<void>): Execute {
   const version = plugin(descriptor)
   return async (input) => {
+    // 缓存命中也要核验外部依赖，不能绕过后端身份检查。
+    await preflight?.(input)
     // 执行身份不含评分器；只改评分器可以复用原答卷。
     const key = fingerprint({ plugin: version, task: input.task, phase: input.phase, settings: input.settings,
       skill: inputs(input.skill), materials: inputs(input.materials) })
@@ -100,9 +103,12 @@ export function cachedExecution(root: string, descriptor: Plugin, handler: Execu
   }
 }
 
-export function cachedScoring(root: string, descriptor: Plugin, handler: Evaluate): Evaluate {
+export function cachedScoring(root: string, descriptor: Plugin, handler: Evaluate,
+  preflight?: (input: Parameters<Evaluate>[0]) => Promise<void>): Evaluate {
   const version = plugin(descriptor)
   return async (input) => {
+    // 评分脚本变化时阻断旧判定复用，不自动重发执行请求。
+    await preflight?.(input)
     const key = fingerprint({ plugin: version, task: input.task, phase: input.phase, settings: input.settings,
       check: input.check, candidate: inputs(input.candidate), skill: inputs(input.skill),
       materials: inputs(input.materials), privateInputs: inputs(input.privateInputs) })

@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
 import { scriptChecker } from "./script-checker"
+import { cachedScoring } from "./cache"
 import type { Artifact, Evaluate } from "./runtime"
 
 const python = "C:/Users/ZhuanZ/miniconda3/python.exe"
@@ -55,6 +56,23 @@ test("interpreter/scorer fingerprint drift blocks invocation", async () => {
   const value = await input("Answer: False", { answer: false })
   value.settings.scriptSHA256 = "0".repeat(64)
   expect((await plugin.evaluate(value)).status).toBe("scoring_error")
+})
+
+test("actual scorer file drift blocks an already cached verdict without destroying it", async () => {
+  const dir = await root()
+  const script = path.join(dir, "cached.py")
+  const body = 'import json\nprint(json.dumps({"status":"passed","message":"fixture"}))\n'
+  await writeFile(script, body)
+  const plugin = await scriptChecker(path.join(dir, "evidence"))
+  const check = cachedScoring(path.join(dir, "cache"), plugin.descriptor, plugin.evaluate, plugin.preflight)
+  const value = await input("Answer: False", { answer: false })
+  Object.assign(value.settings, { script, scriptSHA256: await hash(script) })
+  expect((await check(value)).status).toBe("passed")
+  expect((await check(value)).reused).toBe(true)
+  await writeFile(script, body + "# changed implementation\n")
+  await expect(check(value)).rejects.toThrow("fingerprint changed before cache reuse")
+  await writeFile(script, body)
+  expect((await check(value)).reused).toBe(true)
 })
 
 test("scorer crash or non-JSON output cannot pass", async () => {

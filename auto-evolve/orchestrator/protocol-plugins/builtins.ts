@@ -12,7 +12,7 @@ export async function builtins(root: string) {
   const script = await scriptChecker(path.join(root, "scripts"))
   // 执行与评分分别缓存，换评分配置不重复发送答题请求。
   runtime.addExecutor(http.descriptor, cachedExecution(path.join(root, "cache"), http.descriptor, http.execute))
-  runtime.addChecker(script.descriptor, cachedScoring(path.join(root, "cache"), script.descriptor, script.evaluate))
+  runtime.addChecker(script.descriptor, cachedScoring(path.join(root, "cache"), script.descriptor, script.evaluate, script.preflight))
   const judge = await modelJudge({ evidenceRoot: path.join(root, "judges") })
   runtime.addChecker(judge.descriptor, cachedScoring(path.join(root, "cache"), judge.descriptor, judge.evaluate))
   return runtime

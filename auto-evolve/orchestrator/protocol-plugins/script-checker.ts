@@ -35,7 +35,8 @@ async function digest(file: string) {
   return createHash("sha256").update(await readFile(file)).digest("hex")
 }
 
-export async function scriptChecker(root: string): Promise<{ descriptor: CheckerPlugin; evaluate: Evaluate }> {
+export async function scriptChecker(root: string): Promise<{ descriptor: CheckerPlugin; evaluate: Evaluate;
+  preflight: (input: Parameters<Evaluate>[0]) => Promise<void> }> {
   if (!path.isAbsolute(root)) throw new Error("Absolute script evidence root required")
   const descriptor: CheckerPlugin = { id: "script-json-checker", version: "1", implementation: await digest(fileURLToPath(import.meta.url)),
     targets: ["skill", "product"], mechanisms: ["script"], productKinds: ["text", "excel", "json"],
@@ -108,5 +109,11 @@ export async function scriptChecker(root: string): Promise<{ descriptor: Checker
     await writeJsonAtomic(path.join(dir, "verdict.json"), parsed)
     return { status: parsed.status, message: parsed.message }
   }
-  return { descriptor, evaluate }
+  const preflight = async (input: Parameters<Evaluate>[0]) => {
+    const cfg = config(input.settings)
+    if (await digest(cfg.command) !== cfg.commandSHA256 || await digest(cfg.script) !== cfg.scriptSHA256) {
+      throw new Error("Interpreter or scorer fingerprint changed before cache reuse")
+    }
+  }
+  return { descriptor, evaluate, preflight }
 }

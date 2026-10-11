@@ -36,6 +36,27 @@ test("same execution reuses actual answer and marks reuse", async () => {
   expect(calls).toBe(1)
 })
 
+test("dependency preflight runs before cache hit or claim and preserves completed evidence", async () => {
+  const root = await directory()
+  let calls = 0
+  let compatible = true
+  const guard = async () => { if (!compatible) throw new Error("dependency drift") }
+  const run = cachedExecution(root, descriptor, async () => { calls++; return answer }, guard)
+  const check = cachedScoring(root, descriptor, async () => {
+    calls++; return { status: "passed", message: "ok" }
+  }, guard)
+  await run(request())
+  await check(scoring())
+  compatible = false
+  await expect(run(request())).rejects.toThrow("dependency drift")
+  await expect(check(scoring())).rejects.toThrow("dependency drift")
+  expect(calls).toBe(2)
+  compatible = true
+  expect((await run(request())).reused).toBe(true)
+  expect((await check(scoring())).reused).toBe(true)
+  expect(calls).toBe(2)
+})
+
 test("changed skill, material or settings changes execution identity", async () => {
   let calls = 0
   const run = cachedExecution(await directory(), descriptor, async () => { calls++; return answer })
