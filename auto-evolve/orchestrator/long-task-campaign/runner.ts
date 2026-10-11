@@ -3428,6 +3428,12 @@ export function buildGeneratedRoundSpec(input: {
   blankAgentAcceptanceDiagnosisPath: string
 }): LongTaskSpec {
   const isFirstRound = input.roundNumber === 1
+  const roundBudgets = applyBudgetOverrides(input.baseSpec.budgets, input.campaignSpec.roundBudgetOverrides)
+  // 新配置已冻结训练预算，禁止轮次覆盖悄悄改变执行口径。
+  if (input.baseSpec.protocolTraining && Object.keys(input.baseSpec.protocolTraining.budgets).some((key) =>
+    roundBudgets[key as keyof LongTaskBudgets] !== input.baseSpec.protocolTraining!.budgets[key as keyof LongTaskBudgets])) {
+    throw new Error("Campaign round budget overrides conflict with frozen protocol training")
+  }
   const roundValidators = input.baseSpec.validators.map((validator) => {
     const descriptor =
       `${validator.id} ${validator.title} ${validator.type === "script" ? validator.path : ""}`.toLowerCase()
@@ -3483,7 +3489,7 @@ export function buildGeneratedRoundSpec(input: {
     campaignWorkingMemoryPath: input.workingMemoryPath,
     campaignRoutingControlPath: input.routingControlPath,
     preservePreseededEditablePaths,
-    budgets: applyBudgetOverrides(input.baseSpec.budgets, input.campaignSpec.roundBudgetOverrides),
+    budgets: roundBudgets,
     notes: [
       input.baseSpec.notes,
       `campaign_mode=${input.campaignSpec.mode}`,
