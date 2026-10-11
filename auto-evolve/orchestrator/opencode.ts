@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto"
 import { copyFile, readFile, readdir, realpath, rm, stat } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
 import { buildActionTrace } from "./action-trace"
+import { infrastructureAttempts } from "./opencode-retry-policy"
 import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
 import type { ToolFailure } from "./evaluator"
 import {
@@ -146,6 +147,7 @@ export interface OpencodeModelResolution {
 }
 
 export interface OpencodeTaskInput {
+  infrastructureAttempts?: number
   /** Repository root used to find dependencies, runtime config, and local OpenCode binary. */
   cwd: string
   /** Directory exposed to OpenCode as its task working directory (`opencode run --dir`). */
@@ -1319,6 +1321,7 @@ async function runOpencodeTaskOnce(
 }
 
 export async function runOpencodeTask(input: OpencodeTaskInput): Promise<OpencodeTaskRun> {
+  const maxAttempts = infrastructureAttempts(input.infrastructureAttempts)
   startStaleOpencodeRuntimeCleanup(input.cwd)
 
   const dependenciesInstalled = await pathExists(path.join(input.cwd, "node_modules"))
@@ -1344,7 +1347,6 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
 
   const infrastructureNotes: string[] = []
   let result: OpencodeRunResult | undefined
-  const maxAttempts = 3
 
   // Acquire a global gate permit before spawning OpenCode. This caps total
   // concurrent OpenCode children across the whole process, regardless of
