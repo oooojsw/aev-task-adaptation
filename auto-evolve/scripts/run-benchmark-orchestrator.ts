@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
+import { runHiddenChildProcess } from "../orchestrator/hidden-child-process"
 import { createCoordinatorRun } from "../orchestrator/multi-instance/coordinator"
 import { runCoordinatorPhase2Merge, runPostMergeValidation } from "../orchestrator/multi-instance/merger"
 import {
@@ -60,13 +61,14 @@ import {
 } from "./run-hierarchical-merge-long-task"
 import { updateExperimentLedger } from "./update-experiment-ledger"
 import { runSkillOptMerger } from "../orchestrator/multi-instance/skillopt-merger"
+import { runLiteMerger } from "../orchestrator/multi-instance/lite-merger"
 import { runSkillOptNativeEval } from "../orchestrator/skillopt-native-eval/runner"
 import type { SkillOptNativeEvalConfig, SkillOptNativeSplit } from "../orchestrator/skillopt-native-eval/contract"
 
 type OrchestratorMode = "campaign-only" | "full-pipeline"
 type EvalRunner = "blank-opencode" | "direct-chat" | "opt-direct-chat"
-type MergeExecutionMode = "legacy_script" | "long_task" | "skillopt" | "both_smoke"
-type MergePathName = "merge-as-old" | "merge-as-long-task" | "merge-as-opt" | "merge-both-smoke"
+type MergeExecutionMode = "legacy_script" | "long_task" | "skillopt" | "lite" | "both_smoke"
+type MergePathName = "merge-as-old" | "merge-as-long-task" | "merge-as-opt" | "merge-as-lite" | "merge-both-smoke"
 
 type CampaignRow = {
   id: string
@@ -194,6 +196,7 @@ type BenchmarkConfig = {
     }
   }
   mergeAsSkillOpt?: Awaited<ReturnType<typeof loadConfig>>["mergeConfig"]["asSkillOpt"]
+  mergeAsLite?: Awaited<ReturnType<typeof loadConfig>>["mergeConfig"]["asLite"]
   mergeStrategy: "flat" | "hierarchical"
   hierarchicalMerge: {
     groupSize: number
@@ -378,6 +381,7 @@ export function clearPausedStopMarkerForResume(state: Pick<BenchmarkState, "stop
 function mergePathName(mode: MergeExecutionMode | undefined): MergePathName {
   if (mode === "long_task") return "merge-as-long-task"
   if (mode === "skillopt") return "merge-as-opt"
+  if (mode === "lite") return "merge-as-lite"
   if (mode === "both_smoke") return "merge-both-smoke"
   return "merge-as-old"
 }
@@ -524,8 +528,11 @@ const VALUE_OPTIONS = new Set([
   "--skillopt-target-base-url",
   "--skillopt-target-api-key-env",
   "--skillopt-project-root",
+  "--skillopt-output-root",
   "--skillopt-python-command",
   "--skillopt-reasoning-effort",
+  "--skillopt-max-bytes",
+  "--skillopt-length-repair-attempts",
   "--skillopt-timeout-ms",
   "--skillopt-workers",
   "--mode",
@@ -932,7 +939,21 @@ async function campaigns(taskPackRoot: string, ids: string[], historyContext?: B
     const raw = await readFile(file, "utf8").catch(() => "")
     if (!raw.trim()) continue
     const row = JSON.parse(raw.replace(/^\uFEFF/, "")) as Record<string, unknown>
-    const hit = ids.find((id) => path.resolve(String(row.baseSpecPath ?? "")) === path.resolve(baseSpecPath(taskPackRoot, id)))
+    const lineageTaskID =
+      row.runLineage &&
+      typeof row.runLineage === "object" &&
+      !Array.isArray(row.runLineage) &&
+      typeof (row.runLineage as Record<string, unknown>).taskID === "string"
+        ? String((row.runLineage as Record<string, unknown>).taskID)
+        : undefined
+    // A benchmark overlay may contain byte-identical specs at a different
+    // path. Use the campaign lineage task ID as the second identity signal;
+    // isCampaignAuthorizedForContext still checks run, generation and hash.
+    const hit = ids.find(
+      (id) =>
+        path.resolve(String(row.baseSpecPath ?? "")) === path.resolve(baseSpecPath(taskPackRoot, id)) ||
+        lineageTaskID === id,
+    )
     if (!hit) continue
     if (!historyContext && process.env.AUTO_EVOLVE_ALLOW_LEGACY_CAMPAIGN_REUSE !== "1") continue
     if (historyContext && !isCampaignAuthorizedForContext(row as any, historyContext, hit, expectedSpecHashByID.get(hit))) {
@@ -969,14 +990,39 @@ async function verified(taskPackRoot: string, ids: string[], map?: Map<string, C
   const src = map ?? (await campaigns(taskPackRoot, ids, historyContext))
   const got = new Map<string, CampaignRow>()
   for (const id of ids) {
-    for (const row of src.get(id) ?? []) {
-      if (row.status !== "verified_success") continue
-      if (!(await pathExists(row.pending))) continue
-      got.set(id, row)
-      break
-    }
+    const row = await findVerifiedCampaign(src.get(id) ?? [])
+    if (row) got.set(id, row)
   }
   return got
+}
+
+async function findVerifiedCampaign(rows: CampaignRow[]) {
+  for (const row of rows) {
+    if (row.status !== "verified_success") continue
+    if (!(await pathExists(row.pending))) continue
+    return row
+  }
+  return undefined
+}
+
+async function waitForCampaignSettlement(
+  config: BenchmarkConfig,
+  taskID: string,
+  waitMs = 30_000,
+) {
+  const deadline = Date.now() + waitMs
+  let map = await campaigns(config.taskPackRoot, [taskID], config.historyContext)
+  while (Date.now() < deadline) {
+    const rows = map.get(taskID) ?? []
+    const verifiedRow = await findVerifiedCampaign(rows)
+    const latest = rows[0]
+    if (verifiedRow || (latest && (isTerminalTrainStatus(latest.status) || latest.status === "recovery_pending"))) {
+      return map
+    }
+    await sleep(2_000)
+    map = await campaigns(config.taskPackRoot, [taskID], config.historyContext)
+  }
+  return map
 }
 
 async function syncLatestTrainTerminals(config: BenchmarkConfig, state: BenchmarkState, ids: string[]) {
@@ -985,14 +1031,16 @@ async function syncLatestTrainTerminals(config: BenchmarkConfig, state: Benchmar
     if (config.excludedTaskIDs.includes(id)) continue
     const rowState = state.trainResults.find((item) => item.id === id)
     if (!rowState || rowState.status === "verified_success") continue
-    const latest = map.get(id)?.[0]
-    if (!latest) continue
-    if (latest.status === "verified_success" && (await pathExists(latest.pending))) {
+    const rows = map.get(id) ?? []
+    const verifiedRow = await findVerifiedCampaign(rows)
+    if (verifiedRow) {
       rowState.status = "verified_success"
-      rowState.campaignDir = latest.cdir
+      rowState.campaignDir = verifiedRow.cdir
       rowState.updatedAt = nowISO()
       continue
     }
+    const latest = rows[0]
+    if (!latest) continue
     if (!isTerminalTrainStatus(latest.status)) continue
     rowState.status = latest.status
     rowState.campaignDir = latest.cdir
@@ -1007,10 +1055,12 @@ async function reconcileHistoryFromCampaignMap(
 ) {
   if (!config.historyContext) return
   for (const id of ids) {
-    const latest = map.get(id)?.[0]
+    const rows = map.get(id) ?? []
+    const verifiedRow = await findVerifiedCampaign(rows)
+    const latest = verifiedRow ?? rows[0]
     if (!latest) continue
     const status =
-      latest.status === "verified_success" && (await pathExists(latest.pending))
+      verifiedRow
         ? "verified_success"
         : latest.status === "recovery_pending"
           ? "recovery_pending"
@@ -1322,21 +1372,16 @@ async function runOneCampaign(config: BenchmarkConfig, pick: TrainPick) {
           specPath,
           ...(config.resumeRunning ? [] : ["--force-new"]),
         ]
-    const child = Bun.spawn([process.execPath, ...args], {
+    const child = await runHiddenChildProcess({
+      command: process.execPath,
+      args,
       cwd: autoRoot,
       env: historyPayload ? { ...process.env, AUTO_EVOLVE_HISTORY_SCOPE: historyPayload } : { ...process.env },
-      stdout: "pipe",
-      stderr: "pipe",
-      windowsHide: true,
     })
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ])
+    const { stdout, stderr, exitCode: code } = child
     await writeFile(path.join(logDir, `${pick.id}.stdout.log`), stdout, "utf8")
     await writeFile(path.join(logDir, `${pick.id}.stderr.log`), stderr, "utf8")
-    const map = await campaigns(config.taskPackRoot, [pick.id], config.historyContext)
+    const map = await waitForCampaignSettlement(config, pick.id)
     const ok = await verified(config.taskPackRoot, [pick.id], map, config.historyContext)
     const hit = ok.get(pick.id) ?? map.get(pick.id)?.[0]
     const health = hit?.cdir ? await readCampaignHealth(hit.cdir) : undefined
@@ -1878,7 +1923,46 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
   await saveCoordinatorState(stateRun)
 
   const merge =
-    config.mergeExecutionMode === "skillopt"
+    config.mergeExecutionMode === "lite"
+      ? await (async () => {
+          const projectConfig = await loadConfig(repoRoot)
+          const liteConfig = config.mergeAsLite ?? projectConfig.mergeConfig.asLite
+          const contributingInstances = stateRun.instances.filter(
+            (instance) => instance.role !== "test" && instance.status === "passed" && instance.harvestedSkillPath,
+          )
+          const outcome = await runLiteMerger({
+            cwd: repoRoot,
+            runRoot: path.join(config.outDir, "merge-and-validate", "phase2-lite"),
+            config: liteConfig,
+            sourceSkills: contributingInstances.map((instance) => ({
+              id: instance.id,
+              skillRoot: instance.harvestedSkillPath!,
+            })),
+          })
+          const postMergeValidation = await runPostMergeValidation({
+            cwd: repoRoot,
+            state: stateRun,
+            config: projectConfig,
+            mergerRoot: outcome.mergerRunDir,
+            mergedSkillDir: outcome.mergedSkillDir,
+            manifestPath: outcome.inputManifestPath,
+            contributingInstances,
+          })
+          stateRun.postMergeValidationStatus = postMergeValidation.status
+          stateRun.postMergeValidationResultPath = postMergeValidation.resultPath
+          stateRun.postMergeValidationSummary = postMergeValidation.summary
+          if (postMergeValidation.status === "failed") {
+            throw new Error(`merge-as-lite post-merge validation failed: ${postMergeValidation.summary}`)
+          }
+          return {
+            ...outcome,
+            strategy: "hierarchical" as const,
+            postMergeValidationResultPath: postMergeValidation.resultPath,
+            postMergeValidationPassed:
+              postMergeValidation.status === "skipped" ? undefined : postMergeValidation.status === "passed",
+          }
+        })()
+      : config.mergeExecutionMode === "skillopt"
       ? await (async () => {
           const projectConfig = await loadConfig(repoRoot)
           const skillOptConfig = config.mergeAsSkillOpt ?? projectConfig.mergeConfig.asSkillOpt
@@ -1944,7 +2028,7 @@ async function mergeReplayAndTest(config: BenchmarkConfig, trainIDs: string[], t
   await saveCoordinatorState(stateRun)
   state.merge = {
     mergedSkillDir: merge.mergedSkillDir,
-    strategy: config.mergeExecutionMode === "skillopt" ? "hierarchical" : config.mergeStrategy,
+    strategy: config.mergeExecutionMode === "skillopt" || config.mergeExecutionMode === "lite" ? "hierarchical" : config.mergeStrategy,
     executionMode: config.mergeExecutionMode ?? "legacy_script",
     pathName: mergePathName(config.mergeExecutionMode),
     inputSkillCount: merge.contributingInstances.length,
@@ -3512,11 +3596,11 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
   const runTest = !hasFlag(args, "--skip-test") && modeOpt !== "campaign-only"
   let runBaseline = !hasFlag(args, "--skip-baseline") && modeOpt !== "campaign-only"
   const mergeConfig = parseHierarchicalMergeConfig(args)
-  const mergeExecutionMode = parseChoice<"legacy_script" | "long_task" | "skillopt" | "both_smoke">({
+  const mergeExecutionMode = parseChoice<"legacy_script" | "long_task" | "skillopt" | "lite" | "both_smoke">({
     raw: getOption(args, "--merge-execution-mode"),
     fallback: projectConfig.mergeConfig.mode,
     optionName: "--merge-execution-mode",
-    expected: "legacy-script, long-task, skillopt/merge-as-opt, or both-smoke",
+    expected: "legacy-script, long-task, skillopt/merge-as-opt, lite/merge-as-lite, or both-smoke",
     aliases: {
       legacy: "legacy_script",
       legacy_script: "legacy_script",
@@ -3527,6 +3611,10 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
       opt: "skillopt",
       skillopt: "skillopt",
       "merge-as-opt": "skillopt",
+      lite: "lite",
+      skillopt_lite: "lite",
+      "skillopt-lite": "lite",
+      "merge-as-lite": "lite",
       both: "both_smoke",
       both_smoke: "both_smoke",
       "both-smoke": "both_smoke",
@@ -3585,6 +3673,7 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
     ...projectConfig.mergeConfig.asSkillOpt,
     enabled: projectConfig.mergeConfig.asSkillOpt.enabled || mergeExecutionMode === "skillopt",
     projectRoot: getOption(args, "--skillopt-project-root") ?? projectConfig.mergeConfig.asSkillOpt.projectRoot,
+    outputRoot: getOption(args, "--skillopt-output-root") ?? projectConfig.mergeConfig.asSkillOpt.outputRoot,
     configPath: getOption(args, "--skillopt-config") ?? projectConfig.mergeConfig.asSkillOpt.configPath,
     pythonCommand: getOption(args, "--skillopt-python-command") ?? projectConfig.mergeConfig.asSkillOpt.pythonCommand,
     bridgeScript: getOption(args, "--skillopt-bridge-script") ?? projectConfig.mergeConfig.asSkillOpt.bridgeScript,
@@ -3601,6 +3690,14 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
       getOption(args, "--skillopt-optimizer-api-key-env") ?? projectConfig.mergeConfig.asSkillOpt.optimizerApiKeyEnv,
     reasoningEffort:
       getOption(args, "--skillopt-reasoning-effort") ?? projectConfig.mergeConfig.asSkillOpt.reasoningEffort,
+    maxSkillBytes: getOption(args, "--skillopt-max-bytes") === undefined
+      ? projectConfig.mergeConfig.asSkillOpt.maxSkillBytes
+      : Math.max(0, Number.parseInt(getOption(args, "--skillopt-max-bytes")!, 10) || 0),
+    lengthRepairAttempts: parsePositiveIntOption(
+      args,
+      ["--skillopt-length-repair-attempts"],
+      projectConfig.mergeConfig.asSkillOpt.lengthRepairAttempts,
+    ),
     pipelineMode: parseChoice<"aggregate_only" | "native_train">({
       raw: getOption(args, "--skillopt-pipeline-mode"),
       fallback: projectConfig.mergeConfig.asSkillOpt.pipelineMode,
@@ -3651,10 +3748,48 @@ export async function parseBenchmarkConfig(args: string[]): Promise<BenchmarkCon
     targetApiKeyEnv:
       getOption(args, "--skillopt-target-api-key-env") ?? projectConfig.mergeConfig.asSkillOpt.targetApiKeyEnv,
   }
+  const mergeAsLite = {
+    ...projectConfig.mergeConfig.asLite,
+    enabled: projectConfig.mergeConfig.asLite.enabled || mergeExecutionMode === "lite",
+    projectRoot: getOption(args, "--lite-project-root") ?? projectConfig.mergeConfig.asLite.projectRoot,
+    runtimeRoot: getOption(args, "--lite-runtime-root") ?? projectConfig.mergeConfig.asLite.runtimeRoot,
+    outputRoot: getOption(args, "--lite-output-root") ?? projectConfig.mergeConfig.asLite.outputRoot,
+    pythonCommand: getOption(args, "--lite-python-command") ?? projectConfig.mergeConfig.asLite.pythonCommand,
+    bridgeScript: getOption(args, "--lite-bridge-script") ?? projectConfig.mergeConfig.asLite.bridgeScript,
+    environment: parseChoice<"officeqa" | "spreadsheetbench">({
+      raw: getOption(args, "--lite-environment"),
+      fallback: projectConfig.mergeConfig.asLite.environment,
+      optionName: "--lite-environment",
+      expected: "officeqa or spreadsheetbench",
+    }),
+    splitDir: getOption(args, "--lite-split-dir") ?? projectConfig.mergeConfig.asLite.splitDir,
+    dataRoot: getOption(args, "--lite-data-root") ?? projectConfig.mergeConfig.asLite.dataRoot,
+    rounds: parsePositiveIntOption(args, ["--lite-rounds"], projectConfig.mergeConfig.asLite.rounds),
+    workers: parsePositiveIntOption(args, ["--lite-workers"], projectConfig.mergeConfig.asLite.workers),
+    timeoutMs: parsePositiveIntOption(args, ["--lite-timeout-ms"], projectConfig.mergeConfig.asLite.timeoutMs),
+    optimizerModel: getOption(args, "--lite-optimizer-model") ?? projectConfig.mergeConfig.asLite.optimizerModel,
+    authFile: getOption(args, "--lite-auth-file") ?? projectConfig.mergeConfig.asLite.authFile,
+    providerID: getOption(args, "--lite-provider-id") ?? projectConfig.mergeConfig.asLite.providerID,
+    maxSkillBytes: getOption(args, "--lite-max-bytes") === undefined
+      ? projectConfig.mergeConfig.asLite.maxSkillBytes
+      : Math.max(0, Number.parseInt(getOption(args, "--lite-max-bytes")!, 10) || 0),
+    lengthRepairAttempts: parsePositiveIntOption(
+      args,
+      ["--lite-length-repair-attempts"],
+      projectConfig.mergeConfig.asLite.lengthRepairAttempts,
+    ),
+    gateMetric: parseChoice<"hard" | "soft">({
+      raw: getOption(args, "--lite-gate-metric"),
+      fallback: projectConfig.mergeConfig.asLite.gateMetric,
+      optionName: "--lite-gate-metric",
+      expected: "hard or soft",
+    }),
+  }
   const mergeBackendConfig = {
     mergeExecutionMode,
     mergeAsLongTask,
     mergeAsSkillOpt,
+    mergeAsLite,
   }
   if (stopAfter && stopAfter !== "baseline") runBaseline = false
   if (stopAfter === "training") {

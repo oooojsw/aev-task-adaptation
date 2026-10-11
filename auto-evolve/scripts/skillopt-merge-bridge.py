@@ -159,6 +159,7 @@ def run_native_train(request: dict[str, Any], warm_start_package: str) -> tuple[
     from skillopt.config import flatten_config, load_config
     from skillopt.engine.trainer import ReflACTTrainer
     from skillopt.model import get_token_summary, reset_token_tracker
+    from skillopt.optimizer.skill_length import SkillLengthPolicy, repair_skill_to_limit, utf8_bytes
 
     config_path = Path(str(native.get("configPath") or "")).resolve()
     out_root = Path(str(native.get("outRoot") or "")).resolve()
@@ -169,11 +170,15 @@ def run_native_train(request: dict[str, Any], warm_start_package: str) -> tuple[
     warm_start_path = out_root / "aev-warm-start.md"
     raw_warm_start = extract_core_skill(warm_start_package)
     raw_warm_start_path.write_text(raw_warm_start, encoding="utf-8", newline="\n")
-    warm_start_path.write_text(
+    length_policy = SkillLengthPolicy.from_config(request.get("lengthPolicy"))
+    adapted_warm_start, warm_start_length_events = repair_skill_to_limit(
         adapt_skill_for_native_runtime(raw_warm_start),
-        encoding="utf-8",
-        newline="\n",
+        length_policy,
+        stage="native_runtime_warm_start",
+        document_label="complete native-runtime skill preserving the runtime contract",
+        required_substrings=("SkillOpt Native Runtime Contract", "<answer>...</answer>"),
     )
+    warm_start_path.write_text(adapted_warm_start, encoding="utf-8", newline="\n")
 
     cfg = flatten_config(load_config(str(config_path)))
     if native.get("splitDir"):
@@ -213,8 +218,13 @@ def run_native_train(request: dict[str, Any], warm_start_package: str) -> tuple[
             "optimizer_model": optimizer_model,
             "target_backend": target_backend,
             "target_model": target_model,
+            "skill_max_bytes": length_policy.max_bytes if length_policy.enabled else 0,
+            "skill_length_repair_attempts": length_policy.max_repair_attempts,
         }
     )
+    if "slowUpdateGateWithSelection" in native:
+        # C阶段必须让慢更新和普通候选使用同一验证门禁。
+        cfg["slow_update_gate_with_selection"] = bool(native["slowUpdateGateWithSelection"])
     base_url = str(optimizer.get("baseUrl") or "").strip()
     target_base_url = str(native.get("targetBaseUrl") or base_url).strip()
     if optimizer_backend == "minimax_chat" and base_url:
@@ -232,6 +242,19 @@ def run_native_train(request: dict[str, Any], warm_start_package: str) -> tuple[
     if not best_skill_path.is_file():
         raise ValueError("Native SkillOpt trainer completed without best_skill.md")
     best_skill = best_skill_path.read_text(encoding="utf-8-sig")
+    if length_policy.enabled and utf8_bytes(best_skill) > length_policy.max_bytes:
+        raise ValueError(
+            f"Native SkillOpt best skill exceeds hard limit: {utf8_bytes(best_skill)} > "
+            f"{length_policy.max_bytes} UTF-8 bytes"
+        )
+    summary["bridgeLengthGate"] = {
+        "policy": length_policy.to_dict(),
+        "warmStartEvents": warm_start_length_events,
+        "finalBestSkillBytes": utf8_bytes(best_skill),
+    }
+    summary["bridgeSelectionGate"] = {
+        "slowUpdateGateWithSelection": bool(cfg.get("slow_update_gate_with_selection", False)),
+    }
     packaged = f"{FILE_START}\n{best_skill.rstrip()}\n{FILE_END}"
     return packaged, summary, get_token_summary()
 
@@ -395,16 +418,22 @@ def converge_skill_candidates(
                 "coverage rather than copying every sentence. The final new_skill should be concise (target at most "
                 "60,000 characters). Do not return one candidate per input."
             ).strip(),
+            length_policy=request.get("lengthPolicy"),
         )
         if checkpoint_fn is not None:
             checkpoint_fn(current)
 
 
-def force_pairwise_skill_consolidation(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+def force_pairwise_skill_consolidation(
+    candidates: list[dict[str, Any]],
+    length_policy_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Strictly reduce complete candidates 2->1 without concatenation fallback."""
     from skillopt.model import chat_optimizer
+    from skillopt.optimizer.skill_length import SkillLengthPolicy, repair_skill_to_limit
     from skillopt.utils.json_utils import extract_json
 
+    length_policy = SkillLengthPolicy.from_config(length_policy_config)
     current = list(candidates)
     level = 0
     while len(current) > 1:
@@ -441,6 +470,16 @@ def force_pairwise_skill_consolidation(candidates: list[dict[str, Any]]) -> dict
                     candidate = parsed_candidates[0]
                     skill = str(candidate.get("new_skill") or "") if isinstance(candidate, dict) else ""
                     if FILE_START in skill and FILE_END in skill:
+                        skill, _ = repair_skill_to_limit(
+                            skill,
+                            length_policy,
+                            stage=f"strict_pairwise_level_{level}_pair_{offset // 2 + 1}",
+                            document_label="complete packaged skill preserving AEV file markers",
+                            required_substrings=(FILE_START, FILE_END),
+                        )
+                        if FILE_START not in skill or FILE_END not in skill:
+                            raise ValueError("Length repair removed required AEV package markers")
+                        candidate["new_skill"] = skill
                         merged_candidate = candidate
                         break
                 last_error = f"retry {retry} did not return one complete packaged skill"
@@ -457,7 +496,16 @@ def force_pairwise_skill_consolidation(candidates: list[dict[str, Any]]) -> dict
 
 
 def source_candidate_digest(request: dict[str, Any]) -> str:
-    payload = request.get("successPatches") or []
+    # 长度策略进入指纹，防止复用旧的无上限断点。
+    payload = {
+        "skillContent": request.get("skillContent") or "",
+        "failurePatches": request.get("failurePatches") or [],
+        "successPatches": request.get("successPatches") or [],
+        "metaSkillContext": request.get("metaSkillContext") or "",
+        "batchSize": int(request.get("batchSize") or 8),
+        "lengthPolicy": request.get("lengthPolicy") or {},
+        "bridgeProtocol": "length-gate-v1",
+    }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -467,6 +515,7 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
     configure_optimizer(request)
     from skillopt.gradient.aggregate import merge_patches
     from skillopt.model import get_token_summary, reset_token_tracker
+    from skillopt.optimizer.skill_length import SkillLengthPolicy, repair_skill_to_limit, utf8_bytes
 
     reset_token_tracker()
     native_train = request.get("nativeTrain") if isinstance(request.get("nativeTrain"), dict) else {}
@@ -507,6 +556,7 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
                 workers=int(request.get("workers") or 1),
                 update_mode="full_rewrite_minibatch",
                 meta_skill_context=str(request.get("metaSkillContext") or ""),
+                length_policy=request.get("lengthPolicy"),
             )
             write_json(
                 checkpoint_path,
@@ -522,7 +572,10 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
             merge_patches,
             request,
             merged,
-            strict_finalizer_fn=force_pairwise_skill_consolidation,
+            strict_finalizer_fn=lambda candidates: force_pairwise_skill_consolidation(
+                candidates,
+                request.get("lengthPolicy"),
+            ),
             checkpoint_fn=lambda current: write_json(
                 checkpoint_path,
                 {
@@ -553,6 +606,16 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
             aggregate_tokens["resumeTokenSummary"] = current_aggregate_tokens
         else:
             aggregate_tokens = current_aggregate_tokens
+    length_policy = SkillLengthPolicy.from_config(request.get("lengthPolicy"))
+    warm_start, warm_start_length_events = repair_skill_to_limit(
+        warm_start,
+        length_policy,
+        stage="bridge_warm_start_final",
+        document_label="complete packaged skill preserving AEV file markers",
+        required_substrings=(FILE_START, FILE_END),
+    )
+    if length_policy.enabled and (FILE_START not in warm_start or FILE_END not in warm_start):
+        raise ValueError("Length repair removed required AEV package markers")
     final_skill, native_summary, native_tokens = run_native_train(request, warm_start)
     token_summary: dict[str, Any] = {
         "provider_preflight": provider_preflight_tokens,
@@ -566,6 +629,11 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
         "mergedSkill": final_skill,
         "warmStartSkill": warm_start,
         "warmStartConsolidationAttempts": consolidation_attempts,
+        "lengthGate": {
+            "policy": length_policy.to_dict(),
+            "warmStartBytes": utf8_bytes(warm_start),
+            "warmStartEvents": warm_start_length_events,
+        },
         "nativeTrainSummary": native_summary,
         "nativeTrainOutRoot": str((request.get("nativeTrain") or {}).get("outRoot") or ""),
         "nativeTrainPreflight": native_preflight,

@@ -35,6 +35,7 @@ await writeFile(path.join(sourceRoot, "CORE.md"), "# Core\n\nUse evidence, not g
 await writeFile(path.join(sourceRoot, "casebook", "missing-formula.md"), "# Missing formula\n\nReconstruct dependencies.\n", "utf8")
 await writeFile(path.join(sourceRoot, "tools", "helper.py"), "print('safe helper')\n", "utf8")
 await writeFile(path.join(fakeSkillOptRoot, "configs", "merge.yaml"), "model:\n  optimizer: smoke-model\n", "utf8")
+await writeFile(path.join(fakeSkillOptRoot, "configs", "native.yaml"), "env:\n  name: officeqa\n", "utf8")
 
 try {
   const encoded = await encodeSkillDirectory(sourceRoot)
@@ -85,10 +86,16 @@ try {
   }
 
   const loaded = await loadConfig(cwd)
-  assert(loaded.mergeConfig.mode === "legacy_script", "Existing default merge mode changed unexpectedly")
+  assert(loaded.mergeConfig.mode === "long_task", "Existing default merge mode changed unexpectedly")
   assert(loaded.mergeConfig.asSkillOpt.batchSize === 8, "merge-as-opt total-control config did not load")
   assert(loaded.mergeConfig.asSkillOpt.enabled === false, "merge-as-opt must remain opt-in by default")
   assert(loaded.mergeConfig.asSkillOpt.pipelineMode === "aggregate_only", "merge-as-opt must preserve the historical default")
+  assert(loaded.mergeConfig.asSkillOpt.maxSkillBytes === 5768, "merge-as-opt hard byte cap did not load")
+  assert(loaded.mergeConfig.asSkillOpt.lengthRepairAttempts === 5, "merge-as-opt repair limit did not load")
+  assert(
+    path.resolve(loaded.mergeConfig.asSkillOpt.outputRoot).startsWith("E:\\"),
+    "merge-as-opt large artifact root must stay on E drive",
+  )
 
   const stopAfterMergeConfig = await parseBenchmarkConfig([
     "--task-pack-root",
@@ -111,6 +118,10 @@ try {
     "40",
     "--skillopt-target-workers",
     "2",
+    "--skillopt-max-bytes",
+    "4096",
+    "--skillopt-length-repair-attempts",
+    "4",
     "--stop-after",
     "merge",
     "--dry-run",
@@ -125,6 +136,8 @@ try {
   assert(stopAfterMergeConfig.mergeAsSkillOpt?.nativeTrainEpochs === 4, "native SkillOpt epochs were not preserved")
   assert(stopAfterMergeConfig.mergeAsSkillOpt?.nativeTrainBatchSize === 40, "native SkillOpt batch size was not preserved")
   assert(stopAfterMergeConfig.mergeAsSkillOpt?.nativeTrainTargetWorkers === 2, "native target workers were not preserved")
+  assert(stopAfterMergeConfig.mergeAsSkillOpt?.maxSkillBytes === 4096, "hard byte cap CLI override was lost")
+  assert(stopAfterMergeConfig.mergeAsSkillOpt?.lengthRepairAttempts === 4, "length repair CLI override was lost")
 
   await expectFailure(
     () =>
@@ -270,13 +283,18 @@ try {
       configPath: "configs/merge.yaml",
       optimizerApiKeyEnv: "SMOKE_SECRET_ENV",
     },
-    bridgeRunner: async ({ request }) => ({
-      schema: "auto-evolve/skillopt-merge-result/v1",
-      passed: true,
-      reasoning: "mocked hierarchical full-skill merge",
-      mergedSkill: request.successPatches[0]!.skill_candidates[0]!.new_skill,
-      tokenSummary: { total: 0 },
-    }),
+    bridgeRunner: async ({ request }) => {
+      assert(request.lengthPolicy.enabled === true, "hard length policy was not sent to the bridge")
+      assert(request.lengthPolicy.maxBytes === 5768, "bridge received the wrong hard byte cap")
+      assert(request.metaSkillContext.includes("hard limit"), "merge protocol still describes a soft target")
+      return {
+        schema: "auto-evolve/skillopt-merge-result/v1",
+        passed: true,
+        reasoning: "mocked hierarchical full-skill merge",
+        mergedSkill: request.successPatches[0]!.skill_candidates[0]!.new_skill,
+        tokenSummary: { total: 0 },
+      }
+    },
   })
   assert(outcome.contributingInstances.join(",") === "verified-case-001", "Source lineage was not preserved")
   assert((await readFile(path.join(outcome.mergedSkillDir, "CORE.md"), "utf8")).includes("Use evidence"), "CORE.md was not materialized")
@@ -288,6 +306,29 @@ try {
   assert(report.mergePath === "merge-as-opt", "merge-as-opt lineage marker missing")
   assert(report.pipelineMode === "aggregate_only", "merge-as-opt report lost pipeline mode")
   assert(report.outputFiles.length === 4, "Output file inventory is incomplete")
+
+  await runSkillOptMerger({
+    cwd,
+    runRoot: path.join(root, "native-output-routing-run"),
+    sourceSkills: [{ id: "verified-case-001", skillRoot: sourceRoot }],
+    config: {
+      ...loaded.mergeConfig.asSkillOpt,
+      enabled: true,
+      projectRoot: fakeSkillOptRoot,
+      configPath: "configs/merge.yaml",
+      pipelineMode: "native_train",
+      nativeTrainConfigPath: "configs/native.yaml",
+    },
+    bridgeRunner: async ({ request }) => {
+      assert(request.nativeTrain?.outRoot.startsWith("E:\\"), "native training artifacts were not routed to E drive")
+      assert(request.nativeTrain?.outRoot.includes("native-output-routing-run-"), "E-drive output lacks stable run identity")
+      return {
+        schema: "auto-evolve/skillopt-merge-result/v1",
+        passed: true,
+        mergedSkill: request.successPatches[0]!.skill_candidates[0]!.new_skill,
+      }
+    },
+  })
 
   console.log("smoke-merge-as-opt: passed")
 } finally {

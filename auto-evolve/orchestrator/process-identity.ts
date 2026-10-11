@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process"
 import { setTimeout as sleep } from "node:timers/promises"
+import { runHiddenChildProcess } from "./hidden-child-process"
 
 export type ProcessOwnership = "owned" | "wrong_owner" | "unknown_owner" | "dead"
 
@@ -127,38 +127,22 @@ async function readWindowsProcessIdentityUncached(pid: number): Promise<WindowsP
     "  [PSCustomObject]@{ CommandLine = $cmd; CreationTick = $ticks } | ConvertTo-Json -Compress",
     "}",
   ].join("; ")
-  let child: ReturnType<typeof spawn>
+  let result: Awaited<ReturnType<typeof runHiddenChildProcess>>
   try {
-    child = spawn("powershell", ["-NoProfile", "-Command", script], {
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "ignore"],
+    result = await runHiddenChildProcess({
+      command: "powershell",
+      args: ["-NoProfile", "-NonInteractive", "-Command", script],
+      cwd: process.cwd(),
+      env: { ...process.env },
+      timeoutMs: WINDOWS_IDENTITY_TIMEOUT_MS,
     })
   } catch {
     // Windows can transiently refuse process creation under memory/process pressure.
     // Treat identity as unreadable instead of crashing the supervisor/watchdog.
     return undefined
   }
-  let stdout = ""
-  let timedOut = false
-  const timeout = setTimeout(() => {
-    timedOut = true
-    try {
-      child.kill()
-    } catch {}
-  }, WINDOWS_IDENTITY_TIMEOUT_MS)
-  timeout.unref?.()
-  child.stdout?.setEncoding("utf8")
-  child.stdout?.on("data", (chunk) => {
-    if (stdout.length < WINDOWS_IDENTITY_STDOUT_LIMIT) stdout += String(chunk)
-  })
-  const exitCode = await new Promise<number>((resolve) => {
-    child.on("error", () => resolve(1))
-    child.on("exit", (code) => resolve(code ?? 1))
-  })
-  clearTimeout(timeout)
-  if (timedOut) return undefined
-  if (exitCode !== 0) return undefined
-  const out = stdout.trim()
+  if (result.exitCode !== 0) return undefined
+  const out = result.stdout.slice(0, WINDOWS_IDENTITY_STDOUT_LIMIT).trim()
   if (!out) return undefined
   try {
     const raw = JSON.parse(out) as { CommandLine?: unknown; CreationTick?: unknown }

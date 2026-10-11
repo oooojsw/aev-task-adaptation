@@ -91,7 +91,12 @@ async function main() {
       "--out",
       fixtureRoot,
     ],
-    { cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+    {
+      cwd: repoRoot,
+      env: { ...process.env, AUTO_EVOLVE_BUN_EXE: process.execPath },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
   )
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -104,6 +109,7 @@ async function main() {
   assert(result.selected?.runID === "tmp-smoke-resume-auto-evolve-run", "selected wrong run")
   assert(result.selected?.verified === 1, "verified count mismatch")
   assert(result.launcher?.launcherPath, "launcher path missing")
+  assert(result.bunExe === process.execPath, "explicit AUTO_EVOLVE_BUN_EXE was not preserved")
   assert(result.benchmarkArgs?.includes("--out"), "benchmark args missing --out")
   assert(result.benchmarkArgs?.includes(fixtureRoot), "benchmark args do not preserve fixture out")
   assert(result.benchmarkArgs?.includes("--merge-execution-mode"), "merge backend was not preserved")

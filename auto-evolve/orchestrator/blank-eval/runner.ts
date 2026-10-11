@@ -15,6 +15,7 @@ import { experienceWorkspacePathsFromRoot, resolveExperienceWorkspaceLayout } fr
 import { cleanupRuntimeProcessScope } from "../runtime-process-registry"
 import type { BlankEvalInput, BlankEvalResult } from "./contract"
 import { buildAccessProfile } from "../access-profile"
+import { runSingleTurn, singleTurnEntries } from "./single-turn"
 
 function nowISO() {
   return new Date().toISOString()
@@ -161,18 +162,7 @@ async function materializeSpreadsheetRefsForBlankEval(
     if (ext !== ".xlsx" && ext !== ".xlsm") continue
     const target = path.join(path.dirname(ref.path), `${path.basename(ref.path)}.readable.json`)
     const child = Bun.spawn(
-      [
-        "python",
-        scriptPath,
-        "--xlsx",
-        ref.path,
-        "--max-sheets",
-        "12",
-        "--max-rows",
-        "120",
-        "--max-cols",
-        "80",
-      ],
+      ["python", scriptPath, "--xlsx", ref.path, "--max-sheets", "12", "--max-rows", "120", "--max-cols", "80"],
       {
         cwd,
         stdout: "pipe",
@@ -260,7 +250,10 @@ function isPublicValidatorFlag(flag: string) {
 }
 
 function isSensitivePublicSpecValue(value: string) {
-  const normalized = value.replace(/\\/g, "/").replace(/^\.\/+/, "").toLowerCase()
+  const normalized = value
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .toLowerCase()
   return (
     isSensitiveSandboxInputPath(normalized) ||
     normalized.includes("private-answer") ||
@@ -312,8 +305,7 @@ export function buildBlankEvalPublicTaskSpec(spec: LongTaskSpec) {
   }
   return {
     schema: "blank-eval-public-task-spec/v1",
-    note:
-      "Public task contract for the blank agent. Private answer paths, hidden answers, validator private inputs, and run history are intentionally omitted.",
+    note: "Public task contract for the blank agent. Private answer paths, hidden answers, validator private inputs, and run history are intentionally omitted.",
     id: spec.id,
     title: spec.title,
     goal: spec.goal,
@@ -456,11 +448,7 @@ function sandboxOutputPath(input: {
   return path.join(input.sandboxRoot, "workspace", safeRelative || `output-${input.index + 1}`)
 }
 
-function remapBlankEvalOutputPaths(input: {
-  spec: LongTaskSpec
-  sourceSpecPath: string
-  sandboxRoot: string
-}) {
+function remapBlankEvalOutputPaths(input: { spec: LongTaskSpec; sourceSpecPath: string; sandboxRoot: string }) {
   const remap = new Map<string, string>()
   const remapPath = (item: string, index: number) => {
     const resolved = path.resolve(item)
@@ -680,7 +668,11 @@ async function snapshot(root: string, spec: LongTaskSpec, timedOut: boolean) {
   for (const ref of spec.targetPaths ?? []) {
     try {
       const exists = await pathExists(ref.path)
-      entries.push(exists ? { path: ref.path, exists, sizeBytes: Number((await stat(ref.path)).size) } : { path: ref.path, exists })
+      entries.push(
+        exists
+          ? { path: ref.path, exists, sizeBytes: Number((await stat(ref.path)).size) }
+          : { path: ref.path, exists },
+      )
     } catch (err) {
       entries.push({ path: ref.path, exists: false, error: String(err) })
     }
@@ -750,7 +742,8 @@ async function prepareCleanSkillRoots(sourceRoots: string[], cleanRoot: string) 
   for (const [index, sourceRoot] of unique(sourceRoots).entries()) {
     if (!(await pathExists(sourceRoot))) continue
     const safeName =
-      path.basename(sourceRoot)
+      path
+        .basename(sourceRoot)
         .replace(/[^a-zA-Z0-9._-]+/g, "-")
         .replace(/^-+|-+$/g, "")
         .slice(0, 80) || "skill-root"
@@ -829,8 +822,18 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
     )
     const capabilityRefSources = capRefs(baseRuntimeSpec)
     const capabilityFileSources = capFiles(baseRuntimeSpec)
-    const sandboxCapabilityRefs = await copyStringPathsToSandbox(capabilityRefSources, sandboxCapabilityRoot, loaded.specPath, false)
-    const sandboxCapabilityFiles = await copyStringPathsToSandbox(capabilityFileSources, sandboxCapabilityRoot, loaded.specPath, false)
+    const sandboxCapabilityRefs = await copyStringPathsToSandbox(
+      capabilityRefSources,
+      sandboxCapabilityRoot,
+      loaded.specPath,
+      false,
+    )
+    const sandboxCapabilityFiles = await copyStringPathsToSandbox(
+      capabilityFileSources,
+      sandboxCapabilityRoot,
+      loaded.specPath,
+      false,
+    )
     const capabilityRefMap = new Map<string, string>()
     for (const [index, source] of capabilityRefSources.entries()) {
       const copied = sandboxCapabilityRefs[index]
@@ -863,7 +866,10 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
       ...specBeforePublicContract,
       materials: sandboxMaterials,
     }
-    const entries = await entrypoints(skillRoots)
+    // HTTP只注入现存包内README，元数据仅用于安全定位入口。
+    const entries = spec.blankEvalExecutor?.kind === "single_turn_http"
+      ? await singleTurnEntries(skillRoots)
+      : await entrypoints(skillRoots)
     const cRefs = capRefs(spec)
     const cFiles = capFiles(spec)
     const edits = unique([...resolveLongTaskEditablePaths(spec), ...(spec.targetPaths ?? []).map((item) => item.path)])
@@ -924,6 +930,9 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
     const selection = resolveModelSelection(config, "solve", spec.execution)
     const task = await (async () => {
       try {
+        if (spec.blankEvalExecutor?.kind === "single_turn_http") {
+          return await runSingleTurn({ spec, sandboxRoot, entries, sessionDir, title: `Blank Eval ${title}` })
+        }
         return await runOpencodeTask({
           cwd: input.cwd,
           workDir: sandboxRoot,
@@ -1011,29 +1020,48 @@ export async function runBlankEval(input: BlankEvalInput): Promise<BlankEvalResu
     })
     const validators: BlankEvalResult["validatorResults"] = validationStage.validatorResults
 
-    const required = validators.filter((item) => spec.validators.find((v) => v.id === item.validatorID)?.required !== false)
+    const required = validators.filter(
+      (item) => spec.validators.find((v) => v.id === item.validatorID)?.required !== false,
+    )
     const passed = required.every((item) => item.passed)
     const sessionInfrastructureFailure =
       (task.result.exitCode ?? 0) !== 0 || (task.result as { timedOut?: boolean }).timedOut === true
+    const candidateMissing = required.some(
+      (item) =>
+        !item.passed && item.details.some((detail) => detail.toLowerCase().includes("missing candidate answer file")),
+    )
     const validatorInfrastructureFailure = required.some(
       (item) => !item.passed && item.failureKind === "validator_infrastructure",
     )
     const validatorDatasetFailure = required.some((item) => !item.passed && item.failureKind === "dataset_failure")
     const validatorProductFailure = required.some((item) => !item.passed && item.failureKind === "product_failure")
+    // 正常会话没交答案是任务失败，不能因验证器退出码为 1 提前终止重试。
+    const effectiveValidatorInfrastructureFailure = validatorInfrastructureFailure && !candidateMissing
     const failureKind = passed
       ? undefined
       : validatorDatasetFailure
         ? ("dataset_failure" as const)
-      : validatorProductFailure
-        ? ("product_failure" as const)
-      : sessionInfrastructureFailure || validatorInfrastructureFailure
-        ? ("validator_infrastructure" as const)
-        : ("product_failure" as const)
+        : validatorProductFailure
+          ? ("product_failure" as const)
+          : sessionInfrastructureFailure
+            ? ("validator_infrastructure" as const)
+            : candidateMissing
+              ? ("product_failure" as const)
+              : effectiveValidatorInfrastructureFailure
+                ? ("validator_infrastructure" as const)
+                : ("product_failure" as const)
     const summary = passed
       ? "Blank eval passed."
       : sessionInfrastructureFailure
-        ? short(`Blank agent session infrastructure failed with exit code ${task.result.exitCode}. ${task.result.stderr ?? ""}`)
-        : short(required.filter((item) => !item.passed).map((item) => item.summary).join(" | "))
+        ? short(
+            `Blank agent session infrastructure failed with exit code ${task.result.exitCode}. ${task.result.stderr ?? ""}`,
+          )
+        : short(
+            required
+              .filter((item) => !item.passed)
+              .map((item) => item.summary)
+              .join(" | "),
+          )
     const result = {
       schema: "blank-eval-result/v1",
       runID,

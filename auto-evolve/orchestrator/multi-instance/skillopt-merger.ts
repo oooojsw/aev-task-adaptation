@@ -1,5 +1,5 @@
 import path from "node:path"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { lstat, readdir, readFile } from "node:fs/promises"
 import { ensureDirectory, pathExists, readJsonFile, writeJsonFile, writeTextFile } from "../fs"
 import type { LoadedMergeAsSkillOptConfig } from "../schema"
@@ -39,6 +39,12 @@ export interface SkillOptBridgeRequest {
     apiKeyEnv?: string
     reasoningEffort?: string
   }
+  lengthPolicy: {
+    enabled: boolean
+    maxBytes: number
+    maxRepairAttempts: number
+    unit: "utf8_bytes"
+  }
   nativeTrain?: {
     enabled: boolean
     configPath: string
@@ -67,6 +73,7 @@ export interface SkillOptBridgeResult {
   nativeTrainSummary?: unknown
   nativeTrainOutRoot?: string
   nativeTrainPreflight?: unknown
+  lengthGate?: unknown
   error?: string
 }
 
@@ -299,6 +306,13 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
   if (input.config.pipelineMode === "native_train" && (!nativeTrainConfigPath || !(await pathExists(nativeTrainConfigPath)))) {
     throw new Error("merge-as-opt native_train requires an existing nativeTrainConfigPath")
   }
+  const externalOutputRoot = input.config.outputRoot.trim()
+    ? resolveConfiguredPath(input.cwd, input.config.outputRoot)
+    : ""
+  const runFingerprint = createHash("sha256").update(normalizeSlash(mergerRunDir)).digest("hex").slice(0, 12)
+  const nativeTrainOutRoot = externalOutputRoot
+    ? path.join(externalOutputRoot, `${path.basename(mergerRunDir)}-${runFingerprint}`, "native-train")
+    : path.join(mergerRunDir, "native-train")
   const bridgeScript = resolveConfiguredPath(path.join(input.cwd, "auto-evolve"), input.config.bridgeScript)
   if (!input.bridgeRunner && (!(await pathExists(bridgeScript)) || !input.config.pythonCommand.trim())) {
     throw new Error(`merge-as-opt bridge preflight failed: ${bridgeScript}`)
@@ -320,6 +334,7 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
     sourceSkills: sourcePackages.map((item) => ({ id: item.id, skillRoot: item.skillRoot })),
     skillOpt: {
       projectRoot,
+      outputRoot: externalOutputRoot || undefined,
       configPath,
       batchSize: input.config.batchSize,
       workers: input.config.workers,
@@ -328,6 +343,8 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
       optimizerBaseUrl: input.config.optimizerBaseUrl || undefined,
       optimizerApiKeyEnv: input.config.optimizerApiKeyEnv || undefined,
       reasoningEffort: input.config.reasoningEffort || undefined,
+      maxSkillBytes: input.config.maxSkillBytes,
+      lengthRepairAttempts: input.config.lengthRepairAttempts,
       pipelineMode: input.config.pipelineMode,
       nativeTrainConfigPath: nativeTrainConfigPath || undefined,
       nativeTrainSplitDir: input.config.nativeTrainSplitDir || undefined,
@@ -351,7 +368,9 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
     "Return exactly one complete package in new_skill, with no prose outside file boundaries.",
     "Preserve useful relative filenames and file types; never emit absolute paths, dot segments, hidden paths, or duplicate paths.",
     "The source candidates are verified skills, not trajectories. Merge their reusable methods and remove case-specific answers or identifiers.",
-    "The final merged new_skill must be one coherent deduplicated package, targeting at most 60,000 characters while preserving reusable coverage.",
+    input.config.maxSkillBytes > 0
+      ? `The final merged new_skill must be one coherent deduplicated package within ${input.config.maxSkillBytes} UTF-8 bytes. This is a hard limit, not a soft target.`
+      : "The final merged new_skill must be one coherent deduplicated package, targeting at most 60,000 characters while preserving reusable coverage.",
   ].join("\n")
   const request: SkillOptBridgeRequest = {
     schema: "auto-evolve/skillopt-merge-request/v1",
@@ -381,6 +400,12 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
       apiKeyEnv: input.config.optimizerApiKeyEnv || undefined,
       reasoningEffort: input.config.reasoningEffort || undefined,
     },
+    lengthPolicy: {
+      enabled: input.config.maxSkillBytes > 0,
+      maxBytes: input.config.maxSkillBytes,
+      maxRepairAttempts: input.config.lengthRepairAttempts,
+      unit: "utf8_bytes",
+    },
     nativeTrain: input.config.pipelineMode === "native_train"
       ? {
           enabled: true,
@@ -389,7 +414,7 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
             ? resolveConfiguredPath(projectRoot, input.config.nativeTrainSplitDir)
             : undefined,
           dataDirs: input.config.nativeTrainDataDirs.map((item) => resolveConfiguredPath(projectRoot, item)),
-          outRoot: path.join(mergerRunDir, "native-train"),
+          outRoot: nativeTrainOutRoot,
           epochs: input.config.nativeTrainEpochs,
           batchSize: input.config.nativeTrainBatchSize,
           maxSteps: input.config.nativeTrainMaxSteps,
@@ -438,6 +463,7 @@ export async function runSkillOptMerger(input: RunSkillOptMergerInput): Promise<
     nativeTrainSummary: result.nativeTrainSummary,
     nativeTrainOutRoot: result.nativeTrainOutRoot,
     nativeTrainPreflight: result.nativeTrainPreflight,
+    lengthGate: result.lengthGate,
   }
   await writeJsonFile(reportPath, report)
   return {

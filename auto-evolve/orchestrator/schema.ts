@@ -119,7 +119,7 @@ export interface LoadedValidationConfig {
 
 export interface LoadedMergeConfig {
   /** Which merge path the benchmark orchestrator should prefer. */
-  mode: "legacy_script" | "long_task" | "skillopt" | "both_smoke"
+  mode: "legacy_script" | "long_task" | "skillopt" | "lite" | "both_smoke"
   /** Master switch for config-level merge contract injection. */
   enabled: boolean
   /** Prompt used by the generic flat merger. */
@@ -148,6 +148,33 @@ export interface LoadedMergeConfig {
   asLongTask: LoadedMergeAsLongTaskConfig
   /** Controls the optional SkillOpt full-skill hierarchical merge backend. */
   asSkillOpt: LoadedMergeAsSkillOptConfig
+  /** Controls the isolated SkillOpt-Lite validation-gated merge adapter. */
+  asLite: LoadedMergeAsLiteConfig
+}
+
+export interface LoadedMergeAsLiteConfig {
+  enabled: boolean
+  /** Read-only official SkillOpt-Lite checkout used for provenance checks. */
+  projectRoot: string
+  /** Read-only local runtime adapter that supplies MiniMax evaluation helpers. */
+  runtimeRoot: string
+  /** Optional external root for large merge run artifacts. */
+  outputRoot: string
+  pythonCommand: string
+  /** Auto-Evolve-owned bridge; the Lite checkout is never patched. */
+  bridgeScript: string
+  environment: "officeqa" | "spreadsheetbench"
+  splitDir: string
+  dataRoot: string
+  rounds: number
+  workers: number
+  timeoutMs: number
+  optimizerModel: string
+  authFile: string
+  providerID: string
+  maxSkillBytes: number
+  lengthRepairAttempts: number
+  gateMetric: "hard" | "soft"
 }
 
 export interface LoadedMergeAsSkillOptConfig {
@@ -155,6 +182,8 @@ export interface LoadedMergeAsSkillOptConfig {
   enabled: boolean
   /** Absolute SkillOpt checkout root, or a path relative to the Auto-Evolve host repo. */
   projectRoot: string
+  /** Optional external root for large native-train artifacts. */
+  outputRoot: string
   /** SkillOpt YAML used to configure the optimizer model. Relative paths resolve under projectRoot. */
   configPath: string
   /** Python executable or launcher used for the bridge process. */
@@ -179,6 +208,10 @@ export interface LoadedMergeAsSkillOptConfig {
   optimizerApiKeyEnv: string
   /** Optional optimizer reasoning effort override. */
   reasoningEffort: string
+  /** Hard UTF-8 byte cap for every generated Skill; zero disables it. */
+  maxSkillBytes: number
+  /** Maximum optimizer rewrite attempts after a candidate exceeds the cap. */
+  lengthRepairAttempts: number
   /** aggregate_only keeps the historical bridge; native_train continues with SkillOpt's unmodified trainer. */
   pipelineMode: "aggregate_only" | "native_train"
   /** Dataset-specific SkillOpt config used by the native trainer. */
@@ -744,6 +777,7 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
     asSkillOpt: {
       enabled: false,
       projectRoot: "",
+      outputRoot: "",
       configPath: "",
       pythonCommand: "python",
       bridgeScript: "scripts/skillopt-merge-bridge.py",
@@ -756,6 +790,8 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
       optimizerBaseUrl: "",
       optimizerApiKeyEnv: "",
       reasoningEffort: "",
+      maxSkillBytes: 0,
+      lengthRepairAttempts: 5,
       pipelineMode: "aggregate_only",
       nativeTrainConfigPath: "",
       nativeTrainSplitDir: "",
@@ -769,6 +805,26 @@ export const DEFAULT_CONFIG: AutoEvolveConfig = {
       targetModel: "",
       targetBaseUrl: "",
       targetApiKeyEnv: "",
+    },
+    asLite: {
+      enabled: false,
+      projectRoot: "",
+      runtimeRoot: "",
+      outputRoot: "",
+      pythonCommand: "python",
+      bridgeScript: "scripts/skillopt-lite-merge-bridge.py",
+      environment: "officeqa",
+      splitDir: "",
+      dataRoot: "",
+      rounds: 3,
+      workers: 3,
+      timeoutMs: 18 * 60 * 60 * 1000,
+      optimizerModel: "MiniMax-M2.7",
+      authFile: "",
+      providerID: "minimax-cn-coding-plan",
+      maxSkillBytes: 0,
+      lengthRepairAttempts: 5,
+      gateMetric: "hard",
     },
   },
   blankAcceptanceConfig: {
@@ -1199,8 +1255,38 @@ function normalizeStringMap(input: unknown, fallback: Record<string, string> = {
 }
 
 function normalizeMergeMode(input: unknown, fallback: LoadedMergeConfig["mode"]): LoadedMergeConfig["mode"] {
-  if (input === "legacy_script" || input === "long_task" || input === "skillopt" || input === "both_smoke") return input
+  if (input === "legacy_script" || input === "long_task" || input === "skillopt" || input === "lite" || input === "both_smoke") return input
   return fallback
+}
+
+function normalizeMergeAsLiteConfig(raw: unknown, fallback: LoadedMergeAsLiteConfig): LoadedMergeAsLiteConfig {
+  if (!isObject(raw)) return { ...fallback }
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    projectRoot: normalizeOptionalString(raw.projectRoot) ?? fallback.projectRoot,
+    runtimeRoot: normalizeOptionalString(raw.runtimeRoot) ?? fallback.runtimeRoot,
+    outputRoot: normalizeOptionalString(raw.outputRoot) ?? fallback.outputRoot,
+    pythonCommand: normalizeOptionalString(raw.pythonCommand) ?? fallback.pythonCommand,
+    bridgeScript: normalizeOptionalString(raw.bridgeScript) ?? fallback.bridgeScript,
+    environment:
+      raw.environment === "spreadsheetbench" || raw.environment === "officeqa"
+        ? raw.environment
+        : fallback.environment,
+    splitDir: normalizeOptionalString(raw.splitDir) ?? fallback.splitDir,
+    dataRoot: normalizeOptionalString(raw.dataRoot) ?? fallback.dataRoot,
+    rounds: positiveIntegerField(raw, "rounds", fallback.rounds),
+    workers: positiveIntegerField(raw, "workers", fallback.workers),
+    timeoutMs: positiveIntegerField(raw, "timeoutMs", fallback.timeoutMs),
+    optimizerModel: normalizeOptionalString(raw.optimizerModel) ?? fallback.optimizerModel,
+    authFile: normalizeOptionalString(raw.authFile) ?? fallback.authFile,
+    providerID: normalizeOptionalString(raw.providerID) ?? fallback.providerID,
+    maxSkillBytes:
+      typeof raw.maxSkillBytes === "number" && Number.isInteger(raw.maxSkillBytes) && raw.maxSkillBytes >= 0
+        ? raw.maxSkillBytes
+        : fallback.maxSkillBytes,
+    lengthRepairAttempts: positiveIntegerField(raw, "lengthRepairAttempts", fallback.lengthRepairAttempts),
+    gateMetric: raw.gateMetric === "soft" || raw.gateMetric === "hard" ? raw.gateMetric : fallback.gateMetric,
+  }
 }
 
 function normalizeMergeAsSkillOptConfig(
@@ -1211,6 +1297,7 @@ function normalizeMergeAsSkillOptConfig(
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
     projectRoot: normalizeOptionalString(raw.projectRoot) ?? fallback.projectRoot,
+    outputRoot: normalizeOptionalString(raw.outputRoot) ?? fallback.outputRoot,
     configPath: normalizeOptionalString(raw.configPath) ?? fallback.configPath,
     pythonCommand: normalizeOptionalString(raw.pythonCommand) ?? fallback.pythonCommand,
     bridgeScript: normalizeOptionalString(raw.bridgeScript) ?? fallback.bridgeScript,
@@ -1223,6 +1310,15 @@ function normalizeMergeAsSkillOptConfig(
     optimizerBaseUrl: normalizeOptionalString(raw.optimizerBaseUrl) ?? fallback.optimizerBaseUrl,
     optimizerApiKeyEnv: normalizeOptionalString(raw.optimizerApiKeyEnv) ?? fallback.optimizerApiKeyEnv,
     reasoningEffort: normalizeOptionalString(raw.reasoningEffort) ?? fallback.reasoningEffort,
+    maxSkillBytes:
+      typeof raw.maxSkillBytes === "number" && Number.isInteger(raw.maxSkillBytes) && raw.maxSkillBytes >= 0
+        ? raw.maxSkillBytes
+        : fallback.maxSkillBytes,
+    lengthRepairAttempts: positiveIntegerField(
+      raw,
+      "lengthRepairAttempts",
+      fallback.lengthRepairAttempts,
+    ),
     pipelineMode: raw.pipelineMode === "native_train" || raw.pipelineMode === "aggregate_only"
       ? raw.pipelineMode
       : fallback.pipelineMode,
@@ -1473,6 +1569,7 @@ function normalizeMergeConfig(
       acceptanceProfiles: normalizeMergeAcceptanceProfiles(undefined, fallback.acceptanceProfiles),
       asLongTask: normalizeMergeAsLongTaskConfig(undefined, fallback.asLongTask),
       asSkillOpt: normalizeMergeAsSkillOptConfig(undefined, fallback.asSkillOpt),
+      asLite: normalizeMergeAsLiteConfig(undefined, fallback.asLite),
     }
   }
   return {
@@ -1497,6 +1594,7 @@ function normalizeMergeConfig(
     ),
     asLongTask: normalizeMergeAsLongTaskConfig(raw.asLongTask, fallback.asLongTask),
     asSkillOpt: normalizeMergeAsSkillOptConfig(raw.asSkillOpt, fallback.asSkillOpt),
+    asLite: normalizeMergeAsLiteConfig(raw.asLite, fallback.asLite),
   }
 }
 
@@ -1982,9 +2080,15 @@ export async function loadConfig(cwd: string, runtimePaths?: RuntimePathOverride
   // place loadConfig has side-effects on a singleton — it's intentional so
   // that any code path that calls loadConfig (CLI commands, smoke tests,
   // adapters) automatically receives correct concurrency behavior.
+  const experimentConcurrency = process.env.AUTO_EVOLVE_EXPERIMENT_MAX_CONCURRENT
+  if (experimentConcurrency && !/^[1-9][0-9]*$/.test(experimentConcurrency)) {
+    throw new Error("Invalid experiment concurrency ceiling")
+  }
+  const experimentCeiling = experimentConcurrency ? Number(experimentConcurrency) : Infinity
+  // 实验只可降低本进程并发，不改变其他任务的全局配置。
   OpenCodeGate.configure({
-    maxConcurrent: concurrencyConfig.maxConcurrent,
-    perScopeMaxConcurrent: concurrencyConfig.perScopeMaxConcurrent,
+    maxConcurrent: Math.min(concurrencyConfig.maxConcurrent, experimentCeiling),
+    perScopeMaxConcurrent: Math.min(concurrencyConfig.perScopeMaxConcurrent, experimentCeiling),
     maxQueueDepth: concurrencyConfig.maxQueueDepth,
     acquireTimeoutMs: concurrencyConfig.acquireTimeoutMs,
     minSpawnIntervalMs: concurrencyConfig.minSpawnIntervalMs,

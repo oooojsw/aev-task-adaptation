@@ -355,6 +355,13 @@ function stamp() {
 }
 
 async function findBunExe() {
+  const requested = process.env.AUTO_EVOLVE_BUN_EXE?.trim()
+  if (requested) {
+    if (!(await pathExists(requested))) {
+      throw new Error(`AUTO_EVOLVE_BUN_EXE does not exist: ${requested}`)
+    }
+    return requested
+  }
   const own = process.execPath
   if (own && /bun(?:\.exe)?$/i.test(path.basename(own))) return own
   const common = path.join(process.env.APPDATA || "", "npm", "node_modules", "bun", "bin", "bun.exe")

@@ -704,6 +704,18 @@ export async function loadLongTaskSpec(
   const campaignFinalAcceptanceMode =
     raw.campaignFinalAcceptanceMode === "validators_only" ? "validators_only" : "blank_agent"
 
+  const blankEvalExecutor = raw.blankEvalExecutor
+  if (blankEvalExecutor !== undefined) {
+    // 错配置必须拒绝，不能静默回退成多轮工具执行。
+    if (!isObject(blankEvalExecutor) || blankEvalExecutor.kind !== "single_turn_http" ||
+        !["url", "model", "credentialEnv", "materialLabel", "outputRelativePath"].every(
+          (key) => typeof blankEvalExecutor[key] === "string" && blankEvalExecutor[key].trim()) ||
+        !Number.isInteger(blankEvalExecutor.maxTokens) || Number(blankEvalExecutor.maxTokens) <= 0 ||
+        typeof blankEvalExecutor.temperature !== "number" || !Number.isFinite(blankEvalExecutor.temperature)) {
+      throw new Error("Invalid single-turn blank-eval executor contract")
+    }
+  }
+
   const planning = isObject(raw.planning)
     ? {
         model: typeof raw.planning.model === "string" ? raw.planning.model : undefined,
@@ -768,6 +780,7 @@ export async function loadLongTaskSpec(
     validatorProfiles,
     blankEvalValidatorProfiles,
     campaignFinalAcceptanceMode,
+    blankEvalExecutor: blankEvalExecutor as LongTaskSpec["blankEvalExecutor"],
     validators,
     planning,
     execution,

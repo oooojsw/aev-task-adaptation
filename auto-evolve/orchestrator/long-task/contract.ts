@@ -223,6 +223,17 @@ export interface LongTaskSpec {
   // Campaigns normally run a clean blank agent after surface checks. Merge
   // groups may defer product replay to an external hierarchy supervisor.
   campaignFinalAcceptanceMode?: "blank_agent" | "validators_only"
+  // 可选单次执行端；缺省保留原工具会话验收。
+  blankEvalExecutor?: {
+    kind: "single_turn_http"
+    url: string
+    model: string
+    credentialEnv: string
+    materialLabel: string
+    outputRelativePath: string
+    maxTokens: number
+    temperature: number
+  }
   validators: LongTaskValidatorContract[]
   planning?: ExecutionSpec
   execution?: ExecutionSpec

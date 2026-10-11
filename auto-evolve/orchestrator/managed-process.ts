@@ -1,6 +1,7 @@
 import process from "node:process"
 import { spawn as nodeSpawn } from "node:child_process"
 import { registerRuntimeProcess, terminateProcessTree } from "./runtime-process-registry"
+import { spawnNoConsoleProxy } from "./windows-no-console-process"
 
 export interface ManagedProcessInput {
   title: string
@@ -207,8 +208,16 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
   }
 
   const backend = resolveBackend(input.backend)
-  const child =
-    backend === "python_subprocess"
+  const proxy =
+    process.platform === "win32"
+      ? spawnNoConsoleProxy({
+          command: input.command,
+          cwd: ensureValidCwd(input.cwd),
+          env: { ...process.env, ...input.env },
+          stdinText: input.stdinText,
+          title: input.title,
+        })
+      : backend === "python_subprocess"
       ? nodeSpawn("python", ["-c", buildPythonWrapperCode()], {
           cwd: ensureValidCwd(input.cwd),
           env: {
@@ -232,6 +241,7 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
           shell: false,
           windowsHide: true,
         })
+  const child = "child" in proxy ? proxy.child : proxy
   let stdoutData = ""
   let stderrData = ""
   let timedOut = false
@@ -328,7 +338,9 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
     }
 
     const stdinPayload =
-      backend === "python_subprocess"
+      "stdinPayload" in proxy
+        ? proxy.stdinPayload
+        : backend === "python_subprocess"
         ? JSON.stringify({
             command: input.command,
             cwd: input.cwd,

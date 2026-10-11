@@ -317,6 +317,42 @@ async function main() {
     })),
   })
 
+  const localReplayEnabled = !args.includes("--hierarchical-no-local-replay")
+  const repairAttemptsPerCase = Math.max(
+    0,
+    Number.parseInt(getOption(args, "--hierarchical-repair-attempts") ?? "1", 10),
+  )
+  const localReplayConcurrency = Math.max(
+    1,
+    Number.parseInt(getOption(args, "--hierarchical-replay-concurrency") ?? "1", 10),
+  )
+  const promptPath = resolveMaybeRelative(getOption(args, "--merge-prompt"))
+  const contractPath = resolveMaybeRelative(getOption(args, "--merge-contract"))
+  const mergeModel = getOption(args, "--merge-model")?.trim()
+  const mergeConcurrency = Math.max(1, Number.parseInt(getOption(args, "--merge-concurrency") ?? "1", 10))
+  const groupSize = Math.max(2, Number.parseInt(getOption(args, "--merge-group-size") ?? "5", 10))
+  const maxFinalCoreBytes = getOption(args, "--max-final-core-bytes")
+    ? Math.max(1, Number.parseInt(getOption(args, "--max-final-core-bytes")!, 10))
+    : undefined
+  const finalCoreLengthRepairAttempts = Math.max(
+    0,
+    Number.parseInt(getOption(args, "--final-core-length-repair-attempts") ?? "0", 10),
+  )
+
+  await writeJsonFile(path.join(outDir, "merge-run-config.json"), {
+    sourceBenchmarkRun,
+    sourceSkillsManifest,
+    trainSplit,
+    promptPath,
+    contractPath,
+    mergeModel,
+    mergeConcurrency,
+    groupSize,
+    localReplayEnabled,
+    maxFinalCoreBytes,
+    finalCoreLengthRepairAttempts,
+  })
+
   if (args.includes("--preflight-only")) {
     await writeJsonFile(path.join(outDir, "preflight-result.json"), {
       passed: true,
@@ -328,28 +364,24 @@ async function main() {
     return
   }
 
-  const localReplayEnabled = !args.includes("--hierarchical-no-local-replay")
-  const repairAttemptsPerCase = Math.max(
-    0,
-    Number.parseInt(getOption(args, "--hierarchical-repair-attempts") ?? "1", 10),
-  )
-  const localReplayConcurrency = Math.max(
-    1,
-    Number.parseInt(getOption(args, "--hierarchical-replay-concurrency") ?? "1", 10),
-  )
-
   const result = await runCoordinatorHierarchicalMerge({
     cwd: repoRoot,
     state,
     options: {
-      groupSize: Math.max(2, Number.parseInt(getOption(args, "--merge-group-size") ?? "5", 10)),
+      groupSize,
       inputFilter: "all",
       failurePolicy: "negative_evidence",
       grouping: "status_balanced",
+      concurrency: mergeConcurrency,
+      promptPath,
+      contractPath,
+      model: mergeModel,
       resumeExistingGroups: true,
       localReplayConcurrency,
       localReplayInfrastructureRetries: 2,
       localReplayFailClosedOnInfrastructure: args.includes("--hierarchical-fail-closed-infrastructure"),
+      maxFinalCoreBytes,
+      finalCoreLengthRepairAttempts,
       localReplay: {
         enabled: localReplayEnabled,
         levels: "level1",

@@ -117,7 +117,7 @@ import {
   writeLongTaskCampaignWorkerSuggestion,
 } from "./repository"
 import { loadLongTaskCampaignSpec } from "./spec"
-import { buildCampaignLeadPrompt, buildCampaignReviewerPrompt, buildCampaignWorkerPrompt } from "./prompts"
+import { buildCampaignLeadPrompt, buildCampaignReviewerPrompt, buildCampaignWorkerPrompt, blankExecutorProtocolLines } from "./prompts"
 import { loadConfig } from "../schema"
 import { resolveModelSelection } from "../model-selection"
 import { runOpencodeTask } from "../opencode"
@@ -3400,7 +3400,7 @@ async function harvestRound(input: {
   }
 }
 
-function buildGeneratedRoundSpec(input: {
+export function buildGeneratedRoundSpec(input: {
   baseSpec: LongTaskSpec
   campaignSpec: LongTaskCampaignSpec
   roundNumber: number
@@ -3434,6 +3434,14 @@ function buildGeneratedRoundSpec(input: {
 
   return {
     ...input.baseSpec,
+    // 内层也必须知道验收执行模式，避免修复不存在的工具故障。
+    goal: input.baseSpec.blankEvalExecutor?.kind === "single_turn_http"
+      ? [input.baseSpec.goal, ...blankExecutorProtocolLines("single_turn_http"),
+          "Author/planner/executor may use their original tools to derive a solution and revise Skill; the no-tool restriction applies ONLY to blank acceptance.",
+          "The host campaign controller launches blank acceptance after candidate preparation. Do not launch a second blank evaluation or repair a zero-tool-call condition yourself.",
+          "Earlier routing blockers or memories demanding blank-agent tool calls conflict with this execution contract. Diagnose actual product failures and revise reusable guidance; do not claim a fresh acceptance pass without host evidence.",
+        ].join("\n")
+      : input.baseSpec.goal,
     title: `${input.campaignSpec.title}-${roundID(input.roundNumber)}`,
     validators: roundValidators,
     disableCompletionValidators: isFirstRound,
@@ -3583,12 +3591,14 @@ async function resolvePendingPackageEntryFile(pendingCurrentRoot: string): Promi
   }
 }
 
-async function hasEvolvedPendingPackage(pendingCurrentRoot: string): Promise<boolean> {
+export async function hasEvolvedPendingPackage(pendingCurrentRoot: string, allowReadmeOnly = false): Promise<boolean> {
   // Check surface_contract.json first to find where the entry file should be
   const entryRel = await resolvePendingPackageEntryFile(pendingCurrentRoot)
   if (entryRel) return true
   // Fallback: old-style package with manifest.md at root
   if (await pathExists(path.join(pendingCurrentRoot, "manifest.md"))) return true
+  // 单次HTTP插件接受经表面检查的README包，默认晋级规则不变。
+  if (allowReadmeOnly && await pathExists(path.join(pendingCurrentRoot, "README.md"))) return true
   return false
 }
 
@@ -3610,7 +3620,7 @@ async function prepareCampaignRoundState(input: {
       primarySeed &&
       seedTarget.targetPath === primarySeed.targetPath &&
       (seedTarget.kind ?? "experience_workspace") === "experience_workspace" &&
-      (await hasEvolvedPendingPackage(input.campaignPaths.pendingCurrentRoot))
+      (await hasEvolvedPendingPackage(input.campaignPaths.pendingCurrentRoot, input.baseSpec.blankEvalExecutor?.kind === "single_turn_http"))
     ) {
       await copyExperienceWorkspaceRoot(input.campaignPaths.pendingCurrentRoot, seedTarget.targetPath)
       continue
@@ -3691,8 +3701,9 @@ async function readLatestReviewerSuggestionPath(campaignPaths: ReturnType<typeof
 async function seedRoundPendingPackageFromCurrent(input: {
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
+  allowReadmeOnly?: boolean
 }) {
-  if (!(await hasEvolvedPendingPackage(input.campaignPaths.pendingCurrentRoot))) {
+  if (!(await hasEvolvedPendingPackage(input.campaignPaths.pendingCurrentRoot, input.allowReadmeOnly))) {
     await ensureDirectory(input.roundPaths.pendingPackageSnapshotRoot)
     return
   }
@@ -3788,6 +3799,7 @@ async function runCampaignWorkers(input: {
             accessManifestPath: path.join(stageDir, "access-manifest.json"),
           })
         : buildCampaignWorkerPrompt({
+        blankEvalExecutorKind: input.baseSpec.blankEvalExecutor?.kind,
         title: input.campaignSpec.title,
         roundNumber: input.roundNumber,
         role,
@@ -3912,6 +3924,7 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     blankAcceptanceConfig.diagnosisProfiles[blankAcceptanceConfig.defaultDiagnosisProfile] ??
     blankAcceptanceConfig.diagnosisProfiles.auto
   const prompt = buildCampaignWorkerPrompt({
+    blankEvalExecutorKind: input.baseSpec.blankEvalExecutor?.kind,
     title: input.campaignSpec.title,
     roundNumber: input.roundNumber,
     role,
@@ -4142,6 +4155,7 @@ async function runCampaignLead(input: {
         nextCandidateRoot: input.nextPendingPackageRoot,
       })
     : buildCampaignLeadPrompt({
+    blankEvalExecutorKind: input.baseSpec.blankEvalExecutor?.kind,
     title: input.campaignSpec.title,
     roundNumber: input.roundNumber,
     runTracePath: input.runTraceDigestPath,
@@ -4263,6 +4277,7 @@ async function runCampaignReviewer(input: {
         accessManifestPath: path.join(stageDir, "access-manifest.json"),
       })
     : buildCampaignReviewerPrompt({
+    blankEvalExecutorKind: input.baseSpec.blankEvalExecutor?.kind,
     title: input.campaignSpec.title,
     roundNumber: input.roundNumber,
     pendingPackageRoot: input.pendingPackageRoot,
@@ -4895,8 +4910,9 @@ async function appendAcceptanceExperienceV2(input: {
 async function promoteRoundPendingAndTreeToCurrent(input: {
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
+  allowReadmeOnly?: boolean
 }) {
-  if (await hasEvolvedPendingPackage(input.roundPaths.pendingPackageSnapshotRoot)) {
+  if (await hasEvolvedPendingPackage(input.roundPaths.pendingPackageSnapshotRoot, input.allowReadmeOnly)) {
     await copyExperienceWorkspaceRoot(
       input.roundPaths.pendingPackageSnapshotRoot,
       input.campaignPaths.pendingCurrentRoot,
@@ -5063,6 +5079,7 @@ export async function runLongTaskCampaign(input: {
         await seedRoundPendingPackageFromCurrent({
           campaignPaths,
           roundPaths,
+          allowReadmeOnly: baseSpec.blankEvalExecutor?.kind === "single_turn_http",
         })
         await seedRoundExplorationTreeFromCurrent({
           campaignPaths,
@@ -5521,6 +5538,7 @@ export async function runLongTaskCampaign(input: {
           await promoteRoundPendingAndTreeToCurrent({
             campaignPaths,
             roundPaths,
+            allowReadmeOnly: baseSpec.blankEvalExecutor?.kind === "single_turn_http",
           })
 
           reviewerSuggestion = shouldRunCampaignReviewer(roundNumber)
@@ -6010,6 +6028,7 @@ export async function resumeLongTaskCampaign(input: {
         await seedRoundPendingPackageFromCurrent({
           campaignPaths,
           roundPaths,
+          allowReadmeOnly: baseSpec.blankEvalExecutor?.kind === "single_turn_http",
         })
         await seedRoundExplorationTreeFromCurrent({
           campaignPaths,
@@ -6461,6 +6480,7 @@ export async function resumeLongTaskCampaign(input: {
           await promoteRoundPendingAndTreeToCurrent({
             campaignPaths,
             roundPaths,
+            allowReadmeOnly: baseSpec.blankEvalExecutor?.kind === "single_turn_http",
           })
 
           reviewerSuggestion = shouldRunCampaignReviewer(roundNumber)

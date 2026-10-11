@@ -159,6 +159,7 @@ async function readOptionalJson<T = any>(file: string | undefined): Promise<T | 
 async function loadBenchmarkMaps(benchmarkOut: string | undefined) {
   const result = {
     benchmarkOut: benchmarkOut ? path.resolve(benchmarkOut) : undefined,
+    benchmarkRunID: benchmarkOut ? path.basename(path.resolve(benchmarkOut)) : undefined,
     taskLedgerPath: undefined as string | undefined,
     orchestratorStatePath: undefined as string | undefined,
     campaignToTask: new Map<string, any>(),
@@ -169,6 +170,7 @@ async function loadBenchmarkMaps(benchmarkOut: string | undefined) {
   result.taskLedgerPath = path.join(result.benchmarkOut, "task-ledger.json")
   result.orchestratorStatePath = path.join(result.benchmarkOut, "orchestrator-state.json")
   const ledger = await readOptionalJson<any>(result.taskLedgerPath)
+  if (ledger?.runID) result.benchmarkRunID = String(ledger.runID)
   if (ledger?.tasks && typeof ledger.tasks === "object") {
     for (const [taskID, task] of Object.entries<any>(ledger.tasks)) {
       const attempts = Array.isArray(task.attempts) ? task.attempts : []
@@ -223,6 +225,7 @@ async function loadBenchmarkMaps(benchmarkOut: string | undefined) {
   }
 
   const state = await readOptionalJson<any>(result.orchestratorStatePath)
+  if (state?.runID) result.benchmarkRunID = String(state.runID)
   if (Array.isArray(state?.trainResults)) {
     for (const row of state.trainResults) {
       if (!row?.id) continue
@@ -234,6 +237,57 @@ async function loadBenchmarkMaps(benchmarkOut: string | undefined) {
     }
   }
   return result
+}
+
+function campaignDirForRecord(record: ResourceUsageRecord) {
+  const stageDir = record.stageDir ?? record.refs?.stageDir
+  if (!stageDir) return undefined
+  const normalized = normalizePath(stageDir)
+  const marker = "/rounds/"
+  const index = normalized.indexOf(marker)
+  return index >= 0 ? normalized.slice(0, index) : undefined
+}
+
+/**
+ * A report bound to one benchmark must not absorb every historical campaign
+ * below runtime-state. Campaign lineage is the authoritative ownership link.
+ */
+async function filterRecordsForBenchmark(
+  records: ResourceUsageRecord[],
+  maps: Awaited<ReturnType<typeof loadBenchmarkMaps>>,
+) {
+  if (!maps.benchmarkOut || !maps.benchmarkRunID) return records
+  const campaignLineage = new Map<string, string | undefined>()
+  const included: ResourceUsageRecord[] = []
+  for (const record of records) {
+    const normalizedBenchmarkOut = normalizePath(maps.benchmarkOut)
+    const stageDir = normalizePath(record.stageDir ?? record.refs?.stageDir ?? "")
+    if (
+      normalizePath(record.benchmarkOutDir ?? "") === normalizedBenchmarkOut ||
+      (stageDir && stageDir.startsWith(`${normalizedBenchmarkOut}/`))
+    ) {
+      included.push(record)
+      continue
+    }
+    const campaignDir = campaignDirForRecord(record)
+    if (campaignDir) {
+      if (!campaignLineage.has(campaignDir)) {
+        const campaign = await readOptionalJson<any>(path.join(campaignDir, "campaign.json"))
+        campaignLineage.set(campaignDir, campaign?.runLineage?.benchmarkRunID ? String(campaign.runLineage.benchmarkRunID) : undefined)
+      }
+      const lineageRunID = campaignLineage.get(campaignDir)
+      // A campaign's own lineage is stronger evidence than an inherited caseID.
+      if (lineageRunID === maps.benchmarkRunID) {
+        included.push(record)
+        continue
+      }
+      // A present but foreign campaign lineage is conclusive; never fall back to caseID.
+      if (lineageRunID) continue
+    }
+    const meta = findTaskMeta(record, maps)
+    if (meta.runID && String(meta.runID) === maps.benchmarkRunID) included.push(record)
+  }
+  return included
 }
 
 function campaignLookupKeys(record: ResourceUsageRecord) {
@@ -257,6 +311,7 @@ function findTaskMeta(record: ResourceUsageRecord, maps: Awaited<ReturnType<type
 
 async function buildTaskSummaries(records: ResourceUsageRecord[], benchmarkOut: string | undefined) {
   const maps = await loadBenchmarkMaps(benchmarkOut)
+  const scopedRecords = await filterRecordsForBenchmark(records, maps)
   const byTask = new Map<string, any>()
   const byRound = new Map<string, any>()
   const byTaskRole = new Map<string, any>()
@@ -271,7 +326,7 @@ async function buildTaskSummaries(records: ResourceUsageRecord[], benchmarkOut: 
     return state
   }
 
-  for (const record of records) {
+  for (const record of scopedRecords) {
     const meta = findTaskMeta(record, maps)
     const campaignDir =
       meta.ledgerTask?.activeCampaignDir ||
@@ -632,21 +687,23 @@ for (const file of files) {
   }
 }
 
-const byGroup = aggregate(records)
-const taskSummaries = await buildTaskSummaries(records, benchmarkOut)
+const benchmarkMaps = await loadBenchmarkMaps(benchmarkOut)
+const scopedRecords = await filterRecordsForBenchmark(records, benchmarkMaps)
+const byGroup = aggregate(scopedRecords)
+const taskSummaries = await buildTaskSummaries(scopedRecords, benchmarkOut)
 const summary = {
   schema: "auto-evolve-resource-cost-report/v1",
   createdAt: new Date().toISOString(),
   scanRoot: normalizePath(scanRoot),
-  recordCount: records.length,
+  recordCount: scopedRecords.length,
   warningCount: warnings.length,
   totals: {
-    inputTokens: records.reduce((sum, item) => sum + num(item.usage.inputTokens), 0),
-    outputTokens: records.reduce((sum, item) => sum + num(item.usage.outputTokens), 0),
-    reasoningTokens: records.reduce((sum, item) => sum + num(item.usage.reasoningTokens), 0),
-    totalTokens: records.reduce((sum, item) => sum + num(item.usage.totalTokens), 0),
-    estimatedPromptTokens: records.reduce((sum, item) => sum + num(item.usage.estimatedPromptTokens), 0),
-    rawCost: records.reduce((sum, item) => sum + num(item.cost.rawCost), 0),
+    inputTokens: scopedRecords.reduce((sum, item) => sum + num(item.usage.inputTokens), 0),
+    outputTokens: scopedRecords.reduce((sum, item) => sum + num(item.usage.outputTokens), 0),
+    reasoningTokens: scopedRecords.reduce((sum, item) => sum + num(item.usage.reasoningTokens), 0),
+    totalTokens: scopedRecords.reduce((sum, item) => sum + num(item.usage.totalTokens), 0),
+    estimatedPromptTokens: scopedRecords.reduce((sum, item) => sum + num(item.usage.estimatedPromptTokens), 0),
+    rawCost: scopedRecords.reduce((sum, item) => sum + num(item.cost.rawCost), 0),
   },
   byGroup,
   taskSummary: {
@@ -658,7 +715,7 @@ const summary = {
 }
 
 await writeJsonFile(path.join(outDir, "aggregate-summary.json"), summary)
-await writeTextFile(path.join(outDir, "usage-records.csv"), usageCsv(records))
+await writeTextFile(path.join(outDir, "usage-records.csv"), usageCsv(scopedRecords))
 await writeTextFile(path.join(outDir, "aggregate-by-group.csv"), aggregateCsv(byGroup))
 await writeJsonFile(path.join(outDir, "task-summary.json"), {
   schema: "auto-evolve-resource-task-summary-list/v1",

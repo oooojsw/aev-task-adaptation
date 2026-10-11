@@ -13,6 +13,19 @@ function jsonFence(input: unknown) {
   return "```json\n" + JSON.stringify(input, null, 2) + "\n```"
 }
 
+export function blankExecutorProtocolLines(kind?: "single_turn_http") {
+  // 防止审查沿用工具会话假设，误修正常的单次答题。
+  if (kind !== "single_turn_http") return []
+  return [
+    "Blank acceptance execution contract: single_turn_http.",
+    "- The blank agent makes exactly one fresh HTTP answer request without tools or prior feedback. Zero tool calls and empty action events are EXPECTED, not infrastructure failures.",
+    "- The host writes the returned text to the declared answer file. Do not require the blank agent to call a write tool, shell, read, or any other tool; do not add such instructions to the Skill.",
+    "- A reasoning paragraph followed by the required final answer is valid unless the actual product validator reports a format error. Judge actual answer and validator evidence, not tool count or report style.",
+    "- Earlier advice demanding tool calls conflicts with this execution contract and must not be followed. Repair reusable reasoning guidance on product failure; do not change the gold, evaluator, or answer execution mode.",
+    "",
+  ]
+}
+
 function roleDescription(role: LongTaskCampaignWorkerRole) {
   switch (role) {
     case "blank_acceptance_diagnostician":
@@ -123,6 +136,7 @@ function blankAcceptanceDiagnosisProfileRules(profile?: BlankAcceptanceDiagnosis
 }
 
 export function buildCampaignWorkerPrompt(input: {
+  blankEvalExecutorKind?: "single_turn_http"
   title: string
   roundNumber: number
   role: LongTaskCampaignWorkerRole
@@ -146,6 +160,7 @@ export function buildCampaignWorkerPrompt(input: {
 }) {
   return [
     "You are a campaign worker agent inside a multi-round long-task learning campaign.",
+    ...blankExecutorProtocolLines(input.blankEvalExecutorKind),
     "",
     `Campaign title: ${input.title}`,
     `Round: ${input.roundNumber}`,
@@ -225,6 +240,7 @@ export function buildCampaignWorkerPrompt(input: {
 }
 
 export function buildCampaignLeadPrompt(input: {
+  blankEvalExecutorKind?: "single_turn_http"
   title: string
   roundNumber: number
   runTracePath: string
@@ -250,6 +266,7 @@ export function buildCampaignLeadPrompt(input: {
 }) {
   return [
     "You are the campaign lead for a multi-round long-task learning campaign.",
+    ...blankExecutorProtocolLines(input.blankEvalExecutorKind),
     "",
     `Campaign title: ${input.title}`,
     `Round: ${input.roundNumber}`,
@@ -371,6 +388,7 @@ export function buildCampaignLeadPrompt(input: {
 }
 
 export function buildCampaignReviewerPrompt(input: {
+  blankEvalExecutorKind?: "single_turn_http"
   title: string
   roundNumber: number
   pendingPackageRoot: string
@@ -389,6 +407,7 @@ export function buildCampaignReviewerPrompt(input: {
 }) {
   return [
     "You are the round reviewer for a multi-round long-task learning campaign.",
+    ...blankExecutorProtocolLines(input.blankEvalExecutorKind),
     "",
     `Campaign title: ${input.title}`,
     `Round: ${input.roundNumber}`,

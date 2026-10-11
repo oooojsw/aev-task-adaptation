@@ -157,6 +157,24 @@ const opencodeRecord = await readJsonFile<any>(path.join(stageDir, "resource-usa
 assert(opencodeRecord.usage.inputTokens === 150, "OpenCode record input tokens mismatch")
 assert(opencodeRecord.roundNumber === 3, "OpenCode record round inference mismatch")
 
+// A benchmark-bound report must not absorb another campaign merely because it
+// lives under the same runtime root.
+const foreignCampaignDir = path.join(tmpRoot, "long-task-campaigns", "campaign-other")
+const foreignStageDir = path.join(foreignCampaignDir, "rounds", "round-001", "execute")
+await writeJsonFile(path.join(foreignCampaignDir, "campaign.json"), {
+  id: "campaign-other",
+  currentRound: 1,
+  status: "running",
+  runLineage: { benchmarkRunID: "run-other", taskID: "case-other" },
+})
+await writeJsonFile(path.join(foreignStageDir, "resource-usage.json"), {
+  ...opencodeRecord,
+  recordID: "opencode:foreign-smoke",
+  campaignID: "campaign-other",
+  stageDir: foreignStageDir,
+  refs: { ...opencodeRecord.refs, stageDir: foreignStageDir },
+})
+
 const promptAudit: DirectChatPromptAudit = {
   schema: "direct-chat-prompt-audit/v1",
   caseID: "UID-SMOKE",
@@ -251,6 +269,7 @@ const taskSummary = await readJsonFile<any>(path.join(reportDir, "task-summary.j
 assert(Array.isArray(taskSummary.tasks), "Task summary tasks missing")
 const smokeTask = taskSummary.tasks.find((task: any) => task.taskID === "case-smoke")
 assert(smokeTask, "Smoke task summary missing")
+assert(taskSummary.tasks.length === 1, "Benchmark-bound report included a foreign campaign")
 assert(smokeTask.totals.totalTokens === 185, "Smoke task total tokens mismatch")
 assert(smokeTask.byRole.executor.totalTokens === 185, "Smoke task executor tokens mismatch")
 assert(taskSummary.rounds.some((round: any) => round.taskID === "case-smoke" && round.roundNumber === 3), "Smoke round summary missing")

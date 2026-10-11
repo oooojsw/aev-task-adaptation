@@ -1,5 +1,5 @@
 import path from "node:path"
-import { cp, readdir, rename } from "node:fs/promises"
+import { cp, rename } from "node:fs/promises"
 import { ensureDirectory, pathExists, readTextFile, writeJsonFile, writeTextFile } from "../fs"
 import { loadConfig } from "../schema"
 import { runOpencodeTask } from "../opencode"
@@ -11,6 +11,7 @@ import { runValidationStage } from "../validation-engine/stage-runner"
 import { buildAccessProfile } from "../access-profile"
 import type { CoordinatorState, InstanceState } from "./contract"
 import { appendCoordinatorLog, saveCoordinatorState } from "./repository"
+import { auditMergeOutput, leafSourceIDs, type MergeOutputAudit } from "./merge-output-validation"
 
 export type HierarchicalMergeInputFilter = "success_only" | "failed_only" | "all"
 export type HierarchicalMergeFailurePolicy = "exclude" | "negative_evidence" | "diagnostic_only"
@@ -33,8 +34,13 @@ export interface HierarchicalMergeOptions {
   promptPath?: string
   repairPromptPath?: string
   contractPath?: string
+  model?: string
   /** Reuse fully materialized groups when resuming the same run directory. */
   resumeExistingGroups?: boolean
+  /** Optional hard UTF-8 byte cap for the final deployable CORE.md only. */
+  maxFinalCoreBytes?: number
+  /** Maximum complete rewrites allowed when the final CORE.md exceeds its cap. */
+  finalCoreLengthRepairAttempts?: number
   localReplay?: {
     enabled: boolean
     levels: HierarchicalReplayLevels
@@ -199,18 +205,6 @@ function groupItems(items: MergeItem[], size: number, grouping: HierarchicalMerg
   return groupSequential(items, size)
 }
 
-async function listFiles(root: string, rel = ""): Promise<string[]> {
-  const dir = path.join(root, rel)
-  const rows = await readdir(dir, { withFileTypes: true }).catch(() => [])
-  const out: string[] = []
-  for (const row of rows) {
-    const child = rel ? path.join(rel, row.name) : row.name
-    if (row.isDirectory()) out.push(...(await listFiles(root, child)))
-    else if (row.isFile()) out.push(child)
-  }
-  return out
-}
-
 async function copyTree(source: string, target: string) {
   await ensureDirectory(path.dirname(target))
   await cp(source, target, { recursive: true, force: true })
@@ -369,12 +363,36 @@ async function runMergeGroup(input: {
     permissionReadPaths: access.permissionReadPaths,
     permissionEditPaths: access.permissionEditPaths,
     concurrencyScope: `hierarchical-merge:${input.state.id}`,
+    model: input.options.model,
+    // 合并只需文件读写，禁用 shell 防止越界。
+    allowShell: false,
   })
   await writeTextFile(path.join(root, "stdout.log"), result.result.stdout)
   await writeTextFile(path.join(root, "stderr.log"), result.result.stderr)
   await writeTextFile(path.join(root, "response.txt"), result.result.responseText)
-  const files = await listFiles(outputDir)
-  await writeJsonFile(path.join(root, "output-files.json"), files)
+  // 空产物不能晋升到上一层，否则会悄悄丢失整组来源。
+  let audit = await auditMergeOutput({
+    outputDir,
+    contractPath: input.options.contractPath,
+    expectedSourceIDs: await leafSourceIDs(input.items),
+  })
+  await writeJsonFile(path.join(root, "output-files.json"), audit.files)
+  await writeJsonFile(path.join(root, "output-audit.json"), audit)
+  if (!audit.passed && audit.files.length > 0 && audit.missingSourceIDs.length === 0) {
+    audit = await repairMergeOutput({
+      cwd: input.cwd,
+      stateID: input.state.id,
+      groupID,
+      root,
+      outputDir,
+      items: input.items,
+      options: input.options,
+      audit,
+    })
+  }
+  if (result.result.exitCode !== 0 || !audit.passed) {
+    throw new Error(`Hierarchical merge ${groupID} invalid output: exit=${result.result.exitCode}, missing=${audit.missing.join(",")}, empty=${audit.empty.join(",")}, invalidJson=${audit.invalidJson.join(",")}, missingSources=${audit.missingSourceIDs.join(",")}`)
+  }
   return {
     groupID,
     outputDir,
@@ -384,10 +402,129 @@ async function runMergeGroup(input: {
   } satisfies MergeGroupResult
 }
 
+async function repairMergeOutput(input: {
+  cwd: string
+  stateID: string
+  groupID: string
+  root: string
+  outputDir: string
+  items: MergeItem[]
+  options: HierarchicalMergeOptions
+  audit: MergeOutputAudit
+}): Promise<MergeOutputAudit> {
+  const config = await loadConfig(input.cwd)
+  const readPaths = [
+    path.join(input.root, "input-manifest.json"),
+    input.outputDir,
+    ...(input.options.contractPath ? [input.options.contractPath] : []),
+    ...input.items.map((item) => item.skillPath).filter((item): item is string => !!item),
+  ]
+  const access = await buildAccessProfile({
+    role: "hierarchical_merger",
+    mode: "open_book",
+    readPaths,
+    editPaths: [input.outputDir],
+  })
+  let audit = input.audit
+  for (let attempt = 1; attempt <= 2 && !audit.passed; attempt += 1) {
+    const prompt = [
+      "Repair an incomplete hierarchical merge output in place. Read the input manifest, contract, existing output, and source Skills.",
+      `groupID: ${input.groupID}`,
+      `outputDir: ${input.outputDir}`,
+      `missing files: ${audit.missing.join(", ") || "none"}`,
+      `empty files: ${audit.empty.join(", ") || "none"}`,
+      `invalid JSON files: ${audit.invalidJson.join(", ") || "none"}`,
+      `missing source IDs in PROVENANCE.json: ${audit.missingSourceIDs.join(", ") || "none"}`,
+      "Fill the missing required files and repair only invalid content. Preserve existing correct procedures and every input source. Do not include private answers or final task values. Write files only to outputDir. Do not respond with narrative.",
+    ].join("\n")
+    await writeTextFile(path.join(input.root, `output-repair-${attempt}.prompt.txt`), prompt)
+    const result = await runOpencodeTask({
+      cwd: input.cwd,
+      config,
+      title: `hierarchical-merge-repair-${input.stateID}-${input.groupID}-${attempt}`,
+      prompt,
+      referencePaths: access.referencePaths,
+      permissionReadPaths: access.permissionReadPaths,
+      permissionEditPaths: access.permissionEditPaths,
+      concurrencyScope: `hierarchical-merge:${input.stateID}`,
+      model: input.options.model,
+      allowShell: false,
+    })
+    await writeTextFile(path.join(input.root, `output-repair-${attempt}.stdout.log`), result.result.stdout)
+    await writeTextFile(path.join(input.root, `output-repair-${attempt}.stderr.log`), result.result.stderr)
+    await writeTextFile(path.join(input.root, `output-repair-${attempt}.response.txt`), result.result.responseText)
+    audit = await auditMergeOutput({
+      outputDir: input.outputDir,
+      contractPath: input.options.contractPath,
+      expectedSourceIDs: await leafSourceIDs(input.items),
+    })
+    await writeJsonFile(path.join(input.root, "output-files.json"), audit.files)
+    await writeJsonFile(path.join(input.root, "output-audit.json"), audit)
+    if (result.result.exitCode !== 0) break
+  }
+  return audit
+}
+
+async function enforceFinalCoreLength(input: {
+  cwd: string
+  stateID: string
+  groupID: string
+  groupRoot: string
+  outputDir: string
+  options: HierarchicalMergeOptions
+}) {
+  const cap = input.options.maxFinalCoreBytes
+  if (!cap || cap <= 0) return true
+  const corePath = path.join(input.outputDir, "CORE.md")
+  const attempts = Math.max(0, input.options.finalCoreLengthRepairAttempts ?? 0)
+  const config = await loadConfig(input.cwd)
+  const records: Array<{ attempt: number; bytes: number; status: string }> = []
+
+  for (let attempt = 0; attempt <= attempts; attempt += 1) {
+    const bytes = Buffer.byteLength(await readTextFile(corePath), "utf8")
+    if (bytes <= cap) {
+      records.push({ attempt, bytes, status: "within_limit" })
+      await writeJsonFile(path.join(input.groupRoot, "final-core-length-gate.json"), { capBytes: cap, records })
+      return true
+    }
+    records.push({ attempt, bytes, status: "over_limit" })
+    if (attempt === attempts) break
+    const prompt = [
+      "Rewrite only CORE.md in the specified merged skill directory.",
+      `The current file is ${bytes} UTF-8 bytes; the mandatory hard limit is ${cap} bytes.`,
+      "Preserve the operational method and remove redundancy. Do not truncate mechanically, do not edit other files, and do not add case-specific answers.",
+      `outputDir: ${input.outputDir}`,
+      `corePath: ${corePath}`,
+    ].join("\n")
+    const result = await runOpencodeTask({
+      cwd: input.cwd,
+      config,
+      title: `hierarchical-final-core-length-repair-${input.stateID}-${input.groupID}-${attempt + 1}`,
+      prompt,
+      referencePaths: [corePath],
+      permissionReadPaths: [input.outputDir],
+      permissionEditPaths: [input.outputDir],
+      concurrencyScope: `hierarchical-merge:${input.stateID}`,
+      model: input.options.model,
+      // 长度修复只能改合并产物，避免越界读取或写入。
+      allowShell: false,
+    })
+    await writeTextFile(path.join(input.groupRoot, `final-core-length-repair-${attempt + 1}.stdout.log`), result.result.stdout)
+    await writeTextFile(path.join(input.groupRoot, `final-core-length-repair-${attempt + 1}.stderr.log`), result.result.stderr)
+    await writeTextFile(path.join(input.groupRoot, `final-core-length-repair-${attempt + 1}.response.txt`), result.result.responseText)
+    if (result.result.exitCode !== 0) break
+  }
+  const finalBytes = await pathExists(corePath) ? Buffer.byteLength(await readTextFile(corePath), "utf8") : -1
+  records.push({ attempt: records.length, bytes: finalBytes, status: "rejected_over_limit" })
+  await writeJsonFile(path.join(input.groupRoot, "final-core-length-gate.json"), { capBytes: cap, records })
+  return false
+}
+
 async function loadCompletedMergeGroup(input: {
   root: string
   groupID: string
   items: MergeItem[]
+  contractPath?: string
 }): Promise<MergeGroupResult | undefined> {
   const outputDir = path.join(input.root, "output")
   const manifestPath = path.join(input.root, "input-manifest.json")
@@ -409,6 +546,12 @@ async function loadCompletedMergeGroup(input: {
   const manifestIDs = Array.isArray(manifest.inputs) ? manifest.inputs.map((item) => String(item.id ?? "")) : []
   const expectedIDs = input.items.map((item) => item.id)
   if (manifest.groupID !== input.groupID || JSON.stringify(manifestIDs) !== JSON.stringify(expectedIDs)) return undefined
+  const audit = await auditMergeOutput({
+    outputDir,
+    contractPath: input.contractPath,
+    expectedSourceIDs: await leafSourceIDs(input.items),
+  })
+  if (!audit.passed) return undefined
   return {
     groupID: input.groupID,
     outputDir,
@@ -859,11 +1002,54 @@ export async function runCoordinatorHierarchicalMerge(input: {
       const groupRoot = path.join(runRoot, `level-${level}`, `level-${String(level).padStart(2, "0")}-group-${String(i + 1).padStart(3, "0")}`)
       const groupID = `level-${String(level).padStart(2, "0")}-group-${String(i + 1).padStart(3, "0")}`
       let group = input.options.resumeExistingGroups
-        ? await loadCompletedMergeGroup({ root: groupRoot, groupID, items: groups[i]! })
+        ? await loadCompletedMergeGroup({
+            root: groupRoot,
+            groupID,
+            items: groups[i]!,
+            contractPath: input.options.contractPath,
+          })
         : undefined
       if (group) {
         await appendCoordinatorLog(state, "info", `Hierarchical merge ${groupID}: reused completed group.`)
       } else {
+        const existingManifest = path.join(groupRoot, "input-manifest.json")
+        const existingOutput = path.join(groupRoot, "output")
+        if (input.options.resumeExistingGroups && await pathExists(existingManifest) && await pathExists(existingOutput)) {
+          const manifest = JSON.parse(await readTextFile(existingManifest)) as { groupID?: string; inputs?: MergeItem[] }
+          const expectedIDs = groups[i]!.map((item) => item.id)
+          const storedIDs = manifest.inputs?.map((item) => item.id) ?? []
+          if (manifest.groupID === groupID && JSON.stringify(storedIDs) === JSON.stringify(expectedIDs)) {
+            const audit = await auditMergeOutput({
+              outputDir: existingOutput,
+              contractPath: input.options.contractPath,
+              expectedSourceIDs: await leafSourceIDs(groups[i]!),
+            })
+            // 少整组来源时必须重新合并，补 UID 标签不能补回缺失的方法。
+            if (!audit.passed && audit.files.length > 0 && audit.missingSourceIDs.length === 0) {
+              const repaired = await repairMergeOutput({
+                cwd: input.cwd,
+                stateID: state.id,
+                groupID,
+                root: groupRoot,
+                outputDir: existingOutput,
+                items: groups[i]!,
+                options: input.options,
+                audit,
+              })
+              if (repaired.passed) {
+                group = {
+                  groupID,
+                  outputDir: existingOutput,
+                  manifestPath: existingManifest,
+                  statusCounts: statusCounts(groups[i]!),
+                  inputItems: groups[i]!,
+                }
+              }
+            }
+          }
+        }
+      }
+      if (!group) {
         if (input.options.resumeExistingGroups) await archiveIncompleteMergeGroup(groupRoot)
         group = await runMergeGroup({
           cwd: input.cwd,
@@ -874,6 +1060,19 @@ export async function runCoordinatorHierarchicalMerge(input: {
           groupIndex: i,
           items: groups[i]!,
         })
+      }
+      if (groups.length === 1) {
+        const lengthAccepted = await enforceFinalCoreLength({
+          cwd: input.cwd,
+          stateID: state.id,
+          groupID: group.groupID,
+          groupRoot,
+          outputDir: group.outputDir,
+          options: input.options,
+        })
+        if (!lengthAccepted) {
+          throw new Error(`Hierarchical merge ${group.groupID} final CORE.md exceeds the configured hard byte cap.`)
+        }
       }
       let postMergeValidation = await runHierarchicalPostMergeValidation({
         cwd: input.cwd,

@@ -4,6 +4,7 @@ import path from "node:path"
 import { pathExists, runtimePath } from "./fs"
 import { readFile, rm } from "node:fs/promises"
 import { writeFileAtomic } from "./atomic-write"
+import { runHiddenChildProcess } from "./hidden-child-process"
 
 interface RegisteredRuntimeProcess {
   pid: number
@@ -110,14 +111,15 @@ async function readWindowsCreation(pid: number) {
   if (process.platform !== "win32") return undefined
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const script = `(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).StartTime.Ticks`
-    const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
-      stdout: "pipe",
-      stderr: "pipe",
-      windowsHide: true,
+    const result = await runHiddenChildProcess({
+      command: "powershell",
+      args: ["-NoProfile", "-NonInteractive", "-Command", script],
+      cwd: process.cwd(),
+      env: { ...process.env },
+      timeoutMs: 5000,
     })
-    const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
-    if (exitCode === 0) {
-      const out = stdout.trim()
+    if (result.exitCode === 0) {
+      const out = result.stdout.trim()
       if (out.length > 0) return out
     }
     if (attempt < 2) await sleep(100 * attempt)
@@ -144,15 +146,16 @@ async function batchQueryWindowsProcesses(pids: number[]) {
     "}",
   ].join("; ")
 
-  const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
-    stdout: "pipe",
-    stderr: "pipe",
-    windowsHide: true,
+  const result = await runHiddenChildProcess({
+    command: "powershell",
+    args: ["-NoProfile", "-NonInteractive", "-Command", script],
+    cwd: process.cwd(),
+    env: { ...process.env },
+    timeoutMs: 10000,
   })
-  const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
-  if (exitCode !== 0) return map
+  if (result.exitCode !== 0) return map
 
-  for (const line of stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+  for (const line of result.stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
     try {
       const raw = JSON.parse(line) as { Id?: unknown; Ticks?: unknown; CommandLine?: unknown }
       const pid = Number(raw.Id)
@@ -220,15 +223,16 @@ async function readWindowsProcessLineage(pid: number) {
     "}",
   ].join("; ")
 
-  const child = Bun.spawn(["powershell", "-NoProfile", "-Command", script], {
-    stdout: "pipe",
-    stderr: "pipe",
-    windowsHide: true,
+  const result = await runHiddenChildProcess({
+    command: "powershell",
+    args: ["-NoProfile", "-NonInteractive", "-Command", script],
+    cwd: process.cwd(),
+    env: { ...process.env },
+    timeoutMs: 10000,
   })
-  const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
-  if (exitCode !== 0) return rows
+  if (result.exitCode !== 0) return rows
 
-  for (const line of stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+  for (const line of result.stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
     try {
       const raw = JSON.parse(line) as {
         Id?: unknown
@@ -275,12 +279,13 @@ export async function terminateProcessTree(pid: number | undefined | null) {
 
   if (process.platform === "win32") {
     if (await isProtectedDesktopOpenCodeProcess(pid)) return false
-    const child = Bun.spawn(["taskkill", "/PID", String(pid), "/T", "/F"], {
-      stdout: "pipe",
-      stderr: "pipe",
-      windowsHide: true,
-    })
-    await child.exited.catch(() => 1)
+    await runHiddenChildProcess({
+      command: "taskkill",
+      args: ["/PID", String(pid), "/T", "/F"],
+      cwd: process.cwd(),
+      env: { ...process.env },
+      timeoutMs: 15000,
+    }).catch(() => undefined)
     await sleep(150)
     return !(await isProcessAlive(pid))
   }
