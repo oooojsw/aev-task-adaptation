@@ -162,6 +162,8 @@ export interface OpencodeTaskInput {
   promptInlineFiles?: string[]
   permissionReadPaths?: string[]
   permissionEditPaths?: string[]
+  /** Opt-in external-directory traversal; file read/edit grants still apply. */
+  permissionExternalPaths?: string[]
   model?: string
   agent?: string
   variant?: string
@@ -355,16 +357,17 @@ export async function buildEditPermissionRules(cwd: string, paths: string[]) {
 
 async function makeOverridePermissions(
   cwd: string,
-  input: { readPaths: string[]; editPaths: string[]; allowShell?: boolean },
+  input: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[] },
 ) {
   return {
     "*": "deny",
     read: await buildReadListPermissionRules(cwd, input.readPaths),
     list: await buildReadListPermissionRules(cwd, input.readPaths),
     edit: await buildEditPermissionRules(cwd, input.editPaths),
-    external_directory: {
-      "*": "deny",
-    },
+    // 仅新入口显式放行材料目录，文件权限仍单独判定。
+    external_directory: input.externalPaths?.length
+      ? await buildReadListPermissionRules(cwd, input.externalPaths)
+      : { "*": "deny" },
     bash: input.allowShell ? "allow" : "deny",
     glob: "deny",
     grep: "deny",
@@ -698,7 +701,7 @@ async function ensureOverrideConfig(
   cwd: string,
   model: string | undefined,
   permissionConfig: LoadedPermissionConfig,
-  permissions: { readPaths: string[]; editPaths: string[]; allowShell?: boolean },
+  permissions: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[] },
   runLabel: string,
   injectPlatformSafetyRules = true,
   isolateHostRuntime = false,
@@ -779,6 +782,7 @@ async function ensureOverrideConfig(
         : await makeOverridePermissions(cwd, {
             readPaths: permissions.readPaths,
             editPaths: permissions.editPaths,
+            externalPaths: permissions.externalPaths,
             // Existing sessions allow shell with explicit read paths unless a caller opts out.
             allowShell: permissions.allowShell ?? (permissions.readPaths.length > 0 || isolateHostRuntime),
           }),
@@ -1096,6 +1100,7 @@ async function runOpencodeTaskOnce(
     {
       readPaths: permissionReadPaths,
       editPaths: permissionEditPaths,
+      externalPaths: input.permissionExternalPaths,
       allowShell: input.allowShell,
     },
     runLabel,

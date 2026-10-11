@@ -1,5 +1,5 @@
 import path from "node:path"
-import { readFile, readdir, realpath, mkdir, open } from "node:fs/promises"
+import { readFile, readdir, realpath, mkdir, open, lstat } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { fingerprint } from "./identity"
@@ -58,6 +58,14 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     await preflight()
     if (signal.aborted) throw new Error("Tool execution already aborted")
     await validateToolRequest(request)
+    const externalPaths = new Set<string>()
+    for (const file of [...request.readPaths, ...request.editPaths]) {
+      const info = await lstat(file).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+        return null
+      })
+      externalPaths.add(info?.isDirectory() ? file : path.dirname(file))
+    }
     const dir = path.join(options.evidenceRoot, fingerprint({ host: frozen.key, request }))
     await mkdir(dir, { recursive: true })
     const claim = await open(path.join(dir, "started.claim"), "wx")
@@ -76,6 +84,7 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
       title: "Protocol independent tool execution", prompt: request.prompt, model: request.model,
       referencePaths: request.readPaths, permissionReadPaths: request.readPaths,
       permissionEditPaths: request.editPaths, allowShell: false, isolateHostRuntime: true,
+      permissionExternalPaths: [...externalPaths],
       infrastructureAttempts: 1, injectPlatformSafetyRules: false, recordAdaptiveConcurrency: false,
       runtimeBudget: { profile: "short", softDeadlineMs: request.timeoutMs, hardTimeoutMs: request.timeoutMs,
         silentTimeoutMs: request.timeoutMs, silentTimeoutAfterActivityMs: request.timeoutMs },
