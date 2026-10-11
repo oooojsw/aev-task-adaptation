@@ -4,6 +4,7 @@ import { prepareEntry, type Entry } from "./entry"
 import { readCandidate } from "./candidate"
 import { authorContext, protocolAuthorLines } from "./author-context"
 import { canonical, fingerprint, immutable } from "./identity"
+import { pathExists } from "../fs"
 import type { Runtime } from "./runtime"
 
 export async function mergeContext(input: { parentRunRoot: string; entry: Entry; outputRoot: string;
@@ -23,6 +24,12 @@ export async function mergeContext(input: { parentRunRoot: string; entry: Entry;
     }
     await access(path.join(path.dirname(source.receiptPath), "protocol.started.claim"))
     const receipt = JSON.parse((await readFile(source.receiptPath, "utf8")).replace(/^\uFEFF/, ""))
+    const checkpoint = JSON.parse((await readFile(path.join(path.dirname(source.receiptPath), "protocol.completed.json"), "utf8")).replace(/^\uFEFF/, ""))
+    // 通过字段不等于完整验收，必须对应未被改写的完成记录。
+    if (typeof checkpoint.binding !== "string" || !/^[a-f0-9]{64}$/.test(checkpoint.binding) ||
+        checkpoint.receipt !== fingerprint(receipt) || await pathExists(path.join(path.dirname(source.receiptPath), "protocol.failure.json"))) {
+      throw new Error("Source acceptance completion evidence drift or incomplete")
+    }
     const candidate = await readCandidate(source.candidateRoot, prepared.project.pack.skill)
     const expected = candidate.metadata.map(({ id, kind, bytes, sha256 }) => ({ id, kind, length: bytes, sha256 }))
     const actual = receipt.evidence?.skill

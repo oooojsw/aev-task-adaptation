@@ -191,6 +191,26 @@ test("merge context refuses rejected and duplicate sources", async () => {
   }
 })
 
+test("merge source requires unchanged completion receipt and no interrupted marker", async () => {
+  const f = await fixture()
+  f.selection.protocol.phases.merge = structuredClone(f.selection.protocol.phases.source!)
+  await writeFile(f.entry.selectionPath, JSON.stringify(f.selection))
+  const candidate = path.join(f.root, "candidate")
+  const attempt = path.join(f.root, "attempt")
+  const receipt = await runEntry(f.run, f.entry, candidate, attempt, f.runtime)
+  const receiptPath = path.join(attempt, "protocol.receipt.json")
+  const input = { parentRunRoot: f.run, entry: f.entry, outputRoot: path.join(f.root, "merged"),
+    sources: [{ id: "task", candidateRoot: candidate, receiptPath }], runtime: f.runtime }
+  const original = await readFile(receiptPath)
+  await writeFile(receiptPath, JSON.stringify({ ...receipt, message: "Rewritten success description" }))
+  await expect(mergeContext(input)).rejects.toThrow("completion evidence drift")
+  await writeFile(receiptPath, original)
+  expect((await mergeContext(input)).contract.sources).toHaveLength(1)
+  await writeFile(path.join(attempt, "protocol.failure.json"), JSON.stringify({ status: "interrupted" }))
+  await expect(mergeContext(input)).rejects.toThrow("incomplete")
+  expect(f.calls()).toBe(1)
+})
+
 test("real merger accepts arbitrary entries and recovers without author or checker repeat", async () => {
   const f = await fixture()
   f.selection.protocol.phases.merge = structuredClone(f.selection.protocol.phases.source!)
