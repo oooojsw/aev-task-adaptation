@@ -137,6 +137,17 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
     await mkdir(dir, { recursive: true })
     const claim = await open(path.join(dir, "started.claim"), "wx")
     await claim.close()
+    const startedAt = new Date().toISOString()
+    const clock = performance.now()
+    let observedUsage: { inputTokens?: number; outputTokens?: number } | undefined
+    let actualModel: string | null = null
+    const account = async (status: string) => writeJsonAtomic(path.join(dir, "invocation.accounting.json"), {
+      schema: "aev.backend-invocation-accounting.v1", transport: "http", requestFingerprint: key,
+      requestedModel: cfg.model, actualModel, startedAt, finishedAt: new Date().toISOString(),
+      elapsedMs: Math.max(0, Math.round(performance.now() - clock)), reused: false, fee: null, status,
+      inputTokens: observedUsage?.inputTokens ?? null, outputTokens: observedUsage?.outputTokens ?? null,
+      usageSource: observedUsage ? "provider_response" : "missing", errorKind: status === "completed" ? null : "http_or_persistence_error",
+    })
     await writeJsonAtomic(path.join(dir, "request.json"), { url: cfg.url, credentialAlias: cfg.credentialEnv, request,
       requestFingerprint: key, tools: false, turns: 1, retries: 0 })
     const controller = new AbortController()
@@ -152,6 +163,8 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
         responseSHA256: createHash("sha256").update(raw).digest("hex") })
       if (!response.ok) throw new Error("Provider response was not successful")
       const data = JSON.parse(raw)
+      observedUsage = usage(data?.usage)
+      actualModel = typeof data?.model === "string" ? data.model : null
       if (!data || data.model !== cfg.expectedModel) throw new Error("Actual model differs from frozen expectation")
       let answer: string
       if (cfg.dialect === "anthropic_messages") {
@@ -175,11 +188,14 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
       }
       await writeJsonAtomic(path.join(dir, "completed.json"), { requestFingerprint: key, model: data.model,
         answerSHA256: createHash("sha256").update(answer).digest("hex"), ...(tokens ? { usage: tokens } : {}) })
+      await account("completed")
       return { status: "completed", product: { kind: "text", bytes: Buffer.from(answer) }, ...(tokens ? { usage: tokens } : {}) }
     } catch {
       // 保留原回复；不得把接口故障算为Skill拒绝或自动重试。
       await writeJsonAtomic(path.join(dir, "failure.json"), { requestFingerprint: key,
         status: "execution_error", outcome: "inspect_before_retry" })
+      // 即使产物不合格，已报告用量仍属于实际调用消耗。
+      await account("infrastructure_error")
       return { status: "execution_error", message: "HTTP execution failed; raw evidence retained" }
     } finally {
       clearTimeout(timer)

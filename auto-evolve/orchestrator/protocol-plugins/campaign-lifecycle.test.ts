@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile, readdir, rename } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import { summarizeResources } from "./resource-summary"
 
 // 离线打包只替换API与配置边界，保留实际内外控制器源码。
 export async function buildOfflineCampaign(root: string, boundaryKey: string) {
@@ -286,6 +287,14 @@ test(`actual Campaign learner ${scenario.execution ? "HTTP task execution " : ""
     expect(accounting.some((item) => item.role === "lead")).toBe(true)
     if (rejectedLeads === 2) expect(accounting.some((item) => item.role === "planner")).toBe(true)
     await writeFile(path.join(root, "training-accounting-audit.json"), JSON.stringify({ calls: calls.length, accountingFiles, accounting }, null, 2))
+    const resourceSummary = await summarizeResources(root)
+    expect(resourceSummary.invocations).toHaveLength(calls.length + httpCalls)
+    expect(resourceSummary.input.knownTokens).toBe(execution && fault !== "execution_error" ? httpCalls * 20 : 0)
+    expect(resourceSummary.output.knownTokens).toBe(execution && fault !== "execution_error" ? httpCalls * 3 : 0)
+    expect(resourceSummary.input.unreportedInvocations).toBe(calls.length + (fault === "execution_error" ? httpCalls : 0))
+    // 故障缓存只留下开始标记，不能据此声称所有消耗已知。
+    expect(resourceSummary.startedWithoutLedger).toHaveLength(fault ? 1 : 0)
+    await writeFile(path.join(root, "resource-summary-audit.json"), JSON.stringify(resourceSummary, null, 2))
     expect(calls.some((title) => title.startsWith("Long Task Execute"))).toBe(true)
     for (const request of roleRequests) {
       expect(request.prompt).not.toContain("PRIVATE_CAMPAIGN_LABEL")

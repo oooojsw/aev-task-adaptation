@@ -34,6 +34,34 @@ Campaign lifecycle fixtures check ledger count equals actual training boundary
 calls. This is per-invocation evidence, not yet a consolidated full-run ledger or
 aggregate token-limit enforcement. Existing historical calls are not backfilled.
 
+## Read-only consolidated resource view
+
+summarizeResources scans a declared canonical root, refuses linked directories
+and malformed invocation ledgers, and inventories original byte hashes. Only
+physical training/backend invocation records are added; protocol.accounting.json
+is listed but excluded because its execution/judge usage overlaps these records.
+Verified completed cache wrappers are listed separately, not counted as calls.
+Unclassified started claims remain visible and make completeness false; they may
+be wrapper claims and must not be reported as proven additional API requests.
+Identical request fingerprints in distinct invocation directories still count
+separately: repeated real calls can have the same prompt. Missing tokens stay
+unknown and overflow blocks totals. Fee stays null. Per-call elapsed time is not
+summed as wall time. Scope remains discovered instrumented calls only, not all
+legacy calls, every optional extension or exhaustive billing reconciliation.
+
+From the worktree root:
+
+```powershell
+bun auto-evolve/scripts/report-protocol-resources.ts --root E:/absolute/run-root
+```
+
+The command prints a read-only JSON report and never resumes work or sends calls.
+
+HTTP executor and independent HTTP judge now preserve per-invocation time/model
+and usage, including reported usage on malformed/incomplete successful responses.
+Fault/no-response usage stays unknown. Started-but-unaccounted records are not
+silently repaired or resent to fill missing evidence.
+
 Complete earlier development checkpoints without an accounting field remain
 read-only and eligible for existing identity-checked reuse. No historical tokens
 are retroactively invented, and no scoring/execution is rerun to fill missing

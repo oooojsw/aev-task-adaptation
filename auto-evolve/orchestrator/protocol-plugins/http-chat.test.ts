@@ -4,6 +4,7 @@ import path from "node:path"
 import { httpChat } from "./http-chat"
 import type { Settings } from "./contract"
 import type { Artifact, PublicInputs } from "./runtime"
+import { summarizeResources } from "./resource-summary"
 
 function settings(): Settings {
   return { dialect: "openai_chat", url: "http://127.0.0.1:1/v1/chat/completions", allowedOrigins: ["http://127.0.0.1:1"],
@@ -23,7 +24,8 @@ const reply = () => ({ model: "fixture-model", choices: [{ finish_reason: "stop"
 
 test("HTTP adapter sends one request without NBA/OpenCode assumptions", async () => {
   let calls = 0
-  const plugin = await httpChat({ evidenceRoot: root(), credential: () => "synthetic-fixture", transport: async (_url, options) => {
+  const evidenceRoot = root()
+  const plugin = await httpChat({ evidenceRoot, credential: () => "synthetic-fixture", transport: async (_url, options) => {
     calls++
     expect(options?.redirect).toBe("error")
     const body = JSON.parse(String(options?.body))
@@ -38,6 +40,11 @@ test("HTTP adapter sends one request without NBA/OpenCode assumptions", async ()
   expect(result.status).toBe("completed")
   expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 2 })
   expect(calls).toBe(1)
+  const resources = await summarizeResources(evidenceRoot)
+  expect(resources.invocations).toHaveLength(1)
+  expect(resources.input.knownTokens).toBe(10)
+  expect(resources.output.knownTokens).toBe(2)
+  expect(resources.input.completeForDiscoveredInvocations).toBe(true)
 })
 
 test("Anthropic mode preserves explicit system/user and checks completion", async () => {
