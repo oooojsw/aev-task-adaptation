@@ -36,7 +36,7 @@ import { runBlankEval } from "../blank-eval/runner"
 import { campaignAcceptance, verifyCompletedCampaignAcceptance, readCompletedRejectedCampaignPass } from "../protocol-plugins/campaign-acceptance"
 import { prepareEntry } from "../protocol-plugins/entry"
 import { selectedRuntime } from "../protocol-plugins/selected-runtime"
-import { authorContext, protocolAuthorLines } from "../protocol-plugins/author-context"
+import { authorContext, protocolAuthorLines, publicMaterialSuffixes } from "../protocol-plugins/author-context"
 import { protocolFeedbackEvidence, previousProtocolFeedback } from "../protocol-plugins/feedback-evidence"
 import { protocolRepairDirective, type ProtocolRepairCheck } from "../protocol-plugins/failure-routing"
 import { copyCandidate, hasCandidate, type SkillBinding } from "../protocol-plugins/candidate"
@@ -3551,7 +3551,9 @@ async function runCampaignSuggestionTask(input: {
     config,
     title: input.title,
     ...(input.baseSpec.protocolTraining && input.trainingRole ? { runtimeBudget: trainingRuntimeBudget(input.baseSpec, input.trainingRole) } : {}),
-    prompt: input.prompt,
+    prompt: input.baseSpec.protocolPlugins && input.baseSpec.protocolAuthorContext
+      ? [input.prompt, await publicMaterialSuffixes(input.baseSpec.protocolAuthorContext)].filter(Boolean).join("\n\n")
+      : input.prompt,
     // 新协议允许无id/taskFamily；此请求并未接收campaignSpec。
     concurrencyScope: `long-task-campaign:${input.baseSpec.id ?? input.baseSpec.taskFamily ??
       (input.baseSpec.protocolPlugins ? input.baseSpec.title : (input as unknown as { campaignSpec: LongTaskCampaignSpec }).campaignSpec.title)}`,

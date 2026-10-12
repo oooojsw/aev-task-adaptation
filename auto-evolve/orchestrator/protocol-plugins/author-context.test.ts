@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test"
-import { authorContext, protocolRolePrompt, type AuthorContext } from "./author-context"
+import { authorContext, protocolRolePrompt, publicMaterialSuffixes, type AuthorContext } from "./author-context"
+import { mkdtemp, writeFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { buildCampaignWorkerPrompt, buildCampaignLeadPrompt, buildCampaignReviewerPrompt } from "../long-task-campaign/prompts"
 
 const context: AuthorContext = { fingerprint: "a".repeat(64), projectFingerprint: "b".repeat(64), task: "task",
@@ -28,11 +31,33 @@ test("author-facing view includes inference budget but excludes credential and p
         materials: [{ id: "public", kind: "text", path: "public.txt" }],
         privateInputs: [{ id: "private-gold", kind: "text", path: "private-gold.json" }] }] } })
   expect(view.executor?.settings.maxTokens).toBe(123)
-  expect(view.publicMaterials).toEqual([{ id: "public", path: "E:/pack/public.txt" }])
+  expect(view.publicMaterials).toEqual([{ id: "public", kind: "text", path: "E:/pack/public.txt" }])
   expect(JSON.stringify(view)).not.toContain("PRIVATE_CREDENTIAL_REFERENCE")
   expect(JSON.stringify(view)).not.toContain("private-gold")
   expect(JSON.stringify(view)).not.toContain("private-script")
   expect(JSON.stringify(view)).not.toContain("localhost")
+})
+
+test("public suffixes expose omitted tail with bounded text and exclude non-text inputs", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "aev-public-suffix-"))
+  try {
+    const file = path.join(dir, "public.txt")
+    await writeFile(file, "PREFIX_ONLY" + "x".repeat(100000) + "PUBLIC_OUTPUT_CONVENTION")
+    const excerpt = await publicMaterialSuffixes({ ...context, publicMaterials: [
+      ...Array.from({ length: 6 }, (_, index) => ({ id: String(index), kind: "text", path: file })),
+      { id: "binary", kind: "image", path: path.join(dir, "does-not-exist") } ] })
+    const entries = JSON.parse(excerpt.slice(excerpt.indexOf("[\n")))
+    expect(entries).toHaveLength(4)
+    expect(entries.reduce((total: number, entry: { suffix: string }) => total + entry.suffix.length, 0)).toBe(16000)
+    expect(entries[0].suffix).toContain("PUBLIC_OUTPUT_CONVENTION")
+    expect(entries[0].sha256).toMatch(/^[a-f0-9]{64}$/)
+    expect(excerpt).not.toContain("PREFIX_ONLY")
+    expect(excerpt).not.toContain("binary")
+    expect(await publicMaterialSuffixes(context)).toBe("")
+    await expect(publicMaterialSuffixes({ ...context, publicMaterials: [{ id: "missing", kind: "text", path: path.join(dir, "missing") }] })).rejects.toThrow()
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 test("plugin role prompts use declared entry and do not demand tool evidence or fixed surface contract", () => {
