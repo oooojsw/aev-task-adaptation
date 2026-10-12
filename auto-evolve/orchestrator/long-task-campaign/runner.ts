@@ -33,7 +33,7 @@ import { readOperationalContext, resolveExistingLongTaskRun } from "../long-task
 import { loadLongTaskSpec } from "../long-task/spec"
 import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { runBlankEval } from "../blank-eval/runner"
-import { campaignAcceptance, verifyCompletedCampaignAcceptance } from "../protocol-plugins/campaign-acceptance"
+import { campaignAcceptance, verifyCompletedCampaignAcceptance, readCompletedRejectedCampaignPass } from "../protocol-plugins/campaign-acceptance"
 import { prepareEntry } from "../protocol-plugins/entry"
 import { selectedRuntime } from "../protocol-plugins/selected-runtime"
 import { authorContext, protocolAuthorLines } from "../protocol-plugins/author-context"
@@ -6520,6 +6520,20 @@ export async function resumeLongTaskCampaign(input: {
           const reviewerPassSuggestionPath = path.join(reviewerPassRoot, "review-suggestion.json")
           const acceptancePassRoot = path.join(roundPaths.finalAcceptanceRoot, passID)
           const acceptancePassResultPath = path.join(acceptancePassRoot, "result.json")
+
+          // 已完成拒绝只复用反馈；不得重做作者或覆盖旧验收。
+          if (baseSpec.protocolPlugins && await pathExists(acceptancePassResultPath)) {
+            const saved = await readCompletedRejectedCampaignPass({ campaignRoot: campaignPaths.root,
+              cwd: input.cwd, campaignID: input.campaignID, roundNumber, runID: runResult.runID,
+              entry: baseSpec.protocolPlugins, resultPath: acceptancePassResultPath })
+            finalAcceptance = saved
+            finalAcceptanceFeedbackPath = saved.protocolTrainingResultPath
+            if (await pathExists(reviewerPassSuggestionPath)) {
+              reviewerSuggestion = await readJsonFile<LongTaskCampaignReviewSuggestion>(reviewerPassSuggestionPath)
+              reviewerInputPath = reviewerPassSuggestionPath
+            }
+            continue
+          }
 
           // Dynamically resolve the current pass's evidence bundle.
           // IMPORTANT:

@@ -190,10 +190,11 @@ for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLe
   { rejectedLeads: 0, execution: true, seeded: true },
   { rejectedLeads: 0, execution: true, seeded: true, executorPatch: true },
   { rejectedLeads: 0, execution: true, seeded: true, executorPatch: true, recoverBeforeLead: true },
+  { rejectedLeads: 1, execution: true, recoverAfterPass: true },
   { rejectedLeads: 1, execution: true, seeded: true, executorPatch: true, partialLead: true },
   { rejectedLeads: 0, execution: true, fault: "execution_error" }])
 test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
-  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead } = scenario
+  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass } = scenario
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   await mkdir(root, { recursive: true })
   const key = `__campaignOffline_${randomUUID().replaceAll("-", "")}`
@@ -212,7 +213,7 @@ test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""
       reads: [...(input.referencePaths ?? []), ...(input.permissionReadPaths ?? [])],
       edits: [...(input.permissionEditPaths ?? [])] })
     await input.onSpawn?.()
-    if (recoverBeforeLead && !recoveryTriggered && input.title.startsWith("Campaign Lead")) {
+    if ((recoverBeforeLead || (recoverAfterPass && leads === 1)) && !recoveryTriggered && input.title.startsWith("Campaign Lead")) {
       recoveryTriggered = true
       throw new Error("Fixture interruption before Lead")
     }
@@ -334,7 +335,7 @@ test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""
   process.env.AUTO_EVOLVE_SKIP_STALE_HEAL = "1"
   try {
     let result = await actual.runLongTaskCampaign({ cwd: root, specPath: campaign, forceNew: true })
-    if (recoverBeforeLead) {
+    if (recoverBeforeLead || recoverAfterPass) {
       expect(result.status).toBe("failed")
       await writeFile(path.join(root, "interrupted-result.json"), JSON.stringify(result))
       const statePath = path.join(result.campaignDir, "campaign.json")
@@ -355,9 +356,9 @@ test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""
       /\/protocol-invocations\/[^/]+\/accounting\.json$/.test(file.replaceAll("\\", "/")))
     const accounting = await Promise.all(accountingFiles.map(async (file) => JSON.parse(await readFile(path.join(root, file), "utf8"))))
     expect(accounting).toHaveLength(calls.length)
-    expect(accounting.every((item) => ["completed", ...(recoverBeforeLead ? ["infrastructure_error"] : [])].includes(item.status) &&
+    expect(accounting.every((item) => ["completed", ...(recoverBeforeLead || recoverAfterPass ? ["infrastructure_error"] : [])].includes(item.status) &&
       item.inputTokens === null && item.outputTokens === null)).toBe(true)
-    if (recoverBeforeLead) expect(accounting.filter(item => item.status === "infrastructure_error")).toHaveLength(1)
+    if (recoverBeforeLead || recoverAfterPass) expect(accounting.filter(item => item.status === "infrastructure_error")).toHaveLength(1)
     expect(accounting.some((item) => item.role === "executor")).toBe(true)
     expect(accounting.some((item) => item.role === "lead")).toBe(true)
     if (rejectedLeads === 2) expect(accounting.some((item) => item.role === "planner")).toBe(true)

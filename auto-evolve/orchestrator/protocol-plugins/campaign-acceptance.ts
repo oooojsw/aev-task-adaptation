@@ -1,5 +1,6 @@
 import path from "node:path"
 import { randomUUID } from "node:crypto"
+import { createHash } from "node:crypto"
 import { mkdir, readFile } from "node:fs/promises"
 import { writeJsonAtomic } from "../atomic-write"
 import { pathExists } from "../fs"
@@ -9,8 +10,10 @@ import { selectedRuntime } from "./selected-runtime"
 import type { Runtime } from "./runtime"
 import { productEvidenceName } from "./runtime"
 import { trainingCheckMessage } from "./training-feedback"
-import { canonical } from "./identity"
+import { canonical, fingerprint } from "./identity"
 import { protocolRepairDirective } from "./failure-routing"
+import { taskFromPack } from "./project-pack"
+import { attemptAccounting } from "./attempt-accounting"
 
 export async function campaignAcceptance(input: {
   campaignRoot: string
@@ -115,4 +118,50 @@ export async function verifyCompletedCampaignAcceptance(input: {
   const receipt = await runEntry(input.campaignRoot, input.entry, input.candidateRoot, path.dirname(receiptPath), runtime,
     { reuseCompleted: true })
   if (receipt.status !== "passed" || result.protocolClaim !== receipt.claim) throw new Error("Completed Campaign acceptance verdict drift")
+}
+
+export async function readCompletedRejectedCampaignPass(input: {
+  campaignRoot: string; cwd: string; campaignID: string; roundNumber: number;
+  runID: string; entry: Entry; resultPath: string;
+}) {
+  const result = JSON.parse((await readFile(input.resultPath, "utf8")).replace(/^\uFEFF/, "")) as Awaited<ReturnType<typeof campaignAcceptance>>
+  const dir = path.dirname(input.resultPath)
+  const relative = path.relative(input.campaignRoot, input.resultPath)
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) ||
+      result.campaignID !== input.campaignID || result.roundNumber !== input.roundNumber || result.runID !== input.runID ||
+      result.passed !== false || result.failureKind !== "product_failure" || result.acceptanceMode !== "protocol_plugins" ||
+      result.protocolReceiptPath !== path.join(dir, "protocol.receipt.json") || result.protocolAuditResultPath !== input.resultPath ||
+      result.protocolTrainingResultPath !== `${input.resultPath}.training.json`) throw new Error("Historical rejected pass identity drift")
+  const { protocolReceiptPath: _, protocolAuditResultPath: __, ...expected } = result
+  const training = JSON.parse((await readFile(result.protocolTrainingResultPath, "utf8")).replace(/^\uFEFF/, ""))
+  const receipt = JSON.parse((await readFile(result.protocolReceiptPath, "utf8")).replace(/^\uFEFF/, ""))
+  const checkpoint = JSON.parse((await readFile(path.join(dir, "protocol.completed.json"), "utf8")).replace(/^\uFEFF/, ""))
+  const accounting = JSON.parse((await readFile(path.join(dir, "protocol.accounting.json"), "utf8")).replace(/^\uFEFF/, ""))
+  const runtime = await selectedRuntime(path.join(input.campaignRoot, "protocol-backends"), input.cwd, input.entry)
+  const prepared = await prepareEntry(input.campaignRoot, input.entry, runtime)
+  // 历史拒绝只作反馈，不把已变化的当前Skill冒充旧送验版本。
+  if (!prepared || canonical(training) !== canonical(expected) || receipt.status !== "rejected" ||
+      receipt.task !== input.entry.taskID || receipt.phase !== input.entry.phase || receipt.protocolFingerprint !== prepared.protocol.fingerprint ||
+      checkpoint.receipt !== fingerprint(receipt) || checkpoint.accounting !== fingerprint(accounting) ||
+      !await pathExists(path.join(dir, "protocol.started.claim")) || !await pathExists(`${input.resultPath}.claim`) ||
+      await pathExists(path.join(dir, "protocol.failure.json"))) throw new Error("Historical rejected pass evidence drift")
+  const task = await taskFromPack(prepared.project, input.entry.taskID, input.entry.phase, result.validationPackageRoot)
+  const inputs = await Promise.all([task.skill, task.materials, task.privateInputs].map(async (files, index) =>
+    Promise.all(files.map(async file => {
+      const hash = index === 0 ? receipt.evidence.skill.find((item: { id: string }) => item.id === file.id)?.sha256
+        : createHash("sha256").update(await readFile(file.path)).digest("hex")
+      if (typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash)) throw new Error("Historical input identity missing")
+      return { ...file, sha256: hash }
+    }))))
+  if (checkpoint.binding !== fingerprint({ entry: input.entry, project: prepared.project.fingerprint,
+    protocol: prepared.protocol.fingerprint, inputs }) ||
+    canonical(accounting) !== canonical(attemptAccounting(prepared.protocol, input.entry.phase, receipt, accounting.elapsedMs))) {
+    throw new Error("Historical rejected input/accounting drift")
+  }
+  if (receipt.product) {
+    const bytes = await readFile(path.join(dir, productEvidenceName(receipt.product.kind)))
+    if (canonical(checkpoint.product) !== canonical(receipt.product) || bytes.length !== receipt.product.length ||
+        createHash("sha256").update(bytes).digest("hex") !== receipt.product.sha256) throw new Error("Historical rejected product drift")
+  }
+  return result
 }
