@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { ensureDirectory, pathExists, readJsonFile, writeJsonFile, writeTextFile } from "../fs"
 import type { LoadedMergeAsLiteConfig } from "../schema"
+import { runBridgeProcess } from "./bridge-process"
 import { decodeSkillPackage, encodeSkillDirectory, type SkillOptSourceSkill } from "./skillopt-merger"
 
 export interface LiteMergeRequest {
@@ -102,24 +103,10 @@ async function defaultBridgeRunner(input: {
   bridgeScript: string
   timeoutMs: number
 }) {
-  const child = Bun.spawn(
-    [input.pythonCommand, input.bridgeScript, "--request", input.requestPath, "--result", input.resultPath],
-    {
-      cwd: input.runRoot,
-      env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  )
-  const stdoutPromise = new Response(child.stdout).text()
-  const stderrPromise = new Response(child.stderr).text()
-  let timedOut = false
-  const timer = setTimeout(() => {
-    timedOut = true
-    child.kill()
-  }, input.timeoutMs)
-  const exitCode = await child.exited.finally(() => clearTimeout(timer))
-  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise])
+  const { exitCode, timedOut, stdout, stderr } = await runBridgeProcess({
+    command: [input.pythonCommand, input.bridgeScript, "--request", input.requestPath, "--result", input.resultPath],
+    cwd: input.runRoot, timeoutMs: input.timeoutMs,
+  })
   await writeTextFile(path.join(input.runRoot, "stdout.log"), stdout)
   await writeTextFile(path.join(input.runRoot, "stderr.log"), stderr)
   if (timedOut) throw new Error(`merge-as-lite timed out after ${input.timeoutMs}ms`)

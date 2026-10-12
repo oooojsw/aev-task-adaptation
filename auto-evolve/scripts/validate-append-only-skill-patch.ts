@@ -6,7 +6,7 @@ type Policy = "append_only" | "rewrite_allowed" | "immutable"
 
 async function walk(root: string, rel = ""): Promise<string[]> {
   const dir = path.join(root, rel)
-  const rows = await readdir(dir, { withFileTypes: true }).catch(() => [])
+  const rows = await readdir(dir, { withFileTypes: true })
   const out: string[] = []
   for (const row of rows) {
     const child = rel ? path.join(rel, row.name) : row.name
@@ -42,8 +42,9 @@ function policyFor(rel: string): Policy {
 }
 
 async function sameOrPrefix(base: string, draft: string, rel: string) {
-  const a = await readFile(path.join(base, rel), "utf8").catch(() => "")
-  const b = await readFile(path.join(draft, rel), "utf8").catch(() => "")
+  // 仅统一换行；不得掩盖文字删改或读取故障。
+  const a = (await readFile(path.join(base, rel), "utf8")).replace(/\r\n/g, "\n")
+  const b = (await readFile(path.join(draft, rel), "utf8")).replace(/\r\n/g, "\n")
   if (b === a) return true
   return b.startsWith(a)
 }
@@ -69,8 +70,8 @@ async function main() {
     const next = rel.replace(/\\/g, "/")
     const policy = policyFor(next)
     if (policy === "immutable") {
-      const a = await readFile(path.join(base, rel)).catch(() => Buffer.alloc(0))
-      const b = await readFile(path.join(draft, rel)).catch(() => Buffer.alloc(0))
+      const a = await readFile(path.join(base, rel))
+      const b = await readFile(path.join(draft, rel))
       if (!a.equals(b)) hits.push({ file: rel, reason: "non-mutable file changed" })
       continue
     }
