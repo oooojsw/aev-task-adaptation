@@ -3774,6 +3774,22 @@ async function seedRoundExplorationTreeFromCurrent(input: {
   await writeJsonFile(input.roundPaths.explorationTreeDraftPath, currentTree)
 }
 
+export async function synchronizeProtocolLeadCandidate(input: {
+  enabled: boolean
+  currentRoot: string
+  draftRoot: string
+  skill?: SkillBinding
+}) {
+  if (!input.enabled) return
+  if (!input.skill) throw new Error("Protocol Lead requires declared Skill binding")
+  // 只同步Skill，保留本轮新收获的探索树和路由。
+  if (await hasCandidate(input.currentRoot, input.skill)) {
+    await copyCandidate(input.currentRoot, input.draftRoot, input.skill)
+  } else if (await hasCandidate(input.draftRoot, input.skill)) {
+    throw new Error("Current candidate missing; stale Lead draft reuse blocked")
+  }
+}
+
 async function seedRoundRoutingControlFromCurrent(input: {
   campaignPaths: ReturnType<typeof longTaskCampaignPaths>
   roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>
@@ -5572,6 +5588,12 @@ export async function runLongTaskCampaign(input: {
             }
           }
 
+          await synchronizeProtocolLeadCandidate({
+            enabled: Boolean(baseSpec.protocolPlugins),
+            currentRoot: campaignPaths.pendingCurrentRoot,
+            draftRoot: roundPaths.pendingPackageSnapshotRoot,
+            skill: baseSpec.protocolAuthorContext?.skill,
+          })
           const leadResult = await runCampaignLead({
             cwd: input.cwd,
             campaignSpec,
@@ -6561,6 +6583,12 @@ export async function resumeLongTaskCampaign(input: {
             }
           }
 
+          await synchronizeProtocolLeadCandidate({
+            enabled: Boolean(baseSpec.protocolPlugins),
+            currentRoot: campaignPaths.pendingCurrentRoot,
+            draftRoot: roundPaths.pendingPackageSnapshotRoot,
+            skill: baseSpec.protocolAuthorContext?.skill,
+          })
           await runCampaignLead({
             cwd: input.cwd,
             campaignSpec,

@@ -188,9 +188,12 @@ for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLe
   { rejectedLeads: 0, execution: true }, { rejectedLeads: 1, execution: true },
   { rejectedLeads: 2, execution: true },
   { rejectedLeads: 0, execution: true, seeded: true },
+  { rejectedLeads: 0, execution: true, seeded: true, executorPatch: true },
+  { rejectedLeads: 0, execution: true, seeded: true, executorPatch: true, recoverBeforeLead: true },
+  { rejectedLeads: 1, execution: true, seeded: true, executorPatch: true, partialLead: true },
   { rejectedLeads: 0, execution: true, fault: "execution_error" }])
-test(`actual Campaign learner ${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
-  const { rejectedLeads, fault, execution, seeded } = scenario
+test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
+  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead } = scenario
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   await mkdir(root, { recursive: true })
   const key = `__campaignOffline_${randomUUID().replaceAll("-", "")}`
@@ -202,18 +205,47 @@ test(`actual Campaign learner ${scenario.seeded ? "seeded " : ""}${scenario.exec
   const calls: string[] = []
   const roleRequests: Array<{ title: string; prompt: string; reads: string[]; edits: string[] }> = []
   let leads = 0
+  let recoveryTriggered = false
   holder[key] = { async loadConfig() { return config }, async runOpencodeTask(input: any) {
     calls.push(input.title)
     roleRequests.push({ title: input.title, prompt: input.prompt,
       reads: [...(input.referencePaths ?? []), ...(input.permissionReadPaths ?? [])],
       edits: [...(input.permissionEditPaths ?? [])] })
     await input.onSpawn?.()
+    if (recoverBeforeLead && !recoveryTriggered && input.title.startsWith("Campaign Lead")) {
+      recoveryTriggered = true
+      throw new Error("Fixture interruption before Lead")
+    }
+    if (executorPatch && input.title.startsWith("Long Task Execute")) {
+      const directory = path.join(root, "auto-evolve/runtime-state/long-task-campaigns")
+      const names = await readdir(directory)
+      expect(names).toHaveLength(1)
+      const current = path.join(directory, names[0], "pending-expert-package/current")
+      await writeFile(path.join(current, "rules.txt"), rejectedLeads ? "Incomplete rule" : "Reusable rule")
+      if (partialLead) await writeFile(path.join(current, "notes.txt"), "Executor note")
+    }
     if (input.title.startsWith("Campaign Lead")) leads++
     if (input.title.startsWith("Campaign Lead")) {
       if (seeded && leads === 1) {
         const current = input.permissionReadPaths.find((file: string) => file.replaceAll("\\", "/").endsWith("/pending-expert-package/current"))
         expect(current).toBeDefined()
-        expect(await readFile(path.join(current, "rules.txt"), "utf8")).toBe("Seeded reusable rule")
+        expect(await readFile(path.join(current, "rules.txt"), "utf8")).toBe(executorPatch ?
+          rejectedLeads ? "Incomplete rule" : "Reusable rule" : "Seeded reusable rule")
+      }
+      if (executorPatch) {
+        const draft = input.permissionEditPaths.find((file: string) => file.replaceAll("\\", "/").endsWith("/pending-package"))
+        expect(draft).toBeDefined()
+        expect(await readFile(path.join(draft, "rules.txt"), "utf8")).toBe(leads === 1 && !rejectedLeads ? "Reusable rule" : "Incomplete rule")
+        if (partialLead) {
+          expect(await readFile(path.join(draft, "notes.txt"), "utf8")).toBe(leads === 1 ? "Executor note" : "Executor note + Lead pass1")
+          await writeFile(path.join(draft, leads === 1 ? "notes.txt" : "rules.txt"),
+            leads === 1 ? "Executor note + Lead pass1" : "Reusable rule")
+        }
+        const roundRoot = path.dirname(draft)
+        const tree = JSON.parse(await readFile(path.join(roundRoot, "exploration-tree.json"), "utf8"))
+        const routing = JSON.parse(await readFile(path.join(roundRoot, "routing-control.json"), "utf8"))
+        expect(tree.updatedThroughRound).toBe(1)
+        expect(routing.updatedThroughRound).toBe(1)
       }
       for (const edit of input.permissionEditPaths ?? []) expect(input.permissionReadPaths).toContain(edit)
       if (execution && leads > 1) {
@@ -225,6 +257,7 @@ test(`actual Campaign learner ${scenario.seeded ? "seeded " : ""}${scenario.exec
       }
     }
     for (const edit of input.permissionEditPaths ?? []) {
+      if (executorPatch) continue
       if (edit.endsWith("rules.txt")) { await mkdir(path.dirname(edit), { recursive: true }); await writeFile(edit, "Reusable rule") }
       if (input.title.startsWith("Campaign Lead") && !edit.endsWith(".json")) {
         await mkdir(edit, { recursive: true }); await writeFile(path.join(edit, "rules.txt"), leads <= rejectedLeads ? "Incomplete rule" : "Reusable rule")
@@ -277,7 +310,8 @@ test(`actual Campaign learner ${scenario.seeded ? "seeded " : ""}${scenario.exec
         target: execution ? "product" : "skill", stage: execution ? "after_execution" : "before_execution", required: true, mechanism: "script", privateInputs: ["gold"], settings: {
           command: python, commandSHA256: await hash(python), script, scriptSHA256: await hash(script), timeoutMs: 10000, maxOutputBytes: 4096 } }] } } } }))
   await writeFile(path.join(root, "manifest.json"), JSON.stringify({ schema: "aev.project-pack.v1", project,
-    skill: { format: "text", entries: [{ id: "rules", kind: "text", path: "rules.txt" }] },
+    skill: { format: "text", entries: [{ id: "rules", kind: "text", path: "rules.txt" },
+      ...(partialLead ? [{ id: "notes", kind: "text", path: "notes.txt" }] : [])] },
     tasks: [{ id: "source", split: "train", materials: [{ id: "public", kind: "text", path: "public.txt" },
       { id: "system", kind: "text", path: "system.txt" }], privateInputs: [{ id: "gold", kind: "json", path: "private/gold.json" }] }] }))
   const specPath = path.join(root, "spec.json")
@@ -292,20 +326,38 @@ test(`actual Campaign learner ${scenario.seeded ? "seeded " : ""}${scenario.exec
   if (seeded) {
     await mkdir(seedRoot)
     await writeFile(path.join(seedRoot, "rules.txt"), "Seeded reusable rule")
+    if (partialLead) await writeFile(path.join(seedRoot, "notes.txt"), "Seeded note")
   }
   await writeFile(campaign, JSON.stringify({ title: "Offline Campaign", baseSpecPath: specPath, mode: "graph_iterative", maxRounds: rejectedLeads === 2 ? 2 : 1,
     seedTargets: seeded ? [{ seedPath: seedRoot, targetPath: path.join(root, "author-workspace"), kind: "experience_workspace", resetOnStart: true }] : [] }))
   const previous = process.env.AUTO_EVOLVE_SKIP_STALE_HEAL
   process.env.AUTO_EVOLVE_SKIP_STALE_HEAL = "1"
   try {
-    const result = await actual.runLongTaskCampaign({ cwd: root, specPath: campaign, forceNew: true })
+    let result = await actual.runLongTaskCampaign({ cwd: root, specPath: campaign, forceNew: true })
+    if (recoverBeforeLead) {
+      expect(result.status).toBe("failed")
+      await writeFile(path.join(root, "interrupted-result.json"), JSON.stringify(result))
+      const statePath = path.join(result.campaignDir, "campaign.json")
+      const state = JSON.parse(await readFile(statePath, "utf8"))
+      // 仅离线夹具模拟已审计接管，复用完成的轮内工作。
+      await writeFile(statePath, JSON.stringify({ ...state, status: "recovery_pending", ownerPID: undefined,
+        ownerCommandHint: undefined, ownerCreationTick: undefined, heartbeatAt: undefined,
+        recovery: { action: "harvest_round_run", roundNumber: 1, runID: state.lastRunID,
+          reason: "Offline audited interruption", detectedAt: new Date().toISOString() } }))
+      result = await actual.resumeLongTaskCampaign({ cwd: root, campaignID: result.campaignID, specPath: campaign })
+      expect(calls.filter(title => title.startsWith("Long Task Execute"))).toHaveLength(1)
+    }
     await writeFile(path.join(root, "observed-result.json"), JSON.stringify({ result, calls }, null, 2))
     expect(result.status).toBe(fault ? "failed" : "verified_success")
+    if (partialLead) expect(await readFile(path.join(result.campaignDir, "pending-expert-package/current/notes.txt"), "utf8"))
+      .toBe("Executor note + Lead pass1")
     const accountingFiles = (await readdir(root, { recursive: true })).filter((file) =>
       /\/protocol-invocations\/[^/]+\/accounting\.json$/.test(file.replaceAll("\\", "/")))
     const accounting = await Promise.all(accountingFiles.map(async (file) => JSON.parse(await readFile(path.join(root, file), "utf8"))))
     expect(accounting).toHaveLength(calls.length)
-    expect(accounting.every((item) => item.status === "completed" && item.inputTokens === null && item.outputTokens === null)).toBe(true)
+    expect(accounting.every((item) => ["completed", ...(recoverBeforeLead ? ["infrastructure_error"] : [])].includes(item.status) &&
+      item.inputTokens === null && item.outputTokens === null)).toBe(true)
+    if (recoverBeforeLead) expect(accounting.filter(item => item.status === "infrastructure_error")).toHaveLength(1)
     expect(accounting.some((item) => item.role === "executor")).toBe(true)
     expect(accounting.some((item) => item.role === "lead")).toBe(true)
     if (rejectedLeads === 2) expect(accounting.some((item) => item.role === "planner")).toBe(true)
@@ -402,7 +454,10 @@ test(`actual Campaign learner ${scenario.seeded ? "seeded " : ""}${scenario.exec
         expect(httpCalls).toBe(requests)
       } finally { await rename(`${receiptFile}.fixture-saved`, receiptFile) }
     }
-    if (rejectedLeads) expect(values[0].evidence.skill[0].sha256).not.toBe(values.at(-1).evidence.skill[0].sha256)
+    if (rejectedLeads) expect(values[0].evidence.skill.find((file: any) => file.id === "rules").sha256)
+      .not.toBe(values.at(-1).evidence.skill.find((file: any) => file.id === "rules").sha256)
+    if (partialLead) expect(values[0].evidence.skill.find((file: any) => file.id === "notes").sha256)
+      .toBe(values.at(-1).evidence.skill.find((file: any) => file.id === "notes").sha256)
     if (fault) {
       const state = JSON.parse(await readFile(path.join(result.campaignDir, "campaign.json"), "utf8"))
       expect(state.lastGateFailureKind).toBe(fault === "data_error" ? "dataset_failure" : "infrastructure_failure")
