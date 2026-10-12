@@ -74,6 +74,7 @@ import {
   selectNextLongTaskUnit,
 } from "./work-graph"
 import { loadLongTaskSpec } from "./spec"
+import { permitsAuthorOperation } from "../protocol-plugins/author-operation"
 import { buildLongTaskExecutionPrompt, buildLongTaskPlanningPrompt, buildLongTaskReplanPrompt } from "./prompts"
 import { runLongTaskValidator } from "./validators"
 import { loadConfig } from "../schema"
@@ -391,7 +392,7 @@ function sanitizeGraphPathRefs(values: string[], roots: string[]) {
   return values.filter((value) => !looksLikePathRef(value) || isWithinAllowedGraphRoots(value, roots))
 }
 
-function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
+function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec, trustedProvided = false) {
   if (!Array.isArray(raw)) return []
   const maxUnits = spec.budgets?.maxUnitsPerGraph ?? DEFAULT_LONG_TASK_BUDGETS.maxUnitsPerGraph
   const usedIDs = new Set<string>()
@@ -421,7 +422,8 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
       retryBudgetRaw,
       spec.budgets?.maxAttemptsPerUnit ?? DEFAULT_LONG_TASK_BUDGETS.maxAttemptsPerUnit,
     )
-    if (isPlatformValidationUnit(item as Record<string, unknown>)) continue
+    if (spec.protocolPlugins ? !permitsAuthorOperation(item as Record<string, unknown>, trustedProvided)
+      : isPlatformValidationUnit(item as Record<string, unknown>)) continue
     const sanitizedInputs = sanitizeGraphPathRefs(normalizeStringArray(item.inputs), allowedRoots)
     const sanitizedExpectedArtifacts = sanitizeGraphPathRefs(
       normalizeStringArray(item.expected_artifacts),
@@ -441,7 +443,9 @@ function normalizeGraphUnits(raw: unknown, spec: LongTaskSpec) {
         expectedArtifacts:
           sanitizedExpectedArtifacts.length > 0 ? sanitizedExpectedArtifacts : fallbackExpectedArtifacts,
         claim: typeof item.claim === "string" && item.claim.trim() ? item.claim.trim() : `Unit ${id} is complete.`,
-        checkPlan: scrubCheckPlan(typeof item.check_plan === "string" ? item.check_plan : undefined),
+        checkPlan: spec.protocolPlugins
+          ? `${typeof item.check_plan === "string" ? item.check_plan : "Inspect declared author artifacts."} Author work only: return after artifacts are prepared; host checks happen later, never wait for the parent.`
+          : scrubCheckPlan(typeof item.check_plan === "string" ? item.check_plan : undefined),
         validatorIDs:
           proposedValidatorIDs.length > 0
             ? proposedValidatorIDs
@@ -481,12 +485,14 @@ function fallbackLongTaskGraph(spec: LongTaskSpec, reason: string) {
       buildLongTaskWorkUnit({
         id: "complete-task",
         title: "Complete Task",
-        goal: spec.goal,
+        goal: spec.protocolPlugins
+          ? `Prepare or revise declared candidate Skill and author artifacts using public materials and feedback. Return once the draft is ready; host-owned checks and execution happen later. Task context: ${spec.goal}`
+          : spec.goal,
         inputs: spec.materials.map((item) => item.path),
         dependsOn: [],
         expectedArtifacts: (spec.targetPaths ?? []).map((item) => item.path),
-        claim: "The main long-task goal is completed and validator-ready.",
-        checkPlan: "Run all required work-unit validators against the current task outputs.",
+        claim: spec.protocolPlugins ? "The author candidate artifacts are prepared for later host checks." : "The main long-task goal is completed and validator-ready.",
+        checkPlan: spec.protocolPlugins ? "Inspect candidate artifacts and return. Do not execute or await host acceptance." : "Run all required work-unit validators against the current task outputs.",
         validatorIDs: unitValidatorIDs,
         retryBudget: spec.budgets?.maxAttemptsPerUnit ?? DEFAULT_LONG_TASK_BUDGETS.maxAttemptsPerUnit,
       }),
@@ -494,11 +500,15 @@ function fallbackLongTaskGraph(spec: LongTaskSpec, reason: string) {
   })
 }
 
-function normalizePlanningGraph(raw: Record<string, unknown> | undefined, spec: LongTaskSpec, fallbackReason: string) {
+export function normalizePlanningGraph(raw: Record<string, unknown> | undefined, spec: LongTaskSpec, fallbackReason: string, trustedProvided = false) {
+  if (spec.protocolPlugins?.phase === "test") throw new Error("Held-out test cannot enter author graph normalization")
   if (!raw) return fallbackLongTaskGraph(spec, fallbackReason)
   const hasExplicitCompletionValidatorIDs = Object.prototype.hasOwnProperty.call(raw, "completion_validator_ids")
   const completionValidatorIDs = normalizeStringArray(raw.completion_validator_ids)
-  const units = normalizeGraphUnits(raw.units, spec)
+  const units = normalizeGraphUnits(raw.units, spec, trustedProvided)
+  if (spec.protocolPlugins && units.some(unit => unit.dependsOn.some(id => !units.some(other => other.id === id)))) {
+    return fallbackLongTaskGraph(spec, "Author graph depends on removed or unknown host work")
+  }
   if (!units.length) return fallbackLongTaskGraph(spec, fallbackReason)
   return createLongTaskWorkGraph({
     plannerSummary:
@@ -1087,7 +1097,7 @@ function unitCoversRequiredRegion(unit: LongTaskWorkUnit, region: string) {
   return haystack.includes(normalized)
 }
 
-async function enforceRequiredRoutingCoverage(input: { spec: LongTaskSpec; graph: LongTaskWorkGraph }) {
+export async function enforceRequiredRoutingCoverage(input: { spec: LongTaskSpec; graph: LongTaskWorkGraph }) {
   const requiredRegions = await readRequiredRoutingRegions(input.spec)
   if (!requiredRegions.length) return input.graph
 
@@ -1123,12 +1133,16 @@ async function enforceRequiredRoutingCoverage(input: { spec: LongTaskSpec; graph
       buildLongTaskWorkUnit({
         id,
         title: `Repair Required Region: ${short(region, 80)}`,
-        goal: `Address required routing region and produce concrete repair evidence: ${region}`,
+        goal: input.spec.protocolPlugins
+          ? `Prepare author analysis or candidate Skill corrections for feedback region '${region}'. Host-owned steps are not executed or awaited here; prepare their inputs and return.`
+          : `Address required routing region and produce concrete repair evidence: ${region}`,
         inputs: fallbackInputs,
         dependsOn: [],
         expectedArtifacts: fallbackArtifacts.length > 0 ? fallbackArtifacts : [region],
         claim: `Required routing region '${region}' has explicit repair execution evidence.`,
-        checkPlan: `Execute concrete repair steps for '${region}' and verify with local checks before returning the claim.`,
+        checkPlan: input.spec.protocolPlugins
+          ? "Inspect declared author artifacts and return. Formal protocol execution and scoring remain host-owned after return."
+          : `Execute concrete repair steps for '${region}' and verify with local checks before returning the claim.`,
         validatorIDs: [],
         retryBudget: Math.min(input.spec.budgets?.maxAttemptsPerUnit ?? DEFAULT_LONG_TASK_BUDGETS.maxAttemptsPerUnit, 3),
       }),
@@ -2371,6 +2385,7 @@ export async function runLongTask(input: {
           runtimeSpec.initialGraph as unknown as Record<string, unknown>,
           runtimeSpec,
           "spec.initialGraph was invalid",
+          true,
         )
       : await runPlanningSession({
           cwd: input.cwd,

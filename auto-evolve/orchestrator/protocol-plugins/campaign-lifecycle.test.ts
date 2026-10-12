@@ -86,7 +86,7 @@ test("NBA actual Campaign batch learns merges replays and tests without repeated
       if (!dir.endsWith(".json")) { await mkdir(dir, { recursive: true }); await writeFile(path.join(dir, "skill.txt"), "Reusable legality procedure") }
     }
     const responseText = JSON.stringify(input.title.startsWith("Long Task Graph") ? { completion_validator_ids: [],
-      units: [{ id: "explore", title: "Explore rules", goal: "Explore", inputs: [], depends_on: [], expected_artifacts: [],
+      units: [{ id: "explore", operation: "author_work", title: "Explore rules", goal: "Explore", inputs: [], depends_on: [], expected_artifacts: [],
         claim: "Explored", check_plan: "Host acceptance follows", validator_ids: [], retry_budget: 1 }] }
       : { claimed_success: true, claim_statement: "Fixture exploration", summary: "Reusable procedure", blockers: [] })
     return { title: input.title, prompt: input.prompt, selectedModel: input.model, referencedPaths: input.referencePaths ?? [],
@@ -231,7 +231,7 @@ test(`actual Campaign learner ${scenario.seeded ? "seeded " : ""}${scenario.exec
       }
     }
     const responseText = JSON.stringify(input.title.startsWith("Long Task Graph") ? {
-      planner_summary: "Fixture replanning", completion_validator_ids: [], units: [{ id: "reexplore", title: "Reexplore",
+      planner_summary: "Fixture replanning", completion_validator_ids: [], units: [{ id: "reexplore", operation: "author_work", title: "Reexplore",
         goal: "Revise reusable rules", inputs: [], depends_on: [], expected_artifacts: [], claim: "Explored",
         check_plan: "Formal protocol follows", validator_ids: [], retry_budget: 1 }] } : {
       claimed_success: true, claim_statement: "Fixture exploration complete",

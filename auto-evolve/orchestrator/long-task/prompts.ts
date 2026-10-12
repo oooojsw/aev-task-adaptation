@@ -24,6 +24,7 @@ function protocolTrainingScopeLines(spec: LongTaskSpec) {
     "Selected-protocol training-side work boundary:",
     `This graph belongs to author work for phase ${spec.protocolPlugins.phase}, task ${spec.protocolPlugins.taskID}.`,
     "The graph produces candidate Skill, reusable analysis and declared author artifacts only.",
+    "Every proposed unit must declare operation: author_work. Other operations (protocol_check, independent_execution, host_acceptance, wait_host) are host-only and will not be dispatched to author execution.",
     "Formal protocol checks and any configured independent execution/scoring belong to the host AFTER these work units return.",
     "Do not create units whose goal is to run a blank agent, launch formal acceptance, repair the scorer, or wait for host acceptance.",
     "If a current unit asks for a host-owned step, prepare its candidate/input artifacts and return; do not execute or await that step.",
@@ -198,6 +199,7 @@ export function buildLongTaskPlanningPrompt(input: {
       units: [
         {
           id: "short-kebab-id",
+          ...(input.spec.protocolPlugins ? { operation: "author_work" } : {}),
           title: "short human title",
           goal: "what this unit must achieve",
           inputs: ["absolute/or/spec-relative-paths or symbolic inputs"],
@@ -488,6 +490,7 @@ export function buildLongTaskReplanPrompt(input: {
       units: [
         {
           id: "replanned-unit-id",
+          ...(input.spec.protocolPlugins ? { operation: "author_work" } : {}),
           title: "short title",
           goal: "what remains to do",
           inputs: ["path or logical dependency"],
