@@ -3477,7 +3477,7 @@ export function buildGeneratedRoundSpec(input: {
     ...input.baseSpec,
     // 内层也必须知道验收执行模式，避免修复不存在的工具故障。
     goal: input.baseSpec.protocolAuthorContext
-      ? [input.baseSpec.goal, ...protocolAuthorLines(input.baseSpec.protocolAuthorContext)].join("\n")
+      ? [input.baseSpec.goal, ...protocolAuthorLines(input.baseSpec.protocolAuthorContext, false)].join("\n")
       : input.baseSpec.blankEvalExecutor?.kind === "single_turn_http"
       ? [input.baseSpec.goal, ...blankExecutorProtocolLines("single_turn_http"),
           "Author/planner/executor may use their original tools to derive a solution and revise Skill; the no-tool restriction applies ONLY to blank acceptance.",
@@ -3895,6 +3895,8 @@ async function runCampaignWorkers(input: {
       const access = profileAccess ?? await buildCampaignRoleAccessView({
         role: `worker:${role}`,
         basePaths: [
+          // 修订角色需读公开原题；不授予私有标签或整个材料父目录。
+          ...(input.baseSpec.protocolPlugins ? (input.baseSpec.protocolAuthorContext?.publicMaterials ?? []).map(file => file.path) : []),
           input.runTracePath,
           input.runTraceDigestPath,
           input.pendingPackageRoot,
@@ -4026,6 +4028,7 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
   const access = await buildCampaignRoleAccessView({
     role,
     basePaths: [
+      ...(input.baseSpec.protocolPlugins ? (input.baseSpec.protocolAuthorContext?.publicMaterials ?? []).map(file => file.path) : []),
       input.runTracePath,
       input.runTraceDigestPath,
       ...protocolFeedbackPaths,
@@ -4268,6 +4271,7 @@ async function runCampaignLead(input: {
       ? [input.nextPendingPackageRoot, input.nextExplorationTreePath, input.nextRoutingControlPath]
       : undefined,
     basePaths: [
+      ...(input.baseSpec.protocolPlugins ? (input.baseSpec.protocolAuthorContext?.publicMaterials ?? []).map(file => file.path) : []),
       input.runTraceDigestPath,
       ...protocolFeedbackPaths,
       // 新候选必须可回读核验，写权限不隐式代表读权限。
@@ -4388,6 +4392,7 @@ async function runCampaignReviewer(input: {
   const access = profileAccess ?? await buildCampaignRoleAccessView({
     role: "reviewer",
     basePaths: [
+      ...(input.baseSpec.protocolPlugins ? (input.baseSpec.protocolAuthorContext?.publicMaterials ?? []).map(file => file.path) : []),
       input.pendingPackageRoot,
       input.runTracePath,
       input.explorationTreePath,

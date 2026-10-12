@@ -2,6 +2,7 @@ import type { Snapshot } from "./contract"
 import type { PackSnapshot } from "./project-pack"
 import { immutable } from "./identity"
 import type { Entry } from "./entry"
+import path from "node:path"
 
 export interface AuthorContext {
   fingerprint: string
@@ -11,6 +12,7 @@ export interface AuthorContext {
   claim: string
   executor?: { id: string; version: string; settings: Record<string, unknown> }
   skill: PackSnapshot["pack"]["skill"]
+  publicMaterials?: Array<{ id: string; path: string }>
   checks: Array<{ name: string; target: string; stage: string; mechanism: string; required: boolean }>
 }
 
@@ -20,6 +22,8 @@ export function authorContext(entry: Entry, protocol: Snapshot, project: PackSna
   // 作者只收到协议职责摘要，不把私有评分路径和凭证配置塞进提示。
   return immutable({ fingerprint: protocol.fingerprint, projectFingerprint: project.fingerprint,
     task: entry.taskID, phase: entry.phase, claim: plan.claim,
+    publicMaterials: (project.pack.tasks.find(task => task.id === entry.taskID)?.materials ?? [])
+      .map(file => ({ id: file.id, path: path.join(project.root, file.path).replaceAll("\\", "/") })),
     ...(plan.executor ? { executor: { id: plan.executor.id, version: plan.executor.version,
       settings: Object.fromEntries(["model", "maxTokens", "temperature", "skillPlacement", "maxInputBytes"]
         .filter((key) => plan.executor!.settings[key] !== undefined).map((key) => [key, plan.executor!.settings[key]])) } } : {}),
@@ -27,13 +31,17 @@ export function authorContext(entry: Entry, protocol: Snapshot, project: PackSna
       ({ name, target, stage, mechanism, required })) })
 }
 
-export function protocolAuthorLines(context: AuthorContext) {
-  return ["Frozen acceptance contract (author-facing view):", JSON.stringify(context, null, 2),
+export function protocolAuthorLines(context: AuthorContext, includeMaterialPaths = true) {
+  // 生成goal保留材料ID；绝对路径放结构字段，避免路径校验误判正文换行。
+  const view = includeMaterialPaths ? context : { ...context, publicMaterials: context.publicMaterials?.map(({ id }) => ({ id })) }
+  return ["Frozen acceptance contract (author-facing view):", JSON.stringify(view, null, 2),
     "The host controller owns formal acceptance; do not launch another acceptance or claim a pass from self-review.",
     "Author exploration may retain its existing tools and multiple steps. Acceptance execution is a separate configured backend.",
     "Use the declared Skill entry files. Do not invent README, INDEX, CORE, answer.txt or surface_contract.json requirements.",
     "Only explicit checks define required constraints. Skill checks do not prove task execution or held-out transfer.",
     "On ordinary rejection, use the actual candidate, product and check evidence to revise reusable guidance.",
+    "Read the declared publicMaterials when checking task rules and output conventions; public task instructions override contradictory existing Skill text.",
+    "With this selected protocol, zero legacy completion validators is expected when local completion checks are deferred; it does not invalidate a host product rejection.",
     "Execution/scoring/data faults require infrastructure or dataset handling, not invented Skill repairs.",
     "Absent tool traces do not imply failure. Do not change evaluator, private labels, protocol or execution mode.",
     "Private scoring inputs and task-specific answers must not be copied into deployable Skill."]

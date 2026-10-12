@@ -24,8 +24,11 @@ test("author-facing view includes inference budget but excludes credential and p
         id: "check", version: "1", name: "score", target: "product", stage: "after_execution", mechanism: "script",
         required: true, privateInputs: ["private-gold"], settings: { script: "E:/private-script.py" } }] } } } } },
     { schema: "aev.project-pack-snapshot.v1", root: "E:/pack", fingerprint: "b".repeat(64), artifacts: [],
-      pack: { schema: "aev.project-pack.v1", project, skill: context.skill, tasks: [] } })
+      pack: { schema: "aev.project-pack.v1", project, skill: context.skill, tasks: [{ id: "task", split: "train",
+        materials: [{ id: "public", kind: "text", path: "public.txt" }],
+        privateInputs: [{ id: "private-gold", kind: "text", path: "private-gold.json" }] }] } })
   expect(view.executor?.settings.maxTokens).toBe(123)
+  expect(view.publicMaterials).toEqual([{ id: "public", path: "E:/pack/public.txt" }])
   expect(JSON.stringify(view)).not.toContain("PRIVATE_CREDENTIAL_REFERENCE")
   expect(JSON.stringify(view)).not.toContain("private-gold")
   expect(JSON.stringify(view)).not.toContain("private-script")
@@ -38,6 +41,8 @@ test("plugin role prompts use declared entry and do not demand tool evidence or 
     expect(prompt).toContain("rules.txt")
     expect(prompt).toContain("skill_check")
     expect(prompt).toContain("Absent tool traces do not imply failure")
+    expect(prompt).toContain("public task instructions override contradictory existing Skill text")
+    expect(prompt).toContain("zero legacy completion validators is expected")
     expect(prompt).not.toContain("tool-calls.compact.json")
     expect(prompt).not.toContain("surface_contract.json is a machine-only control file")
     expect(prompt).not.toContain("Each repair item requires at least one file change")

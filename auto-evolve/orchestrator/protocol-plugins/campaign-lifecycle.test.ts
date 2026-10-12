@@ -387,6 +387,11 @@ test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""
     }
     await writeFile(path.join(root, "role-permission-audit.json"), JSON.stringify({ privateFile, roleRequests }, null, 2))
     for (const request of roleRequests.filter((item) => item.title.startsWith("Campaign"))) {
+      for (const file of ["public.txt", "system.txt"]) {
+        const material = path.join(root, file).replaceAll("\\", "/")
+        expect(request.reads.map(file => file.replaceAll("\\", "/"))).toContain(material)
+        expect(request.prompt).toContain(material)
+      }
       expect(request.reads.some((file) => file.endsWith("protocol.receipt.json"))).toBe(false)
       expect(request.prompt).not.toContain("protocol.receipt.json")
       expect(request.reads.some((file) => file.endsWith("expert-oracle-bundle.json"))).toBe(false)
