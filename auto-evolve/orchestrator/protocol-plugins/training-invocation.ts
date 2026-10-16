@@ -30,6 +30,7 @@ export async function runProtocolTrainingTask(options: { enabled: boolean; stage
   request = { ...request, sourceHost: true, permissionExternalPaths: [...external] }
   const dir = path.join(options.stageDir, "protocol-invocations", randomUUID())
   await mkdir(dir, { recursive: true })
+  if (request.localSearch) request = { ...request, localSearchEvidenceRoot: path.join(dir, "local-search") }
   // 同阶段可有多次正常修订，每次留独立账，恢复仍由控制器决定。
   const claim = await open(path.join(dir, "started.claim"), "wx")
   await claim.close()
@@ -38,6 +39,7 @@ export async function runProtocolTrainingTask(options: { enabled: boolean; stage
   const requestFingerprint = fingerprint({ role: options.role, title: request.title, prompt: request.prompt,
     model: request.model ?? null, variant: request.variant ?? null, runtimeBudget: request.runtimeBudget ?? null, sourceHost: true,
     ...(request.requestBudget ? { requestBudget: request.requestBudget } : {}),
+    ...(request.localSearch ? { localSearch: request.localSearch } : {}),
     references: request.referencePaths ?? [], reads: request.permissionReadPaths ?? [], edits: request.permissionEditPaths ?? [],
     ...(adapted ? { taskWindow: adapted.scope, allowShell: request.allowShell, isolateHostRuntime: request.isolateHostRuntime,
       infrastructureAttempts: request.infrastructureAttempts, permissionMode: request.config.permissionConfig.mode } : {}) })

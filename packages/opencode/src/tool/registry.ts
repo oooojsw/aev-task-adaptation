@@ -27,6 +27,7 @@ import { Log } from "@/util/log"
 import { LspTool } from "./lsp"
 import { Truncate } from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
+import { AevLocalSearchTool } from "./aev-local-search"
 import { Glob } from "../util/glob"
 import { pathToFileURL } from "url"
 import { Effect, Layer, ServiceMap } from "effect"
@@ -131,6 +132,7 @@ export namespace ToolRegistry {
           CodeSearchTool,
           SkillTool,
           ApplyPatchTool,
+          ...(process.env.OPENCODE_AEV_LOCAL_SEARCH_FILE ? [AevLocalSearchTool] : []),
           ...(Flag.OPENCODE_EXPERIMENTAL_LSP_TOOL ? [LspTool] : []),
           ...(cfg.experimental?.batch_tool === true ? [BatchTool] : []),
           ...(Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE && Flag.OPENCODE_CLIENT === "cli" ? [PlanExitTool] : []),

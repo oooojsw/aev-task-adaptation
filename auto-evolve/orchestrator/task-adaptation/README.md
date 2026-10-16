@@ -454,3 +454,41 @@ scenarios. Only the preparation fixture and model/configuration boundaries are
 substituted there; this is not yet an external-model end-to-end acceptance.
 Remaining full-objective work includes constrained research/recompute tools,
 pipeline inheritance, format adapters, criteria revisions and three real tasks.
+
+## Scoped local source search (2026-10-17)
+
+An explicitly authorized `search` action now enables `aev_local_search` in the
+source host. Its scope is **declared local UTF-8 resources**, not internet search,
+directory discovery or general shell execution. Models supply literal,
+case-sensitive keywords and optional resource IDs from their actual role window;
+they cannot supply arbitrary paths. Ordinary grep/glob/web/shell permissions
+remain denied. `execute` still requires a separate work-tool adapter.
+
+The invocation binding includes only currently authorized read resources,
+including relocated candidates and explicitly published feedback/advice.
+Immutable sources must retain their hashes; mutable candidates are read at their
+current bytes. Mutability does not grant write permission to read-only roles.
+The backend cross-checks search resources against its actual file grants and
+requires restricted source-host execution with shell disabled. Unselected
+requests clear inherited search environment bindings and do not register the tool.
+
+Limits are explicit: 8 MiB per file, 64 MiB total input, 1024 query bytes, 100
+returned matches and 32000 bytes of match objects; individual lines may be
+shortened with a flag. Results disclose truncation, inspected count and actual
+input bytes. No input is silently clipped; invalid UTF-8, binary, oversized,
+linked, drifting or cancelled reads cannot produce successful evidence. The line
+scanner avoids allocating a whole array for millions of short lines.
+
+Each search writes a separate receipt with actual file hashes and matches under
+the persistent training-invocation directory. Private configuration is passed
+by a hashed file binding, not by model prompts. Results are source evidence, not
+formal acceptance, and are not automatically promoted into the candidate.
+
+Tests cover the real local-search engine, actual role/training handoff and the
+actual source tool execute function with only its SDK registration wrapper
+substituted. The full source CLI preflight currently fails before startup because
+this independent worktree lacks `@opentui/solid/preload`; syntax builds and the
+offline tests do not prove complete host execution. Dependency/runtime bootstrap,
+external search adapters, controlled recomputation and real-task acceptance remain
+required. A local ignored junction reuses the existing pinned Zod 4.1.8 package
+for tests; no dependency contents or production configuration were changed.

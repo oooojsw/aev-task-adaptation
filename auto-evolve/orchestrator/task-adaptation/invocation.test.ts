@@ -7,6 +7,7 @@ import { authorizeInvocation, type Invocation } from "./invocation"
 import { runProtocolTrainingTask } from "../protocol-plugins/training-invocation"
 import type { Plan } from "./plan"
 import type { OpencodeTaskInput, OpencodeTaskRun } from "../opencode"
+import { searchLocalFiles } from "./local-search"
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "aev-task-invocation-"))
@@ -70,6 +71,31 @@ test("adapted role derives private request budget from its own frozen task polic
   f.input.requestBudget = undefined
   f.request.requestBudget = ready.request.requestBudget
   expect((await authorizeInvocation(f.input, f.request)).request.requestBudget).toBeUndefined()
+})
+
+test("search action binds only actual role resources and the training ledger supplies durable evidence", async () => {
+  const f = await fixture()
+  f.plan.windows[0].actions.push("search")
+  f.input.bound = await f.bind()
+  const prepared = await authorizeInvocation(f.input, f.request)
+  expect(prepared.request.localSearch?.resources.map(item => item.id)).toEqual(["candidate", "source"])
+  expect(prepared.request.prompt).toContain("not a web search")
+  const stageDir = path.join(f.root, "stage")
+  let invoked = false
+  await runProtocolTrainingTask({ enabled: true, stageDir, role: "lead", adaptation: f.input }, f.request, async request => {
+    invoked = true
+    expect(request.allowShell).toBe(false)
+    const result = await searchLocalFiles({ ...request.localSearch!, evidenceRoot: request.localSearchEvidenceRoot! }, { query: "VISIBLE_SOURCE" })
+    expect(result.matches[0].resource).toBe("source")
+    expect(JSON.stringify(result)).not.toContain("SECRET_LABEL")
+    return { result: { exitCode: 0, events: [] } } as unknown as OpencodeTaskRun
+  })
+  expect(invoked).toBe(true)
+  expect((await readdir(path.join(stageDir, "protocol-invocations")))).toHaveLength(1)
+  f.plan.windows[0].actions = ["read", "edit"]
+  f.input.bound = await f.bind()
+  f.request.localSearch = prepared.request.localSearch
+  expect((await authorizeInvocation(f.input, f.request)).request.localSearch).toBeUndefined()
 })
 
 test("review advice is opt-in, on-demand and never grants its embedded references", async () => {

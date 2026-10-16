@@ -148,6 +148,8 @@ export interface OpencodeModelResolution {
 }
 
 export interface OpencodeTaskInput {
+  localSearch?: import("./task-adaptation/local-search").LocalSearchScope
+  localSearchEvidenceRoot?: string
   requestBudget?: BudgetTransportConfig
   infrastructureAttempts?: number
   /** Repository root used to find dependencies, runtime config, and local OpenCode binary. */
@@ -361,7 +363,7 @@ export async function buildEditPermissionRules(cwd: string, paths: string[]) {
 
 async function makeOverridePermissions(
   cwd: string,
-  input: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[] },
+  input: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[]; localSearch?: boolean },
 ) {
   return {
     "*": "deny",
@@ -381,6 +383,7 @@ async function makeOverridePermissions(
     websearch: "deny",
     codesearch: "deny",
     skill: "deny",
+    ...(input.localSearch ? { aev_local_search: "allow" } : {}),
     lsp: "deny",
   } as const
 }
@@ -705,7 +708,7 @@ async function ensureOverrideConfig(
   cwd: string,
   model: string | undefined,
   permissionConfig: LoadedPermissionConfig,
-  permissions: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[] },
+  permissions: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[]; localSearch?: boolean },
   runLabel: string,
   injectPlatformSafetyRules = true,
   isolateHostRuntime = false,
@@ -789,6 +792,7 @@ async function ensureOverrideConfig(
             externalPaths: permissions.externalPaths,
             // Existing sessions allow shell with explicit read paths unless a caller opts out.
             allowShell: permissions.allowShell ?? (permissions.readPaths.length > 0 || isolateHostRuntime),
+            localSearch: permissions.localSearch,
           }),
   }
   await ensureDirectory(dir)
@@ -1096,6 +1100,12 @@ async function runOpencodeTaskOnce(
   attempt: number,
 ) {
   const runLabel = buildRunLabel(input.title, attempt)
+  if (input.localSearch && (!input.sourceHost || input.allowShell !== false || input.config.permissionConfig.mode !== "restricted" ||
+      !input.localSearchEvidenceRoot)) throw new Error("Scoped search requires restricted source host and durable evidence")
+  if (input.localSearch) {
+    const { validateLocalSearchAccess } = await import("./task-adaptation/local-search")
+    validateLocalSearchAccess(input.localSearch, permissionReadPaths, permissionEditPaths, input.localSearchEvidenceRoot!)
+  }
   const isolateHostRuntime = shouldIsolateHostRuntime(input)
   const overrideConfigDir = await ensureOverrideConfig(
     input.cwd,
@@ -1106,6 +1116,7 @@ async function runOpencodeTaskOnce(
       editPaths: permissionEditPaths,
       externalPaths: input.permissionExternalPaths,
       allowShell: input.allowShell,
+      localSearch: Boolean(input.localSearch),
     },
     runLabel,
     input.injectPlatformSafetyRules !== false,
@@ -1117,6 +1128,9 @@ async function runOpencodeTaskOnce(
     ...(isolatedRuntime?.env ?? {}),
   }
   const requestBudgetEnv = await budgetTransportEnvironment(input.requestBudget, overrideConfigDir)
+  const { localSearchEnvironment } = await import("./task-adaptation/local-search")
+  const localSearchEnv = await localSearchEnvironment(input.localSearch
+    ? { ...input.localSearch, evidenceRoot: input.localSearchEvidenceRoot! } : undefined, overrideConfigDir)
 
   const opencodeCmd = input.sourceHost ? process.execPath : await resolveOpencodeCommand(input.cwd)
   const sourceEntry = path.join(input.cwd, "packages", "opencode", "src", "index.ts")
@@ -1241,6 +1255,7 @@ async function runOpencodeTaskOnce(
       env: {
         ...runtimeEnv,
         ...requestBudgetEnv,
+        ...localSearchEnv,
         ...(input.sourceHost ? { OPENCODE_AEV_ABSOLUTE_PERMISSIONS: "1" } : {}),
         OPENCODE_CONFIG_DIR: overrideConfigDir,
         ...(typeof input.config.modelConfig.limits.requestsPerMinute === "number"
