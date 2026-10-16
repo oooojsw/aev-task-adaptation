@@ -26,6 +26,7 @@ test("actual Campaign request builder routes worker/lead/reviewer/diagnostician 
     const rewritten = `
       import { trainingExecution, trainingRuntimeBudget } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dir, "training.ts")).href)};
       import { runProtocolTrainingTask } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dir, "training-invocation.ts")).href)};
+      import { taskInvocation } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dir, "../task-adaptation/context.ts")).href)};
       import { resolveModelSelection } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dir, "../model-selection.ts")).href)};
       const runOpencodeTask = globalThis.__trainingRoleInvoke;
       const loadConfig = globalThis.__trainingRoleConfig;

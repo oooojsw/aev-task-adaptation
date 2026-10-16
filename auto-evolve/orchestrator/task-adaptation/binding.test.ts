@@ -51,6 +51,14 @@ test("binding rejects missing capabilities and a forged identity", async () => {
   await expect(verifyBinding({ ...bound, fingerprint: "forged" })).rejects.toThrow("fingerprint")
 })
 
+test("bound role view preserves only explicitly declared runtime feedback", async () => {
+  const { root, plan } = await fixture()
+  plan.windows[0].runtime = ["feedback"]
+  const bound = await bindPlan(root, plan, ["read"])
+  expect((await boundWindow(bound, "lead", "revise")).runtime).toEqual(["feedback"])
+  expect((await boundWindow(bound, "checker", "accept")).runtime).toBeUndefined()
+})
+
 test("resource hardlink cannot alias a private grading file", async () => {
   const { root, plan } = await fixture()
   await link(path.join(root, "private/rubric.txt"), path.join(root, "alias.txt"))

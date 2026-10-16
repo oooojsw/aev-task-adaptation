@@ -3530,6 +3530,7 @@ async function runCampaignSuggestionTask(input: {
   taskWorker?: string
   taskCandidateRoot?: string
   taskFeedbackPath?: string
+  taskAdvice?: Array<{ kind: "analysis" | "review"; path: string }>
   cwd: string
   baseSpec: LongTaskSpec
   title: string
@@ -3554,7 +3555,8 @@ async function runCampaignSuggestionTask(input: {
   const task = await runProtocolTrainingTask({ enabled: Boolean(input.baseSpec.protocolPlugins), stageDir: input.stageDir,
     role: input.trainingRole ?? input.phase,
     adaptation: input.trainingRole ? taskInvocation(input.baseSpec, input.trainingRole, {
-      worker: input.taskWorker, candidateRoot: input.taskCandidateRoot, feedbackPath: input.taskFeedbackPath }) : undefined }, {
+      worker: input.taskWorker, candidateRoot: input.taskCandidateRoot, feedbackPath: input.taskFeedbackPath,
+      advice: input.taskAdvice }) : undefined }, {
     cwd: input.cwd,
     config,
     title: input.title,
@@ -3745,7 +3747,7 @@ async function collectCarryoverContext(input: {
   return resolved
 }
 
-async function readLatestReviewerSuggestionPath(campaignPaths: ReturnType<typeof longTaskCampaignPaths>) {
+async function readLatestReviewerSuggestionPath(campaignPaths: ReturnType<typeof longTaskCampaignPaths>, adapted = false) {
   if (!(await pathExists(campaignPaths.campaignReviewSuggestionsPath))) return undefined
   const raw = (await readTextFile(campaignPaths.campaignReviewSuggestionsPath)).trim()
   if (!raw) return undefined
@@ -3756,7 +3758,8 @@ async function readLatestReviewerSuggestionPath(campaignPaths: ReturnType<typeof
   if (!lines.length) return undefined
   try {
     const last = JSON.parse(lines[lines.length - 1]) as LongTaskCampaignReviewSuggestion
-    return last.responsePath
+    // 新任务只读取归一化建议，不把原始模型回复当作授权资料。
+    return adapted && last.responsePath ? path.join(path.dirname(last.responsePath), "review-suggestion.json") : last.responsePath
   } catch {
     return undefined
   }
@@ -4319,6 +4322,10 @@ async function runCampaignLead(input: {
     trainingRole: "lead",
     taskCandidateRoot: input.nextPendingPackageRoot,
     taskFeedbackPath: input.finalAcceptanceFeedbackPath,
+    taskAdvice: [
+      ...input.workerSuggestions.flatMap(item => item.suggestionPath ? [{ kind: "analysis" as const, path: item.suggestionPath }] : []),
+      ...(input.reviewerSuggestionPath ? [{ kind: "review" as const, path: input.reviewerSuggestionPath }] : []),
+    ],
     execution: input.baseSpec.execution,
     referencePaths: access.referencePaths,
     permissionReadPaths: access.permissionReadPaths,
@@ -5454,7 +5461,7 @@ export async function runLongTaskCampaign(input: {
           }),
         )
 
-        const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths)
+        const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths, Boolean(baseSpec.taskAdaptation))
         // Step 10: workers need the latest blank-agent evidence from previous round's failure.
         const priorProtocolFeedback = baseSpec.protocolPlugins
           ? await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase) : undefined
@@ -6453,7 +6460,7 @@ export async function resumeLongTaskCampaign(input: {
           }),
         )
 
-        const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths)
+        const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths, Boolean(baseSpec.taskAdaptation))
         const priorProtocolFeedback = baseSpec.protocolPlugins
           ? await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase) : undefined
         const latestBlankEvidence = baseSpec.protocolPlugins

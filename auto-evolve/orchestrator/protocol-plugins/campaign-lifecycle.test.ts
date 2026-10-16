@@ -4,6 +4,8 @@ import { createHash, randomUUID } from "node:crypto"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { summarizeResources } from "./resource-summary"
+import { taskFeedback } from "../task-adaptation/feedback"
+import type { BoundPlan } from "../task-adaptation/binding"
 
 // 离线打包只替换API与配置边界，保留实际内外控制器源码。
 export async function buildOfflineCampaign(root: string, boundaryKey: string) {
@@ -260,6 +262,14 @@ test(`actual Campaign learner ${scenario.adapted ? "adapted report " : ""}${scen
         expect(JSON.stringify(view)).not.toContain("PRIVATE_CAMPAIGN_LABEL")
         expect(input.permissionReadPaths.some((file: string) => file.endsWith("protocol.receipt.json"))).toBe(false)
       }
+      if (adapted) {
+        const advicePaths = input.permissionReadPaths.filter((file: string) => file.includes("/runtime-views/"))
+        const advice = await Promise.all(advicePaths.map(async (file: string) => JSON.parse(await readFile(file, "utf8"))))
+        expect(advice.some(item => item.kind === "analysis" && item.content.role === "task-sources")).toBe(true)
+        expect(advice.every(item => item.advisoryOnly === true)).toBe(true)
+        if (leads > 1) expect(advice.some(item => item.kind === "review")).toBe(true)
+        expect(JSON.stringify(advice)).not.toContain("PRIVATE_CAMPAIGN_LABEL")
+      }
       if (!adapted && execution && leads > 1) {
         expect(input.prompt).toContain("A product rejection means the generated answer failed")
         const productPath = input.permissionReadPaths.find((file: string) => file.endsWith("protocol.product.txt"))
@@ -344,7 +354,7 @@ test(`actual Campaign learner ${scenario.adapted ? "adapted report " : ""}${scen
     const windows = ["planner", "executor", "worker", "lead", "reviewer", "diagnostician"].map(role => ({ role,
       stage: role === "lead" || role === "diagnostician" ? "revise" : role === "reviewer" ? "accept" : "explore",
       reads: ["rules", "public"], writes: role === "lead" || role === "executor" ? ["rules"] : [], inline: [],
-      runtime: ["feedback"],
+      runtime: role === "lead" ? ["feedback", "analysis", "review"] : ["feedback"],
       actions: role === "lead" || role === "executor" ? ["read", "edit"] : ["read"] }))
     windows.push({ role: "checker", stage: "accept", reads: ["rules", "gold"], writes: [], inline: [], actions: ["read"], runtime: [] })
     await writeFile(path.join(root, "task-plan.json"), JSON.stringify({ schema: "aev.task-plan.v1", id: "report", objective: "Write an evidence-supported report",
@@ -471,6 +481,27 @@ test(`actual Campaign learner ${scenario.adapted ? "adapted report " : ""}${scen
       expect(httpCalls).toBe(requests)
       const state = JSON.parse(await readFile(path.join(result.campaignDir, "campaign.json"), "utf8"))
       const accepted = JSON.parse(await readFile(state.lastFinalAcceptanceResultPath, "utf8"))
+      if (adapted) {
+        const bound = JSON.parse(await readFile(path.join(result.campaignDir, "task-adaptation/task-plan.snapshot.json"), "utf8")) as BoundPlan
+        const reference = { root: result.campaignDir, path: accepted.protocolTrainingResultPath, task: "source-1", phase: "source" as const }
+        const receipt = JSON.parse(await readFile(accepted.protocolReceiptPath, "utf8"))
+        reference.task = receipt.task
+        const published = await taskFeedback(bound, reference)
+        expect(published.view.status).toBe("passed")
+        expect(published.view.issues.every(issue => issue.actions.length === 0)).toBe(true)
+        expect(JSON.stringify(published.view)).not.toContain("PRIVATE_CAMPAIGN_LABEL")
+        expect(JSON.stringify(published.view)).not.toContain("fixture content gate")
+        await expect(taskFeedback(bound, { ...reference, task: "other-task" })).rejects.toThrow("receipt or protocol drift")
+        await expect(taskFeedback(bound, { ...reference, phase: "test" })).rejects.toThrow("receipt or protocol drift")
+        const original = await readFile(accepted.protocolTrainingResultPath)
+        await writeFile(accepted.protocolTrainingResultPath, JSON.stringify({ ...JSON.parse(original.toString()), passed: false }))
+        try { await expect(taskFeedback(bound, reference)).rejects.toThrow("verdict identity") }
+        finally { await writeFile(accepted.protocolTrainingResultPath, original) }
+        const originalView = await readFile(published.path)
+        await writeFile(published.path, JSON.stringify({ ...published.view, status: "rejected" }))
+        try { await expect(taskFeedback(bound, reference)).rejects.toThrow("Published task feedback drift") }
+        finally { await writeFile(published.path, originalView) }
+      }
       if (execution) {
         const productFile = path.join(path.dirname(accepted.protocolReceiptPath), "protocol.product.txt")
         const productBytes = await readFile(productFile)

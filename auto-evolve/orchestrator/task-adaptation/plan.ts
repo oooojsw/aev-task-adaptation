@@ -6,6 +6,7 @@ export const actions = ["read", "search", "execute", "edit", "research", "verify
 export type Role = typeof roles[number]
 export type Stage = typeof stages[number]
 export type Action = typeof actions[number]
+export type RuntimeInformation = "feedback" | "analysis" | "review"
 
 export interface Resource {
   id: string
@@ -21,7 +22,7 @@ export interface Window {
   writes: string[]
   inline: string[]
   actions: Action[]
-  runtime?: Array<"feedback">
+  runtime?: RuntimeInformation[]
 }
 
 export interface Plan {
@@ -115,7 +116,8 @@ export function validatePlan(value: unknown): Readonly<Plan> {
     member(item.stage, stages)
     if (item.runtime !== undefined) {
       list(item.runtime)
-      if (item.runtime.some(kind => kind !== "feedback") || (item.runtime.length && item.role === "independent")) throw new Error("Forbidden runtime information window")
+      if (item.runtime.some(kind => !["feedback", "analysis", "review"].includes(kind)) ||
+        (item.runtime.length && item.role === "independent")) throw new Error("Forbidden runtime information window")
     }
     const key = `${item.role}:${item.stage}`
     if (windows.has(key)) throw new Error("Duplicate role-stage window")

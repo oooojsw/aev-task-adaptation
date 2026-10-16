@@ -7,6 +7,7 @@ import { freezePlan, verifyBinding, resolveResource, type BoundPlan } from "./bi
 import { validatePlan, type Role } from "./plan"
 import type { Invocation } from "./invocation"
 import { loadPack } from "../protocol-plugins/project-pack"
+import type { AdviceReference } from "./advice"
 
 export interface Adaptation {
   schema: "aev.task-adaptation.v1"
@@ -100,7 +101,7 @@ export async function seedTaskCandidate(spec: LongTaskSpec, root: string) {
   }
 }
 
-export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; feedbackPath?: string } = {}): Invocation | undefined {
+export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; feedbackPath?: string; advice?: Array<Omit<AdviceReference, "root">> } = {}): Invocation | undefined {
   if (!spec.taskAdaptation) return undefined
   const bound = spec.taskAdaptationContext
   if (!bound) throw new Error("Frozen task adaptation context missing")
@@ -113,8 +114,10 @@ export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidat
   if (input.candidateRoot && !entries) throw new Error("Declared candidate entries missing")
   const feedback = input.feedbackPath ?? spec.taskAdaptationFeedbackPath
   if (feedback && (!spec.taskAdaptationCampaignRoot || !spec.protocolPlugins)) throw new Error("Task feedback campaign identity missing")
+  if (input.advice?.length && !spec.taskAdaptationCampaignRoot) throw new Error("Task advice campaign identity missing")
   return { bound, role, stage: role === "lead" || role === "diagnostician" ? "revise" : role === "reviewer" || role === "checker" || role === "independent" ? "accept" : "explore",
     ...(input.worker ? { worker: input.worker } : {}), output: input.output ?? output, maxInlineBytes: 16000,
+    ...(input.advice?.length ? { advice: input.advice.map(item => ({ ...item, root: spec.taskAdaptationCampaignRoot! })) } : {}),
     ...(feedback ? { feedback: { root: spec.taskAdaptationCampaignRoot!, path: feedback,
       task: spec.protocolPlugins!.taskID, phase: spec.protocolPlugins!.phase } } : {}),
     ...(input.candidateRoot ? { candidate: { root: input.candidateRoot, entries: entries!.map(entry => ({ id: entry.id, path: entry.path })) } } : {}) }

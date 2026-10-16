@@ -55,6 +55,44 @@ test("adaptation rebuilds actual backend context and file grants, not only promp
   expect(prepared.request.prompt).not.toContain("reusable guidance")
 })
 
+test("review advice is opt-in, on-demand and never grants its embedded references", async () => {
+  const f = await fixture()
+  f.plan.windows[0].runtime = ["review"]
+  f.input.bound = await f.bind()
+  const directory = path.join(f.root, "rounds/round-001/reviewer/pass-01")
+  await mkdir(directory, { recursive: true })
+  const file = path.join(directory, "review-suggestion.json")
+  await writeFile(file, JSON.stringify({ roundNumber: 1, readyForFinalAcceptance: true, summary: "ADVICE_ONLY",
+    reasons: ["Check source support"], nextAttentionAreas: ["Recompute figure"],
+    responsePath: path.join(f.root, "private.txt"), refs: ["SECRET_LABEL"] }))
+  f.input.advice = [{ root: f.root, path: file, kind: "review" }]
+  const prepared = await authorizeInvocation(f.input, f.request)
+  const advice = prepared.scope.advice![0]
+  expect(prepared.request.permissionReadPaths).toContain(advice.path)
+  expect(prepared.request.permissionReadPaths).not.toContain(file)
+  expect(prepared.request.permissionReadPaths).not.toContain(path.join(f.root, "private.txt"))
+  expect(prepared.request.prompt).not.toContain("ADVICE_ONLY")
+  const view = JSON.parse(await readFile(advice.path, "utf8"))
+  expect(view.advisoryOnly).toBe(true)
+  expect(view.content.summary).toBe("ADVICE_ONLY")
+  expect(JSON.stringify(view)).not.toContain("SECRET_LABEL")
+  expect(JSON.stringify(view)).not.toContain("private.txt")
+  expect(JSON.stringify(view)).not.toContain("responsePath")
+  expect(prepared.request.permissionEditPaths).not.toContain(advice.path)
+  await writeFile(advice.path, JSON.stringify({ ...view, advisoryOnly: false }))
+  await expect(authorizeInvocation(f.input, f.request)).rejects.toThrow("Published task advice drift")
+})
+
+test("undeclared runtime advice is not opened and declared advice cannot scan arbitrary files", async () => {
+  const f = await fixture()
+  f.input.advice = [{ root: f.root, path: path.join(f.root, "missing.txt"), kind: "review" }]
+  expect((await authorizeInvocation(f.input, f.request)).scope.advice).toBeUndefined()
+  f.plan.windows[0].runtime = ["review"]
+  f.input.bound = await f.bind()
+  f.input.advice[0].path = path.join(f.root, "private.txt")
+  await expect(authorizeInvocation(f.input, f.request)).rejects.toThrow("Unexpected task advice source")
+})
+
 test("explicit inline is bounded by actual UTF-8 bytes", async () => {
   const f = await fixture()
   f.plan.windows[0].inline = ["source"]

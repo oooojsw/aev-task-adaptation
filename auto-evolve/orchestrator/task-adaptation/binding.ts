@@ -88,5 +88,6 @@ export async function boundWindow(bound: BoundPlan, role: Role, stage: Stage, wo
     ...(scope.purpose ? { purpose: scope.purpose } : {}), actions: scope.actions,
     reads: scope.reads.map(item => ({ id: item.id, path: file(item.id).path })),
     writes: scope.writes.map(item => ({ id: item.id, path: file(item.id).path })),
-    inline: scope.inline })
+    // 保留显式运行时授权，避免修订角色丢失受控反馈。
+    ...(scope.runtime ? { runtime: scope.runtime } : {}), inline: scope.inline })
 }
