@@ -46,7 +46,8 @@ export async function loadTaskContext(spec: LongTaskSpec, dir: string): Promise<
   if ((plan.acceptance.execution === "none") !== (phase.claim === "skill_check") ||
     plan.acceptance.checks.length !== phase.checks.length || plan.acceptance.checks.some(check =>
       !phase.checks.some(actual => actual.name === check.id && actual.target === (check.target === "candidate" ? "skill" : "product") &&
-        actual.required === check.required && actual.mechanism === check.mechanism))) throw new Error("Task plan and execution protocol disagree")
+        actual.required === check.required && (actual.mechanism === check.mechanism ||
+          (check.mechanism === "active_judge" && actual.mechanism === "judge" && actual.id === "active-tool-judge"))))) throw new Error("Task plan and execution protocol disagree")
   if (plan.deliverable.entries.length !== phase.skill.entries.length || plan.deliverable.entries.some(id =>
     !phase.skill.entries.some(entry => entry.id === id)) ||
     canonical(cfg.entries) !== canonical(phase.skill.entries.map(({ id, path }) => ({ id, path })))) throw new Error("Task deliverable does not match protocol entry files")

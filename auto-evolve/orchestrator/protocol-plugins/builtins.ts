@@ -6,6 +6,7 @@ import { cachedExecution, cachedScoring } from "./cache"
 import { modelJudge } from "./model-judge"
 import { toolSession } from "./tool-session"
 import { scriptExecutor } from "./script-executor"
+import { activeJudge } from "./active-judge"
 import type { InvokeTool } from "./tool-session"
 
 export interface BuiltinOptions {
@@ -36,6 +37,10 @@ export async function builtins(root: string, options: BuiltinOptions = {}) {
       backendImplementation: options.tool.implementation, invoke: options.tool.invoke })
     runtime.addExecutor(tool.descriptor, cachedExecution(path.join(root, "cache"), tool.descriptor,
       tool.execute, options.tool.preflight))
+    const judge = await activeJudge({ evidenceRoot: path.join(root, "active-judges"),
+      backendImplementation: options.tool.implementation, invoke: options.tool.invoke })
+    runtime.addChecker(judge.descriptor, cachedScoring(path.join(root, "cache"), judge.descriptor,
+      judge.evaluate, options.tool.preflight))
   }
   return runtime
 }

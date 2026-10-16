@@ -229,3 +229,32 @@ This checkpoint does not yet enforce the plan's global model-call/token budgets,
 provide a generic performance metric extractor beyond numeric JSON properties,
 or implement arbitrary task-plan revision and best-version reuse across changed
 acceptance standards. These remain part of the full objective.
+
+## Active source-checking backend checkpoint (2026-10-16)
+
+`active-tool-judge@1` is an opt-in formal checker using the existing frozen tool
+driver. Its own fresh workspace grants read access to the actual candidate,
+declared materials and selected private criteria; only its verdict workspace is
+editable and Shell remains disabled. Criteria go directly to the checker, never
+through an author role. Source and criterion IDs have distinct namespaces.
+The checker can read the full permitted files on demand rather than receiving
+their text inline. It returns a JSON verdict with actionable reasons and exact
+evidence quotes; unknown source IDs, invented quotes or missing evidence cannot
+pass. Quotes are checked against provided bytes, not judged automatically for
+semantic relevance. The model's reasoning and research quality still need real
+task validation. This backend does not grant web search or arbitrary execution.
+
+`active_judge` in a task plan must bind to this specific real checker, not silently
+fall back to a passive model judge. The selected runtime loads the tool host even
+when there is no independent executor and the phase only checks content. Actual
+protocol tests distinguish that formal checking call from task execution.
+Read/edit grants are application-level controls, not an OS sandbox guarantee.
+Private quote evidence stays in checker artifacts; author-facing feedback still
+uses the existing explicit status/message disclosure rules.
+
+Full offline regression: 342 passed, 0 failed, 6944 assertions across 55 files,
+61.16 seconds, exit 0 (Bun 1.3.14). Log:
+`E:/project/AEV-task-adaptation-20261016/validation-active-checker-final-20261016.log`.
+SHA-256: `41509de8ee4ae4e646b778fdbd23fb2007f54f927149070676502dcc58f6867e`.
+The active backend boundary is fixed in these tests; no real research task,
+real model call, full typecheck or production deployment is claimed.

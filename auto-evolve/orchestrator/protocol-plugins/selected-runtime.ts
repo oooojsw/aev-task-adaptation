@@ -13,7 +13,8 @@ export async function selectedRuntime(root: string, cwd: string | undefined, ent
   const selection = JSON.parse((await readFile(entry.selectionPath, "utf8")).replace(/^\uFEFF/, "")) as Selection
   const phases = selection?.protocol?.phases
   const requiresTool = phases && typeof phases === "object" && Object.values(phases).some(
-    (phase) => phase?.executor?.id === "isolated-tool-session")
+    (phase) => phase?.executor?.id === "isolated-tool-session" ||
+      phase?.checks?.some(check => check.id === "active-tool-judge"))
   const requiresScript = phases && typeof phases === "object" && Object.values(phases).some(
     (phase) => phase?.executor?.id === "script-json-executor")
   let options: BuiltinOptions = { scriptExecution: Boolean(requiresScript) }
