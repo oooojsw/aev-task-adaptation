@@ -310,3 +310,38 @@ Host availability, safe execution, dependency checks and the final same-controll
 real task runs remain necessary. Offline tests pass the generated Skill/report/
 software specs through the real spec loader, protocol entry preparation and task
 binding, without API requests.
+
+## Request admission and local dependency preflight (2026-10-16)
+
+`request-budget.ts` provides a cross-process, task-scoped reservation ledger.
+Before an instrumented network dispatch it reserves one admitted attempt and an
+explicit host-declared total-token ceiling. Concurrent reservations share the
+same locked atomic state. Complete provider-reported input/output usage releases
+only the unused reservation; partial/missing usage retains the whole reservation
+and blocks future admission. Unexpected provider overruns are recorded and also
+block subsequent requests. Changed limits, duplicate attempt identity or
+conflicting settlement cannot silently reset the ledger. A reserved attempt is
+an upper-bound admission count, not proof a remote server received a request.
+
+HTTP execution and passive model judging can opt into this through
+`BuiltinOptions.httpBudgets`. Budget configuration participates in their frozen
+implementation identity. The gate sits immediately before transport, rather
+than counting roles or rounds; rejected admission does not create a fake backend
+API-usage leaf. Cached completed stages remain reuse, not new calls. Tests use a
+real local HTTP server through the actual Runtime to show that execution and
+judging share the same limit, including blocking the second dispatch.
+
+The token ceiling must come from a valid host/provider bound. It is not inferred
+from byte length, and a declared reservation cannot force an uncooperative
+provider to obey or honestly report its limits. This checkpoint does **not** yet
+bind the task plan's global budget to all Campaign/OpenCode requests, intake,
+retries or compaction. It must not be described as complete global enforcement.
+OpenCode request-boundary instrumentation and controller budget-stop handling
+remain necessary before the three real task runs.
+
+`preflight-bindings.ts` verifies selected plugin settings, script/interpreter
+hashes and presence of the selected HTTP credential reference without sending a
+model request or exposing the credential. The unified preparation entry now
+performs these default local dependency checks before paid task interpretation.
+This proves local prerequisites only, not remote availability or remaining quota.
+The old execution entry is unchanged; checks are added to the new task workflow.

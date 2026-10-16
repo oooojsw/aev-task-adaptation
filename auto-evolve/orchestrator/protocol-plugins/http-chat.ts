@@ -6,11 +6,19 @@ import { writeFileAtomic, writeJsonAtomic } from "../atomic-write"
 import { fingerprint } from "./identity"
 import type { ExecutorPlugin, Settings } from "./contract"
 import type { Artifact, Execute } from "./runtime"
+import { reserveRequest, settleRequest, type RequestBudget } from "../task-adaptation/request-budget"
+
+export interface HttpRequestBudget {
+  config: RequestBudget
+  tokenCeiling: number
+  role: string
+}
 
 interface Options {
   evidenceRoot: string
   transport?: typeof fetch
   credential?: (name: string) => string | undefined
+  budget?: HttpRequestBudget
 }
 
 interface Config {
@@ -105,13 +113,17 @@ async function bounded(response: Response, limit: number) {
 
 export async function httpChat(options: Options): Promise<{ descriptor: ExecutorPlugin; execute: Execute }> {
   if (!path.isAbsolute(options.evidenceRoot)) throw new Error("Absolute HTTP evidence root required")
-  const implementation = createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex")
+  const source = createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex")
+  const implementation = options.budget ? fingerprint({ source, budget: options.budget,
+    ledger: createHash("sha256").update(await readFile(fileURLToPath(new URL("../task-adaptation/request-budget.ts", import.meta.url)))).digest("hex") }) : source
   const descriptor: ExecutorPlugin = { id: "http-text-chat", version: "1", implementation,
     skillFormats: ["text", "package"], productKinds: ["text"], materialKinds: ["text"], validate(settings) { config(settings) } }
   const transport = options.transport ?? fetch
   const credential = options.credential ?? ((name: string) => process.env[name])
   const execute: Execute = async (input) => {
     const cfg = config(input.settings)
+    if (options.budget && (!Number.isSafeInteger(options.budget.tokenCeiling) || options.budget.tokenCeiling < cfg.maxTokens ||
+        typeof options.budget.role !== "string" || !options.budget.role.trim())) throw new Error("Explicit HTTP request token ceiling and role required")
     function material(id: string) {
       const matches = input.materials.filter((item) => item.id === id)
       if (matches.length !== 1) throw new Error(`Exactly one declared public prompt required: ${id}`)
@@ -141,19 +153,33 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
     const clock = performance.now()
     let observedUsage: { inputTokens?: number; outputTokens?: number } | undefined
     let actualModel: string | null = null
-    const account = async (status: string) => writeJsonAtomic(path.join(dir, "invocation.accounting.json"), {
+    let dispatched = false
+    const account = async (status: string) => {
+      if (options.budget && !dispatched) {
+        // 准入被拒没有真实网络调用，不能污染API消耗账本。
+        return writeJsonAtomic(path.join(dir, "budget.admission.json"), { status: "blocked_before_dispatch", requestFingerprint: key })
+      }
+      return writeJsonAtomic(path.join(dir, "invocation.accounting.json"), {
       schema: "aev.backend-invocation-accounting.v1", transport: "http", requestFingerprint: key,
       requestedModel: cfg.model, actualModel, startedAt, finishedAt: new Date().toISOString(),
       elapsedMs: Math.max(0, Math.round(performance.now() - clock)), reused: false, fee: null, status,
       inputTokens: observedUsage?.inputTokens ?? null, outputTokens: observedUsage?.outputTokens ?? null,
       usageSource: observedUsage ? "provider_response" : "missing", errorKind: status === "completed" ? null : "http_or_persistence_error",
-    })
+      })
+    }
     await writeJsonAtomic(path.join(dir, "request.json"), { url: cfg.url, credentialAlias: cfg.credentialEnv, request,
       requestFingerprint: key, tools: false, turns: 1, retries: 0 })
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), cfg.timeoutMs)
+    let reserved = false
     try {
+      if (options.budget) {
+        await reserveRequest(options.budget.config, { id: key, request: key, model: cfg.model,
+          role: options.budget.role, reservationTokens: options.budget.tokenCeiling })
+        reserved = true
+      }
       // 禁默认空闲超时，长回答仍受协议总时限约束。
+      dispatched = true
       const response = await transport(cfg.url, { method: "POST", redirect: "error", timeout: false, signal: controller.signal,
         headers: cfg.dialect === "anthropic_messages"
           ? { "content-type": "application/json", "x-api-key": secret, "anthropic-version": "2023-06-01" }
@@ -200,6 +226,12 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
       return { status: "execution_error", message: "HTTP execution failed; raw evidence retained" }
     } finally {
       clearTimeout(timer)
+      if (reserved && options.budget) {
+        // 缺少任一侧用量即保留整份预留，不把未知计费记作零。
+        const total = observedUsage?.inputTokens !== undefined && observedUsage.outputTokens !== undefined
+          ? observedUsage.inputTokens + observedUsage.outputTokens : undefined
+        await settleRequest(options.budget.config, key, total)
+      }
     }
   }
   return { descriptor, execute }

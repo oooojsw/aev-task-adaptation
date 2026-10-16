@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { writeJsonAtomic } from "../atomic-write"
-import { httpChat } from "./http-chat"
+import { httpChat, type HttpRequestBudget } from "./http-chat"
 import { fingerprint } from "./identity"
 import type { CheckerPlugin, Settings } from "./contract"
 import type { Artifact, Evaluate } from "./runtime"
@@ -12,6 +12,7 @@ interface Options {
   evidenceRoot: string
   transport?: typeof fetch
   credential?: (name: string) => string | undefined
+  budget?: HttpRequestBudget
 }
 
 function artifact(id: string, value: string): Artifact {

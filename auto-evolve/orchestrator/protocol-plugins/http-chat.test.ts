@@ -5,6 +5,7 @@ import { httpChat } from "./http-chat"
 import type { Settings } from "./contract"
 import type { Artifact, PublicInputs } from "./runtime"
 import { summarizeResources } from "./resource-summary"
+import { inspectBudget } from "../task-adaptation/request-budget"
 
 function settings(): Settings {
   return { dialect: "openai_chat", url: "http://127.0.0.1:1/v1/chat/completions", allowedOrigins: ["http://127.0.0.1:1"],
@@ -46,6 +47,42 @@ test("HTTP adapter sends one request without NBA/OpenCode assumptions", async ()
   expect(resources.input.knownTokens).toBe(10)
   expect(resources.output.knownTokens).toBe(2)
   expect(resources.input.completeForDiscoveredInvocations).toBe(true)
+})
+
+test("shared request budget blocks actual second HTTP dispatch before transport", async () => {
+  const config = { root: root(), scope: "shared-task", calls: 1, tokens: 1000 }
+  let calls = 0
+  const budget = { config, role: "independent", tokenCeiling: 300 }
+  const evidenceRoot = root()
+  const plugin = await httpChat({ evidenceRoot, budget, credential: () => "synthetic-fixture",
+    transport: async () => { calls++; return Response.json(reply()) } })
+  expect((await plugin.execute(request())).status).toBe("completed")
+  const other = request()
+  other.materials[1] = artifact("user", "Different public task")
+  expect((await plugin.execute(other)).status).toBe("execution_error")
+  expect(calls).toBe(1)
+  expect(await inspectBudget(config)).toMatchObject({ admittedAttempts: 1, reportedTokens: 12, outstandingTokens: 0 })
+  expect((await summarizeResources(evidenceRoot)).invocations).toHaveLength(1)
+})
+
+test("incomplete HTTP usage keeps reservation and blocks requests from another backend", async () => {
+  const config = { root: root(), scope: "shared-task", calls: 10, tokens: 1000 }
+  let calls = 0
+  const plugin = await httpChat({ evidenceRoot: root(), budget: { config, role: "independent", tokenCeiling: 300 },
+    credential: () => "synthetic-fixture", transport: async () => { calls++; throw new Error("synthetic network interruption") } })
+  expect((await plugin.execute(request())).status).toBe("execution_error")
+  const second = await httpChat({ evidenceRoot: root(), budget: { config, role: "checker", tokenCeiling: 300 },
+    credential: () => "synthetic-fixture", transport: async () => { calls++; return Response.json(reply()) } })
+  expect((await second.execute(request())).status).toBe("execution_error")
+  expect(calls).toBe(1)
+  expect(await inspectBudget(config)).toMatchObject({ admittedAttempts: 1, outstandingTokens: 300, unknownAttempts: 1 })
+})
+
+test("HTTP budget identity is frozen and cannot be silently removed", async () => {
+  const config = { root: root(), scope: "shared-task", calls: 1, tokens: 1000 }
+  const ordinary = await httpChat({ evidenceRoot: root() })
+  const bounded = await httpChat({ evidenceRoot: root(), budget: { config, role: "independent", tokenCeiling: 300 } })
+  expect(bounded.descriptor.implementation).not.toBe(ordinary.descriptor.implementation)
 })
 
 test("Anthropic mode preserves explicit system/user and checks completion", async () => {
