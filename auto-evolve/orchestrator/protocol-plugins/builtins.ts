@@ -5,10 +5,12 @@ import { scriptChecker } from "./script-checker"
 import { cachedExecution, cachedScoring } from "./cache"
 import { modelJudge } from "./model-judge"
 import { toolSession } from "./tool-session"
+import { scriptExecutor } from "./script-executor"
 import type { InvokeTool } from "./tool-session"
 
 export interface BuiltinOptions {
   tool?: { implementation: string; invoke: InvokeTool; preflight: () => Promise<void> }
+  scriptExecution?: boolean
 }
 
 export async function builtins(root: string, options: BuiltinOptions = {}) {
@@ -21,6 +23,12 @@ export async function builtins(root: string, options: BuiltinOptions = {}) {
   runtime.addChecker(script.descriptor, cachedScoring(path.join(root, "cache"), script.descriptor, script.evaluate, script.preflight))
   const judge = await modelJudge({ evidenceRoot: path.join(root, "judges") })
   runtime.addChecker(judge.descriptor, cachedScoring(path.join(root, "cache"), judge.descriptor, judge.evaluate))
+  // 程序执行显式启用；旧配置不会增加宿主代码执行能力。
+  if (options.scriptExecution) {
+    const runner = await scriptExecutor(path.join(root, "execution"))
+    runtime.addExecutor(runner.descriptor, cachedExecution(path.join(root, "cache"), runner.descriptor,
+      runner.execute, runner.preflight))
+  }
   // 显式提供工具后端才注册；默认HTTP链路不读取宿主配置。
   if (options.tool) {
     if (typeof options.tool.preflight !== "function") throw new Error("Tool dependency preflight required")

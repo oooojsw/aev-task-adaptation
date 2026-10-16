@@ -198,9 +198,11 @@ for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLe
   { rejectedLeads: 1, execution: true, seeded: true, executorPatch: true, partialLead: true },
   { rejectedLeads: 0, execution: true, fault: "execution_error" }, { rejectedLeads: 0, adapted: true },
   { rejectedLeads: 0, adapted: true, bootstrap: true }, { rejectedLeads: 1, adapted: true },
-  { rejectedLeads: 2, adapted: true }, { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true }])
-test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${scenario.adapted ? "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
-  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass, adapted, bootstrap, intake } = scenario
+  { rejectedLeads: 2, adapted: true }, { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true },
+  { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true, program: true }])
+test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${scenario.adapted ? scenario.program ? "adapted program " : "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
+  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass, adapted, bootstrap, intake, program } = scenario
+  const hasExecution = Boolean(execution || program)
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   await mkdir(root, { recursive: true })
   const key = `__campaignOffline_${randomUUID().replaceAll("-", "")}`
@@ -260,7 +262,7 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
         expect(feedback).toBeDefined()
         const view = JSON.parse(await readFile(feedback, "utf8"))
         expect(view.status).toBe("rejected")
-        expect(view.issues[0].actions).toEqual(["research"])
+        expect(view.issues[0].actions).toEqual([program ? "repair" : "research"])
         expect(JSON.stringify(view)).not.toContain("PRIVATE_CAMPAIGN_LABEL")
         expect(input.permissionReadPaths.some((file: string) => file.endsWith("protocol.receipt.json"))).toBe(false)
       }
@@ -281,7 +283,11 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
       }
     }
     for (const edit of input.permissionEditPaths ?? []) {
-      if (adapted) { await writeFile(edit, input.title.startsWith("Campaign Lead") && leads <= rejectedLeads ? "Incomplete rule" : "Reusable rule"); continue }
+      if (adapted) {
+        const rejected = input.title.startsWith("Campaign Lead") && leads <= rejectedLeads
+        await writeFile(edit, program ? `def solve(x): return ${rejected ? "x" : "x*x"}\n` : rejected ? "Incomplete rule" : "Reusable rule")
+        continue
+      }
       if (executorPatch) continue
       if (edit.endsWith("rules.txt")) { await mkdir(path.dirname(edit), { recursive: true }); await writeFile(edit, "Reusable rule") }
       if (input.title.startsWith("Campaign Lead") && !edit.endsWith(".json")) {
@@ -299,17 +305,18 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
       permissionReadPaths: input.permissionReadPaths ?? [], permissionEditPaths: input.permissionEditPaths ?? [],
       result: { exitCode: 0, stdout: responseText, stderr: "", events: [], responseText, toolFailures: [] } }
   } }
-  const project = { id: "campaign-fixture", version: "1", skillFormats: ["text"], productKinds: ["text"], materialKinds: ["text"] }
+  const project = { id: "campaign-fixture", version: "1", skillFormats: ["text"], productKinds: [program ? "json" : "text"], materialKinds: ["text"] }
   const python = "C:/Users/ZhuanZ/miniconda3/python.exe"
   const script = path.join(root, "check.py")
   await writeFile(script, 'import json,sys\np=json.load(open(sys.argv[1],encoding="utf-8-sig"))\ng=json.load(open(p["privateInputs"][0]["path"],encoding="utf-8-sig"))\nassert g["marker"]=="PRIVATE_CAMPAIGN_LABEL"\ns=open(p["candidate"][0]["path"],encoding="utf-8").read()\nprint(json.dumps({"status":"passed" if s=="Reusable rule" else "rejected","message":"fixture content gate"}))\n')
+  if (program) await writeFile(script, 'import json,sys\np=json.load(open(sys.argv[1],encoding="utf-8-sig"))\ng=json.load(open(p["privateInputs"][0]["path"],encoding="utf-8-sig"))\ns=json.load(open(p["candidate"][0]["path"],encoding="utf-8-sig"))\nassert g["marker"]=="PRIVATE_CAMPAIGN_LABEL"\nprint(json.dumps({"status":"passed" if s["answers"]==g["expected"] and s["elapsed_ns"]>=0 else "rejected","message":"program correctness and measured timing"}))\n')
   if (fault && fault !== "execution_error") await writeFile(script, `import json\nprint(json.dumps({"status":${JSON.stringify(fault)},"message":"fixture failure"}))\n`)
   const hash = async (file: string) => createHash("sha256").update(await readFile(file)).digest("hex")
-  await writeFile(path.join(root, "public.txt"), "Public rules")
+  await writeFile(path.join(root, "public.txt"), program ? "[2,3,4]" : "Public rules")
   await writeFile(path.join(root, "system.txt"), "Independent public execution")
   const privateFile = path.join(root, "private", "gold.json")
   await mkdir(path.dirname(privateFile))
-  await writeFile(privateFile, JSON.stringify({ marker: "PRIVATE_CAMPAIGN_LABEL" }))
+  await writeFile(privateFile, JSON.stringify({ marker: "PRIVATE_CAMPAIGN_LABEL", ...(program ? { expected: [4,9,16] } : {}) }))
   const credentialEnv = `AEV_CAMPAIGN_FIXTURE_${randomUUID().replaceAll("-", "").toUpperCase()}`
   let httpCalls = 0
   const server = execution ? Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
@@ -325,14 +332,18 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
       usage: { prompt_tokens: 20, completion_tokens: 3 } })
   } }) : undefined
   if (execution) process.env[credentialEnv] = "synthetic-local-test"
-  const executor = server ? { id: "http-text-chat", version: "1", settings: { dialect: "openai_chat",
+  const programRunner = path.resolve(import.meta.dir, "fixtures/program-runner.py")
+  const executor = program ? { id: "script-json-executor", version: "1", settings: {
+    command: python, commandSHA256: await hash(python), script: programRunner, scriptSHA256: await hash(programRunner),
+    timeoutMs: 10000, maxInputBytes: 65536, maxOutputBytes: 16384, executionBoundary: "trusted_host_runner",
+  } } : server ? { id: "http-text-chat", version: "1", settings: { dialect: "openai_chat",
     url: server.url.origin + "/v1/chat/completions", allowedOrigins: [server.url.origin],
     model: "offline-consumer", expectedModel: "offline-consumer", credentialEnv, systemInput: "system", userInputs: ["public"],
     skillPlacement: "system", maxTokens: 100, maxInputBytes: 10000, maxResponseBytes: 4096, temperature: 0, timeoutMs: 2000 } } : undefined
   await writeFile(path.join(root, "selection.json"), JSON.stringify({ schema: "aev.protocol-plugins.v1", project,
-    run: { skillFormat: "text", productKind: "text", materialKinds: ["text"] }, protocol: { id: "fixture", version: "1",
-      phases: { source: { claim: execution ? "task_execution" : "skill_check", executor, checks: [{ id: "script-json-checker", version: "1", name: "content",
-        target: execution ? "product" : "skill", stage: execution ? "after_execution" : "before_execution", required: true, mechanism: "script", privateInputs: ["gold"], settings: {
+    run: { skillFormat: "text", productKind: program ? "json" : "text", materialKinds: ["text"] }, protocol: { id: "fixture", version: "1",
+      phases: { source: { claim: hasExecution ? "task_execution" : "skill_check", executor, checks: [{ id: "script-json-checker", version: "1", name: "content",
+        target: hasExecution ? "product" : "skill", stage: hasExecution ? "after_execution" : "before_execution", required: true, mechanism: "script", privateInputs: ["gold"], settings: {
           command: python, commandSHA256: await hash(python), script, scriptSHA256: await hash(script), timeoutMs: 10000, maxOutputBytes: 4096 } }] } } } }))
   await writeFile(path.join(root, "manifest.json"), JSON.stringify({ schema: "aev.project-pack.v1", project,
     skill: { format: "text", entries: [{ id: "rules", kind: "text", path: "rules.txt" },
@@ -347,7 +358,7 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
     protocolPlugins: { schema: "aev.protocol-entry.v1", selectionPath: path.join(root, "selection.json"),
       projectManifestPath: path.join(root, "manifest.json"), taskID: "source", phase: "source" } }))
   if (adapted) {
-    await writeFile(path.join(root, "candidate-seed.txt"), "Initial report")
+    await writeFile(path.join(root, "candidate-seed.txt"), program ? "def solve(x): return x\n" : "Initial report")
     const resources = [
       { id: "rules", path: "candidate-seed.txt", audience: "public", mutable: true },
       { id: "public", path: "public.txt", audience: "public", mutable: false },
@@ -359,11 +370,11 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
       runtime: role === "lead" ? ["feedback", "analysis", "review"] : ["feedback"],
       actions: role === "lead" || role === "executor" ? ["read", "edit"] : ["read"] }))
     windows.push({ role: "checker", stage: "accept", reads: ["rules", "gold"], writes: [], inline: [], actions: ["read"], runtime: [] })
-    await writeFile(path.join(root, "task-plan.json"), JSON.stringify({ schema: "aev.task-plan.v1", id: "report", objective: "Write an evidence-supported report",
-      deliverable: { kind: "report", entries: ["rules"] }, resources, windows, capabilities: ["file-read", "file-edit"],
+    await writeFile(path.join(root, "task-plan.json"), JSON.stringify({ schema: "aev.task-plan.v1", id: program ? "program" : "report", objective: program ? "Implement square function and measure runtime" : "Write an evidence-supported report",
+      deliverable: { kind: program ? "software" : "report", entries: ["rules"] }, resources, windows, capabilities: ["file-read", "file-edit"],
       workers: [{ id: "sources", purpose: "Inspect source support", resources: ["rules", "public"], actions: ["read"] }],
-      acceptance: { execution: "none", checks: [{ id: "content", target: "candidate", mechanism: "script", purpose: "Check report", required: true, resources: ["rules", "gold"], feedback: "status_only" }] },
-      rejection: [{ check: "content", actions: ["research"] }], selection: { rule: "first_pass" }, stop: { rounds: 1, calls: 20, tokens: 100000, stagnant: 1 } }))
+      acceptance: { execution: program ? "script" : "none", checks: [{ id: "content", target: program ? "product" : "candidate", mechanism: "script", purpose: program ? "Check program outputs and timing" : "Check report", required: true, resources: ["rules", "gold"], feedback: "status_only" }] },
+      rejection: [{ check: "content", actions: [program ? "repair" : "research"] }], selection: { rule: "first_pass" }, stop: { rounds: 1, calls: 20, tokens: 100000, stagnant: 1 } }))
     const spec = JSON.parse(await readFile(specPath, "utf8"))
     if (bootstrap) delete spec.initialGraph
     spec.taskAdaptation = { schema: "aev.task-adaptation.v1", planPath: path.join(root, "task-plan.json"), root,
@@ -374,7 +385,7 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
         entries: ["rules"], maxWorkers: 2, stop: initial.stop,
         capabilities: [{ id: "file-read", version: "1", description: "Read declared files", actions: ["read"], available: true },
           { id: "file-edit", version: "1", description: "Edit declared candidate", actions: ["edit"], available: true }],
-        profiles: [{ id: "report-content", description: "Check report content", kinds: ["report"], requires: ["file-read", "file-edit"],
+        profiles: [{ id: "task-content", description: "Check declared task content", kinds: [initial.deliverable.kind], requires: ["file-read", "file-edit"],
           acceptance: initial.acceptance, rejection: initial.rejection, selection: initial.selection }] }
       let interpretations = 0
       const input = { cwd: root, root, dir: `${root}-intake`, catalogue, model: "fixture/intake", expectedModel: "fixture/intake",
@@ -384,7 +395,7 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
           interpretations++
           expect(request.prompt).not.toContain("PRIVATE_CAMPAIGN_LABEL")
           expect(request.readPaths).not.toContain(privateFile)
-          await writeFile(request.editPaths[0], JSON.stringify({ kind: "report", profiles: ["report-content"], needs: [],
+          await writeFile(request.editPaths[0], JSON.stringify({ kind: initial.deliverable.kind, profiles: ["task-content"], needs: [],
             workers: initial.workers, rationale: "Report task uses declared source inspection and content checks" }))
           return { completed: true, actualModel: "fixture/intake" }
         } }) }
@@ -465,7 +476,7 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
     await writeFile(path.join(root, "role-permission-audit.json"), JSON.stringify({ privateFile, roleRequests }, null, 2))
     for (const request of roleRequests.filter((item) => item.title.startsWith("Campaign"))) {
       if (adapted) {
-        expect(request.prompt).toContain("AEV report task")
+        expect(request.prompt).toContain(program ? "AEV software task" : "AEV report task")
         expect(request.prompt).not.toContain("Public material suffix excerpts")
         expect(request.prompt).not.toContain("reusable guidance")
         continue
@@ -497,8 +508,18 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
     const values = await Promise.all(receipts.map(async (file) => JSON.parse(await readFile(path.join(roundsRoot, file), "utf8"))))
     expect(values.map((value) => value.status)).toEqual(fault ? [fault] : [...Array(rejectedLeads).fill("rejected"), "passed"])
     expect(new Set(values.map((value) => value.protocolFingerprint)).size).toBe(1)
-    expect(values.every((value) => value.claim === (execution ? "task_execution" : "skill_check") &&
-      value.executed === Boolean(execution && fault !== "execution_error"))).toBe(true)
+    expect(values.every((value) => value.claim === (hasExecution ? "task_execution" : "skill_check") &&
+      value.executed === Boolean(hasExecution && fault !== "execution_error"))).toBe(true)
+    if (program) {
+      expect(values.every(value => value.product.kind === "json")).toBe(true)
+      const answers = await Promise.all(receipts.map(async file => {
+        const product = JSON.parse(await readFile(path.join(roundsRoot, path.dirname(file), "protocol.product.bin"), "utf8"))
+        expect(product.elapsed_ns).toBeGreaterThanOrEqual(0)
+        expect(product.input_keys).not.toContain("privateInputs")
+        return product.answers
+      }))
+      expect(answers).toEqual([[2,3,4], [4,9,16]])
+    }
     expect(httpCalls).toBe(execution ? Math.min(rejectedLeads, 1) + 1 : 0)
     if (execution && rejectedLeads === 2) expect(values.map(value => value.executionReused)).toEqual([false, true, false])
     if (!fault) {
@@ -530,10 +551,11 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
         try { await expect(taskFeedback(bound, reference)).rejects.toThrow("Published task feedback drift") }
         finally { await writeFile(published.path, originalView) }
       }
-      if (execution) {
-        const productFile = path.join(path.dirname(accepted.protocolReceiptPath), "protocol.product.txt")
+      if (execution || program) {
+        const productFile = path.join(path.dirname(accepted.protocolReceiptPath), program ? "protocol.product.bin" : "protocol.product.txt")
         const productBytes = await readFile(productFile)
-        expect(productBytes.toString()).toBe("Reusable rule")
+        if (program) expect(JSON.parse(productBytes.toString()).answers).toEqual([4,9,16])
+        else expect(productBytes.toString()).toBe("Reusable rule")
         await writeFile(productFile, "Altered answer")
         try {
           await expect(actual.resumeLongTaskCampaign({ cwd: root, campaignID: result.campaignID, specPath: campaign }))

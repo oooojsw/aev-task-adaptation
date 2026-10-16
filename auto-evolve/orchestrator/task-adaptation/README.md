@@ -149,3 +149,52 @@ Log: `E:/project/AEV-task-adaptation-20261016/validation-task-intake-20261016.lo
 SHA-256: `e8cc36136d2c022d685b702a03764c79e1f9b72d41e99a3c298017d4be77a0e2`.
 CLI help was checked without invoking any model. Full TypeScript typechecking,
 three real tasks and the remainder of the objective are still pending.
+
+## Script execution and program Campaign checkpoint (2026-10-16)
+
+`protocol-plugins/script-executor.ts` adds the optional `script-json-executor@1`.
+A selected protocol enables it explicitly; legacy builtin registration does not
+gain an executor, and script-only selection does not load an OpenCode backend.
+`selectedRuntime` checks the real interpreter and runner fingerprints before
+returning a runtime. Cached execution repeats dependency and input-budget checks.
+
+Settings require absolute `command` / `script`, their SHA-256 fingerprints,
+`timeoutMs`, `maxInputBytes`, `maxOutputBytes`, and the explicit
+`executionBoundary: "trusted_host_runner"`. The runner must be self-contained:
+the executor copies verified runner bytes into each independent evidence working
+directory before launching that frozen copy with the input JSON path. It uses no
+shell and does not inherit model credential environment variables. Only declared
+candidate and public material bytes are staged; private grading inputs remain
+with the checker. Original IDs, kinds, hashes and byte lengths are preserved.
+
+The runner returns one JSON object on stdout. This is a product, not a verdict.
+The existing protocol runtime still requires a separate product check; it cannot
+accept a runner's self-reported success as formal acceptance. Raw stdout, stderr,
+process exit/failure, wall time, dependency identities and product bytes are saved.
+Input overflow blocks before process launch; timeout, output overflow, process
+failure and malformed products do not become ordinary correctness rejection.
+Execution caching reuses an existing measurement, not a new benchmark repetition.
+
+This backend is for trusted host runners and trusted local test candidates.
+A temporary directory and reduced environment are **not** an OS sandbox: they
+do not enforce host filesystem, network, memory or descendant-process privileges.
+Do not advertise this backend as safe arbitrary untrusted-code execution. An
+actual isolation backend and its environment preflight remain required wherever
+the selected task requires that security boundary.
+
+Offline integration now passes a software task through `prepareTask`, the actual
+Planner/Executor/Workers/Lead/Reviewer Campaign chain, real Python execution,
+independent correctness checking, rejection feedback, repair and reacceptance.
+It verifies actual wrong and corrected outputs, timing presence, withheld private
+inputs, completed-run reuse, and rejection of altered saved product evidence.
+The interpretation and author model boundaries are fixed test replies, not real
+semantic task understanding. The measured timing is present in the product, but
+best-metric version selection, global budgets, real research source checking and
+the three real tasks are not thereby implemented or verified.
+
+Final offline regression for this checkpoint: 332 passed, 0 failed, 6693
+assertions across 53 files in 55.22 seconds, exit 0 (Bun 1.3.14).
+Log: `E:/project/AEV-task-adaptation-20261016/validation-program-intake-final-20261016.log`.
+SHA-256: `3dcc20e36414308c38dc4016ee372c57f0631086a3d5e707e58749be62e4c0e2`.
+This is not a full TypeScript typecheck, production deployment, or real-model
+experiment. Earlier checkpoints and their logs remain historical evidence.
