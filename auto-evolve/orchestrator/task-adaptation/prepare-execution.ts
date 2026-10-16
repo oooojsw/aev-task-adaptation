@@ -12,6 +12,7 @@ import { loadPack } from "../protocol-plugins/project-pack"
 import { bindPlan, verifyBinding, resolveResource } from "./binding"
 import { validatePlan, type Plan } from "./plan"
 import { verifyProtocolScopes } from "./protocol-scopes"
+import { validateTaskBudgetPolicy, type TaskBudgetPolicy } from "./budget-policy"
 
 export interface ExecutionPreparation {
   root: string
@@ -25,6 +26,7 @@ export interface ExecutionPreparation {
   checkers: Array<{ name: string; binding: Binding }>
   training: TrainingConfig
   maxBundleBytes: number
+  requestBudget?: TaskBudgetPolicy
 }
 
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
@@ -32,6 +34,7 @@ const json = (bytes: Buffer) => JSON.parse(bytes.toString("utf8").replace(/^\uFE
 
 export async function prepareExecution(input: ExecutionPreparation, registry: Registry) {
   const plan = validatePlan(input.plan)
+  if (input.requestBudget) validateTaskBudgetPolicy(input.requestBudget)
   if (![input.root, input.dir].every(file => typeof file === "string" && path.isAbsolute(file)) ||
       !Number.isSafeInteger(input.maxBundleBytes) || input.maxBundleBytes < 1) throw new Error("Explicit bounded execution preparation required")
   const relation = path.relative(input.root, input.dir)
@@ -133,6 +136,7 @@ export async function prepareExecution(input: ExecutionPreparation, registry: Re
       projectManifestPath: paths.projectManifestPath.replaceAll("\\", "/"), taskID: plan.id, phase: "source" },
     protocolTraining: training, taskAdaptation: { schema: "aev.task-adaptation.v1", planPath: paths.planPath.replaceAll("\\", "/"),
       root: bundle.replaceAll("\\", "/"), capabilities: input.capabilities,
+      ...(input.requestBudget ? { requestBudget: input.requestBudget } : {}),
       entries: plan.resources.filter(item => entries.includes(item.id)).map(item => ({ id: item.id, path: item.path })) } })
   await verifyBinding(bound)
   for (const item of files) {

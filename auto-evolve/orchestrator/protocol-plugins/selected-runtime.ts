@@ -8,7 +8,8 @@ import type { Selection } from "./contract"
 import { verifyScriptExecution } from "./script-executor"
 
 export async function selectedRuntime(root: string, cwd: string | undefined, entry: Entry,
-  createDriver: typeof opencodeDriver = opencodeDriver) {
+  createDriver: typeof opencodeDriver = opencodeDriver,
+  budgets: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets"> = {}) {
   validateEntry(entry)
   const selection = JSON.parse((await readFile(entry.selectionPath, "utf8")).replace(/^\uFEFF/, "")) as Selection
   const phases = selection?.protocol?.phases
@@ -17,7 +18,7 @@ export async function selectedRuntime(root: string, cwd: string | undefined, ent
       phase?.checks?.some(check => check.id === "active-tool-judge"))
   const requiresScript = phases && typeof phases === "object" && Object.values(phases).some(
     (phase) => phase?.executor?.id === "script-json-executor")
-  let options: BuiltinOptions = { scriptExecution: Boolean(requiresScript) }
+  let options: BuiltinOptions = { scriptExecution: Boolean(requiresScript), ...budgets }
   if (requiresTool) {
     // 先校验完整协议，再读取宿主配置；探测驱动绝不能执行。
     const probe = await builtins(root, { ...options, tool: { implementation: "0".repeat(64),

@@ -11,6 +11,7 @@ import { resolveResource } from "./binding"
 
 interface Driver { implementation: string; preflight(): Promise<void>; invoke: InvokeTool }
 export interface IntakeInput {
+  requestBudget?: import("./budget-transport").BudgetTransportConfig
   cwd: string
   root: string
   dir: string
@@ -57,7 +58,8 @@ export async function prepareTask(input: IntakeInput, dependencies?: { createDri
   const source = await Promise.all(["./intake.ts", "./catalogue.ts", "./plan.ts", "./binding.ts"].map(async file => hash(await readFile(fileURLToPath(new URL(file, import.meta.url))))))
   const binding = fingerprint({ catalogue, root, files, cwd: input.cwd, backend: driver.implementation, source,
     model: input.model, expectedModel: input.expectedModel, timeoutMs: input.timeoutMs,
-    maxInputBytes: input.maxInputBytes, maxDecisionBytes: input.maxDecisionBytes, prompt })
+    maxInputBytes: input.maxInputBytes, maxDecisionBytes: input.maxDecisionBytes, prompt,
+    ...(input.requestBudget ? { requestBudget: input.requestBudget } : {}) })
   const snapshot = path.join(dir, "intake.snapshot.json")
   const completed = path.join(dir, "intake.completed.json")
   const result = path.join(dir, "intake.result.json")
@@ -92,6 +94,7 @@ export async function prepareTask(input: IntakeInput, dependencies?: { createDri
   try {
     const signal = AbortSignal.timeout(input.timeoutMs)
     const reply = await driver.invoke({ workDir: workspace, prompt, model: input.model, readPaths: [...reads.map(file => file.path), output],
+      ...(input.requestBudget ? { requestBudget: input.requestBudget } : {}),
       editPaths: [output], allowShell: false, maxAttempts: 1, timeoutMs: input.timeoutMs }, signal)
     const receipt = JSON.parse(JSON.stringify(reply))
     await writeJsonAtomic(path.join(dir, "intake.backend-result.json"), receipt)

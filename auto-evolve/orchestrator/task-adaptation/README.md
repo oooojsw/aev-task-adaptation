@@ -371,3 +371,23 @@ the serialized cache identity and transport remain unchanged. Local HTTP and
 stream fixtures verify the hook, not a real full OpenCode/model task. Automatic
 task-plan budget propagation to every role/backend and controller stop handling
 remain unfinished; this is not yet a complete global budget guarantee.
+
+## Shared task policy wiring
+
+Optional `ExecutionPreparation.requestBudget` / `Adaptation.requestBudget` is a
+host-owned `TaskBudgetPolicy`: private ledger root/scope and explicit model-to-wire
+bindings. It cannot contain separate per-role total limits. Calls/tokens derive
+from the frozen task plan; intake, author roles, independent execution and formal
+judges use the same ledger. A role changes only its label and wire/model bounds.
+Runtime HTTP reservation ceilings conservatively cover the largest configured
+model binding; tool backends select their explicit model mapping.
+
+The generated spec preserves this policy, and Campaign preparation freezes its
+identity alongside the task. Missing model bindings fail before author work.
+Changed/removed policies, plan drift and interrupted policy snapshots cannot
+silently reset limits. The budget file is not part of role-readable material.
+Legacy specs without this optional policy retain their existing behavior.
+
+This wiring does not yet complete budget-exhaustion delivery/stop handling,
+generic batch/merge inheritance or real model acceptance. These remain required
+before enabling the new workflow as a fully bounded production system.

@@ -13,6 +13,7 @@ export interface BuiltinOptions {
   tool?: { implementation: string; invoke: InvokeTool; preflight: () => Promise<void> }
   scriptExecution?: boolean
   httpBudgets?: { execution: HttpRequestBudget; judging: HttpRequestBudget }
+  toolBudgets?: { execution: Parameters<typeof toolSession>[0]["requestBudgets"]; judging: Parameters<typeof toolSession>[0]["requestBudgets"] }
 }
 
 export async function builtins(root: string, options: BuiltinOptions = {}) {
@@ -35,11 +36,13 @@ export async function builtins(root: string, options: BuiltinOptions = {}) {
   if (options.tool) {
     if (typeof options.tool.preflight !== "function") throw new Error("Tool dependency preflight required")
     const tool = await toolSession({ evidenceRoot: path.join(root, "tools"),
-      backendImplementation: options.tool.implementation, invoke: options.tool.invoke })
+      backendImplementation: options.tool.implementation, invoke: options.tool.invoke,
+      ...(options.toolBudgets ? { requestBudgets: options.toolBudgets.execution } : {}) })
     runtime.addExecutor(tool.descriptor, cachedExecution(path.join(root, "cache"), tool.descriptor,
       tool.execute, options.tool.preflight))
     const judge = await activeJudge({ evidenceRoot: path.join(root, "active-judges"),
-      backendImplementation: options.tool.implementation, invoke: options.tool.invoke })
+      backendImplementation: options.tool.implementation, invoke: options.tool.invoke,
+      ...(options.toolBudgets ? { requestBudgets: options.toolBudgets.judging } : {}) })
     runtime.addChecker(judge.descriptor, cachedScoring(path.join(root, "cache"), judge.descriptor,
       judge.evaluate, options.tool.preflight))
   }

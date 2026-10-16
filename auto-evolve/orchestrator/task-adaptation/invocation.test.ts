@@ -55,6 +55,23 @@ test("adaptation rebuilds actual backend context and file grants, not only promp
   expect(prepared.request.prompt).not.toContain("reusable guidance")
 })
 
+test("adapted role derives private request budget from its own frozen task policy", async () => {
+  const f = await fixture()
+  const ledger = await mkdtemp(path.join(os.tmpdir(), "aev-role-budget-"))
+  f.request.model = "fixture/model"
+  f.input.requestBudget = { schema: "aev.task-budget-policy.v1", root: ledger, scope: "task",
+    models: [{ model: "fixture/model", expectedModels: ["wire-model"], dialect: "openai_chat", maxInputTokens: 1000, maxOutputTokens: 100 }] }
+  const ready = await authorizeInvocation(f.input, f.request)
+  expect(ready.request.requestBudget).toMatchObject({ role: "lead", budget: { root: ledger, calls: 10, tokens: 10000 } })
+  expect(ready.request.prompt).not.toContain(ledger)
+  expect(ready.request.permissionReadPaths).not.toContain(ledger)
+  f.input.requestBudget.root = f.root
+  await expect(authorizeInvocation(f.input, f.request)).rejects.toThrow("outside model materials")
+  f.input.requestBudget = undefined
+  f.request.requestBudget = ready.request.requestBudget
+  expect((await authorizeInvocation(f.input, f.request)).request.requestBudget).toBeUndefined()
+})
+
 test("review advice is opt-in, on-demand and never grants its embedded references", async () => {
   const f = await fixture()
   f.plan.windows[0].runtime = ["review"]

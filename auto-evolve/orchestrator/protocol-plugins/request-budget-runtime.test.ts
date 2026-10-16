@@ -8,6 +8,7 @@ import { compile } from "./compile"
 import type { Settings, Selection } from "./contract"
 import { inspectBudget } from "../task-adaptation/request-budget"
 import { summarizeResources } from "./resource-summary"
+import { taskRuntimeBudgets } from "../task-adaptation/budget-policy"
 
 for (const calls of [1, 2]) test(`actual HTTP execution and model judging share ${calls}-request admission limit`, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aev-budget-runtime-"))
@@ -24,9 +25,9 @@ for (const calls of [1, 2]) test(`actual HTTP execution and model judging share 
   try {
     const config = { root: path.join(root, "budget"), scope: "shared-task", calls, tokens: 1000 }
     const backend = path.join(root, "backend")
-    const runtime = await builtins(backend, { httpBudgets: {
-      execution: { config, role: "independent", tokenCeiling: 300 },
-      judging: { config, role: "checker", tokenCeiling: 300 } } })
+    const runtime = await builtins(backend, taskRuntimeBudgets({ schema: "aev.task-budget-policy.v1", root: config.root, scope: config.scope,
+      models: [{ model: "fixture-model", expectedModels: ["fixture-model"], dialect: "openai_chat", maxInputTokens: 200, maxOutputTokens: 100 }] },
+      { calls, tokens: 1000, rounds: 2, stagnant: 1 }))
     const http: Settings = { dialect: "openai_chat", url: `${server.url.origin}/chat`, allowedOrigins: [server.url.origin],
       model: "fixture-model", expectedModel: "fixture-model", credentialEnv, systemInput: "system", userInputs: ["user"],
       skillPlacement: "system", maxTokens: 100, maxInputBytes: 10000, maxResponseBytes: 4000, temperature: 0, timeoutMs: 2000 }

@@ -14,8 +14,10 @@ import { canonical, fingerprint } from "./identity"
 import { protocolRepairDirective } from "./failure-routing"
 import { taskFromPack } from "./project-pack"
 import { attemptAccounting } from "./attempt-accounting"
+import type { BuiltinOptions } from "./builtins"
 
 export async function campaignAcceptance(input: {
+  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets">
   campaignRoot: string
   cwd?: string
   campaignID: string
@@ -36,7 +38,7 @@ export async function campaignAcceptance(input: {
     throw error
   }
   if (await pathExists(input.resultPath)) throw new Error("Campaign acceptance result already exists; inspect original evidence")
-  const engine = runtime ?? await selectedRuntime(path.join(input.campaignRoot, "protocol-backends"), input.cwd, input.entry)
+  const engine = runtime ?? await selectedRuntime(path.join(input.campaignRoot, "protocol-backends"), input.cwd, input.entry, undefined, input.budgets)
   const receipt = await runEntry(input.campaignRoot, input.entry, input.candidateRoot, input.attemptRoot, engine)
   const prepared = await prepareEntry(input.campaignRoot, input.entry, engine)
   if (!prepared) throw new Error("Frozen feedback protocol required")
@@ -94,6 +96,7 @@ export async function campaignAcceptance(input: {
 }
 
 export async function verifyCompletedCampaignAcceptance(input: {
+  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets">
   campaignRoot: string; cwd: string; campaignID: string; roundNumber: number;
   runID: string; entry: Entry; candidateRoot: string; resultPath: string;
 }) {
@@ -114,13 +117,14 @@ export async function verifyCompletedCampaignAcceptance(input: {
   if (!await pathExists(receiptPath) || !await pathExists(path.join(path.dirname(receiptPath), "protocol.completed.json"))) {
     throw new Error("Completed Campaign acceptance evidence missing")
   }
-  const runtime = await selectedRuntime(path.join(input.campaignRoot, "protocol-backends"), input.cwd, input.entry)
+  const runtime = await selectedRuntime(path.join(input.campaignRoot, "protocol-backends"), input.cwd, input.entry, undefined, input.budgets)
   const receipt = await runEntry(input.campaignRoot, input.entry, input.candidateRoot, path.dirname(receiptPath), runtime,
     { reuseCompleted: true })
   if (receipt.status !== "passed" || result.protocolClaim !== receipt.claim) throw new Error("Completed Campaign acceptance verdict drift")
 }
 
 export async function readCompletedRejectedCampaignPass(input: {
+  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets">
   campaignRoot: string; cwd: string; campaignID: string; roundNumber: number;
   runID: string; entry: Entry; resultPath: string;
 }) {
@@ -137,7 +141,7 @@ export async function readCompletedRejectedCampaignPass(input: {
   const receipt = JSON.parse((await readFile(result.protocolReceiptPath, "utf8")).replace(/^\uFEFF/, ""))
   const checkpoint = JSON.parse((await readFile(path.join(dir, "protocol.completed.json"), "utf8")).replace(/^\uFEFF/, ""))
   const accounting = JSON.parse((await readFile(path.join(dir, "protocol.accounting.json"), "utf8")).replace(/^\uFEFF/, ""))
-  const runtime = await selectedRuntime(path.join(input.campaignRoot, "protocol-backends"), input.cwd, input.entry)
+  const runtime = await selectedRuntime(path.join(input.campaignRoot, "protocol-backends"), input.cwd, input.entry, undefined, input.budgets)
   const prepared = await prepareEntry(input.campaignRoot, input.entry, runtime)
   // 历史拒绝只作反馈，不把已变化的当前Skill冒充旧送验版本。
   if (!prepared || canonical(training) !== canonical(expected) || receipt.status !== "rejected" ||

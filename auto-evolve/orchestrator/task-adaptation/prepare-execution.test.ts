@@ -10,7 +10,7 @@ import { TRAINING_ROLES, type TrainingConfig } from "../protocol-plugins/trainin
 import { loadLongTaskSpec } from "../long-task/spec"
 import { prepareEntry } from "../protocol-plugins/entry"
 import { authorContext } from "../protocol-plugins/author-context"
-import { loadTaskContext } from "./context"
+import { loadTaskContext, taskInvocation, taskBudgetOptions } from "./context"
 import { prepareTaskRun } from "./prepare-task-run"
 
 async function fixture(kind: "report" | "software" | "skill" = "report") {
@@ -59,6 +59,26 @@ test("missing real checker binding is explicit without creating a run", async ()
   f.input.checkers = []
   expect(await prepareExecution(f.input, f.rt.registry)).toEqual({ status: "missing_bindings", missing: ["checker:support"] })
   await expect(readFile(path.join(f.input.dir, "execution-preparation.started.claim"))).rejects.toThrow()
+})
+
+test("generated spec freezes shared budget through role and acceptance runtime configuration", async () => {
+  const f = await fixture()
+  f.input.requestBudget = { schema: "aev.task-budget-policy.v1", root: path.join(f.parent, "ledger"), scope: "whole-task",
+    models: [{ model: "offline/author", dialect: "openai_chat", expectedModels: ["author"], maxInputTokens: 1000, maxOutputTokens: 100 }] }
+  const output = await prepareExecution(f.input, f.rt.registry)
+  if (output.status !== "ready") throw new Error("Not ready")
+  const loaded = (await loadLongTaskSpec(output.specPath)).spec
+  expect(loaded.taskAdaptation?.requestBudget).toEqual(f.input.requestBudget)
+  const campaign = path.join(f.parent, "campaign")
+  const prepared = await prepareEntry(campaign, loaded.protocolPlugins, f.rt)
+  if (!prepared) throw new Error("Protocol missing")
+  loaded.protocolAuthorContext = authorContext(prepared.entry, prepared.protocol, prepared.project)
+  loaded.taskAdaptationContext = await loadTaskContext(loaded, path.join(campaign, "task-adaptation"))
+  expect(taskInvocation(loaded, "lead")?.requestBudget).toEqual(f.input.requestBudget)
+  expect((await taskBudgetOptions(loaded)).httpBudgets?.judging.config).toMatchObject({ root: f.input.requestBudget.root,
+    calls: f.input.plan.stop.calls, tokens: f.input.plan.stop.tokens })
+  loaded.taskAdaptation!.requestBudget!.scope = "altered"
+  await expect(loadTaskContext(loaded, path.join(campaign, "task-adaptation"))).rejects.toThrow("drift")
 })
 
 test("generated artifact drift and source drift block preparation reuse", async () => {

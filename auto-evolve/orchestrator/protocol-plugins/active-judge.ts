@@ -6,7 +6,8 @@ import { fingerprint } from "./identity"
 import type { Evaluate } from "./runtime"
 import { toolSession, type InvokeTool } from "./tool-session"
 
-export async function activeJudge(options: { evidenceRoot: string; backendImplementation: string; invoke: InvokeTool }) {
+export async function activeJudge(options: { evidenceRoot: string; backendImplementation: string; invoke: InvokeTool;
+  requestBudgets?: Parameters<typeof toolSession>[0]["requestBudgets"] }) {
   const tool = await toolSession({ ...options, purpose: "checking" })
   const own = createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex")
   function settings(value: Settings) {

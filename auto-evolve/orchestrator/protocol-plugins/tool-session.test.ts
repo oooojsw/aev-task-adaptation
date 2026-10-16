@@ -32,6 +32,26 @@ test("tool session stages bytes with safe names and explicit no-shell fresh work
   expect(Buffer.from(result.product!.bytes).toString()).toBe("Result")
 })
 
+test("tool backend receives selected task budget privately and rejects missing model mapping", async () => {
+  const cfg = { schema: "aev.budget-transport.v1" as const, budget: { root: root(), scope: "task", calls: 2, tokens: 10000 },
+    role: "independent", dialect: "openai_chat" as const, expectedModels: ["fixture"], maxInputTokens: 1000, maxOutputTokens: 100 }
+  let calls = 0
+  const p = await toolSession({ evidenceRoot: root(), backendImplementation: "a".repeat(64), requestBudgets: { fixture: cfg },
+    invoke: async request => {
+      calls++
+      expect(request.requestBudget).toEqual(cfg)
+      expect(request.prompt).not.toContain(cfg.budget.root)
+      expect(request.readPaths).not.toContain(cfg.budget.root)
+      await writeFile(path.join(request.workDir, "workspace", "final.txt"), "Result")
+      return { completed: true, actualModel: "fixture" }
+    } })
+  expect((await p.execute(input())).status).toBe("completed")
+  const request = input()
+  request.settings.model = "unbound"
+  await expect(p.execute(request)).rejects.toThrow("no task budget")
+  expect(calls).toBe(1)
+})
+
 test("missing product and wrong model are infrastructure failures", async () => {
   for (const model of ["fixture", "wrong"]) {
     const p = await plugin(async () => ({ completed: true, actualModel: model }))

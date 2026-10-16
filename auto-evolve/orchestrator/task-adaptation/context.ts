@@ -10,6 +10,7 @@ import { validatePlan, type Role } from "./plan"
 import type { Invocation } from "./invocation"
 import { loadPack } from "../protocol-plugins/project-pack"
 import type { AdviceReference } from "./advice"
+import { freezeTaskBudgetPolicy, validateTaskBudgetPolicy, taskRuntimeBudgets, taskRequestBudget, type TaskBudgetPolicy } from "./budget-policy"
 
 export interface Adaptation {
   schema: "aev.task-adaptation.v1"
@@ -17,19 +18,29 @@ export interface Adaptation {
   root: string
   capabilities: string[]
   entries: Array<{ id: string; path: string }>
+  requestBudget?: TaskBudgetPolicy
 }
 
 export function validateAdaptation(value: unknown): Adaptation {
   const cfg = value as Adaptation
   if (!cfg || typeof cfg !== "object" || Array.isArray(cfg) || cfg.schema !== "aev.task-adaptation.v1" ||
-    Object.keys(cfg).some(key => !["schema", "planPath", "root", "capabilities", "entries"].includes(key)) ||
+    Object.keys(cfg).some(key => !["schema", "planPath", "root", "capabilities", "entries", "requestBudget"].includes(key)) ||
     ![cfg.planPath, cfg.root].every(file => typeof file === "string" && path.isAbsolute(file)) ||
     !Array.isArray(cfg.capabilities) || cfg.capabilities.some(id => typeof id !== "string" || !id.trim()) ||
     new Set(cfg.capabilities).size !== cfg.capabilities.length || !Array.isArray(cfg.entries) || !cfg.entries.length ||
     cfg.entries.some(entry => !entry || typeof entry.id !== "string" || !entry.id.trim() || typeof entry.path !== "string" ||
       entry.path.includes("\\") || entry.path.includes(":") || entry.path.split("/").some(part => !part || part === "." || part === "..")) ||
     new Set(cfg.entries.map(entry => entry.id)).size !== cfg.entries.length) throw new Error("Invalid task adaptation configuration")
+  if (cfg.requestBudget) validateTaskBudgetPolicy(cfg.requestBudget)
   return structuredClone(cfg)
+}
+
+export async function taskBudgetOptions(spec: LongTaskSpec) {
+  if (!spec.taskAdaptation?.requestBudget) return {}
+  const cfg = validateAdaptation(spec.taskAdaptation)
+  const plan = validatePlan(JSON.parse((await readFile(cfg.planPath, "utf8")).replace(/^\uFEFF/, "")))
+  if (spec.taskAdaptationContext && canonical(spec.taskAdaptationContext.plan) !== canonical(plan)) throw new Error("Task budget plan drift")
+  return taskRuntimeBudgets(cfg.requestBudget, plan.stop)
 }
 
 export async function loadTaskContext(spec: LongTaskSpec, dir: string): Promise<BoundPlan | undefined> {
@@ -60,6 +71,14 @@ export async function loadTaskContext(spec: LongTaskSpec, dir: string): Promise<
     !phase.skill.entries.some(entry => entry.id === id)) ||
     canonical(cfg.entries) !== canonical(phase.skill.entries.map(({ id, path }) => ({ id, path })))) throw new Error("Task deliverable does not match protocol entry files")
   await verifyProtocolScopes(plan, cfg.root, project, spec.protocolPlugins.taskID, actualPhase)
+  if (cfg.requestBudget) {
+    const models = [...Object.values(spec.protocolTraining?.roles ?? {}).map(item => item.model),
+      actualPhase.executor?.settings.model, ...actualPhase.checks.map(item => item.settings.model ??
+        (item.settings.http && typeof item.settings.http === "object" ? (item.settings.http as Record<string, unknown>).model : undefined))]
+    // 模型绑定先齐全再训练，不能做完作者工作才发现裁判缺预算配置。
+    for (const model of models) if (typeof model === "string") taskRequestBudget(cfg.requestBudget, plan.stop, "preflight", model)
+  }
+  await freezeTaskBudgetPolicy(dir, cfg.requestBudget, plan)
   return freezePlan(dir, cfg.root, plan, cfg.capabilities)
 }
 
@@ -127,6 +146,7 @@ export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidat
   if (input.advice?.length && !spec.taskAdaptationCampaignRoot) throw new Error("Task advice campaign identity missing")
   return { bound, role, stage: role === "lead" || role === "diagnostician" ? "revise" : role === "reviewer" || role === "checker" || role === "independent" ? "accept" : "explore",
     ...(input.worker ? { worker: input.worker } : {}), output: input.output ?? output, maxInlineBytes: 16000,
+    ...(spec.taskAdaptation.requestBudget ? { requestBudget: spec.taskAdaptation.requestBudget } : {}),
     ...(input.advice?.length ? { advice: input.advice.map(item => ({ ...item, root: spec.taskAdaptationCampaignRoot! })) } : {}),
     ...(feedback ? { feedback: { root: spec.taskAdaptationCampaignRoot!, path: feedback,
       task: spec.protocolPlugins!.taskID, phase: spec.protocolPlugins!.phase } } : {}),

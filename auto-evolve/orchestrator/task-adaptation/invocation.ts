@@ -7,6 +7,7 @@ import { createHash } from "node:crypto"
 import type { Role, Stage } from "./plan"
 import { taskFeedback, type FeedbackReference } from "./feedback"
 import { taskAdvice, type AdviceReference } from "./advice"
+import { taskRequestBudget, type TaskBudgetPolicy } from "./budget-policy"
 
 export interface Invocation {
   bound: BoundPlan
@@ -18,12 +19,20 @@ export interface Invocation {
   candidate?: { root: string; entries: Array<{ id: string; path: string }> }
   feedback?: FeedbackReference
   advice?: AdviceReference[]
+  requestBudget?: TaskBudgetPolicy
 }
 
 export async function authorizeInvocation(input: Invocation, request: OpencodeTaskInput) {
   if (!Number.isSafeInteger(input.maxInlineBytes) || input.maxInlineBytes < 0 || input.maxInlineBytes > 64000 ||
     typeof input.output !== "string" || !input.output.trim()) throw new Error("Explicit bounded role output contract required")
   const original = await boundWindow(input.bound, input.role, input.stage, input.worker)
+  const budget = input.requestBudget ? taskRequestBudget(input.requestBudget, input.bound.plan.stop, input.role, request.model ?? "") : undefined
+  if (budget) {
+    for (const root of [input.bound.root, input.candidate?.root].filter((value): value is string => Boolean(value))) {
+      const relative = path.relative(root, budget.budget.root)
+      if (!relative || relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) throw new Error("Task budget ledger must remain outside model materials")
+    }
+  }
   const relocated = new Map<string, { id: string; path: string; sha256: string; bytes: number }>()
   if (input.candidate) {
     if (!path.isAbsolute(input.candidate.root)) throw new Error("Absolute candidate root required")
@@ -80,6 +89,7 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
   ].join("\n")
   // 丢弃原请求附件及内联上下文，避免旧角色授权借新入口混入。
   return { request: { ...request, prompt, allowShell: false, sourceHost: true,
+    requestBudget: budget,
     config: { ...request.config, permissionConfig: { ...request.config.permissionConfig, version: 1, mode: "restricted" as const } },
     isolateHostRuntime: true, infrastructureAttempts: 1,
     injectPlatformSafetyRules: false,

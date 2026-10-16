@@ -1,7 +1,7 @@
 ﻿import path from "node:path"
 import process from "node:process"
 import { freezeTraining, verifyTraining, trainingExecution, trainingRuntimeBudget, type TrainingRole } from "../protocol-plugins/training"
-import { loadTaskContext, taskInvocation, seedTaskCandidate } from "../task-adaptation/context"
+import { loadTaskContext, taskInvocation, seedTaskCandidate, taskBudgetOptions } from "../task-adaptation/context"
 import { recordTaskVersion, readTaskVersions, chooseTaskVersion } from "../task-adaptation/selection"
 import { randomUUID } from "node:crypto"
 import { cp, lstat, readdir, rm } from "node:fs/promises"
@@ -4583,7 +4583,7 @@ async function prepareCampaignProtocol(root: string, spec: LongTaskSpec, existin
   if (existing && spec.protocolPlugins && !prepared) throw new Error("Cannot enable protocol plugins on existing legacy campaign")
   if (!spec.protocolPlugins) throw new Error("Protocol entry removed from existing plugin campaign")
   const binding = await prepareEntry(root, spec.protocolPlugins,
-    await selectedRuntime(path.join(root, "protocol-backends"), cwd, spec.protocolPlugins))
+    await selectedRuntime(path.join(root, "protocol-backends"), cwd, spec.protocolPlugins, undefined, await taskBudgetOptions(spec)))
   if (binding) spec.protocolAuthorContext = authorContext(binding.entry, binding.protocol, binding.project)
   if (existing && spec.protocolTraining && !await pathExists(path.join(root, "protocol-training"))) {
     throw new Error("Cannot enable training config on an existing unconfigured Campaign")
@@ -4617,6 +4617,7 @@ async function runCampaignFinalAcceptance(input: {
   const acceptanceResultPath = input.finalAcceptanceResultPath ?? input.roundPaths.finalAcceptanceResultPath
   if (input.baseSpec.protocolPlugins) {
     return campaignAcceptance({ campaignRoot: input.campaignPaths.root, cwd: input.cwd, campaignID: input.campaignID,
+      budgets: await taskBudgetOptions(input.baseSpec),
       roundNumber: input.roundNumber, runID: input.sourceRunID, entry: input.baseSpec.protocolPlugins,
       candidateRoot: input.pendingPackageRoot, attemptRoot: acceptanceRoot, resultPath: acceptanceResultPath })
   }
@@ -6049,6 +6050,7 @@ export async function resumeLongTaskCampaign(input: {
       (!baseSpec.taskAdaptation || existingState.lastFinalAcceptancePassed)) {
       if (!existingState.lastFinalAcceptanceResultPath || !existingState.lastRunID) throw new Error("Completed Campaign acceptance identity missing")
       await verifyCompletedCampaignAcceptance({ campaignRoot: campaignPaths.root, cwd: input.cwd,
+        budgets: await taskBudgetOptions(baseSpec),
         campaignID: input.campaignID, roundNumber: existingState.currentRound, runID: existingState.lastRunID,
         entry: baseSpec.protocolPlugins, candidateRoot: campaignPaths.pendingCurrentRoot,
         resultPath: existingState.lastFinalAcceptanceResultPath })
@@ -6581,6 +6583,7 @@ export async function resumeLongTaskCampaign(input: {
           // 已完成拒绝只复用反馈；不得重做作者或覆盖旧验收。
           if (baseSpec.protocolPlugins && await pathExists(acceptancePassResultPath)) {
             const saved = await readCompletedRejectedCampaignPass({ campaignRoot: campaignPaths.root,
+              budgets: await taskBudgetOptions(baseSpec),
               cwd: input.cwd, campaignID: input.campaignID, roundNumber, runID: runResult.runID,
               entry: baseSpec.protocolPlugins, resultPath: acceptancePassResultPath })
             finalAcceptance = saved
