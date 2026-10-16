@@ -1,6 +1,7 @@
 import path from "node:path"
 import { lstat, realpath } from "node:fs/promises"
 import type { ToolRequest } from "./tool-session"
+import { validateBudgetTransport } from "../task-adaptation/budget-transport"
 
 function absolute(value: unknown): asserts value is string {
   if (typeof value !== "string" || !path.isAbsolute(value) || /[*?\x00]/.test(value)) {
@@ -35,6 +36,16 @@ export async function validateToolRequest(request: ToolRequest) {
   }
   // 空读取清单可能触发旧宿主开放权限，新入口必须先阻断。
   absolute(request.workDir)
+  if (request.requestBudget) {
+    const cfg = validateBudgetTransport(request.requestBudget)
+    // 预算和计量文件不属于Agent可读写的任务材料。
+    for (const root of [request.workDir, ...request.readPaths, ...request.editPaths]) {
+      const relative = path.relative(root, cfg.budget.root)
+      if (!relative || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))) {
+        throw new Error("Provider budget must remain outside model permission roots")
+      }
+    }
+  }
   await canonicalPath(request.workDir, false)
   if (!(await lstat(request.workDir)).isDirectory()) throw new Error("Tool workDir must be a directory")
   for (const file of request.readPaths) {

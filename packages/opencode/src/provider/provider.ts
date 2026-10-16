@@ -11,6 +11,7 @@ import { Plugin } from "../plugin"
 import { NamedError } from "@opencode-ai/util/error"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
 import { ModelsDev } from "./models"
+import { fetchWithTaskBudget, taskBudgetIdentity } from "./aev-request-budget"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { Instance } from "../project/instance"
@@ -1335,6 +1336,7 @@ export namespace Provider {
               providerID: model.providerID,
               npm: model.api.npm,
               options,
+              taskBudget: taskBudgetIdentity(model.api.id, model.limit.context),
             }),
           )
           const existing = s.sdk.get(key)
@@ -1374,11 +1376,12 @@ export namespace Provider {
               }
             }
 
-            const res = await fetchFn(input, {
+            const requestOptions = {
               ...opts,
               // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
               timeout: false,
-            })
+            }
+            const res = await fetchWithTaskBudget(input, requestOptions, model.limit.context, fetchFn)
 
             if (!chunkAbortCtl) return res
             return wrapSSE(res, chunkTimeout, chunkAbortCtl)

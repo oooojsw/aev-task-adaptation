@@ -37,6 +37,7 @@ export async function runProtocolTrainingTask(options: { enabled: boolean; stage
   const clock = performance.now()
   const requestFingerprint = fingerprint({ role: options.role, title: request.title, prompt: request.prompt,
     model: request.model ?? null, variant: request.variant ?? null, runtimeBudget: request.runtimeBudget ?? null, sourceHost: true,
+    ...(request.requestBudget ? { requestBudget: request.requestBudget } : {}),
     references: request.referencePaths ?? [], reads: request.permissionReadPaths ?? [], edits: request.permissionEditPaths ?? [],
     ...(adapted ? { taskWindow: adapted.scope, allowShell: request.allowShell, isolateHostRuntime: request.isolateHostRuntime,
       infrastructureAttempts: request.infrastructureAttempts, permissionMode: request.config.permissionConfig.mode } : {}) })

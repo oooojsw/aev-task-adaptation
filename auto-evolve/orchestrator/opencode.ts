@@ -6,6 +6,7 @@ import { copyFile, readFile, readdir, realpath, rm, stat } from "node:fs/promise
 import { setTimeout as sleep } from "node:timers/promises"
 import { buildActionTrace } from "./action-trace"
 import { infrastructureAttempts } from "./opencode-retry-policy"
+import { budgetTransportEnvironment, validateBudgetTransport, type BudgetTransportConfig } from "./task-adaptation/budget-transport"
 import type { AutoEvolveConfig, LoadedPermissionConfig } from "./schema"
 import type { ToolFailure } from "./evaluator"
 import {
@@ -147,6 +148,7 @@ export interface OpencodeModelResolution {
 }
 
 export interface OpencodeTaskInput {
+  requestBudget?: BudgetTransportConfig
   infrastructureAttempts?: number
   /** Repository root used to find dependencies, runtime config, and local OpenCode binary. */
   cwd: string
@@ -1114,6 +1116,7 @@ async function runOpencodeTaskOnce(
     ...(await ensureRuntimeEnvironment(input.cwd, runLabel)),
     ...(isolatedRuntime?.env ?? {}),
   }
+  const requestBudgetEnv = await budgetTransportEnvironment(input.requestBudget, overrideConfigDir)
 
   const opencodeCmd = input.sourceHost ? process.execPath : await resolveOpencodeCommand(input.cwd)
   const sourceEntry = path.join(input.cwd, "packages", "opencode", "src", "index.ts")
@@ -1237,6 +1240,7 @@ async function runOpencodeTaskOnce(
       cwd: taskWorkDir,
       env: {
         ...runtimeEnv,
+        ...requestBudgetEnv,
         ...(input.sourceHost ? { OPENCODE_AEV_ABSOLUTE_PERMISSIONS: "1" } : {}),
         OPENCODE_CONFIG_DIR: overrideConfigDir,
         ...(typeof input.config.modelConfig.limits.requestsPerMinute === "number"
@@ -1337,6 +1341,11 @@ async function runOpencodeTaskOnce(
 }
 
 export async function runOpencodeTask(input: OpencodeTaskInput): Promise<OpencodeTaskRun> {
+  if (input.requestBudget) {
+    validateBudgetTransport(input.requestBudget)
+    // 只有已插桩的源码宿主可接预算，未知失败不自动重开会话。
+    if (!input.sourceHost || input.infrastructureAttempts !== 1) throw new Error("Provider budget requires single-attempt source host")
+  }
   const maxAttempts = infrastructureAttempts(input.infrastructureAttempts)
   startStaleOpencodeRuntimeCleanup(input.cwd)
 

@@ -59,6 +59,8 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     const usageSource = await readFile(fileURLToPath(new URL("./backend-usage.ts", import.meta.url)))
     const boundarySource = await readFile(fileURLToPath(new URL("./tool-request-boundary.ts", import.meta.url)))
     const retryPolicy = await readFile(fileURLToPath(new URL("../opencode-retry-policy.ts", import.meta.url)))
+    const budgetTransport = await readFile(fileURLToPath(new URL("../task-adaptation/budget-transport.ts", import.meta.url)))
+    const budgetLedger = await readFile(fileURLToPath(new URL("../task-adaptation/request-budget.ts", import.meta.url)))
     const key = fingerprint({ cwd, profile, files: files.sort((a, b) => a.path.localeCompare(b.path)),
       sourceHost: { kind: options.invoke ? "injected-test-boundary" : "bun-source", executable: process.execPath,
         version: typeof Bun === "undefined" ? null : Bun.version, files: hostFiles.sort((a, b) => a.path.localeCompare(b.path)) },
@@ -66,7 +68,9 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
       own: createHash("sha256").update(own).digest("hex"),
       usageSource: createHash("sha256").update(usageSource).digest("hex"),
       boundarySource: createHash("sha256").update(boundarySource).digest("hex"),
-      retryPolicy: createHash("sha256").update(retryPolicy).digest("hex") })
+      retryPolicy: createHash("sha256").update(retryPolicy).digest("hex"),
+      budgetTransport: createHash("sha256").update(budgetTransport).digest("hex"),
+      budgetLedger: createHash("sha256").update(budgetLedger).digest("hex") })
     return { key, config: normalized }
   }
   const frozen = await identity()
@@ -103,6 +107,7 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     // 每次传副本，避免宿主修改冻结配置影响后续请求。
     const result = await invoke({ cwd, workDir: request.workDir, config: structuredClone(frozen.config),
       title: "Protocol independent tool execution", prompt: request.prompt, model: request.model, sourceHost: true,
+      ...(request.requestBudget ? { requestBudget: request.requestBudget } : {}),
       referencePaths: request.readPaths, permissionReadPaths: request.readPaths,
       permissionEditPaths: request.editPaths, allowShell: false, isolateHostRuntime: true,
       permissionExternalPaths: [...externalPaths],

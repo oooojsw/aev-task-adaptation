@@ -60,6 +60,21 @@ test("driver freezes host config and sends explicit single-attempt no-shell requ
   expect(calls).toBe(1)
 })
 
+test("selected tool request forwards budget privately without broadening model read grants", async () => {
+  const f = await fixture()
+  const budget = { schema: "aev.budget-transport.v1" as const, budget: { root: path.join(f.cwd, "..", `budget-${randomUUID()}`),
+    scope: "task", calls: 10, tokens: 10000 }, role: "independent", dialect: "openai_chat" as const,
+    expectedModels: ["model"], maxInputTokens: 1000, maxOutputTokens: 100 }
+  const driver = await opencodeDriver({ ...f, load: async () => structuredClone(DEFAULT_CONFIG), invoke: async input => {
+    expect(input.requestBudget).toEqual(budget)
+    expect(input.referencePaths).not.toContain(budget.budget.root)
+    expect(input.permissionReadPaths).not.toContain(budget.budget.root)
+    return response(input)
+  } })
+  const result = await driver.invoke({ ...request(f.cwd), requestBudget: budget }, new AbortController().signal)
+  expect(result.completed).toBe(true)
+})
+
 test("profile or config drift blocks before cached reuse or backend invocation", async () => {
   const f = await fixture()
   const config = structuredClone(DEFAULT_CONFIG)

@@ -8,6 +8,7 @@ import type { Settings, ExecutorPlugin } from "./contract"
 import type { Execute, PublicInputs } from "./runtime"
 
 export interface ToolRequest {
+  requestBudget?: import("../task-adaptation/budget-transport").BudgetTransportConfig
   workDir: string
   prompt: string
   model: string

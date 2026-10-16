@@ -345,3 +345,29 @@ model request or exposing the credential. The unified preparation entry now
 performs these default local dependency checks before paid task interpretation.
 This proves local prerequisites only, not remote availability or remaining quota.
 The old execution entry is unchanged; checks are added to the new task workflow.
+
+## Explicit OpenCode wire-budget transport
+
+`budget-transport.ts` instruments actual SDK transport, not role-session counts.
+The source host receives a frozen private configuration file pointer and hash;
+this file is not injected into the model's prompt or read grants. Explicit
+budgeting requires the source host and a single infrastructure attempt.
+Unselected invocations clear inherited budget pointers and otherwise retain
+their existing transport behavior.
+
+The provider hook uses the same outgoing JSON and the same incoming bytes.
+Supported wire dialects are OpenAI Chat, Responses and Anthropic Messages.
+Each dispatch, including SDK retries, reserves separately. Streaming usage is
+read incrementally; cancellation, incomplete/malformed usage or transport
+failure retains an uncertain reservation and blocks further admission.
+Anthropic cache creation/read tokens count toward total consumption. Unsupported
+wire formats, unbounded output or insufficient input reservations fail before
+dispatch. The input reservation must cover the configured model context bound;
+it is deliberately not a byte-based token guess.
+
+Budget-enabled SDK cache identities include wire model and context bound to
+avoid inheriting the first model's bound through SDK reuse. Without a budget,
+the serialized cache identity and transport remain unchanged. Local HTTP and
+stream fixtures verify the hook, not a real full OpenCode/model task. Automatic
+task-plan budget propagation to every role/backend and controller stop handling
+remain unfinished; this is not yet a complete global budget guarantee.
