@@ -28,6 +28,7 @@ import { LspTool } from "./lsp"
 import { Truncate } from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
 import { AevLocalSearchTool } from "./aev-local-search"
+import { AevRecomputeTool } from "./aev-recompute"
 import { Glob } from "../util/glob"
 import { pathToFileURL } from "url"
 import { Effect, Layer, ServiceMap } from "effect"
@@ -133,6 +134,7 @@ export namespace ToolRegistry {
           SkillTool,
           ApplyPatchTool,
           ...(process.env.OPENCODE_AEV_LOCAL_SEARCH_FILE ? [AevLocalSearchTool] : []),
+          ...(process.env.OPENCODE_AEV_RECOMPUTE_FILE ? [AevRecomputeTool] : []),
           ...(Flag.OPENCODE_EXPERIMENTAL_LSP_TOOL ? [LspTool] : []),
           ...(cfg.experimental?.batch_tool === true ? [BatchTool] : []),
           ...(Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE && Flag.OPENCODE_CLIENT === "cli" ? [PlanExitTool] : []),

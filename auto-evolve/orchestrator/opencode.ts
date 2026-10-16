@@ -150,6 +150,8 @@ export interface OpencodeModelResolution {
 export interface OpencodeTaskInput {
   localSearch?: import("./task-adaptation/local-search").LocalSearchScope
   localSearchEvidenceRoot?: string
+  recompute?: import("./task-adaptation/recompute").RecomputeScope
+  recomputeEvidenceRoot?: string
   requestBudget?: BudgetTransportConfig
   infrastructureAttempts?: number
   /** Repository root used to find dependencies, runtime config, and local OpenCode binary. */
@@ -363,7 +365,7 @@ export async function buildEditPermissionRules(cwd: string, paths: string[]) {
 
 async function makeOverridePermissions(
   cwd: string,
-  input: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[]; localSearch?: boolean },
+  input: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[]; localSearch?: boolean; recompute?: boolean },
 ) {
   return {
     "*": "deny",
@@ -384,6 +386,7 @@ async function makeOverridePermissions(
     codesearch: "deny",
     skill: "deny",
     ...(input.localSearch ? { aev_local_search: "allow" } : {}),
+    ...(input.recompute ? { aev_recompute: "allow" } : {}),
     lsp: "deny",
   } as const
 }
@@ -708,7 +711,7 @@ async function ensureOverrideConfig(
   cwd: string,
   model: string | undefined,
   permissionConfig: LoadedPermissionConfig,
-  permissions: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[]; localSearch?: boolean },
+  permissions: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[]; localSearch?: boolean; recompute?: boolean },
   runLabel: string,
   injectPlatformSafetyRules = true,
   isolateHostRuntime = false,
@@ -793,6 +796,7 @@ async function ensureOverrideConfig(
             // Existing sessions allow shell with explicit read paths unless a caller opts out.
             allowShell: permissions.allowShell ?? (permissions.readPaths.length > 0 || isolateHostRuntime),
             localSearch: permissions.localSearch,
+            recompute: permissions.recompute,
           }),
   }
   await ensureDirectory(dir)
@@ -1106,6 +1110,14 @@ async function runOpencodeTaskOnce(
     const { validateLocalSearchAccess } = await import("./task-adaptation/local-search")
     validateLocalSearchAccess(input.localSearch, permissionReadPaths, permissionEditPaths, input.localSearchEvidenceRoot!)
   }
+  if (input.recompute) {
+    // 复算不借工具授权开放Shell，也不让模型改写计算回执。
+    if (!input.sourceHost || input.allowShell !== false || input.config.permissionConfig.mode !== "restricted" || !input.recomputeEvidenceRoot) {
+      throw new Error("Recompute requires restricted source host and durable evidence")
+    }
+    const { validateRecomputeAccess } = await import("./task-adaptation/recompute")
+    validateRecomputeAccess(input.recompute, permissionReadPaths, permissionEditPaths, input.recomputeEvidenceRoot)
+  }
   const isolateHostRuntime = shouldIsolateHostRuntime(input)
   const overrideConfigDir = await ensureOverrideConfig(
     input.cwd,
@@ -1117,6 +1129,7 @@ async function runOpencodeTaskOnce(
       externalPaths: input.permissionExternalPaths,
       allowShell: input.allowShell,
       localSearch: Boolean(input.localSearch),
+      recompute: Boolean(input.recompute),
     },
     runLabel,
     input.injectPlatformSafetyRules !== false,
@@ -1131,6 +1144,9 @@ async function runOpencodeTaskOnce(
   const { localSearchEnvironment } = await import("./task-adaptation/local-search")
   const localSearchEnv = await localSearchEnvironment(input.localSearch
     ? { ...input.localSearch, evidenceRoot: input.localSearchEvidenceRoot! } : undefined, overrideConfigDir)
+  const { recomputeEnvironment } = await import("./task-adaptation/recompute")
+  const recomputeEnv = await recomputeEnvironment(input.recompute
+    ? { ...input.recompute, evidenceRoot: input.recomputeEvidenceRoot! } : undefined, overrideConfigDir)
 
   const opencodeCmd = input.sourceHost ? process.execPath : await resolveOpencodeCommand(input.cwd)
   const sourceEntry = path.join(input.cwd, "packages", "opencode", "src", "index.ts")
@@ -1256,6 +1272,7 @@ async function runOpencodeTaskOnce(
         ...runtimeEnv,
         ...requestBudgetEnv,
         ...localSearchEnv,
+        ...recomputeEnv,
         ...(input.sourceHost ? { OPENCODE_AEV_ABSOLUTE_PERMISSIONS: "1" } : {}),
         OPENCODE_CONFIG_DIR: overrideConfigDir,
         ...(typeof input.config.modelConfig.limits.requestsPerMinute === "number"

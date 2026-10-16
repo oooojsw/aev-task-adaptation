@@ -526,3 +526,30 @@ experience-workspace, managed-process, CLI session and Copilot SDK files). The
 new task-plan/advice/budget environment type errors were fixed; this is not a
 claim that all remaining diagnostics are proven pre-existing. Three real task
 acceptances and the rest of the full objective remain outstanding.
+
+## Bounded arithmetic recomputation (2026-10-17)
+
+An explicit `recompute` action enables `aev_recompute` for that role/stage.
+It computes a JSON arithmetic tree, not JavaScript/Python or shell commands.
+Supported operations are add, sub, mul, div, pow, sqrt, min, max, sum and mean;
+limits are 256 nodes, depth 16, 128 operands and exponent magnitude 1024.
+Nonfinite inputs/results, division by zero and malformed operations are rejected.
+Arithmetic is IEEE-754 binary64, not guaranteed exact decimal or financial math.
+
+Numbers are supplied by the model. The tool does **not** verify source extraction,
+fetch files, browse, execute candidate programs or provide formal acceptance.
+Both prompt and result explicitly retain this distinction. Every successful
+calculation persists exact arguments/result, task/role identity and a fingerprint
+in the training invocation's evidence directory, outside model read/edit grants.
+
+Private configuration is hash-bound and validated before execution; source-tool
+permission is requested before computing. The source host requires restricted
+mode, shell disabled and durable evidence. Unselected invocations clear inherited
+bindings and do not enable the tool. Backend identity includes its implementation.
+The existing independent trusted-script acceptance executor remains separate;
+author-side arbitrary program execution still needs a constrained adapter.
+
+Targeted tests exercise actual arithmetic, limits, receipts, tamper/cancellation,
+role authorization, and the actual source tool with only SDK registration mocked.
+These are offline tests, not proof of live model tool selection or three-task
+end-to-end acceptance. The real source CLI was rechecked after tool registration.

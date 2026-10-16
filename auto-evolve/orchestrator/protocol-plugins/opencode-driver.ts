@@ -64,6 +64,7 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     const budgetLedger = await readFile(fileURLToPath(new URL("../task-adaptation/request-budget.ts", import.meta.url)))
     const readiness = await readFile(fileURLToPath(new URL("./host-preflight.ts", import.meta.url)))
     const localSearch = await readFile(fileURLToPath(new URL("../task-adaptation/local-search.ts", import.meta.url)))
+    const recompute = await readFile(fileURLToPath(new URL("../task-adaptation/recompute.ts", import.meta.url)))
     const key = fingerprint({ cwd, profile, files: files.sort((a, b) => a.path.localeCompare(b.path)),
       sourceHost: { kind: options.invoke ? "injected-test-boundary" : "bun-source", executable: process.execPath,
         version: typeof Bun === "undefined" ? null : Bun.version, files: hostFiles.sort((a, b) => a.path.localeCompare(b.path)) },
@@ -75,7 +76,8 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
       budgetTransport: createHash("sha256").update(budgetTransport).digest("hex"),
       budgetLedger: createHash("sha256").update(budgetLedger).digest("hex"),
       readiness: createHash("sha256").update(readiness).digest("hex"),
-      localSearch: createHash("sha256").update(localSearch).digest("hex") })
+      localSearch: createHash("sha256").update(localSearch).digest("hex"),
+      recompute: createHash("sha256").update(recompute).digest("hex") })
     return { key, config: normalized }
   }
   const frozen = await identity()

@@ -8,6 +8,7 @@ import { runProtocolTrainingTask } from "../protocol-plugins/training-invocation
 import type { Plan } from "./plan"
 import type { OpencodeTaskInput, OpencodeTaskRun } from "../opencode"
 import { searchLocalFiles } from "./local-search"
+import { recompute } from "./recompute"
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "aev-task-invocation-"))
@@ -124,6 +125,29 @@ test("review advice is opt-in, on-demand and never grants its embedded reference
   expect(prepared.request.permissionEditPaths).not.toContain(advice.path)
   await writeFile(advice.path, JSON.stringify({ ...view, advisoryOnly: false }))
   await expect(authorizeInvocation(f.input, f.request)).rejects.toThrow("Published task advice drift")
+})
+
+test("recompute action enables bounded arithmetic with persistent evidence, never shell or inherited grants", async () => {
+  const f = await fixture()
+  f.plan.windows[0].actions.push("recompute")
+  f.input.bound = await f.bind()
+  await runProtocolTrainingTask({ enabled: true, stageDir: path.join(f.root, "stage"), role: "lead", adaptation: f.input },
+    f.request, async request => {
+      expect(request.recompute).toMatchObject({ schema: "aev.recompute.v1", role: "lead", task: f.input.bound.fingerprint })
+      expect(request.recomputeEvidenceRoot).toContain("protocol-invocations")
+      expect(request.allowShell).toBe(false)
+      expect(request.prompt).toContain("does not verify where your numbers came from")
+      const result = await recompute({ ...request.recompute!, evidenceRoot: request.recomputeEvidenceRoot! }, { op: "add", args: [2, 3] })
+      expect(result.result).toBe(5)
+      return { result: { exitCode: 0, events: [] } } as unknown as OpencodeTaskRun
+    })
+  f.request.recompute = { schema: "aev.recompute.v1", task: f.input.bound.fingerprint, role: "lead" }
+  f.request.recomputeEvidenceRoot = "E:/must-not-inherit"
+  f.plan.windows[0].actions = ["read", "edit"]
+  f.input.bound = await f.bind()
+  const restricted = (await authorizeInvocation(f.input, f.request)).request
+  expect(restricted.recompute).toBeUndefined()
+  expect(restricted.recomputeEvidenceRoot).toBeUndefined()
 })
 
 test("undeclared runtime advice is not opened and declared advice cannot scan arbitrary files", async () => {
