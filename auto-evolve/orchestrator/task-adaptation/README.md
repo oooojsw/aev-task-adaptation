@@ -582,3 +582,19 @@ values**, not measured real-model tokens or costs. The first configuration trial
 was rejected before any HTTP send because its declared input reservation was below
 the model's context ceiling; that failure evidence was preserved, not hidden.
 None of these checks closes the outstanding three real-model task requirement.
+
+## Windows long working directories (2026-10-17)
+
+The first real report Campaign reached formal checking but its checker process
+failed before any provider request: Windows CreateProcess rejected its 276-character
+working directory (WinError 267). An extended-path prefix did not fix that OS
+boundary. The existing Windows no-console wrapper now resolves long cwd values
+to an existing short-name alias and verifies physical directory identity before
+starting the child. Normal cwd behavior, command arguments, grants and inputs are
+unchanged. It never falls back to a parent; unavailable short names fail closed.
+
+Actual child-process tests cover ordinary and long directories. An actual source
+host/SDK/tool fixture also completed from a nested long evidence path. These are
+local tests, not real report acceptance. Original failed evidence is retained;
+recovery must explicitly reuse the completed candidate and preserve billing limits,
+not regenerate the report or silently retry an unknown paid request.
