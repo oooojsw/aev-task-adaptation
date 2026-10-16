@@ -8,6 +8,7 @@ export interface ManagedProcessInput {
   command: string[]
   cwd: string
   env?: NodeJS.ProcessEnv
+  inheritEnv?: boolean
   stdinText?: string
   runtimeScope?: string
   timeoutMs: number
@@ -208,35 +209,28 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
   }
 
   const backend = resolveBackend(input.backend)
+  // 隔离预检只继承显式环境，旧调用仍保持原来的环境合并。
+  const environment = input.inheritEnv === false ? { ...input.env } : { ...process.env, ...input.env }
   const proxy =
     process.platform === "win32"
       ? spawnNoConsoleProxy({
           command: input.command,
           cwd: ensureValidCwd(input.cwd),
-          env: { ...process.env, ...input.env },
+          env: environment,
           stdinText: input.stdinText,
           title: input.title,
         })
       : backend === "python_subprocess"
       ? nodeSpawn("python", ["-c", buildPythonWrapperCode()], {
           cwd: ensureValidCwd(input.cwd),
-          env: {
-            ...process.env,
-            ...input.env,
-          },
+          env: environment,
           stdio: ["pipe", "pipe", "pipe"],
           shell: false,
           windowsHide: true,
         })
       : nodeSpawn(normalizePathForSpawn(input.command[0] ?? ""), input.command.slice(1).map(normalizeArgForSpawn), {
           cwd: ensureValidCwd(input.cwd),
-          env: (() => {
-            const env: NodeJS.ProcessEnv = {
-              ...process.env,
-              ...input.env,
-            }
-            return env
-          })(),
+          env: environment,
           stdio: ["pipe", "pipe", "pipe"],
           shell: false,
           windowsHide: true,

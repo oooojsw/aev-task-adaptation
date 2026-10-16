@@ -66,7 +66,7 @@ function list(value: unknown): asserts value is string[] {
   }
 }
 
-function member(value: unknown, values: readonly string[]) {
+function member(value: unknown, values: readonly string[]): asserts value is string {
   if (typeof value !== "string" || !values.includes(value)) throw new Error(`Invalid choice: ${String(value)}`)
 }
 
@@ -122,19 +122,19 @@ export function validatePlan(value: unknown): Readonly<Plan> {
     const key = `${item.role}:${item.stage}`
     if (windows.has(key)) throw new Error("Duplicate role-stage window")
     windows.add(key)
-    refs(item.reads)
-    refs(item.writes)
-    refs(item.inline)
+    const readable = refs(item.reads)
+    const writable = refs(item.writes)
+    const inline = refs(item.inline)
     list(item.actions)
     for (const action of item.actions) member(action, actions)
     // 信息授权以角色和阶段为边界，不由材料内容扩大权限。
-    if (item.reads.some(id => resources.get(id)!.audience === "private" && item.role !== "checker") ||
-      item.reads.some(id => resources.get(id)!.audience === "training" && item.role === "independent")) throw new Error("Forbidden resource audience")
-    if (item.inline.some(id => !(item.reads as string[]).includes(id))) throw new Error("Inline resource is not readable")
-    if (item.writes.some(id => !resources.get(id)!.mutable || resources.get(id)!.audience === "private") ||
-      (item.writes.length && !["executor", "lead"].includes(item.role))) throw new Error("Forbidden write")
-    if (item.reads.length && !item.actions.includes("read")) throw new Error("Read capability required")
-    if (item.writes.length && !item.actions.includes("edit")) throw new Error("Edit capability required")
+    if (readable.some(id => resources.get(id)!.audience === "private" && item.role !== "checker") ||
+      readable.some(id => resources.get(id)!.audience === "training" && item.role === "independent")) throw new Error("Forbidden resource audience")
+    if (inline.some(id => !readable.includes(id))) throw new Error("Inline resource is not readable")
+    if (writable.some(id => !resources.get(id)!.mutable || resources.get(id)!.audience === "private") ||
+      (writable.length && !["executor", "lead"].includes(item.role))) throw new Error("Forbidden write")
+    if (readable.length && !item.actions.includes("read")) throw new Error("Read capability required")
+    if (writable.length && !item.actions.includes("edit")) throw new Error("Edit capability required")
   }
   items(value.workers)
   const workers = new Set<string>()

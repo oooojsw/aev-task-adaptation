@@ -492,3 +492,37 @@ offline tests do not prove complete host execution. Dependency/runtime bootstrap
 external search adapters, controlled recomputation and real-task acceptance remain
 required. A local ignored junction reuses the existing pinned Zod 4.1.8 package
 for tests; no dependency contents or production configuration were changed.
+
+## Actual source-host readiness (2026-10-17)
+
+The earlier missing-preload observation is now superseded: isolated dependency
+bootstrap and an exact-version incomplete-package repair allow the actual source
+CLI to load. This does not prove model connectivity or real task acceptance.
+The independent worktree's ignored dependencies changed; source dependencies,
+lockfile and production checkout did not.
+
+The explicit protocol OpenCode driver now runs a no-model `--help` readiness check
+once per driver instance, before intake or independent tool execution can send
+model requests. Source/config/profile fingerprints are still checked each time.
+Injected test drivers do not pretend to perform real host readiness. Readiness
+implementation and local search engine source join the backend fingerprint.
+
+The readiness child uses an explicit OS-environment allowlist and isolated
+home/config/data/cache. Inherited API credentials, live config, budget/search
+bindings, proxies and runtime injection options are omitted. Managed processes
+retain their previous environment merge by default; only explicit `inheritEnv:
+false` opts out. Default and isolated behavior are tested using actual child
+processes, including the Windows no-console wrapper.
+
+Nonzero exit, timeout or absent help evidence blocks the task. Help may be written
+to stdout or stderr. Every readiness attempt retains a separate receipt with
+command, actual exit, streams and hashes; the latest-result file points to that
+receipt rather than erasing earlier failures. These are startup diagnostics, not
+acceptance or model-usage evidence.
+
+The actual readiness integration and 425 offline tests passed. Full package
+typechecking was also attempted and remains failing (93 diagnostics across
+experience-workspace, managed-process, CLI session and Copilot SDK files). The
+new task-plan/advice/budget environment type errors were fixed; this is not a
+claim that all remaining diagnostics are proven pre-existing. Three real task
+acceptances and the rest of the full objective remain outstanding.

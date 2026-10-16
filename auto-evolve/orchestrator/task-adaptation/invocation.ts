@@ -53,7 +53,7 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
   const view = { ...original, reads: original.reads.map(location), writes: original.writes.map(location) }
   const feedback = input.feedback && original.runtime?.includes("feedback") ? await taskFeedback(input.bound, input.feedback) : undefined
   if (feedback) view.reads.push({ id: "runtime:feedback", path: feedback.path })
-  const advice = []
+  const advice: Array<Awaited<ReturnType<typeof taskAdvice>>> = []
   for (const reference of input.advice ?? []) {
     if (!original.runtime?.includes(reference.kind)) continue
     const item = await taskAdvice(input.bound, reference)

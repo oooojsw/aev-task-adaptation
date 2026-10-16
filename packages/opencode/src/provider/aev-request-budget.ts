@@ -1,4 +1,5 @@
 type Environment = {
+  [key: string]: string | undefined
   OPENCODE_AEV_REQUEST_BUDGET_FILE?: string
   OPENCODE_AEV_REQUEST_BUDGET_SHA256?: string
 }

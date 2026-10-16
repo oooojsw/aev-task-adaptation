@@ -10,6 +10,7 @@ import type { OpencodeTaskInput, OpencodeTaskRun } from "../opencode"
 import type { InvokeTool } from "./tool-session"
 import { backendUsage } from "./backend-usage"
 import { validateToolRequest } from "./tool-request-boundary"
+import { preflightSourceHost } from "./host-preflight"
 
 export async function opencodeDriver(options: { cwd: string; evidenceRoot: string;
   load?: (cwd: string) => Promise<AutoEvolveConfig>;
@@ -61,6 +62,8 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     const retryPolicy = await readFile(fileURLToPath(new URL("../opencode-retry-policy.ts", import.meta.url)))
     const budgetTransport = await readFile(fileURLToPath(new URL("../task-adaptation/budget-transport.ts", import.meta.url)))
     const budgetLedger = await readFile(fileURLToPath(new URL("../task-adaptation/request-budget.ts", import.meta.url)))
+    const readiness = await readFile(fileURLToPath(new URL("./host-preflight.ts", import.meta.url)))
+    const localSearch = await readFile(fileURLToPath(new URL("../task-adaptation/local-search.ts", import.meta.url)))
     const key = fingerprint({ cwd, profile, files: files.sort((a, b) => a.path.localeCompare(b.path)),
       sourceHost: { kind: options.invoke ? "injected-test-boundary" : "bun-source", executable: process.execPath,
         version: typeof Bun === "undefined" ? null : Bun.version, files: hostFiles.sort((a, b) => a.path.localeCompare(b.path)) },
@@ -70,13 +73,18 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
       boundarySource: createHash("sha256").update(boundarySource).digest("hex"),
       retryPolicy: createHash("sha256").update(retryPolicy).digest("hex"),
       budgetTransport: createHash("sha256").update(budgetTransport).digest("hex"),
-      budgetLedger: createHash("sha256").update(budgetLedger).digest("hex") })
+      budgetLedger: createHash("sha256").update(budgetLedger).digest("hex"),
+      readiness: createHash("sha256").update(readiness).digest("hex"),
+      localSearch: createHash("sha256").update(localSearch).digest("hex") })
     return { key, config: normalized }
   }
   const frozen = await identity()
+  let ready: Promise<void> | undefined
   async function preflight() {
     const currentProfile = path.resolve(process.env.AUTO_EVOLVE_OPENCODE_PRIVATE_PROFILE_ROOT?.trim() || autoEvolvePath(cwd, ".opencode-private"))
     if (currentProfile !== profile || (await identity()).key !== frozen.key) throw new Error("OpenCode host/config/profile fingerprint changed")
+    // 每个驱动实例只预检一次；测试替身不冒充实际源码宿主。
+    if (!options.invoke) await (ready ??= preflightSourceHost({ cwd, evidenceRoot: options.evidenceRoot }))
   }
   const run: InvokeTool = async (request, signal) => {
     request = structuredClone(request)
