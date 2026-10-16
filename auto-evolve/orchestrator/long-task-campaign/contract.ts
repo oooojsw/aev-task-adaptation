@@ -447,6 +447,8 @@ export interface LongTaskCampaignState {
   lastRunHardVerified?: boolean
   lastFinalAcceptancePassed?: boolean
   lastFinalAcceptanceResultPath?: string
+  selectedTaskVersionPath?: string
+  taskStopReason?: string
   lastRoundClosure?: LongTaskRoundClosure
   lastGateFailureKind?: LongTaskCampaignRoundRecord["gateFailureKind"]
   lastGateFailureSummary?: string

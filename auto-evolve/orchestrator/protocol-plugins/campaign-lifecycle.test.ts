@@ -199,9 +199,10 @@ for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLe
   { rejectedLeads: 0, execution: true, fault: "execution_error" }, { rejectedLeads: 0, adapted: true },
   { rejectedLeads: 0, adapted: true, bootstrap: true }, { rejectedLeads: 1, adapted: true },
   { rejectedLeads: 2, adapted: true }, { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true },
-  { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true, program: true }])
-test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${scenario.adapted ? scenario.program ? "adapted program " : "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
-  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass, adapted, bootstrap, intake, program } = scenario
+  { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true, program: true },
+  { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true, program: true, bestPass: true }])
+test(`actual Campaign learner ${scenario.bestPass ? "best-pass selection " : ""}${scenario.intake ? "from task intake " : ""}${scenario.adapted ? scenario.program ? "adapted program " : "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
+  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass, adapted, bootstrap, intake, program, bestPass } = scenario
   const hasExecution = Boolean(execution || program)
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   await mkdir(root, { recursive: true })
@@ -257,7 +258,7 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
         expect(routing.updatedThroughRound).toBe(1)
       }
       for (const edit of input.permissionEditPaths ?? []) expect(input.permissionReadPaths).toContain(edit)
-      if (adapted && leads > 1) {
+      if (adapted && leads > 1 && !(bestPass && leads > 2)) {
         const feedback = input.permissionReadPaths.find((file: string) => file.endsWith("task.feedback.json"))
         expect(feedback).toBeDefined()
         const view = JSON.parse(await readFile(feedback, "utf8"))
@@ -285,7 +286,9 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
     for (const edit of input.permissionEditPaths ?? []) {
       if (adapted) {
         const rejected = input.title.startsWith("Campaign Lead") && leads <= rejectedLeads
-        await writeFile(edit, program ? `def solve(x): return ${rejected ? "x" : "x*x"}\n` : rejected ? "Incomplete rule" : "Reusable rule")
+        await writeFile(edit, program ? bestPass && leads > 2
+          ? "import time\ndef solve(x):\n    time.sleep(0.02)\n    return x*x\n"
+          : `def solve(x): return ${rejected ? "x" : "x*x"}\n` : rejected ? "Incomplete rule" : "Reusable rule")
         continue
       }
       if (executorPatch) continue
@@ -374,7 +377,9 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
       deliverable: { kind: program ? "software" : "report", entries: ["rules"] }, resources, windows, capabilities: ["file-read", "file-edit"],
       workers: [{ id: "sources", purpose: "Inspect source support", resources: ["rules", "public"], actions: ["read"] }],
       acceptance: { execution: program ? "script" : "none", checks: [{ id: "content", target: program ? "product" : "candidate", mechanism: "script", purpose: program ? "Check program outputs and timing" : "Check report", required: true, resources: ["rules", "gold"], feedback: "status_only" }] },
-      rejection: [{ check: "content", actions: [program ? "repair" : "research"] }], selection: { rule: "first_pass" }, stop: { rounds: 1, calls: 20, tokens: 100000, stagnant: 1 } }))
+      rejection: [{ check: "content", actions: [program ? "repair" : "research"] }],
+      selection: bestPass ? { rule: "best_pass", metric: "elapsed_ns", direction: "min" } : { rule: "first_pass" },
+      stop: { rounds: bestPass ? 3 : rejectedLeads === 2 ? 2 : 1, calls: 40, tokens: 100000, stagnant: 1 } }))
     const spec = JSON.parse(await readFile(specPath, "utf8"))
     if (bootstrap) delete spec.initialGraph
     spec.taskAdaptation = { schema: "aev.task-adaptation.v1", planPath: path.join(root, "task-plan.json"), root,
@@ -414,7 +419,7 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
     await writeFile(path.join(seedRoot, "rules.txt"), "Seeded reusable rule")
     if (partialLead) await writeFile(path.join(seedRoot, "notes.txt"), "Seeded note")
   }
-  await writeFile(campaign, JSON.stringify({ title: "Offline Campaign", baseSpecPath: specPath, mode: "graph_iterative", maxRounds: rejectedLeads === 2 ? 2 : 1,
+  await writeFile(campaign, JSON.stringify({ title: "Offline Campaign", baseSpecPath: specPath, mode: "graph_iterative", maxRounds: bestPass ? 3 : rejectedLeads === 2 ? 2 : 1,
     seedTargets: seeded ? [{ seedPath: seedRoot, targetPath: path.join(root, "author-workspace"), kind: "experience_workspace", resetOnStart: true }] : [] }))
   const previous = process.env.AUTO_EVOLVE_SKIP_STALE_HEAL
   process.env.AUTO_EVOLVE_SKIP_STALE_HEAL = "1"
@@ -459,7 +464,7 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
     expect(calls.some((title) => title.startsWith("Long Task Execute"))).toBe(true)
     if (bootstrap) expect(calls.some(title => title.startsWith("Long Task Graph"))).toBe(true)
     if (adapted) expect(calls.filter(title => title.startsWith("Campaign Worker task-"))).toEqual([
-      "Campaign Worker task-sources round-001", ...(rejectedLeads === 2 ? ["Campaign Worker task-sources round-002"] : [])])
+      "Campaign Worker task-sources round-001", ...(rejectedLeads === 2 || bestPass ? ["Campaign Worker task-sources round-002"] : [])])
     for (const request of roleRequests) {
       if (!adapted && (request.title.startsWith("Long Task Graph") || request.title.startsWith("Long Task Execute"))) {
         expect(request.prompt).toContain("Selected-protocol training-side work boundary")
@@ -492,7 +497,7 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
       expect(request.prompt).not.toContain("protocol.receipt.json")
       expect(request.reads.some((file) => file.endsWith("expert-oracle-bundle.json"))).toBe(false)
     }
-    expect(leads).toBe(rejectedLeads + 1)
+    expect(leads).toBe(rejectedLeads + (bestPass ? 2 : 1))
     if (rejectedLeads && !fault && !adapted) {
       const tickets = JSON.parse(await readFile(path.join(result.campaignDir, "dispatch-tickets.json"), "utf8"))
       expect(tickets.tickets.some((ticket: { key: string }) => ticket.key === `skill:${execution ? "product" : "skill"}:content`)).toBe(true)
@@ -500,13 +505,13 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
       const laterLeads = roleRequests.filter(item => item.title.startsWith("Campaign Lead")).slice(1)
       expect(laterLeads.every(item => item.prompt.includes("Host alone"))).toBe(true)
     }
-    expect(result.roundsCompleted).toBe(rejectedLeads === 2 ? 2 : 1)
+    expect(result.roundsCompleted).toBe(rejectedLeads === 2 || bestPass ? 2 : 1)
     if (rejectedLeads === 2) expect(calls.some((title) => title.startsWith("Long Task Graph"))).toBe(true)
     const roundsRoot = path.join(result.campaignDir, "rounds")
     const receipts = (await readdir(roundsRoot, { recursive: true })).filter((file) => file.endsWith("protocol.receipt.json")).sort()
-    expect(receipts).toHaveLength(rejectedLeads + 1)
+    expect(receipts).toHaveLength(rejectedLeads + (bestPass ? 2 : 1))
     const values = await Promise.all(receipts.map(async (file) => JSON.parse(await readFile(path.join(roundsRoot, file), "utf8"))))
-    expect(values.map((value) => value.status)).toEqual(fault ? [fault] : [...Array(rejectedLeads).fill("rejected"), "passed"])
+    expect(values.map((value) => value.status)).toEqual(fault ? [fault] : [...Array(rejectedLeads).fill("rejected"), "passed", ...(bestPass ? ["passed"] : [])])
     expect(new Set(values.map((value) => value.protocolFingerprint)).size).toBe(1)
     expect(values.every((value) => value.claim === (hasExecution ? "task_execution" : "skill_check") &&
       value.executed === Boolean(hasExecution && fault !== "execution_error"))).toBe(true)
@@ -518,7 +523,15 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
         expect(product.input_keys).not.toContain("privateInputs")
         return product.answers
       }))
-      expect(answers).toEqual([[2,3,4], [4,9,16]])
+      expect(answers).toEqual([[2,3,4], [4,9,16], ...(bestPass ? [[4,9,16]] : [])])
+      if (bestPass) {
+        expect(result.taskStopReason).toBe("stagnant")
+        const selected = JSON.parse(await readFile(result.selectedTaskVersionPath, "utf8"))
+        expect(selected.round).toBe(1)
+        const bestBytes = await readFile(path.join(path.dirname(result.selectedTaskVersionPath), selected.files[0].file), "utf8")
+        expect(bestBytes).not.toContain("time.sleep")
+        expect(await readFile(path.join(result.campaignDir, "pending-expert-package/current/rules.txt"), "utf8")).toContain("time.sleep")
+      }
     }
     expect(httpCalls).toBe(execution ? Math.min(rejectedLeads, 1) + 1 : 0)
     if (execution && rejectedLeads === 2) expect(values.map(value => value.executionReused)).toEqual([false, true, false])
@@ -531,6 +544,14 @@ test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${sce
       const state = JSON.parse(await readFile(path.join(result.campaignDir, "campaign.json"), "utf8"))
       const accepted = JSON.parse(await readFile(state.lastFinalAcceptanceResultPath, "utf8"))
       if (adapted) {
+        expect(result.selectedTaskVersionPath).toBeDefined()
+        const version = JSON.parse(await readFile(result.selectedTaskVersionPath, "utf8"))
+        const versionFile = path.join(path.dirname(result.selectedTaskVersionPath), version.files[0].file)
+        const versionBytes = await readFile(versionFile)
+        await writeFile(versionFile, "corrupted frozen delivery")
+        try { await expect(actual.resumeLongTaskCampaign({ cwd: root, campaignID: result.campaignID, specPath: campaign }))
+          .rejects.toThrow("Saved task version bytes drift") }
+        finally { await writeFile(versionFile, versionBytes) }
         const bound = JSON.parse(await readFile(path.join(result.campaignDir, "task-adaptation/task-plan.snapshot.json"), "utf8")) as BoundPlan
         const reference = { root: result.campaignDir, path: accepted.protocolTrainingResultPath, task: "source-1", phase: "source" as const }
         const receipt = JSON.parse(await readFile(accepted.protocolReceiptPath, "utf8"))

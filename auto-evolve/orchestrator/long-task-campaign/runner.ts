@@ -2,6 +2,7 @@
 import process from "node:process"
 import { freezeTraining, verifyTraining, trainingExecution, trainingRuntimeBudget, type TrainingRole } from "../protocol-plugins/training"
 import { loadTaskContext, taskInvocation, seedTaskCandidate } from "../task-adaptation/context"
+import { recordTaskVersion, readTaskVersions, chooseTaskVersion } from "../task-adaptation/selection"
 import { randomUUID } from "node:crypto"
 import { cp, lstat, readdir, rm } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -895,6 +896,8 @@ type LongTaskCampaignRunResult = {
   lastRunID?: string
   lessonsPath: string
   roundSummaryPath?: string
+  selectedTaskVersionPath?: string
+  taskStopReason?: string
   attachedLive?: boolean
   terminal?: boolean
 }
@@ -918,6 +921,8 @@ function toCampaignRunResult(input: {
     lastRunID: input.state.lastRunID,
     lessonsPath: input.campaignPaths.campaignLessonsPath,
     roundSummaryPath: input.state.lastRoundSummaryPath,
+    ...(input.state.selectedTaskVersionPath ? { selectedTaskVersionPath: input.state.selectedTaskVersionPath } : {}),
+    ...(input.state.taskStopReason ? { taskStopReason: input.state.taskStopReason } : {}),
     attachedLive: input.attachedLive,
     terminal,
   }
@@ -5868,9 +5873,16 @@ export async function runLongTaskCampaign(input: {
 
         const acceptanceInfrastructureFailure = finalAcceptance?.failureKind === "infrastructure_failure"
         const acceptanceDatasetFailure = finalAcceptance?.failureKind === "dataset_failure"
+        const taskSelection = await recordTaskVersion(baseSpec, {
+          root: campaignPaths.root, candidateRoot: campaignPaths.pendingCurrentRoot,
+          feedback: (finalAcceptance as Record<string, unknown> | undefined)?.protocolTrainingResultPath as string | undefined,
+          passed: finalAcceptance?.passed === true, round: roundNumber, maxRounds: campaignSpec.maxRounds,
+        })
         const nextStatus =
           acceptanceInfrastructureFailure || acceptanceDatasetFailure
             ? "failed"
+            : taskSelection
+              ? taskSelection.stop ? taskSelection.passed ? "verified_success" : "round_limit_reached" : "running"
             : finalAcceptance?.passed === true
             ? "verified_success"
             : roundNumber >= campaignSpec.maxRounds
@@ -5912,6 +5924,7 @@ export async function runLongTaskCampaign(input: {
           lastRoundSummaryPath: finalizedRoundRecord.roundSummaryPath,
           lastRunHardVerified,
           lastFinalAcceptancePassed: finalAcceptance?.passed === true,
+          ...(taskSelection ? { selectedTaskVersionPath: taskSelection.selectedTaskVersionPath, taskStopReason: taskSelection.taskStopReason } : {}),
           lastFinalAcceptanceResultPath: baseSpec.protocolPlugins && finalAcceptance
             ? String((finalAcceptance as Record<string, unknown>).protocolAuditResultPath)
             : finalAcceptanceFeedbackPath,
@@ -5930,7 +5943,7 @@ export async function runLongTaskCampaign(input: {
         }
         await writeLongTaskCampaignState(campaignPaths, state)
 
-        if (nextStatus === "verified_success") {
+        if (nextStatus === "verified_success" || (taskSelection?.stop && nextStatus === "round_limit_reached")) {
           return toCampaignRunResult({
             campaignID,
             campaignPaths,
@@ -6026,7 +6039,14 @@ export async function resumeLongTaskCampaign(input: {
   }
 
   if (existingState.status === "verified_success" || existingState.status === "round_limit_reached") {
-    if (baseSpec.protocolPlugins && existingState.status === "verified_success") {
+    if (baseSpec.taskAdaptation) {
+      const selection = chooseTaskVersion(baseSpec, await readTaskVersions(baseSpec, campaignPaths.root), existingState.currentRound, campaignSpec.maxRounds)
+      if (selection.selectedTaskVersionPath !== existingState.selectedTaskVersionPath ||
+        selection.taskStopReason !== existingState.taskStopReason || !selection.stop ||
+        (existingState.status === "verified_success") !== selection.passed) throw new Error("Completed task delivery selection drift")
+    }
+    if (baseSpec.protocolPlugins && existingState.status === "verified_success" &&
+      (!baseSpec.taskAdaptation || existingState.lastFinalAcceptancePassed)) {
       if (!existingState.lastFinalAcceptanceResultPath || !existingState.lastRunID) throw new Error("Completed Campaign acceptance identity missing")
       await verifyCompletedCampaignAcceptance({ campaignRoot: campaignPaths.root, cwd: input.cwd,
         campaignID: input.campaignID, roundNumber: existingState.currentRound, runID: existingState.lastRunID,
@@ -6853,9 +6873,16 @@ export async function resumeLongTaskCampaign(input: {
 
         const acceptanceInfrastructureFailure = finalAcceptance?.failureKind === "infrastructure_failure"
         const acceptanceDatasetFailure = finalAcceptance?.failureKind === "dataset_failure"
+        const taskSelection = await recordTaskVersion(baseSpec, {
+          root: campaignPaths.root, candidateRoot: campaignPaths.pendingCurrentRoot,
+          feedback: (finalAcceptance as Record<string, unknown> | undefined)?.protocolTrainingResultPath as string | undefined,
+          passed: finalAcceptance?.passed === true, round: roundNumber, maxRounds: campaignSpec.maxRounds,
+        })
         const nextStatus =
           acceptanceInfrastructureFailure || acceptanceDatasetFailure
             ? "failed"
+            : taskSelection
+              ? taskSelection.stop ? taskSelection.passed ? "verified_success" : "round_limit_reached" : "running"
             : finalAcceptance?.passed === true
             ? "verified_success"
             : roundNumber >= campaignSpec.maxRounds
@@ -6897,6 +6924,7 @@ export async function resumeLongTaskCampaign(input: {
           lastRoundSummaryPath: finalizedRoundRecord.roundSummaryPath,
           lastRunHardVerified,
           lastFinalAcceptancePassed: finalAcceptance?.passed === true,
+          ...(taskSelection ? { selectedTaskVersionPath: taskSelection.selectedTaskVersionPath, taskStopReason: taskSelection.taskStopReason } : {}),
           lastFinalAcceptanceResultPath: baseSpec.protocolPlugins && finalAcceptance
             ? String((finalAcceptance as Record<string, unknown>).protocolAuditResultPath)
             : finalAcceptanceFeedbackPath,
@@ -6915,7 +6943,7 @@ export async function resumeLongTaskCampaign(input: {
         }
         await writeLongTaskCampaignState(campaignPaths, state)
 
-        if (nextStatus === "verified_success") {
+        if (nextStatus === "verified_success" || (taskSelection?.stop && nextStatus === "round_limit_reached")) {
           return toCampaignRunResult({
             campaignID: input.campaignID,
             campaignPaths,

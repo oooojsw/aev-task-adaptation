@@ -198,3 +198,34 @@ Log: `E:/project/AEV-task-adaptation-20261016/validation-program-intake-final-20
 SHA-256: `3dcc20e36414308c38dc4016ee372c57f0631086a3d5e707e58749be62e4c0e2`.
 This is not a full TypeScript typecheck, production deployment, or real-model
 experiment. Earlier checkpoints and their logs remain historical evidence.
+
+## Qualified version selection checkpoint (2026-10-16)
+
+`selection.ts` snapshots declared candidate files only after formal acceptance.
+Each version binds the task plan, exact acceptance receipt, source feedback,
+round, actual file bytes and hashes. `best_pass` reads a finite numeric top-level
+metric from the hash-verified executed JSON product; the host must select product
+checks that validate that metric. This does not establish benchmark quality or
+trust an author's unexecuted metric claim. `first_pass` keeps its first qualified
+version. Ties retain the earlier version.
+
+Both initial and resumed Campaign loops use this selection. Best-pass tasks
+continue beyond the first pass and stop at the tighter task/Campaign round
+budget or the declared rounds-without-improvement limit. Exploration may keep a
+slower current candidate; the qualified snapshot is separate. Result/state fields
+`selectedTaskVersionPath` and `taskStopReason` identify the delivery manifest and
+stop reason. Consumers of this new task path must read the manifest's file map,
+not assume the exploratory current package is the selected delivery. Old specs
+without task adaptation retain their original decisions and result fields.
+
+Resume revalidates every saved qualified version, original receipt/product and
+snapshot bytes, and requires the saved final selection to match. Incomplete
+snapshot directories block recovery for inspection; they are not overwritten.
+The integration fixture actually measures a fast and deliberately slower correct
+program, retains the former and stops for stagnation. Its model replies are
+fixed offline boundaries. It is not a real-model optimization experiment.
+
+This checkpoint does not yet enforce the plan's global model-call/token budgets,
+provide a generic performance metric extractor beyond numeric JSON properties,
+or implement arbitrary task-plan revision and best-version reuse across changed
+acceptance standards. These remain part of the full objective.
