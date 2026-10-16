@@ -15,6 +15,7 @@ import { assertNoBlankAgentAudience } from "../validation-engine/registry"
 import { validateEntry } from "../protocol-plugins/entry"
 import { validateTraining } from "../protocol-plugins/training"
 import { canonical } from "../protocol-plugins/identity"
+import { validateAdaptation, restoreTaskContext } from "../task-adaptation/context"
 
 export interface LoadLongTaskSpecOptions {
   allowMissingInitialExpertContextPaths?: boolean
@@ -598,6 +599,11 @@ export async function loadLongTaskSpec(
   const baseDir = path.dirname(resolvedSpecPath)
   const protocolPlugins = raw.protocolPlugins === undefined ? undefined : validateEntry(raw.protocolPlugins)
   const protocolTraining = raw.protocolTraining === undefined ? undefined : validateTraining(raw.protocolTraining)
+  const taskAdaptation = raw.taskAdaptation === undefined ? undefined : validateAdaptation(raw.taskAdaptation)
+  if (taskAdaptation && !protocolPlugins) throw new Error("Task adaptation requires protocol plugins")
+  for (const key of ["taskAdaptationCampaignRoot", "taskAdaptationFeedbackPath"]) {
+    if (raw[key] !== undefined && (!taskAdaptation || typeof raw[key] !== "string" || !path.isAbsolute(raw[key] as string))) throw new Error("Invalid task runtime context path")
+  }
   if (protocolTraining && !protocolPlugins) throw new Error("Explicit training config requires protocol plugins")
   if (protocolTraining && raw.budgets !== undefined && canonical(raw.budgets) !== canonical(protocolTraining.budgets)) throw new Error("Conflicting training work budgets")
   if (raw.protocolTrainingRoot !== undefined && (!protocolTraining || typeof raw.protocolTrainingRoot !== "string" || !path.isAbsolute(raw.protocolTrainingRoot))) throw new Error("Invalid frozen training root")
@@ -796,6 +802,10 @@ export async function loadLongTaskSpec(
     protocolPlugins,
     protocolTraining,
     protocolTrainingRoot: raw.protocolTrainingRoot as string | undefined,
+    taskAdaptation,
+    taskAdaptationContext: await restoreTaskContext({ taskAdaptation, protocolPlugins } as LongTaskSpec, raw.taskAdaptationContext),
+    taskAdaptationCampaignRoot: raw.taskAdaptationCampaignRoot as string | undefined,
+    taskAdaptationFeedbackPath: raw.taskAdaptationFeedbackPath as string | undefined,
     blankEvalExecutor: blankEvalExecutor as LongTaskSpec["blankEvalExecutor"],
     validators,
     planning,

@@ -1,6 +1,7 @@
 ﻿import path from "node:path"
 import process from "node:process"
 import { freezeTraining, verifyTraining, trainingExecution, trainingRuntimeBudget, type TrainingRole } from "../protocol-plugins/training"
+import { loadTaskContext, taskInvocation, seedTaskCandidate } from "../task-adaptation/context"
 import { randomUUID } from "node:crypto"
 import { cp, lstat, readdir, rm } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -2202,6 +2203,7 @@ function collectStaticBaseContextPaths(baseSpec: LongTaskSpec) {
 }
 
 function defaultCampaignWorkerRoles(baseSpec?: LongTaskSpec): LongTaskCampaignWorkerRole[] {
+  if (baseSpec?.taskAdaptationContext) return baseSpec.taskAdaptationContext.plan.workers.map(worker => `task-${worker.id}` as const)
   if (baseSpec && isMultiSkillMergeProfile(baseSpec)) return [...MULTI_SKILL_MERGE_WORKER_ROLES]
   return [
     "blank_acceptance_diagnostician",
@@ -2730,7 +2732,8 @@ function partitionCampaignFinalAcceptanceValidators(spec: LongTaskSpec) {
   return { contracts, surfaceValidators, legacyBlankAgentValidators, productValidators }
 }
 
-function shouldRunCampaignWorkers(roundNumber: number) {
+function shouldRunCampaignWorkers(roundNumber: number, spec?: LongTaskSpec) {
+  if (spec?.taskAdaptationContext) return spec.taskAdaptationContext.plan.workers.length > 0
   return roundNumber > 1
 }
 
@@ -3524,6 +3527,9 @@ export function buildGeneratedRoundSpec(input: {
 
 async function runCampaignSuggestionTask(input: {
   trainingRole?: TrainingRole
+  taskWorker?: string
+  taskCandidateRoot?: string
+  taskFeedbackPath?: string
   cwd: string
   baseSpec: LongTaskSpec
   title: string
@@ -3546,12 +3552,14 @@ async function runCampaignSuggestionTask(input: {
   const selection = resolveModelSelection(config, input.selectionPhase,
     input.trainingRole ? trainingExecution(input.baseSpec, input.trainingRole, input.execution) : input.execution)
   const task = await runProtocolTrainingTask({ enabled: Boolean(input.baseSpec.protocolPlugins), stageDir: input.stageDir,
-    role: input.trainingRole ?? input.phase }, {
+    role: input.trainingRole ?? input.phase,
+    adaptation: input.trainingRole ? taskInvocation(input.baseSpec, input.trainingRole, {
+      worker: input.taskWorker, candidateRoot: input.taskCandidateRoot, feedbackPath: input.taskFeedbackPath }) : undefined }, {
     cwd: input.cwd,
     config,
     title: input.title,
     ...(input.baseSpec.protocolTraining && input.trainingRole ? { runtimeBudget: trainingRuntimeBudget(input.baseSpec, input.trainingRole) } : {}),
-    prompt: input.baseSpec.protocolPlugins && input.baseSpec.protocolAuthorContext
+    prompt: !input.baseSpec.taskAdaptation && input.baseSpec.protocolPlugins && input.baseSpec.protocolAuthorContext
       ? [input.prompt, await publicMaterialSuffixes(input.baseSpec.protocolAuthorContext)].filter(Boolean).join("\n\n")
       : input.prompt,
     // 新协议允许无id/taskFamily；此请求并未接收campaignSpec。
@@ -3927,6 +3935,9 @@ async function runCampaignWorkers(input: {
         prompt,
         selectionPhase: "planning",
         trainingRole: "worker",
+        taskWorker: role.startsWith("task-") ? role.slice(5) : role,
+        taskCandidateRoot: input.pendingPackageRoot,
+        taskFeedbackPath: input.finalAcceptanceFeedbackPath,
         execution: input.baseSpec.planning ?? input.baseSpec.execution,
         referencePaths: access.referencePaths,
         permissionReadPaths: access.permissionReadPaths,
@@ -4056,6 +4067,8 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
     prompt,
     selectionPhase: "planning",
     trainingRole: "diagnostician",
+    taskCandidateRoot: input.pendingPackageRoot,
+    taskFeedbackPath: input.finalAcceptanceFeedbackPath,
     execution: input.baseSpec.planning ?? input.baseSpec.execution,
     referencePaths: access.referencePaths,
     permissionReadPaths: access.permissionReadPaths,
@@ -4304,6 +4317,8 @@ async function runCampaignLead(input: {
     prompt,
     selectionPhase: "solve",
     trainingRole: "lead",
+    taskCandidateRoot: input.nextPendingPackageRoot,
+    taskFeedbackPath: input.finalAcceptanceFeedbackPath,
     execution: input.baseSpec.execution,
     referencePaths: access.referencePaths,
     permissionReadPaths: access.permissionReadPaths,
@@ -4416,6 +4431,7 @@ async function runCampaignReviewer(input: {
     prompt,
     selectionPhase: "validation",
     trainingRole: "reviewer",
+    taskCandidateRoot: input.pendingPackageRoot,
     execution: input.baseSpec.validation ?? input.baseSpec.execution,
     referencePaths: access.referencePaths,
     permissionReadPaths: access.permissionReadPaths,
@@ -4561,6 +4577,8 @@ async function prepareCampaignProtocol(root: string, spec: LongTaskSpec, existin
     throw new Error("Cannot enable training config on an existing unconfigured Campaign")
   }
   spec.protocolTrainingRoot = await freezeTraining(root, spec.protocolTraining, cwd)
+  spec.taskAdaptationContext = await loadTaskContext(spec, path.join(root, "task-adaptation"))
+  if (spec.taskAdaptation) spec.taskAdaptationCampaignRoot = root
 }
 
 async function runCampaignFinalAcceptance(input: {
@@ -5165,6 +5183,7 @@ export async function runLongTaskCampaign(input: {
     currentRoot: campaignPaths.pendingCurrentRoot,
     seedTarget: primaryExperienceWorkspaceSeedTarget(campaignSpec.seedTargets),
   })
+  await seedTaskCandidate(baseSpec, campaignPaths.pendingCurrentRoot)
 
   const history: LongTaskCampaignRoundRecord[] = []
   let lastRoundNumber = 0
@@ -5230,6 +5249,8 @@ export async function runLongTaskCampaign(input: {
           dispatchTicketsPath: campaignPaths.dispatchTicketsPath,
           blankAgentAcceptanceDiagnosisPath: campaignPaths.blankAgentAcceptanceDiagnosisPath,
         })
+        if (baseSpec.taskAdaptation && baseSpec.protocolPlugins && roundNumber > 1) generatedSpec.taskAdaptationFeedbackPath =
+          await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase)
         await writeJsonFile(roundPaths.generatedSpecPath, generatedSpec)
 
         await writeLongTaskCampaignState(campaignPaths, {
@@ -5489,7 +5510,7 @@ export async function runLongTaskCampaign(input: {
           campaignPaths,
           history,
         })
-        const workerSuggestions = shouldRunCampaignWorkers(roundNumber)
+        const workerSuggestions = shouldRunCampaignWorkers(roundNumber, baseSpec)
           ? await runCampaignWorkers({
               cwd: input.cwd,
               campaignID,
@@ -6206,6 +6227,8 @@ export async function resumeLongTaskCampaign(input: {
           dispatchTicketsPath: campaignPaths.dispatchTicketsPath,
           blankAgentAcceptanceDiagnosisPath: campaignPaths.blankAgentAcceptanceDiagnosisPath,
         })
+        if (baseSpec.taskAdaptation && baseSpec.protocolPlugins && roundNumber > 1) generatedSpec.taskAdaptationFeedbackPath =
+          await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase)
         await writeJsonFile(roundPaths.generatedSpecPath, generatedSpec)
 
         await writeLongTaskCampaignState(campaignPaths, {
@@ -6484,7 +6507,7 @@ export async function resumeLongTaskCampaign(input: {
           campaignPaths,
           history,
         })
-        const workerSuggestions = shouldRunCampaignWorkers(roundNumber)
+        const workerSuggestions = shouldRunCampaignWorkers(roundNumber, baseSpec)
           ? await runCampaignWorkers({
               cwd: input.cwd,
               campaignID: input.campaignID,

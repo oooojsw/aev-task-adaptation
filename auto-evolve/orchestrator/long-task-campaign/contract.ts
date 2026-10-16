@@ -125,6 +125,7 @@ export type LongTaskCampaignWorkerRole =
   | "merge_provenance_guard"
   | "merge_replay_failure_diagnostician"
   | "custom"
+  | `task-${string}`
 
 export interface LongTaskCampaignWorkerSuggestion {
   id: string

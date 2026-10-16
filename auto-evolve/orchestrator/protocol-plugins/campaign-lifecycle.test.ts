@@ -192,9 +192,11 @@ for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLe
   { rejectedLeads: 0, execution: true, seeded: true, executorPatch: true, recoverBeforeLead: true },
   { rejectedLeads: 1, execution: true, recoverAfterPass: true },
   { rejectedLeads: 1, execution: true, seeded: true, executorPatch: true, partialLead: true },
-  { rejectedLeads: 0, execution: true, fault: "execution_error" }])
-test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
-  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass } = scenario
+  { rejectedLeads: 0, execution: true, fault: "execution_error" }, { rejectedLeads: 0, adapted: true },
+  { rejectedLeads: 0, adapted: true, bootstrap: true }, { rejectedLeads: 1, adapted: true },
+  { rejectedLeads: 2, adapted: true }])
+test(`actual Campaign learner ${scenario.adapted ? "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
+  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass, adapted, bootstrap } = scenario
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   await mkdir(root, { recursive: true })
   const key = `__campaignOffline_${randomUUID().replaceAll("-", "")}`
@@ -249,7 +251,16 @@ test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""
         expect(routing.updatedThroughRound).toBe(1)
       }
       for (const edit of input.permissionEditPaths ?? []) expect(input.permissionReadPaths).toContain(edit)
-      if (execution && leads > 1) {
+      if (adapted && leads > 1) {
+        const feedback = input.permissionReadPaths.find((file: string) => file.endsWith("task.feedback.json"))
+        expect(feedback).toBeDefined()
+        const view = JSON.parse(await readFile(feedback, "utf8"))
+        expect(view.status).toBe("rejected")
+        expect(view.issues[0].actions).toEqual(["research"])
+        expect(JSON.stringify(view)).not.toContain("PRIVATE_CAMPAIGN_LABEL")
+        expect(input.permissionReadPaths.some((file: string) => file.endsWith("protocol.receipt.json"))).toBe(false)
+      }
+      if (!adapted && execution && leads > 1) {
         expect(input.prompt).toContain("A product rejection means the generated answer failed")
         const productPath = input.permissionReadPaths.find((file: string) => file.endsWith("protocol.product.txt"))
         expect(productPath).toBeDefined()
@@ -258,6 +269,7 @@ test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""
       }
     }
     for (const edit of input.permissionEditPaths ?? []) {
+      if (adapted) { await writeFile(edit, input.title.startsWith("Campaign Lead") && leads <= rejectedLeads ? "Incomplete rule" : "Reusable rule"); continue }
       if (executorPatch) continue
       if (edit.endsWith("rules.txt")) { await mkdir(path.dirname(edit), { recursive: true }); await writeFile(edit, "Reusable rule") }
       if (input.title.startsWith("Campaign Lead") && !edit.endsWith(".json")) {
@@ -322,6 +334,30 @@ test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""
       expected_artifacts: [], claim: "Explored", check_plan: "Formal protocol follows", validator_ids: [], retry_budget: 1 }] },
     protocolPlugins: { schema: "aev.protocol-entry.v1", selectionPath: path.join(root, "selection.json"),
       projectManifestPath: path.join(root, "manifest.json"), taskID: "source", phase: "source" } }))
+  if (adapted) {
+    await writeFile(path.join(root, "candidate-seed.txt"), "Initial report")
+    const resources = [
+      { id: "rules", path: "candidate-seed.txt", audience: "public", mutable: true },
+      { id: "public", path: "public.txt", audience: "public", mutable: false },
+      { id: "gold", path: "private/gold.json", audience: "private", mutable: false },
+    ]
+    const windows = ["planner", "executor", "worker", "lead", "reviewer", "diagnostician"].map(role => ({ role,
+      stage: role === "lead" || role === "diagnostician" ? "revise" : role === "reviewer" ? "accept" : "explore",
+      reads: ["rules", "public"], writes: role === "lead" || role === "executor" ? ["rules"] : [], inline: [],
+      runtime: ["feedback"],
+      actions: role === "lead" || role === "executor" ? ["read", "edit"] : ["read"] }))
+    windows.push({ role: "checker", stage: "accept", reads: ["rules", "gold"], writes: [], inline: [], actions: ["read"], runtime: [] })
+    await writeFile(path.join(root, "task-plan.json"), JSON.stringify({ schema: "aev.task-plan.v1", id: "report", objective: "Write an evidence-supported report",
+      deliverable: { kind: "report", entries: ["rules"] }, resources, windows, capabilities: ["file-read", "file-edit"],
+      workers: [{ id: "sources", purpose: "Inspect source support", resources: ["rules", "public"], actions: ["read"] }],
+      acceptance: { execution: "none", checks: [{ id: "content", target: "candidate", mechanism: "script", purpose: "Check report", required: true, resources: ["rules", "gold"], feedback: "status_only" }] },
+      rejection: [{ check: "content", actions: ["research"] }], selection: { rule: "first_pass" }, stop: { rounds: 1, calls: 20, tokens: 100000, stagnant: 1 } }))
+    const spec = JSON.parse(await readFile(specPath, "utf8"))
+    if (bootstrap) delete spec.initialGraph
+    spec.taskAdaptation = { schema: "aev.task-adaptation.v1", planPath: path.join(root, "task-plan.json"), root,
+      capabilities: ["file-read", "file-edit"], entries: [{ id: "rules", path: "rules.txt" }] }
+    await writeFile(specPath, JSON.stringify(spec))
+  }
   const campaign = path.join(root, "campaign.json")
   const seedRoot = path.join(root, "initial-candidate")
   if (seeded) {
@@ -372,8 +408,11 @@ test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""
     expect(resourceSummary.startedWithoutLedger).toHaveLength(fault ? 1 : 0)
     await writeFile(path.join(root, "resource-summary-audit.json"), JSON.stringify(resourceSummary, null, 2))
     expect(calls.some((title) => title.startsWith("Long Task Execute"))).toBe(true)
+    if (bootstrap) expect(calls.some(title => title.startsWith("Long Task Graph"))).toBe(true)
+    if (adapted) expect(calls.filter(title => title.startsWith("Campaign Worker task-"))).toEqual([
+      "Campaign Worker task-sources round-001", ...(rejectedLeads === 2 ? ["Campaign Worker task-sources round-002"] : [])])
     for (const request of roleRequests) {
-      if (request.title.startsWith("Long Task Graph") || request.title.startsWith("Long Task Execute")) {
+      if (!adapted && (request.title.startsWith("Long Task Graph") || request.title.startsWith("Long Task Execute"))) {
         expect(request.prompt).toContain("Selected-protocol training-side work boundary")
         expect(request.prompt).toContain("parent is waiting for your response before it can grade")
         expect(request.prompt).toContain("claimed_success describes completion of this author unit")
@@ -387,6 +426,12 @@ test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""
     }
     await writeFile(path.join(root, "role-permission-audit.json"), JSON.stringify({ privateFile, roleRequests }, null, 2))
     for (const request of roleRequests.filter((item) => item.title.startsWith("Campaign"))) {
+      if (adapted) {
+        expect(request.prompt).toContain("AEV report task")
+        expect(request.prompt).not.toContain("Public material suffix excerpts")
+        expect(request.prompt).not.toContain("reusable guidance")
+        continue
+      }
       expect(request.prompt).toContain("Public material suffix excerpts")
       expect(request.prompt).toContain("Independent public execution")
       for (const file of ["public.txt", "system.txt"]) {
@@ -399,7 +444,7 @@ test(`actual Campaign learner ${scenario.executorPatch ? "executor-change " : ""
       expect(request.reads.some((file) => file.endsWith("expert-oracle-bundle.json"))).toBe(false)
     }
     expect(leads).toBe(rejectedLeads + 1)
-    if (rejectedLeads && !fault) {
+    if (rejectedLeads && !fault && !adapted) {
       const tickets = JSON.parse(await readFile(path.join(result.campaignDir, "dispatch-tickets.json"), "utf8"))
       expect(tickets.tickets.some((ticket: { key: string }) => ticket.key === `skill:${execution ? "product" : "skill"}:content`)).toBe(true)
       expect(tickets.tickets.some((ticket: { title: string }) => ticket.title.startsWith("Repair validator"))).toBe(false)

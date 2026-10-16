@@ -90,6 +90,7 @@ import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
 import { runProtocolTrainingTask } from "../protocol-plugins/training-invocation"
+import { taskInvocation } from "../task-adaptation/context"
 import { extractJsonObject } from "./json-extract"
 import { cleanupRuntimeProcessScope, longTaskRunRuntimeScope } from "../runtime-process-registry"
 import {
@@ -1237,7 +1238,8 @@ async function runPlanningSession(input: {
       })
     : basePrompt
 
-  const task = await runProtocolTrainingTask({ enabled: Boolean(input.spec.protocolPlugins), stageDir: draftPaths.root, role: "planner" }, {
+  const task = await runProtocolTrainingTask({ enabled: Boolean(input.spec.protocolPlugins), stageDir: draftPaths.root, role: "planner",
+    adaptation: taskInvocation(input.spec, "planner", { candidateRoot: input.spec.campaignPendingPackageRoot }) }, {
     cwd: input.cwd,
     config,
     title: input.phase === "plan" ? "Long Task Graph Bootstrap" : "Long Task Graph Replan",
@@ -1382,7 +1384,9 @@ async function executeWorkUnit(input: {
     await input.onActivation?.()
   })
 
-  const task = await runProtocolTrainingTask({ enabled: Boolean(input.spec.protocolPlugins), stageDir: attemptPaths.executeDir, role: "executor" }, {
+  const task = await runProtocolTrainingTask({ enabled: Boolean(input.spec.protocolPlugins), stageDir: attemptPaths.executeDir, role: "executor",
+    adaptation: taskInvocation(input.spec, "executor", { candidateRoot: input.spec.campaignPendingPackageRoot,
+      output: `Complete this host-assigned work unit: ${JSON.stringify({ id: activeUnit.id, title: activeUnit.title, goal: activeUnit.goal })}. Return JSON with claimed_success, claim_statement, summary, blockers and artifacts.` }) }, {
     cwd: input.cwd,
     config,
     title: `Long Task Execute ${activeUnit.id}`,

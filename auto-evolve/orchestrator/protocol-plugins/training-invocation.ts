@@ -5,10 +5,19 @@ import type { OpencodeTaskInput, OpencodeTaskRun } from "../opencode"
 import { writeJsonAtomic } from "../atomic-write"
 import { fingerprint } from "./identity"
 import { backendUsage } from "./backend-usage"
+import { authorizeInvocation, type Invocation } from "../task-adaptation/invocation"
 
-export async function runProtocolTrainingTask(options: { enabled: boolean; stageDir: string; role: string },
+export async function runProtocolTrainingTask(options: { enabled: boolean; stageDir: string; role: string; adaptation?: Invocation },
   request: OpencodeTaskInput, invoke: (request: OpencodeTaskInput) => Promise<OpencodeTaskRun>): Promise<OpencodeTaskRun> {
-  if (!options.enabled) return invoke(request)
+  if (!options.enabled) {
+    if (options.adaptation) throw new Error("Task adaptation requires protocol training boundary")
+    return invoke(request)
+  }
+  const adapted = options.adaptation ? await authorizeInvocation(options.adaptation, request) : undefined
+  if (adapted) {
+    if (options.role !== options.adaptation!.role) throw new Error("Adapted training role mismatch")
+    request = adapted.request
+  }
   // 新训练与独立执行使用同一冻结源码宿主，旧入口保持不变。
   const external = new Set<string>()
   for (const file of [...request.permissionReadPaths ?? [], ...request.permissionEditPaths ?? []]) {
@@ -28,10 +37,13 @@ export async function runProtocolTrainingTask(options: { enabled: boolean; stage
   const clock = performance.now()
   const requestFingerprint = fingerprint({ role: options.role, title: request.title, prompt: request.prompt,
     model: request.model ?? null, variant: request.variant ?? null, runtimeBudget: request.runtimeBudget ?? null, sourceHost: true,
-    references: request.referencePaths ?? [], reads: request.permissionReadPaths ?? [], edits: request.permissionEditPaths ?? [] })
+    references: request.referencePaths ?? [], reads: request.permissionReadPaths ?? [], edits: request.permissionEditPaths ?? [],
+    ...(adapted ? { taskWindow: adapted.scope, allowShell: request.allowShell, isolateHostRuntime: request.isolateHostRuntime,
+      infrastructureAttempts: request.infrastructureAttempts, permissionMode: request.config.permissionConfig.mode } : {}) })
   const identity = { schema: "aev.training-invocation-accounting.v1", role: options.role, requestFingerprint,
     requestedModel: request.model ?? null, startedAt, reused: false, fee: null }
   await writeJsonAtomic(path.join(dir, "started.json"), identity)
+  if (adapted) await writeJsonAtomic(path.join(dir, "task-window.json"), adapted.scope)
   const persist = async (fields: Record<string, unknown>) => writeJsonAtomic(path.join(dir, "accounting.json"), {
     ...identity, finishedAt: new Date().toISOString(), elapsedMs: Math.max(0, Math.round(performance.now() - clock)), ...fields,
   })
