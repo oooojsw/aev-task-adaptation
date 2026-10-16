@@ -388,6 +388,36 @@ Changed/removed policies, plan drift and interrupted policy snapshots cannot
 silently reset limits. The budget file is not part of role-readable material.
 Legacy specs without this optional policy retain their existing behavior.
 
-This wiring does not yet complete budget-exhaustion delivery/stop handling,
-generic batch/merge inheritance or real model acceptance. These remain required
-before enabling the new workflow as a fully bounded production system.
+Generic batch/merge inheritance and real model acceptance remain required before
+enabling the new workflow as a fully bounded production system.
+
+## Request-budget stopping and recovery
+
+Budget admission denials are durable ledger evidence, not extra sent requests.
+They bind to the exact attempt-state fingerprint: a denial caused by concurrent
+reservations becomes stale when those reservations settle. An initialization
+claim prevents a lost ledger from silently resetting consumption. Existing valid
+legacy ledgers gain the claim without changing their recorded attempts.
+
+Both Campaign loops check the explicit task budget before work, after acceptance
+and after an aborted round. Normal exhaustion selects only existing qualified
+versions. A reserved/unknown request or provider overrun instead stops for
+inspection; it does not become successful merely because an earlier version
+exists. Stop receipts retain the budget evidence and selected-version pointer.
+Unrelated scoring/platform faults are not reclassified simply because a limit
+was also reached. Later platform faults preserve earlier qualified versions.
+
+For compatibility the legacy terminal status `round_limit_reached` also carries
+budget stops without a qualified version; the precise reason is explicitly
+`request_call_budget` or `request_token_budget`, not a claim that rounds ran out.
+Inspection uses failed status with `request_usage_unresolved` or
+`request_budget_overrun`. Completed budget stops revalidate the ledger and saved
+version evidence on resume, without grading a newer unaccepted working draft or
+reissuing model calls. Corrupted saved deliveries block recovery.
+
+Offline Campaign tests simulate the model boundary and actual reservation ledger
+for pre-start/mid-round exhaustion, uncertain usage, independent scoring faults,
+qualified-version preservation and resume/tamper checks. These complement the
+separate real local HTTP/provider-hook tests; they are not external-model trials.
+The complete entry, constrained work tools, pipeline inheritance, automatic
+format adapters, criteria revisions and the three real tasks are still pending.

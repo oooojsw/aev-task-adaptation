@@ -8,6 +8,8 @@ import { taskFeedback } from "../task-adaptation/feedback"
 import type { BoundPlan } from "../task-adaptation/binding"
 import { prepareTask } from "../task-adaptation/intake"
 import type { TaskCatalogue } from "../task-adaptation/catalogue"
+import { reserveRequest, settleRequest, inspectBudget } from "../task-adaptation/request-budget"
+import type { RequestBudget } from "../task-adaptation/request-budget"
 
 // 离线打包只替换API与配置边界，保留实际内外控制器源码。
 export async function buildOfflineCampaign(root: string, boundaryKey: string) {
@@ -38,6 +40,9 @@ export { builtins } from ${JSON.stringify(path.join(orchestrator, "protocol-plug
             return boundary.${exported}(...args);
           }` }
       })
+      // 打包后仍从原源码计算身份，不能把相对资源误指向产物目录。
+      builder.onLoad({ filter: /[\\/]orchestrator[\\/].*\.ts$/ }, async ({ path: file }) => ({ loader: "ts",
+        contents: (await readFile(file, "utf8")).replaceAll("import.meta.url", JSON.stringify(pathToFileURL(file).href)) }))
     } }] })
   if (!built.success) throw new Error(built.logs.map(String).join("\n"))
   if (replaced.size !== 2) throw new Error("Offline model/config boundaries were not both replaced")
@@ -200,9 +205,14 @@ for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLe
   { rejectedLeads: 0, adapted: true, bootstrap: true }, { rejectedLeads: 1, adapted: true },
   { rejectedLeads: 2, adapted: true }, { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true },
   { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true, program: true },
-  { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true, program: true, bestPass: true }])
-test(`actual Campaign learner ${scenario.bestPass ? "best-pass selection " : ""}${scenario.intake ? "from task intake " : ""}${scenario.adapted ? scenario.program ? "adapted program " : "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
-  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass, adapted, bootstrap, intake, program, bestPass } = scenario
+  { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true, program: true, bestPass: true },
+  { rejectedLeads: 0, adapted: true, budget: "pre" }, { rejectedLeads: 0, adapted: true, budget: "mid" },
+  { rejectedLeads: 0, adapted: true, budget: "unknown" },
+  { rejectedLeads: 0, adapted: true, budget: "fault", fault: "scoring_error" },
+  { rejectedLeads: 1, adapted: true, program: true, bestPass: true, budget: "unrelated" },
+  { rejectedLeads: 1, adapted: true, program: true, bestPass: true, budget: "qualified" }])
+test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` : ""}${scenario.bestPass ? "best-pass selection " : ""}${scenario.intake ? "from task intake " : ""}${scenario.adapted ? scenario.program ? "adapted program " : "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
+  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass, adapted, bootstrap, intake, program, bestPass, budget } = scenario
   const hasExecution = Boolean(execution || program)
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   await mkdir(root, { recursive: true })
@@ -216,7 +226,13 @@ test(`actual Campaign learner ${scenario.bestPass ? "best-pass selection " : ""}
   const roleRequests: Array<{ title: string; prompt: string; reads: string[]; edits: string[] }> = []
   let leads = 0
   let recoveryTriggered = false
+  let fixtureBudget: RequestBudget | undefined
   holder[key] = { async loadConfig() { return config }, async runOpencodeTask(input: any) {
+    if (budget && input.requestBudget) {
+      const id = randomUUID()
+      await reserveRequest(input.requestBudget.budget, { id, request: "a".repeat(64), role: input.requestBudget.role, model: input.model, reservationTokens: 1100 })
+      await settleRequest(input.requestBudget.budget, id, budget === "unknown" ? undefined : 10)
+    }
     calls.push(input.title)
     roleRequests.push({ title: input.title, prompt: input.prompt,
       reads: [...(input.referencePaths ?? []), ...(input.permissionReadPaths ?? [])],
@@ -235,6 +251,7 @@ test(`actual Campaign learner ${scenario.bestPass ? "best-pass selection " : ""}
       if (partialLead) await writeFile(path.join(current, "notes.txt"), "Executor note")
     }
     if (input.title.startsWith("Campaign Lead")) leads++
+    if (budget === "unrelated" && leads === 3 && input.title.startsWith("Campaign Lead")) throw new Error("Fixture ordinary failure after qualification")
     if (input.title.startsWith("Campaign Lead")) {
       if (seeded && leads === 1) {
         const current = input.permissionReadPaths.find((file: string) => file.replaceAll("\\", "/").endsWith("/pending-expert-package/current"))
@@ -388,6 +405,19 @@ test(`actual Campaign learner ${scenario.bestPass ? "best-pass selection " : ""}
     if (bootstrap) delete spec.initialGraph
     spec.taskAdaptation = { schema: "aev.task-adaptation.v1", planPath: path.join(root, "task-plan.json"), root,
       capabilities: ["file-read", "file-edit"], entries: [{ id: "rules", path: "rules.txt" }] }
+    if (budget) {
+      const plan = JSON.parse(await readFile(spec.taskAdaptation.planPath, "utf8"))
+      plan.stop.calls = budget === "qualified" ? 10 : budget === "fault" ? 4 : budget === "unrelated" ? 100 : 1
+      fixtureBudget = { root: path.join(path.dirname(root), `budget-${randomUUID()}`), scope: "campaign-budget", calls: plan.stop.calls, tokens: plan.stop.tokens }
+      spec.taskAdaptation.requestBudget = { schema: "aev.task-budget-policy.v1", root: fixtureBudget.root, scope: fixtureBudget.scope,
+        models: [{ model: "fixture/budget", dialect: "openai_chat", expectedModels: ["budget"], maxInputTokens: 1000, maxOutputTokens: 100 }] }
+      for (const role of ["planning", "execution", "validation"]) spec[role] = { model: "fixture/budget" }
+      await writeFile(spec.taskAdaptation.planPath, JSON.stringify(plan))
+      if (budget === "pre") {
+        await reserveRequest(fixtureBudget, { id: "intake", request: "a".repeat(64), role: "intake", model: "fixture/budget", reservationTokens: 1100 })
+        await settleRequest(fixtureBudget, "intake", 10)
+      }
+    }
     if (intake) {
       const initial = JSON.parse(await readFile(spec.taskAdaptation.planPath, "utf8"))
       const catalogue: TaskCatalogue = { id: initial.id, request: initial.objective, resources: initial.resources,
@@ -429,6 +459,44 @@ test(`actual Campaign learner ${scenario.bestPass ? "best-pass selection " : ""}
   process.env.AUTO_EVOLVE_SKIP_STALE_HEAL = "1"
   try {
     let result = await actual.runLongTaskCampaign({ cwd: root, specPath: campaign, forceNew: true })
+    if (budget) {
+      await writeFile(path.join(root, "budget-observed.json"), JSON.stringify({ result, calls, ledger: await inspectBudget(fixtureBudget!) }, null, 2))
+      if (budget === "fault") {
+        expect(calls).toHaveLength(4)
+        expect((await inspectBudget(fixtureBudget!)).denial).toBeUndefined()
+        expect(result.status).toBe("failed")
+        expect(result.taskStopReason).not.toBe("request_call_budget")
+        return
+      }
+      if (budget === "unrelated") {
+        expect(result.status).toBe("failed")
+        expect(result.taskStopReason).toBe("platform_failure")
+        expect((await inspectBudget(fixtureBudget!)).denial).toBeUndefined()
+        const saved = JSON.parse(await readFile(result.selectedTaskVersionPath, "utf8"))
+        expect(saved.round).toBe(1)
+        expect(await readFile(path.join(path.dirname(result.selectedTaskVersionPath), saved.files[0].file), "utf8")).toContain("x*x")
+        return
+      }
+      expect(result.taskStopReason).toBe(budget === "unknown" ? "request_usage_unresolved" : "request_call_budget")
+      expect(result.status).toBe(budget === "unknown" ? "failed" : budget === "qualified" ? "verified_success" : "round_limit_reached")
+      expect(calls).toHaveLength(budget === "pre" ? 0 : budget === "qualified" ? 10 : 1)
+      if (budget === "qualified") {
+        const saved = JSON.parse(await readFile(result.selectedTaskVersionPath, "utf8"))
+        expect(saved.round).toBe(1)
+        expect(await readFile(path.join(path.dirname(result.selectedTaskVersionPath), saved.files[0].file), "utf8")).toContain("x*x")
+      } else expect(result.selectedTaskVersionPath).toBeUndefined()
+      const resumed = await actual.resumeLongTaskCampaign({ cwd: root, campaignID: result.campaignID, specPath: campaign })
+      expect(resumed.status).toBe(result.status)
+      expect(resumed.taskStopReason).toBe(result.taskStopReason)
+      expect(calls).toHaveLength(budget === "pre" ? 0 : budget === "qualified" ? 10 : 1)
+      if (budget === "qualified") {
+        const saved = JSON.parse(await readFile(result.selectedTaskVersionPath, "utf8"))
+        const file = path.join(path.dirname(result.selectedTaskVersionPath), saved.files[0].file)
+        await writeFile(file, "tampered delivery")
+        await expect(actual.resumeLongTaskCampaign({ cwd: root, campaignID: result.campaignID, specPath: campaign })).rejects.toThrow("Saved task version bytes drift")
+      }
+      return
+    }
     if (recoverBeforeLead || recoverAfterPass) {
       expect(result.status).toBe("failed")
       await writeFile(path.join(root, "interrupted-result.json"), JSON.stringify(result))

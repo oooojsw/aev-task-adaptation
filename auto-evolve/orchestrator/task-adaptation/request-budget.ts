@@ -1,5 +1,5 @@
 import path from "node:path"
-import { mkdir, readFile, realpath } from "node:fs/promises"
+import { mkdir, readFile, realpath, open, lstat } from "node:fs/promises"
 import { withFileLock } from "../jsonl"
 import { writeJsonAtomic } from "../atomic-write"
 import { canonical, fingerprint } from "../protocol-plugins/identity"
@@ -25,6 +25,14 @@ interface State {
   schema: "aev.request-budget.v1"
   binding: string
   attempts: Attempt[]
+  lastDenial?: {
+    reason: "calls" | "tokens" | "unresolved"
+    request: string
+    role: string
+    model: string
+    reservationTokens: number
+    atState: string
+  }
 }
 
 const positive = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0
@@ -42,9 +50,11 @@ async function transaction<T>(config: RequestBudget, apply: (state: State) => Pr
   const { file, binding } = await location(config)
   return withFileLock(`${file}.lock`, async () => {
     let state: State
+    let fresh = false
     try { state = JSON.parse((await readFile(file, "utf8")).replace(/^\uFEFF/, "")) }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      fresh = true
       state = { schema: "aev.request-budget.v1", binding, attempts: [] }
     }
     if (state.schema !== "aev.request-budget.v1" || state.binding !== binding || !Array.isArray(state.attempts) ||
@@ -55,7 +65,25 @@ async function transaction<T>(config: RequestBudget, apply: (state: State) => Pr
           (item.status === "settled" || item.status === "overrun") &&
             (!Number.isSafeInteger(item.usedTokens) || Number(item.usedTokens) < 0 ||
               (item.status === "overrun") !== (Number(item.usedTokens) > item.reservationTokens)) ||
-          (item.status === "reserved" || item.status === "unknown") && item.usedTokens !== undefined)) throw new Error("Request budget evidence or limits drift")
+          (item.status === "reserved" || item.status === "unknown") && item.usedTokens !== undefined) ||
+        state.lastDenial && (typeof state.lastDenial !== "object" || Array.isArray(state.lastDenial) || !["calls", "tokens", "unresolved"].includes(state.lastDenial.reason) ||
+          !/^[a-f0-9]{64}$/.test(state.lastDenial.request) || !/^[a-f0-9]{64}$/.test(state.lastDenial.atState) ||
+          ![state.lastDenial.role, state.lastDenial.model].every(value => typeof value === "string" && value.trim()) ||
+          !positive(state.lastDenial.reservationTokens))) throw new Error("Request budget evidence or limits drift")
+    const claim = `${file}.started.claim`
+    try {
+      const info = await lstat(claim)
+      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || (await readFile(claim, "utf8")) !== binding) {
+        throw new Error("Request budget initialization claim drift")
+      }
+      if (fresh) throw new Error("Request budget state missing after initialization; inspect before recovery")
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      // 永久认领防止账本丢失后被当成零消耗；旧完整账本只补认领。
+      const handle = await open(claim, "wx")
+      try { await handle.writeFile(binding, "utf8") } finally { await handle.close() }
+    }
+    if (fresh) await writeJsonAtomic(file, state)
     const before = canonical(state)
     const result = await apply(state)
     if (canonical(state) !== before) await writeJsonAtomic(file, state)
@@ -77,17 +105,26 @@ export function budgetTotals(attempts: ReadonlyArray<Attempt>) {
 export async function reserveRequest(config: RequestBudget, attempt: Omit<Attempt, "status" | "usedTokens">) {
   if (!attempt || ![attempt.id, attempt.model, attempt.role].every(value => typeof value === "string" && value.trim()) ||
       !/^[a-f0-9]{64}$/.test(attempt.request) || !positive(attempt.reservationTokens)) throw new Error("Explicit request token ceiling required")
-  return transaction(config, state => {
+  const result = await transaction(config, state => {
     if (state.attempts.some(item => item.id === attempt.id)) throw new Error("Prior request reservation exists; inspect before retry")
     const totals = budgetTotals(state.attempts)
     // 未知计费不释放预留，不能以失败或重试偷偷扩大预算。
-    if (totals.unknownAttempts || totals.overrunAttempts) throw new Error("Request budget needs unresolved usage inspection")
-    if (totals.admittedAttempts >= config.calls ||
-        totals.reportedTokens + totals.outstandingTokens + attempt.reservationTokens > config.tokens) throw new Error("Request budget exhausted")
+    const reason = totals.unknownAttempts || totals.overrunAttempts ? "unresolved" as const
+      : totals.admittedAttempts >= config.calls ? "calls" as const
+      : totals.reportedTokens + totals.outstandingTokens + attempt.reservationTokens > config.tokens ? "tokens" as const : undefined
+    if (reason) {
+      // 拒绝也原子留证；无发送不增调用，后续停止不靠解析异常文本。
+      state.lastDenial = { reason, request: attempt.request, role: attempt.role, model: attempt.model,
+        reservationTokens: attempt.reservationTokens, atState: fingerprint(state.attempts) }
+      return { totals, reason }
+    }
+    delete state.lastDenial
     state.attempts.push({ id: attempt.id, request: attempt.request, model: attempt.model, role: attempt.role,
       reservationTokens: attempt.reservationTokens, status: "reserved" })
-    return budgetTotals(state.attempts)
+    return { totals: budgetTotals(state.attempts), reason: undefined }
   })
+  if (result.reason) throw new Error(result.reason === "unresolved" ? "Request budget needs unresolved usage inspection" : "Request budget exhausted")
+  return result.totals
 }
 
 export async function settleRequest(config: RequestBudget, id: string, tokens: number | undefined) {
@@ -108,5 +145,6 @@ export async function settleRequest(config: RequestBudget, id: string, tokens: n
 
 export async function inspectBudget(config: RequestBudget) {
   return transaction(config, state => ({ ...budgetTotals(state.attempts), scope: config.scope,
-    limits: { calls: config.calls, tokens: config.tokens } }))
+    limits: { calls: config.calls, tokens: config.tokens },
+    ...(state.lastDenial && state.lastDenial.atState === fingerprint(state.attempts) ? { denial: structuredClone(state.lastDenial) } : {}) }))
 }

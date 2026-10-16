@@ -3,6 +3,9 @@ import process from "node:process"
 import { freezeTraining, verifyTraining, trainingExecution, trainingRuntimeBudget, type TrainingRole } from "../protocol-plugins/training"
 import { loadTaskContext, taskInvocation, seedTaskCandidate, taskBudgetOptions } from "../task-adaptation/context"
 import { recordTaskVersion, readTaskVersions, chooseTaskVersion } from "../task-adaptation/selection"
+import { requestBudgetStop, isRequestBudgetStop } from "../task-adaptation/budget-stop"
+import { writeJsonAtomic } from "../atomic-write"
+import { fingerprint } from "../protocol-plugins/identity"
 import { randomUUID } from "node:crypto"
 import { cp, lstat, readdir, rm } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -926,6 +929,39 @@ function toCampaignRunResult(input: {
     attachedLive: input.attachedLive,
     terminal,
   }
+}
+
+async function finishTaskRequestBudget(input: {
+  spec: LongTaskSpec
+  campaignID: string
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+  maxRounds: number
+  roundsCompleted: number
+  faulted?: boolean
+}): Promise<LongTaskCampaignRunResult | undefined> {
+  const stop = await requestBudgetStop(input.spec)
+  if (!stop) return undefined
+  // 无当前准入拒绝证据时，不能把恰好到额度的其他故障改报为正常结束。
+  if (input.faulted && !stop.inspectionRequired && !stop.evidence.denial) return undefined
+  const current = await readLongTaskCampaignState(input.campaignPaths)
+  const selection = chooseTaskVersion(input.spec, await readTaskVersions(input.spec, input.campaignPaths.root),
+    current.currentRound, input.maxRounds, stop.reason)
+  const body = { schema: "aev.task-request-budget-stop.v1", task: input.spec.taskAdaptationContext!.fingerprint,
+    round: current.currentRound, ...stop, selectedTaskVersionPath: selection.selectedTaskVersionPath ?? null }
+  const folder = path.join(input.campaignPaths.root, "task-adaptation/budget-stops")
+  await ensureDirectory(folder)
+  await writeJsonAtomic(path.join(folder, `${fingerprint(body)}.json`), body)
+  // 未结算是平台待核；正常耗尽仅交付已有正式验收版本。
+  const state: LongTaskCampaignState = { ...current,
+    status: stop.inspectionRequired ? "failed" : selection.passed ? "verified_success" : "round_limit_reached",
+    updatedAt: nowISO(), recovery: undefined, taskStopReason: stop.reason,
+    selectedTaskVersionPath: selection.selectedTaskVersionPath,
+    lastSummary: stop.inspectionRequired ? `Request usage requires inspection (${stop.reason}); no automatic retry.`
+      : selection.passed ? `Request budget stopped work (${stop.reason}); delivering the saved qualified version.`
+      : `Request budget stopped work (${stop.reason}); no qualified version exists.` }
+  await writeLongTaskCampaignState(input.campaignPaths, state)
+  return toCampaignRunResult({ campaignID: input.campaignID, campaignPaths: input.campaignPaths, state,
+    roundsCompleted: input.roundsCompleted })
 }
 
 async function updateCampaignStatus(
@@ -5206,6 +5242,9 @@ export async function runLongTaskCampaign(input: {
 
   try {
     for (let roundNumber = startRound; roundNumber <= campaignSpec.maxRounds; roundNumber += 1) {
+      const stopped = await finishTaskRequestBudget({ spec: baseSpec, campaignID, campaignPaths,
+        maxRounds: campaignSpec.maxRounds, roundsCompleted: history.length })
+      if (stopped) return stopped
       lastRoundNumber = roundNumber
       const roundRuntimeScope = campaignRoundRuntimeScope(campaignID, roundNumber)
       const roundPaths = longTaskCampaignRoundPaths(campaignPaths, roundNumber)
@@ -5944,6 +5983,10 @@ export async function runLongTaskCampaign(input: {
         }
         await writeLongTaskCampaignState(campaignPaths, state)
 
+        const stopped = await finishTaskRequestBudget({ spec: baseSpec, campaignID, campaignPaths,
+          maxRounds: campaignSpec.maxRounds, roundsCompleted: history.length,
+          faulted: acceptanceInfrastructureFailure || acceptanceDatasetFailure })
+        if (stopped) return stopped
         if (nextStatus === "verified_success" || (taskSelection?.stop && nextStatus === "round_limit_reached")) {
           return toCampaignRunResult({
             campaignID,
@@ -5965,15 +6008,22 @@ export async function runLongTaskCampaign(input: {
       }
     }
   } catch (error) {
+    const stopped = await finishTaskRequestBudget({ spec: baseSpec, campaignID, campaignPaths,
+      maxRounds: campaignSpec.maxRounds, roundsCompleted: history.length, faulted: true })
+    if (stopped) return stopped
     const message = error instanceof Error ? error.message : String(error)
+    const saved = baseSpec.taskAdaptation ? await readLongTaskCampaignState(campaignPaths) : initialState
+    const qualified = baseSpec.taskAdaptation ? chooseTaskVersion(baseSpec, await readTaskVersions(baseSpec, campaignPaths.root),
+      lastRoundNumber, campaignSpec.maxRounds) : undefined
     const failureState: LongTaskCampaignState = {
-      ...initialState,
+      ...saved,
       currentRound: lastRoundNumber,
       status: "failed",
       updatedAt: nowISO(),
       lastRunID,
       lastSummary: `Campaign aborted unexpectedly: ${short(message, 240)}`,
       lastRoundSummaryPath,
+      ...(qualified ? { selectedTaskVersionPath: qualified.selectedTaskVersionPath, taskStopReason: "platform_failure" } : {}),
     }
     await writeLongTaskCampaignState(campaignPaths, failureState)
     return toCampaignRunResult({
@@ -6041,13 +6091,17 @@ export async function resumeLongTaskCampaign(input: {
 
   if (existingState.status === "verified_success" || existingState.status === "round_limit_reached") {
     if (baseSpec.taskAdaptation) {
-      const selection = chooseTaskVersion(baseSpec, await readTaskVersions(baseSpec, campaignPaths.root), existingState.currentRound, campaignSpec.maxRounds)
+      const budget = isRequestBudgetStop(existingState.taskStopReason) ? await requestBudgetStop(baseSpec) : undefined
+      if (isRequestBudgetStop(existingState.taskStopReason) && (!budget || budget.inspectionRequired || budget.reason !== existingState.taskStopReason)) {
+        throw new Error("Completed task request budget evidence drift")
+      }
+      const selection = chooseTaskVersion(baseSpec, await readTaskVersions(baseSpec, campaignPaths.root), existingState.currentRound, campaignSpec.maxRounds, budget?.reason)
       if (selection.selectedTaskVersionPath !== existingState.selectedTaskVersionPath ||
         selection.taskStopReason !== existingState.taskStopReason || !selection.stop ||
         (existingState.status === "verified_success") !== selection.passed) throw new Error("Completed task delivery selection drift")
     }
     if (baseSpec.protocolPlugins && existingState.status === "verified_success" &&
-      (!baseSpec.taskAdaptation || existingState.lastFinalAcceptancePassed)) {
+      (!baseSpec.taskAdaptation || existingState.lastFinalAcceptancePassed && !isRequestBudgetStop(existingState.taskStopReason))) {
       if (!existingState.lastFinalAcceptanceResultPath || !existingState.lastRunID) throw new Error("Completed Campaign acceptance identity missing")
       await verifyCompletedCampaignAcceptance({ campaignRoot: campaignPaths.root, cwd: input.cwd,
         budgets: await taskBudgetOptions(baseSpec),
@@ -6199,6 +6253,9 @@ export async function resumeLongTaskCampaign(input: {
 
   try {
     for (let roundNumber = startRound; roundNumber <= campaignSpec.maxRounds; roundNumber += 1) {
+      const stopped = await finishTaskRequestBudget({ spec: baseSpec, campaignID: input.campaignID, campaignPaths,
+        maxRounds: campaignSpec.maxRounds, roundsCompleted: history.length })
+      if (stopped) return stopped
       lastRoundNumber = roundNumber
       const activeRecoveryPlan = recoveryPlan && recoveryPlan.roundNumber === roundNumber ? recoveryPlan : undefined
       const roundRuntimeScope = campaignRoundRuntimeScope(input.campaignID, roundNumber)
@@ -6946,6 +7003,10 @@ export async function resumeLongTaskCampaign(input: {
         }
         await writeLongTaskCampaignState(campaignPaths, state)
 
+        const stopped = await finishTaskRequestBudget({ spec: baseSpec, campaignID: input.campaignID, campaignPaths,
+          maxRounds: campaignSpec.maxRounds, roundsCompleted: history.length,
+          faulted: acceptanceInfrastructureFailure || acceptanceDatasetFailure })
+        if (stopped) return stopped
         if (nextStatus === "verified_success" || (taskSelection?.stop && nextStatus === "round_limit_reached")) {
           return toCampaignRunResult({
             campaignID: input.campaignID,
@@ -6967,15 +7028,22 @@ export async function resumeLongTaskCampaign(input: {
       }
     }
   } catch (error) {
+    const stopped = await finishTaskRequestBudget({ spec: baseSpec, campaignID: input.campaignID, campaignPaths,
+      maxRounds: campaignSpec.maxRounds, roundsCompleted: history.length, faulted: true })
+    if (stopped) return stopped
     const message = error instanceof Error ? error.message : String(error)
+    const saved = baseSpec.taskAdaptation ? await readLongTaskCampaignState(campaignPaths) : initialState
+    const qualified = baseSpec.taskAdaptation ? chooseTaskVersion(baseSpec, await readTaskVersions(baseSpec, campaignPaths.root),
+      lastRoundNumber, campaignSpec.maxRounds) : undefined
     const failureState: LongTaskCampaignState = {
-      ...initialState,
+      ...saved,
       currentRound: lastRoundNumber,
       status: "failed",
       updatedAt: nowISO(),
       lastRunID,
       lastSummary: `Campaign aborted unexpectedly: ${short(message, 240)}`,
       lastRoundSummaryPath,
+      ...(qualified ? { selectedTaskVersionPath: qualified.selectedTaskVersionPath, taskStopReason: "platform_failure" } : {}),
     }
     await writeLongTaskCampaignState(campaignPaths, failureState)
     return toCampaignRunResult({

@@ -83,16 +83,16 @@ export async function readTaskVersions(spec: LongTaskSpec, root: string) {
   return versions.sort((a, b) => a.record.round - b.record.round || a.record.receipt.localeCompare(b.record.receipt))
 }
 
-export function chooseTaskVersion(spec: LongTaskSpec, versions: Awaited<ReturnType<typeof readTaskVersions>>, round: number, maxRounds: number) {
+export function chooseTaskVersion(spec: LongTaskSpec, versions: Awaited<ReturnType<typeof readTaskVersions>>, round: number, maxRounds: number, forcedReason?: string) {
   const plan = spec.taskAdaptationContext!.plan
   let best = versions[0]
   for (const version of versions.slice(1)) {
     if (plan.selection.rule === "best_pass" && (plan.selection.direction === "min"
       ? version.record.metric! < best.record.metric! : version.record.metric! > best.record.metric!)) best = version
   }
-  const reason = plan.selection.rule === "first_pass" && best ? "first_pass"
+  const reason = forcedReason ?? (plan.selection.rule === "first_pass" && best ? "first_pass"
     : round >= Math.min(maxRounds, plan.stop.rounds) ? "round_budget"
-    : best && round - best.record.round >= plan.stop.stagnant ? "stagnant" : undefined
+    : best && round - best.record.round >= plan.stop.stagnant ? "stagnant" : undefined)
   return { selectedTaskVersionPath: best?.path, taskStopReason: reason, stop: Boolean(reason), passed: Boolean(best) }
 }
 
