@@ -30,8 +30,9 @@ File contents are read on demand unless explicitly selected for bounded inline u
 Private scoring resources are checker-only; training resources do not enter the
 independent executor. A window is not an OS sandbox claim: enforcement uses the
 existing host's exact-file permission rules, with shell disabled and inherited
-attachments removed. Search/execution actions currently stop with a missing-adapter
-error rather than silently enabling an unrestricted shell.
+attachments removed. Declared local search and bounded arithmetic recomputation
+have scoped tools (see current implementation sections below). Arbitrary author-side
+execution still stops with a missing-adapter error rather than enabling a shell.
 
 The invocation ledger stores the exact role window and relocated candidate hashes.
 Candidate relocations cannot alter private resources or omit declared deliverables.
