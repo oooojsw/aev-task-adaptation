@@ -554,3 +554,31 @@ Targeted tests exercise actual arithmetic, limits, receipts, tamper/cancellation
 role authorization, and the actual source tool with only SDK registration mocked.
 These are offline tests, not proof of live model tool selection or three-task
 end-to-end acceptance. The real source CLI was rechecked after tool registration.
+
+## Real SDK / source-host tool smoke (2026-10-17)
+
+`auto-evolve/scripts/smoke-task-source-host.ts` starts a loopback-only deterministic
+OpenAI-compatible fixture and runs the actual source OpenCode host, SDK, permission
+engine, file tools, scoped search, arithmetic tool and request-budget fetch hook.
+Only the remote model is simulated; this is not a real LLM task acceptance.
+Every invocation retains a separate attempt directory under an explicit external
+evidence root. It never imports a production profile or uses real credentials.
+Example from the independent worktree:
+
+```powershell
+bun run auto-evolve/scripts/smoke-task-source-host.ts --cwd E:/project/AEV-task-adaptation-20261016/worktree --out E:/project/AEV-task-adaptation-20261016/source-host-sdk-fixture
+```
+
+The positive case reads an authorized source, searches it, multiplies its supplied
+operands and writes the allowed answer. `--deny-probe` first attempts to read an
+existing but unauthorized file and verifies the rejection and absence of secret
+contents in the following provider request before completing the normal chain.
+`--budget-stop-probe` allows two actual HTTP sends and verifies that the third is
+blocked before the loopback service, with no answer falsely delivered.
+
+The three scenarios passed with 5, 6 and 2 local HTTP requests respectively, and
+zero unknown or unsettled usage entries. Their usage values are **synthetic fixture
+values**, not measured real-model tokens or costs. The first configuration trial
+was rejected before any HTTP send because its declared input reservation was below
+the model's context ceiling; that failure evidence was preserved, not hidden.
+None of these checks closes the outstanding three real-model task requirement.
