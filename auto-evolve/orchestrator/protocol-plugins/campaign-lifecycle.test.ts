@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdir, readFile, writeFile, readdir, rename } from "node:fs/promises"
+import { mkdir, readFile, writeFile, readdir, rename, rm } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -10,6 +10,9 @@ import { prepareTask } from "../task-adaptation/intake"
 import type { TaskCatalogue } from "../task-adaptation/catalogue"
 import { reserveRequest, settleRequest, inspectBudget } from "../task-adaptation/request-budget"
 import type { RequestBudget } from "../task-adaptation/request-budget"
+import { exportTaskDelivery } from "../task-adaptation/delivery"
+import { restoreTaskContext } from "../task-adaptation/context"
+import { loadLongTaskSpec } from "../long-task/spec"
 
 // 离线打包只替换API与配置边界，保留实际内外控制器源码。
 export async function buildOfflineCampaign(root: string, boundaryKey: string) {
@@ -21,6 +24,7 @@ export { loadConfig, DEFAULT_CONFIG } from ${JSON.stringify(path.join(orchestrat
 export { buildNbaPack } from ${JSON.stringify(path.resolve(import.meta.dir, "../../projects/nba/pack.ts"))};
 export { prepareProjectTasks } from ${JSON.stringify(path.join(orchestrator, "protocol-plugins/project-tasks.ts"))};
 export { runProjectBatch } from ${JSON.stringify(path.join(orchestrator, "protocol-plugins/project-batch.ts"))};
+export { runTask } from ${JSON.stringify(path.join(orchestrator, "task-adaptation/run-task.ts"))};
 export { builtins } from ${JSON.stringify(path.join(orchestrator, "protocol-plugins/builtins.ts"))};`)
   const replaced = new Set<string>()
   const built = await Bun.build({ entrypoints: [entry], target: "bun", packages: "external",
@@ -458,7 +462,23 @@ test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` :
   const previous = process.env.AUTO_EVOLVE_SKIP_STALE_HEAL
   process.env.AUTO_EVOLVE_SKIP_STALE_HEAL = "1"
   try {
-    let result = await actual.runLongTaskCampaign({ cwd: root, specPath: campaign, forceNew: true })
+    const preparedSpec = budget ? JSON.parse(await readFile(specPath, "utf8")) : undefined
+    const unifiedInput = budget ? { intake: { cwd: root }, execution: {
+      dir: `${root}-unified`, requestBudget: preparedSpec.taskAdaptation.requestBudget } } : undefined
+    const unifiedDependencies = budget ? { prepare: async () => ({ status: "ready", specPath,
+      planPath: preparedSpec.taskAdaptation.planPath, selectionPath: preparedSpec.protocolPlugins.selectionPath,
+      projectManifestPath: preparedSpec.protocolPlugins.projectManifestPath, reused: true }),
+      controller: async () => actual } : undefined
+    let registered = false
+    let result = budget ? await actual.runTask(unifiedInput, unifiedDependencies)
+      : await actual.runLongTaskCampaign({ cwd: root, specPath: campaign, forceNew: true, onCreated: async (created: any) => {
+        expect(calls).toHaveLength(0)
+        const state = JSON.parse(await readFile(path.join(created.campaignDir, "campaign.json"), "utf8"))
+        expect(state.id).toBe(created.campaignID)
+        expect(state.status).toBe("bootstrapping")
+        registered = true
+      } })
+    if (!budget) expect(registered).toBe(true)
     if (budget) {
       await writeFile(path.join(root, "budget-observed.json"), JSON.stringify({ result, calls, ledger: await inspectBudget(fixtureBudget!) }, null, 2))
       if (budget === "fault") {
@@ -485,11 +505,13 @@ test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` :
         expect(saved.round).toBe(1)
         expect(await readFile(path.join(path.dirname(result.selectedTaskVersionPath), saved.files[0].file), "utf8")).toContain("x*x")
       } else expect(result.selectedTaskVersionPath).toBeUndefined()
-      const resumed = await actual.resumeLongTaskCampaign({ cwd: root, campaignID: result.campaignID, specPath: campaign })
+      const resumed = await actual.runTask(unifiedInput, unifiedDependencies)
       expect(resumed.status).toBe(result.status)
       expect(resumed.taskStopReason).toBe(result.taskStopReason)
       expect(calls).toHaveLength(budget === "pre" ? 0 : budget === "qualified" ? 10 : 1)
       if (budget === "qualified") {
+        expect(result.delivery).toBeDefined()
+        expect(resumed.delivery.reused).toBe(true)
         const saved = JSON.parse(await readFile(result.selectedTaskVersionPath, "utf8"))
         const file = path.join(path.dirname(result.selectedTaskVersionPath), saved.files[0].file)
         await writeFile(file, "tampered delivery")
@@ -617,6 +639,35 @@ test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` :
       const accepted = JSON.parse(await readFile(state.lastFinalAcceptanceResultPath, "utf8"))
       if (adapted) {
         expect(result.selectedTaskVersionPath).toBeDefined()
+        const deliverySpec = (await loadLongTaskSpec(specPath)).spec
+        deliverySpec.taskAdaptationContext = await restoreTaskContext(deliverySpec, JSON.parse(await readFile(
+          path.join(result.campaignDir, "task-adaptation/task-plan.snapshot.json"), "utf8")))
+        const deliveryInput = { root: result.campaignDir, selectedTaskVersionPath: result.selectedTaskVersionPath,
+          dir: `${root}-delivery` }
+        const delivery = await exportTaskDelivery(deliverySpec, deliveryInput)
+        expect(delivery.reused).toBe(false)
+        expect((await exportTaskDelivery(deliverySpec, deliveryInput)).reused).toBe(true)
+        const manifest = JSON.parse(await readFile(delivery.path, "utf8"))
+        expect(manifest.files.map((item: any) => item.id)).toEqual(["rules"])
+        const deliveredFile = path.join(deliveryInput.dir, manifest.files[0].path)
+        const deliveredBytes = await readFile(deliveredFile)
+        expect(deliveredBytes.toString()).not.toContain("PRIVATE_CAMPAIGN_LABEL")
+        if (bestPass) expect(deliveredBytes.toString()).not.toContain("time.sleep")
+        await writeFile(deliveredFile, "tampered delivery")
+        await expect(exportTaskDelivery(deliverySpec, deliveryInput)).rejects.toThrow("Delivered file drift")
+        await writeFile(deliveredFile, deliveredBytes)
+        const unexpected = path.join(deliveryInput.dir, "private-copy.txt")
+        await writeFile(unexpected, "unexpected file")
+        await expect(exportTaskDelivery(deliverySpec, deliveryInput)).rejects.toThrow("Unexpected delivery files")
+        await rm(unexpected)
+        await expect(exportTaskDelivery(deliverySpec, { ...deliveryInput, dir: result.campaignDir }))
+          .rejects.toThrow("separate from task evidence")
+        const incomplete = `${root}-incomplete-delivery`
+        await mkdir(incomplete)
+        await expect(exportTaskDelivery(deliverySpec, { ...deliveryInput, dir: incomplete })).rejects.toThrow()
+        expect(await readdir(incomplete)).toEqual([])
+        await expect(exportTaskDelivery(deliverySpec, { ...deliveryInput, selectedTaskVersionPath: specPath }))
+          .rejects.toThrow("verified task version")
         const version = JSON.parse(await readFile(result.selectedTaskVersionPath, "utf8"))
         const versionFile = path.join(path.dirname(result.selectedTaskVersionPath), version.files[0].file)
         const versionBytes = await readFile(versionFile)

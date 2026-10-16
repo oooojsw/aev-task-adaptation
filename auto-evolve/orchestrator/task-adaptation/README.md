@@ -421,3 +421,36 @@ qualified-version preservation and resume/tamper checks. These complement the
 separate real local HTTP/provider-hook tests; they are not external-model trials.
 The complete entry, constrained work tools, pipeline inheritance, automatic
 format adapters, criteria revisions and the three real tasks are still pending.
+
+## Unified launch, resume and qualified delivery (2026-10-17)
+
+`run-task.ts --input <absolute-config.json>` accepts the same configuration as
+the preparation CLI and additionally requires an explicit shared request budget.
+It calls preparation first, returns missing capabilities/bindings without
+launching, then delegates to the original Campaign runner (graph mode). The
+preparation-only CLI remains unchanged.
+
+The generated campaign spec, preparation identity and input hash are frozen in
+`<execution.dir>/task-run`. A short exclusive claim serializes the initial
+launch. The controller's opt-in creation callback registers its identity before
+protocol preparation or author work. Subsequent calls resume that same Campaign;
+they never use force-new. An interrupted unregistered launch, missing receipt,
+changed identity or separately deleted claim blocks rather than silently starting
+another potentially paid task. A completed/failed Campaign is still revalidated
+by the original resume path, not blindly trusted from a summary.
+
+Terminal tasks with saved qualified versions export only their declared files
+to a separate `task-run/delivery/files` directory. Each file retains its original
+entry name, hash and size, with plan/receipt/version provenance in `delivery.json`.
+Export validates the actual acceptance evidence and snapshot again; it never
+copies the mutable working candidate, raw checker inputs or private criteria.
+An existing export is reused only after manifest, contents and file coverage
+checks; incomplete exports are preserved and blocked. A platform-failed task may
+retain an earlier qualified delivery without changing its failed status.
+
+Tests cover the journal with injected launch boundaries and the actual Campaign
+controller through the unified entry for budget-stop and qualified-delivery
+scenarios. Only the preparation fixture and model/configuration boundaries are
+substituted there; this is not yet an external-model end-to-end acceptance.
+Remaining full-objective work includes constrained research/recompute tools,
+pipeline inheritance, format adapters, criteria revisions and three real tasks.

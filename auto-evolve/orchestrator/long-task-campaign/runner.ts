@@ -5146,6 +5146,7 @@ export async function runLongTaskCampaign(input: {
   taskID?: string
   attemptID?: string
   specHash?: string
+  onCreated?: (created: { campaignID: string; campaignDir: string }) => Promise<void>
 }): Promise<LongTaskCampaignRunResult> {
   if (process.env.AUTO_EVOLVE_SKIP_STALE_HEAL !== "1") await healStaleRuntimeStates(input.cwd)
   const { spec: campaignSpec } = await loadLongTaskCampaignSpec(input.specPath)
@@ -5216,6 +5217,8 @@ export async function runLongTaskCampaign(input: {
   }
 
   await initializeLongTaskCampaign(campaignPaths, initialState)
+  // 先登记归属再开展工作，中断后不得重复创建付费任务。
+  await input.onCreated?.({ campaignID, campaignDir: campaignPaths.root })
   await prepareCampaignProtocol(campaignPaths.root, baseSpec, false, input.cwd)
   if (input.historyContext && input.taskID && input.attemptID) {
     await registerCampaignAttempt({
