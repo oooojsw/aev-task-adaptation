@@ -598,3 +598,25 @@ host/SDK/tool fixture also completed from a nested long evidence path. These are
 local tests, not real report acceptance. Original failed evidence is retained;
 recovery must explicitly reuse the completed candidate and preserve billing limits,
 not regenerate the report or silently retry an unknown paid request.
+
+The process launcher and Windows wrapper are now included in backend identity.
+Changing them blocks reuse of an earlier frozen task just as a model-host change
+does. The first report's initial identity did not yet cover this helper; its
+platform-recovery journal explicitly records the repaired helper hash and retained
+failed evidence. Do not claim that original snapshot already covered every helper.
+
+## Intake boundary and bounded decision repairs (2026-10-17)
+
+The interpreter writes a task decision only. Its intentionally narrow write
+permission does not mean that later author roles lack catalogue-authorized editing.
+Its worker resource references must be declared IDs, not filenames or task kinds.
+These distinctions are now explicit in the interpretation prompt.
+
+`maxDecisionRepairs` optionally permits zero to two corrections of a **completed**
+invalid JSON/plan decision. Default remains zero. Each raw decision and backend
+result is retained in `decision-attempts`; validation feedback asks only to correct
+the proposal within the existing catalogue. Criteria, permissions, call/token
+budgets and available capabilities do not expand. Backend/model mismatch, abort,
+material drift and uncertain billing never enter this correction loop. A failed or
+interrupted intake still blocks implicit recovery. Configuration revisions must
+preserve the old stage and cumulative budget rather than remove its claim.

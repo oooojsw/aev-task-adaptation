@@ -65,6 +65,10 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     const readiness = await readFile(fileURLToPath(new URL("./host-preflight.ts", import.meta.url)))
     const localSearch = await readFile(fileURLToPath(new URL("../task-adaptation/local-search.ts", import.meta.url)))
     const recompute = await readFile(fileURLToPath(new URL("../task-adaptation/recompute.ts", import.meta.url)))
+    // 进程桥接也会改变实际执行，须纳入恢复身份，不能只冻模型源码。
+    const processHelpers = await Promise.all(["../managed-process.ts", "../windows-no-console-process.ts", "../windows-no-console-wrapper.py"].map(async file => ({
+      file, sha256: createHash("sha256").update(await readFile(fileURLToPath(new URL(file, import.meta.url)))).digest("hex"),
+    })))
     const key = fingerprint({ cwd, profile, files: files.sort((a, b) => a.path.localeCompare(b.path)),
       sourceHost: { kind: options.invoke ? "injected-test-boundary" : "bun-source", executable: process.execPath,
         version: typeof Bun === "undefined" ? null : Bun.version, files: hostFiles.sort((a, b) => a.path.localeCompare(b.path)) },
@@ -77,7 +81,7 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
       budgetLedger: createHash("sha256").update(budgetLedger).digest("hex"),
       readiness: createHash("sha256").update(readiness).digest("hex"),
       localSearch: createHash("sha256").update(localSearch).digest("hex"),
-      recompute: createHash("sha256").update(recompute).digest("hex") })
+      recompute: createHash("sha256").update(recompute).digest("hex"), processHelpers })
     return { key, config: normalized }
   }
   const frozen = await identity()

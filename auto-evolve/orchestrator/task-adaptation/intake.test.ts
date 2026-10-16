@@ -93,3 +93,49 @@ test("incomplete claim is never silently regenerated", async () => {
   await expect(prepareTask(f.input, f.dependencies)).rejects.toThrow()
   expect(f.requests).toHaveLength(0)
 })
+
+test("opt-in decision repair only corrects a completed invalid proposal and preserves each reply", async () => {
+  const f = await fixture()
+  f.input.maxDecisionRepairs = 1
+  let calls = 0
+  const dependencies = { createDriver: async () => ({ implementation: "a".repeat(64), preflight: async () => {},
+    invoke: async (request: ToolRequest) => {
+      calls++
+      const value = decision()
+      if (calls === 1) value.workers[0].resources = ["invented-resource"]
+      else {
+        expect(request.prompt).toContain("Platform decision validation rejected")
+        expect(request.prompt).toContain("do not imply missing author capabilities")
+      }
+      await writeFile(request.editPaths[0], JSON.stringify(value))
+      return { completed: true, actualModel: "fixture/planner" }
+    } }) }
+  expect((await prepareTask(f.input, dependencies)).status).toBe("ready")
+  expect(calls).toBe(2)
+  expect(await readFile(path.join(f.input.dir, "decision-attempts/1/decision.json"), "utf8")).toContain("invented-resource")
+  expect(await readFile(path.join(f.input.dir, "decision-attempts/1/validation.json"), "utf8")).toContain("invalid_decision")
+  expect(await readFile(path.join(f.input.dir, "decision-attempts/2/decision.json"), "utf8")).not.toContain("invented-resource")
+  expect((await prepareTask(f.input, dependencies)).reused).toBe(true)
+  expect(calls).toBe(2)
+})
+
+test("decision repair never retries incomplete backend responses and invalid caps block before construction", async () => {
+  const f = await fixture()
+  f.input.maxDecisionRepairs = 2
+  f.reply({ completed: false, actualModel: "fixture/planner" })
+  await expect(prepareTask(f.input, f.dependencies)).rejects.toThrow("incomplete")
+  expect(f.requests).toHaveLength(1)
+  const other = await fixture()
+  other.input.maxDecisionRepairs = 3
+  await expect(prepareTask(other.input, { createDriver: async () => { throw new Error("Should not construct driver") } })).rejects.toThrow("bounded task intake")
+})
+
+test("bounded invalid decision repairs stop and cannot be silently restarted", async () => {
+  const f = await fixture()
+  f.input.maxDecisionRepairs = 1
+  f.choose({ ...decision(), profiles: ["nonexistent"] })
+  await expect(prepareTask(f.input, f.dependencies)).rejects.toThrow()
+  expect(f.requests).toHaveLength(2)
+  await expect(prepareTask(f.input, f.dependencies)).rejects.toThrow("failed; inspect")
+  expect(f.requests).toHaveLength(2)
+})

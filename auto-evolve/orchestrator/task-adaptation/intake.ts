@@ -2,7 +2,7 @@ import path from "node:path"
 import { readFile, mkdir, open, realpath, access } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
-import { writeJsonAtomic } from "../atomic-write"
+import { writeJsonAtomic, writeFileAtomic } from "../atomic-write"
 import { opencodeDriver } from "../protocol-plugins/opencode-driver"
 import type { InvokeTool } from "../protocol-plugins/tool-session"
 import { canonical, fingerprint } from "../protocol-plugins/identity"
@@ -21,6 +21,7 @@ export interface IntakeInput {
   timeoutMs: number
   maxInputBytes: number
   maxDecisionBytes: number
+  maxDecisionRepairs?: number
 }
 
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
@@ -30,7 +31,8 @@ export async function prepareTask(input: IntakeInput, dependencies?: { createDri
   if (![input.cwd, input.root, input.dir].every(file => typeof file === "string" && path.isAbsolute(file)) ||
     ![input.model, input.expectedModel].every(text => typeof text === "string" && text.trim()) ||
     ![input.timeoutMs, input.maxInputBytes, input.maxDecisionBytes].every(number => Number.isSafeInteger(number) && number > 0) ||
-    input.timeoutMs > 43200000 || input.maxDecisionBytes > 1048576) throw new Error("Explicit bounded task intake required")
+    input.timeoutMs > 43200000 || input.maxDecisionBytes > 1048576 ||
+    input.maxDecisionRepairs !== undefined && (!Number.isSafeInteger(input.maxDecisionRepairs) || input.maxDecisionRepairs < 0 || input.maxDecisionRepairs > 2)) throw new Error("Explicit bounded task intake required")
   const catalogue = validateCatalogue(input.catalogue)
   const root = await realpath(input.root)
   if (root.toLowerCase() !== path.resolve(input.root).toLowerCase()) throw new Error("Linked intake material root rejected")
@@ -59,6 +61,7 @@ export async function prepareTask(input: IntakeInput, dependencies?: { createDri
   const binding = fingerprint({ catalogue, root, files, cwd: input.cwd, backend: driver.implementation, source,
     model: input.model, expectedModel: input.expectedModel, timeoutMs: input.timeoutMs,
     maxInputBytes: input.maxInputBytes, maxDecisionBytes: input.maxDecisionBytes, prompt,
+    ...(input.maxDecisionRepairs !== undefined ? { maxDecisionRepairs: input.maxDecisionRepairs } : {}),
     ...(input.requestBudget ? { requestBudget: input.requestBudget } : {}) })
   const snapshot = path.join(dir, "intake.snapshot.json")
   const completed = path.join(dir, "intake.completed.json")
@@ -92,23 +95,43 @@ export async function prepareTask(input: IntakeInput, dependencies?: { createDri
   await writeJsonAtomic(snapshot, { schema: "aev.task-intake-snapshot.v1", binding, backend: driver.implementation })
   await writeJsonAtomic(output, null)
   try {
-    const signal = AbortSignal.timeout(input.timeoutMs)
-    const reply = await driver.invoke({ workDir: workspace, prompt, model: input.model, readPaths: [...reads.map(file => file.path), output],
-      ...(input.requestBudget ? { requestBudget: input.requestBudget } : {}),
-      editPaths: [output], allowShell: false, maxAttempts: 1, timeoutMs: input.timeoutMs }, signal)
-    const receipt = JSON.parse(JSON.stringify(reply))
-    await writeJsonAtomic(path.join(dir, "intake.backend-result.json"), receipt)
-    if (!reply.completed || reply.actualModel !== input.expectedModel || signal.aborted) throw new Error("Task intake backend incomplete or model mismatch")
-    await driver.preflight()
-    if (canonical(await resources()) !== canonical(files)) throw new Error("Task intake material drift during interpretation")
-    const decision = await readFile(await resolveResource(dir, "workspace/decision.json"))
-    if (decision.length > input.maxDecisionBytes) throw new Error("Task decision exceeds byte budget")
-    const value = compileTask(catalogue, json(decision) as Decision)
-    await writeJsonAtomic(result, value)
-    if (value.status === "ready") await writeJsonAtomic(plan, value.plan)
-    await writeJsonAtomic(completed, { schema: "aev.task-intake-completed.v1", binding, decisionSHA256: hash(decision),
-      result: fingerprint(value), backend: fingerprint(receipt), ...(value.status === "ready" ? { planSHA256: hash(await readFile(plan)) } : {}) })
-    return { ...value, dir, ...(value.status === "ready" ? { planPath: plan } : {}), reused: false }
+    await mkdir(path.join(dir, "decision-attempts"))
+    let correction = ""
+    for (let attempt = 0; attempt <= (input.maxDecisionRepairs ?? 0); attempt++) {
+      const signal = AbortSignal.timeout(input.timeoutMs)
+      const actualPrompt = prompt + correction
+      if (Buffer.byteLength(actualPrompt) + reads.reduce((sum, file) => sum + file.bytes, 0) > input.maxInputBytes) throw new Error("Task intake repair input byte budget exceeded")
+      const reply = await driver.invoke({ workDir: workspace, prompt: actualPrompt, model: input.model, readPaths: [...reads.map(file => file.path), output],
+        ...(input.requestBudget ? { requestBudget: input.requestBudget } : {}),
+        editPaths: [output], allowShell: false, maxAttempts: 1, timeoutMs: input.timeoutMs }, signal)
+      const receipt = JSON.parse(JSON.stringify(reply))
+      await writeJsonAtomic(path.join(dir, "intake.backend-result.json"), receipt)
+      if (!reply.completed || reply.actualModel !== input.expectedModel || signal.aborted) throw new Error("Task intake backend incomplete or model mismatch")
+      await driver.preflight()
+      if (canonical(await resources()) !== canonical(files)) throw new Error("Task intake material drift during interpretation")
+      const decision = await readFile(await resolveResource(dir, "workspace/decision.json"))
+      const attemptDir = path.join(dir, "decision-attempts", String(attempt + 1))
+      await mkdir(attemptDir)
+      await writeJsonAtomic(path.join(attemptDir, "backend-result.json"), receipt)
+      await writeFileAtomic(path.join(attemptDir, "decision.json"), decision)
+      if (decision.length > input.maxDecisionBytes) throw new Error("Task decision exceeds byte budget")
+      let value: ReturnType<typeof compileTask>
+      try { value = compileTask(catalogue, json(decision) as Decision) }
+      catch (error) {
+        // 只修完整回复中的方案错误；故障或未知计费不自动重发。
+        if (attempt >= (input.maxDecisionRepairs ?? 0)) throw error
+        const message = error instanceof Error ? error.message.replace(/[\x00-\x1f]/g, " ").slice(0, 500) : "Invalid decision"
+        await writeJsonAtomic(path.join(attemptDir, "validation.json"), { status: "invalid_decision", message })
+        correction = `\nPlatform decision validation rejected your completed proposal: ${JSON.stringify(message)}. Correct only the decision JSON. Use exact declared IDs. Your intake edit restrictions do not imply missing author capabilities. Do not perform the underlying task or change its criteria.`
+        continue
+      }
+      await writeJsonAtomic(result, value)
+      if (value.status === "ready") await writeJsonAtomic(plan, value.plan)
+      await writeJsonAtomic(completed, { schema: "aev.task-intake-completed.v1", binding, decisionSHA256: hash(decision),
+        result: fingerprint(value), backend: fingerprint(receipt), ...(value.status === "ready" ? { planSHA256: hash(await readFile(plan)) } : {}) })
+      return { ...value, dir, ...(value.status === "ready" ? { planPath: plan } : {}), reused: false }
+    }
+    throw new Error("Task decision repair limit reached")
   } catch (error) {
     await writeJsonAtomic(path.join(dir, "intake.failure.json"), { status: "incomplete", binding, errorKind: "task_intake_error" })
     throw error
