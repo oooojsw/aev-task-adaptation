@@ -45,7 +45,7 @@ acceptance mechanically; it is not evidence of research quality or real-model su
 Existing Campaign tests exercise legacy learning, rejection/repair, merge, replay,
 held-out evaluation and recovery.
 
-Still required: natural-language intake and capability composition, broader runtime
+Still required: verified runtime capability discovery and full protocol composition, broader runtime
 memory visibility windows, active source-checking tools, isolated program
 execution and metrics, best-version and global stop enforcement, protocol-aware
 batch/merge propagation, full compatibility comparison, and three small real tasks.
@@ -100,3 +100,52 @@ Log: `E:/project/AEV-task-adaptation-20261016/validation-feedback-advice-2026101
 SHA-256: `ffb6e64905a394c479fe8b43ad91094583a8828a960cba99e3b7637ae7c12bdd`.
 This is offline controller/compatibility evidence, not a TypeScript typecheck,
 real-model success, full objective completion, or production deployment.
+
+## Task intake checkpoint (2026-10-16)
+
+`catalogue.ts` compiles one interpretation decision into the shared `Plan` schema.
+The host owns the resource list, edit targets, acceptance profiles, rejection
+routes, selection metrics and finite budgets. The interpretation selects the
+deliverable kind, profile combination, needed capabilities and task-specific
+Workers; it cannot invent a test, weaken a check or grant private material access.
+Combinations may add execution to a report requiring recomputation; conflicting
+execution modes, metrics or duplicate check identities stop compilation.
+
+`intake.ts` performs one interpretation invocation using the existing frozen
+OpenCode driver. It passes absolute allowed file locations for on-demand reading,
+keeps private scoring files out of the prompt and read grants, and permits only
+the decision JSON to be edited. It stores source/backend/config fingerprints,
+raw decision bytes, backend metadata, the compiled outcome and a completion
+checkpoint. Matching completed intake reuses its result. Failed, incomplete or
+changed intake is not automatically resent. An unavailable capability is a
+persisted `missing_capabilities` outcome, not a silently weakened ready plan.
+
+The callable entry point is `prepareTask(IntakeInput)`; the CLI is:
+
+```text
+bun run auto-evolve/scripts/prepare-task.ts --input <absolute-intake-config.json>
+```
+
+`IntakeInput` declares `cwd`, material `root`, independent evidence `dir`, the
+host's `catalogue`, explicit `model` / `expectedModel`, `timeoutMs`,
+`maxInputBytes` and `maxDecisionBytes`. `TaskCatalogue` contains the natural-language
+`request`, resource inventory, deliverable entry IDs, capability descriptors,
+acceptance profiles, stop limits and `maxWorkers`. See the TypeScript interfaces
+for the exact schema. Catalogue files must contain no credentials; use the
+existing private host configuration. The CLI prepares a plan only. It does not
+start training, merge or deployment. Audit existing assets and actual capability
+availability before any real invocation.
+
+Availability flags are host declarations, not automatic infrastructure probes.
+The generated plan still needs matching real protocol bindings and tool adapters;
+`ready` here means plan compilation, not that every requested runtime exists.
+The same-controller integration test supplies a fixed interpretation and runs
+Planner, Executor, dynamic Workers, rejection, revision and formal reacceptance
+through the existing Campaign. It does not prove semantic task understanding by
+a real model or the quality of an actual research report.
+
+Current full regression: 323 passed, 0 failed, 6510 assertions across 52 files.
+Log: `E:/project/AEV-task-adaptation-20261016/validation-task-intake-20261016.log`.
+SHA-256: `e8cc36136d2c022d685b702a03764c79e1f9b72d41e99a3c298017d4be77a0e2`.
+CLI help was checked without invoking any model. Full TypeScript typechecking,
+three real tasks and the remainder of the objective are still pending.

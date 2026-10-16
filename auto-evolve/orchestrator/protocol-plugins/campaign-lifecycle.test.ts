@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url"
 import { summarizeResources } from "./resource-summary"
 import { taskFeedback } from "../task-adaptation/feedback"
 import type { BoundPlan } from "../task-adaptation/binding"
+import { prepareTask } from "../task-adaptation/intake"
+import type { TaskCatalogue } from "../task-adaptation/catalogue"
 
 // 离线打包只替换API与配置边界，保留实际内外控制器源码。
 export async function buildOfflineCampaign(root: string, boundaryKey: string) {
@@ -196,9 +198,9 @@ for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLe
   { rejectedLeads: 1, execution: true, seeded: true, executorPatch: true, partialLead: true },
   { rejectedLeads: 0, execution: true, fault: "execution_error" }, { rejectedLeads: 0, adapted: true },
   { rejectedLeads: 0, adapted: true, bootstrap: true }, { rejectedLeads: 1, adapted: true },
-  { rejectedLeads: 2, adapted: true }])
-test(`actual Campaign learner ${scenario.adapted ? "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
-  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass, adapted, bootstrap } = scenario
+  { rejectedLeads: 2, adapted: true }, { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true }])
+test(`actual Campaign learner ${scenario.intake ? "from task intake " : ""}${scenario.adapted ? "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
+  const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass, adapted, bootstrap, intake } = scenario
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   await mkdir(root, { recursive: true })
   const key = `__campaignOffline_${randomUUID().replaceAll("-", "")}`
@@ -366,6 +368,32 @@ test(`actual Campaign learner ${scenario.adapted ? "adapted report " : ""}${scen
     if (bootstrap) delete spec.initialGraph
     spec.taskAdaptation = { schema: "aev.task-adaptation.v1", planPath: path.join(root, "task-plan.json"), root,
       capabilities: ["file-read", "file-edit"], entries: [{ id: "rules", path: "rules.txt" }] }
+    if (intake) {
+      const initial = JSON.parse(await readFile(spec.taskAdaptation.planPath, "utf8"))
+      const catalogue: TaskCatalogue = { id: initial.id, request: initial.objective, resources: initial.resources,
+        entries: ["rules"], maxWorkers: 2, stop: initial.stop,
+        capabilities: [{ id: "file-read", version: "1", description: "Read declared files", actions: ["read"], available: true },
+          { id: "file-edit", version: "1", description: "Edit declared candidate", actions: ["edit"], available: true }],
+        profiles: [{ id: "report-content", description: "Check report content", kinds: ["report"], requires: ["file-read", "file-edit"],
+          acceptance: initial.acceptance, rejection: initial.rejection, selection: initial.selection }] }
+      let interpretations = 0
+      const input = { cwd: root, root, dir: `${root}-intake`, catalogue, model: "fixture/intake", expectedModel: "fixture/intake",
+        timeoutMs: 2000, maxInputBytes: 100000, maxDecisionBytes: 16000 }
+      const dependencies = { createDriver: async () => ({ implementation: "a".repeat(64), preflight: async () => {},
+        invoke: async (request: { prompt: string; editPaths: string[]; readPaths: string[] }) => {
+          interpretations++
+          expect(request.prompt).not.toContain("PRIVATE_CAMPAIGN_LABEL")
+          expect(request.readPaths).not.toContain(privateFile)
+          await writeFile(request.editPaths[0], JSON.stringify({ kind: "report", profiles: ["report-content"], needs: [],
+            workers: initial.workers, rationale: "Report task uses declared source inspection and content checks" }))
+          return { completed: true, actualModel: "fixture/intake" }
+        } }) }
+      const prepared = await prepareTask(input, dependencies)
+      if (prepared.status !== "ready") throw new Error("Offline intake did not produce a ready plan")
+      spec.taskAdaptation.planPath = prepared.planPath
+      expect((await prepareTask(input, dependencies)).reused).toBe(true)
+      expect(interpretations).toBe(1)
+    }
     await writeFile(specPath, JSON.stringify(spec))
   }
   const campaign = path.join(root, "campaign.json")
