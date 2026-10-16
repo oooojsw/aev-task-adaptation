@@ -98,6 +98,21 @@ describe("opt-in protocol compiler, offline only", () => {
     expect(() => compile(value, registry())).toThrow()
   })
   test("unknown phase field blocks", () => invalid((value) => { Object.assign(source(value), { requird: true }) }))
+  test("input scopes reject duplicate, empty candidate, and malformed selectors", () => {
+    invalid(value => { source(value).executionInputs = { skill: [], materials: [] } })
+    invalid(value => { source(value).executionInputs = { skill: ["a", "a"], materials: [] } })
+    invalid(value => { source(value).checks[0].materialInputs = ["a", "a"] })
+    invalid(value => { source(value).checks[0].skillInputs = [" "] })
+    invalid(value => { Object.assign(source(value).checks[0], { target: "skill", stage: "before_execution", skillInputs: [] }) })
+  })
+  test("explicit scope changes invalidate frozen protocol identity", () => {
+    const value = selection()
+    const original = compile(value, registry())
+    source(value).checks[0].materialInputs = []
+    const scoped = compile(value, registry())
+    expect(scoped.fingerprint).not.toBe(original.fingerprint)
+    expect(() => verify({ ...original, selection: scoped.selection }, registry())).toThrow("drift")
+  })
   test("canonical identity unaffected by object key ordering", () => {
     expect(fingerprint({ b: 2, a: 1 })).toBe(fingerprint({ a: 1, b: 2 }))
     expect(fingerprint({ a: 1 })).not.toBe(fingerprint({ a: 2 }))

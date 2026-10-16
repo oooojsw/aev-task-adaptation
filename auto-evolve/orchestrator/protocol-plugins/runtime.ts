@@ -119,12 +119,17 @@ export class Runtime {
     const privateInputs = await load(task.privateInputs, roots)
     if (materials.some((item) => !resolved.selection.run.materialKinds.includes(item.kind))) throw new Error("Task material kind mismatch")
     for (const check of plan.checks) {
+      for (const [ids, available] of [[check.skillInputs, skill], [check.materialInputs, materials]] as const) {
+        if (ids?.some(id => !available.some(item => item.id === id))) throw new Error("Missing declared checker input scope")
+      }
       for (const id of check.privateInputs ?? []) {
         if (!privateInputs.some((item) => item.id === id)) throw new Error(`Missing declared private binding: ${id}`)
       }
       if (!this.checkers.has(identity(check))) throw new Error(`Missing checker handler: ${check.id}`)
     }
     if (plan.executor && !this.executors.has(identity(plan.executor))) throw new Error(`Missing executor handler: ${plan.executor.id}`)
+    if (plan.executionInputs && (plan.executionInputs.skill.some(id => !skill.some(item => item.id === id)) ||
+      plan.executionInputs.materials.some(id => !materials.some(item => item.id === id)))) throw new Error("Missing declared execution input scope")
     const evidence = { skill: metadata(skill), materials: metadata(materials), privateInputs: metadata(privateInputs) }
     const checks: Array<{ name: string; target: Check["target"]; stage: Check["stage"]; mechanism: Check["mechanism"]; required: boolean; status: Outcome; message: string; inputFingerprint: string;
       usage?: { inputTokens?: number; outputTokens?: number }; reused?: boolean }> = []
@@ -140,14 +145,18 @@ export class Runtime {
     })
     const evaluate = async (stage: Check["stage"]) => {
       for (const check of plan.checks.filter((item) => item.stage === stage)) {
-        const candidate = check.target === "skill" ? skill : product ? [product] : []
+        // 省略选择器保留旧行为；显式空数组意味着不传，而非全传。
+        const selectedSkill = check.skillInputs ? skill.filter(item => check.skillInputs!.includes(item.id)) : skill
+        const selectedMaterials = check.materialInputs ? materials.filter(item => check.materialInputs!.includes(item.id)) : materials
+        const candidate = check.target === "skill" ? selectedSkill : product ? [product] : []
         if (!candidate.length) return "data_error" as const
         const selected = privateInputs.filter((item) => check.privateInputs?.includes(item.id))
         const key = fingerprint({ checker: this.registry.checker(check).implementation,
-          binding: check, candidate: metadata(candidate), materials: metadata(materials), privateInputs: metadata(selected) })
+          binding: check, candidate: metadata(candidate), materials: metadata(selectedMaterials), privateInputs: metadata(selected),
+          ...(check.skillInputs !== undefined ? { skill: metadata(selectedSkill) } : {}) })
         let result
         try {
-          result = await this.checkers.get(identity(check))!({ ...publicInputs(), candidate: copy(candidate),
+          result = await this.checkers.get(identity(check))!({ ...publicInputs(), skill: copy(selectedSkill), materials: copy(selectedMaterials), candidate: copy(candidate),
             privateInputs: copy(selected), settings: immutable(check.settings),
             check: { name: check.name, target: check.target, stage: check.stage, mechanism: check.mechanism } })
           if (!result || !["passed", "rejected", "scoring_error", "data_error"].includes(result.status) ||
@@ -168,7 +177,11 @@ export class Runtime {
     if (plan.claim === "skill_check") return receipt("passed", "Declared skill checks passed; task not executed", false)
     let result
     try {
-      result = await this.executors.get(identity(plan.executor!))!({ ...publicInputs(), settings: immutable(plan.executor!.settings) })
+      const scope = plan.executionInputs
+      result = await this.executors.get(identity(plan.executor!))!({ ...publicInputs(),
+        ...(scope ? { skill: copy(skill.filter(item => scope.skill.includes(item.id))),
+          materials: copy(materials.filter(item => scope.materials.includes(item.id))) } : {}),
+        settings: immutable(plan.executor!.settings) })
     } catch {
       return receipt("execution_error", "Executor failed; inspect backend evidence", false, true)
     }

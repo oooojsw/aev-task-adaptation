@@ -258,3 +258,24 @@ Full offline regression: 342 passed, 0 failed, 6944 assertions across 55 files,
 SHA-256: `41509de8ee4ae4e646b778fdbd23fb2007f54f927149070676502dcc58f6867e`.
 The active backend boundary is fixed in these tests; no real research task,
 real model call, full typecheck or production deployment is claimed.
+
+## Actual checker and execution input scopes (2026-10-16)
+
+Protocol checks may select `skillInputs` and `materialInputs` independently of
+their existing `privateInputs`. An execution phase may declare `executionInputs`
+with candidate and material IDs. Omitted selectors preserve the historical
+all-public-input behavior; explicit empty material lists send no materials.
+Missing IDs block before any checker or executor invocation. Selectors are part
+of the frozen protocol identity and actual checker input fingerprints.
+
+Adapted Campaigns compare these actual scopes with the task plan before any
+author work: candidate IDs, checker source/criterion IDs, physical source files,
+feedback disclosure, independent execution window and backend must agree.
+Matching a filename or resource ID alone is insufficient. The task catalogue
+generates an independent input window for script execution as well as Agent
+execution. Neither receives private grading inputs. Legacy configurations
+without task adaptation retain their previous selection behavior.
+
+This is input-routing validation, not an OS security sandbox. Global request
+budgets, complete executable configuration generation and the three real task
+acceptance runs remain separate unfinished requirements.

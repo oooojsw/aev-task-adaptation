@@ -2,7 +2,9 @@ import path from "node:path"
 import { readFile, access, mkdir, lstat, realpath } from "node:fs/promises"
 import { writeFileAtomic } from "../atomic-write"
 import type { LongTaskSpec } from "../long-task/contract"
-import { canonical } from "../protocol-plugins/identity"
+import { canonical, fingerprint } from "../protocol-plugins/identity"
+import type { Snapshot } from "../protocol-plugins/contract"
+import { verifyProtocolScopes } from "./protocol-scopes"
 import { freezePlan, verifyBinding, resolveResource, type BoundPlan } from "./binding"
 import { validatePlan, type Role } from "./plan"
 import type { Invocation } from "./invocation"
@@ -42,15 +44,22 @@ export async function loadTaskContext(spec: LongTaskSpec, dir: string): Promise<
   const cfg = validateAdaptation(spec.taskAdaptation)
   const plan = validatePlan(JSON.parse((await readFile(cfg.planPath, "utf8")).replace(/^\uFEFF/, "")))
   const phase = spec.protocolAuthorContext
+  const snapshot: Snapshot = JSON.parse((await readFile(path.join(dir, "..", "protocol-plugins", "protocol.snapshot.json"), "utf8")).replace(/^\uFEFF/, ""))
+  const { fingerprint: savedFingerprint, ...body } = snapshot
+  const project = await loadPack(spec.protocolPlugins.projectManifestPath)
+  const actualPhase = snapshot.selection.protocol.phases[spec.protocolPlugins.phase]
+  if (fingerprint(body) !== savedFingerprint || savedFingerprint !== phase.fingerprint ||
+      project.fingerprint !== phase.projectFingerprint || !actualPhase) throw new Error("Task protocol scope identity drift")
   // 声明的验收必须与实际协议一致，不能只在作者提示中更换标准。
   if ((plan.acceptance.execution === "none") !== (phase.claim === "skill_check") ||
     plan.acceptance.checks.length !== phase.checks.length || plan.acceptance.checks.some(check =>
-      !phase.checks.some(actual => actual.name === check.id && actual.target === (check.target === "candidate" ? "skill" : "product") &&
+      !actualPhase.checks.some(actual => actual.name === check.id && actual.target === (check.target === "candidate" ? "skill" : "product") &&
         actual.required === check.required && (actual.mechanism === check.mechanism ||
           (check.mechanism === "active_judge" && actual.mechanism === "judge" && actual.id === "active-tool-judge"))))) throw new Error("Task plan and execution protocol disagree")
   if (plan.deliverable.entries.length !== phase.skill.entries.length || plan.deliverable.entries.some(id =>
     !phase.skill.entries.some(entry => entry.id === id)) ||
     canonical(cfg.entries) !== canonical(phase.skill.entries.map(({ id, path }) => ({ id, path })))) throw new Error("Task deliverable does not match protocol entry files")
+  await verifyProtocolScopes(plan, cfg.root, project, spec.protocolPlugins.taskID, actualPhase)
   return freezePlan(dir, cfg.root, plan, cfg.capabilities)
 }
 

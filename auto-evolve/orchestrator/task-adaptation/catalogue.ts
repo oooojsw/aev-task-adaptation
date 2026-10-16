@@ -107,7 +107,8 @@ function assemble(input: TaskCatalogue, decision: Decision): Readonly<Plan> {
     return worker
   })
   windows.find(item => item.role === "worker")!.actions = [...new Set<Action>(["read", ...workers.flatMap(item => item.actions)])]
-  if (modes[0] === "independent") windows.push({ role: "independent", stage: "accept", reads: publicReads, writes: [], inline: [], actions: ["read"] })
+  // 脚本执行同样需要独立输入窗，不能继承检查器的私有材料。
+  if (modes[0] && modes[0] !== "none") windows.push({ role: "independent", stage: "accept", reads: publicReads, writes: [], inline: [], actions: ["read"] })
   return validatePlan({ schema: "aev.task-plan.v1", id: input.id, objective: input.request,
     deliverable: { kind: decision.kind, entries: input.entries }, resources: input.resources, capabilities: requires,
     windows, workers, acceptance: { execution: modes[0] ?? "none", checks },

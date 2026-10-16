@@ -27,12 +27,15 @@ export interface Check extends Binding {
   required: boolean
   mechanism: "script" | "judge"
   privateInputs?: string[]
+  skillInputs?: string[]
+  materialInputs?: string[]
   feedback?: "status_only" | "checker_message"
 }
 
 export interface PhaseProtocol {
   claim: "skill_check" | "task_execution"
   executor?: Binding
+  executionInputs?: { skill: string[]; materials: string[] }
   checks: Check[]
 }
 

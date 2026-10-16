@@ -149,3 +149,63 @@ test("executing adapter cannot mutate originals used by scoring", async () => {
   })
   expect((await rt.run(compile(selection(), rt.registry), "source", await task())).status).toBe("passed")
 })
+
+test("checker and executor scopes are independent and explicit empty sends no materials", async () => {
+  const input = await task()
+  input.skill.push({ ...input.skill[0], id: "extra-skill" })
+  input.materials.push({ ...input.materials[0], id: "extra-source" })
+  const seen: string[] = []
+  const rt = runtime(async payload => {
+    expect(payload.skill.map(item => item.id)).toEqual(["skill"])
+    expect(payload.materials.map(item => item.id)).toEqual(["extra-source"])
+    seen.push("execute")
+    return execute(payload)
+  }, async payload => {
+    expect(payload.skill.map(item => item.id)).toEqual(["extra-skill"])
+    expect(payload.materials).toEqual([])
+    expect(payload.candidate.map(item => item.id)).toEqual(["execution-product"])
+    seen.push("check")
+    return score(payload)
+  })
+  const value = selection()
+  value.protocol.phases.source!.executionInputs = { skill: ["skill"], materials: ["extra-source"] }
+  Object.assign(value.protocol.phases.source!.checks[0], { skillInputs: ["extra-skill"], materialInputs: [] })
+  const receipt = await rt.run(compile(value, rt.registry), "source", input)
+  expect(receipt.status).toBe("passed")
+  expect(seen).toEqual(["execute", "check"])
+  expect(receipt.evidence.skill).toHaveLength(2)
+})
+
+test("candidate checks receive only selected candidate entries and sources", async () => {
+  const input = await task()
+  input.skill.push({ ...input.skill[0], id: "extra-skill" })
+  input.materials.push({ ...input.materials[0], id: "extra-source" })
+  const rt = runtime(execute, async payload => {
+    expect(payload.skill.map(item => item.id)).toEqual(["skill"])
+    expect(payload.candidate.map(item => item.id)).toEqual(["skill"])
+    expect(payload.materials.map(item => item.id)).toEqual(["source"])
+    return score(payload)
+  })
+  const value = selection()
+  delete value.protocol.phases.source!.executor
+  value.protocol.phases.source!.claim = "skill_check"
+  Object.assign(value.protocol.phases.source!.checks[0], { target: "skill", stage: "before_execution",
+    skillInputs: ["skill"], materialInputs: ["source"] })
+  expect((await rt.run(compile(value, rt.registry), "source", input)).status).toBe("passed")
+})
+
+test("missing scope bindings stop before any checker or executor call", async () => {
+  for (const field of ["skillInputs", "materialInputs", "executionSkill", "executionMaterials"]) {
+    let calls = 0
+    const rt = runtime(async payload => { calls++; return execute(payload) }, async payload => { calls++; return score(payload) })
+    const value = selection()
+    const phase = value.protocol.phases.source!
+    if (field.startsWith("execution")) phase.executionInputs = {
+      skill: [field === "executionSkill" ? "missing" : "skill"],
+      materials: [field === "executionMaterials" ? "missing" : "source"],
+    }
+    else Object.assign(phase.checks[0], { [field]: ["missing"] })
+    await expect(rt.run(compile(value, rt.registry), "source", await task())).rejects.toThrow("input scope")
+    expect(calls).toBe(0)
+  }
+})

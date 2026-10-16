@@ -345,7 +345,10 @@ test(`actual Campaign learner ${scenario.bestPass ? "best-pass selection " : ""}
     skillPlacement: "system", maxTokens: 100, maxInputBytes: 10000, maxResponseBytes: 4096, temperature: 0, timeoutMs: 2000 } } : undefined
   await writeFile(path.join(root, "selection.json"), JSON.stringify({ schema: "aev.protocol-plugins.v1", project,
     run: { skillFormat: "text", productKind: program ? "json" : "text", materialKinds: ["text"] }, protocol: { id: "fixture", version: "1",
-      phases: { source: { claim: hasExecution ? "task_execution" : "skill_check", executor, checks: [{ id: "script-json-checker", version: "1", name: "content",
+      phases: { source: { claim: hasExecution ? "task_execution" : "skill_check", executor,
+        ...(adapted && program ? { executionInputs: { skill: ["rules"], materials: ["public"] } } : {}),
+        checks: [{ id: "script-json-checker", version: "1", name: "content",
+        ...(adapted ? { skillInputs: ["rules"], materialInputs: [] } : {}),
         target: hasExecution ? "product" : "skill", stage: hasExecution ? "after_execution" : "before_execution", required: true, mechanism: "script", privateInputs: ["gold"], settings: {
           command: python, commandSHA256: await hash(python), script, scriptSHA256: await hash(script), timeoutMs: 10000, maxOutputBytes: 4096 } }] } } } }))
   await writeFile(path.join(root, "manifest.json"), JSON.stringify({ schema: "aev.project-pack.v1", project,
@@ -373,6 +376,7 @@ test(`actual Campaign learner ${scenario.bestPass ? "best-pass selection " : ""}
       runtime: role === "lead" ? ["feedback", "analysis", "review"] : ["feedback"],
       actions: role === "lead" || role === "executor" ? ["read", "edit"] : ["read"] }))
     windows.push({ role: "checker", stage: "accept", reads: ["rules", "gold"], writes: [], inline: [], actions: ["read"], runtime: [] })
+    if (program) windows.push({ role: "independent", stage: "accept", reads: ["rules", "public"], writes: [], inline: [], actions: ["read"], runtime: [] })
     await writeFile(path.join(root, "task-plan.json"), JSON.stringify({ schema: "aev.task-plan.v1", id: program ? "program" : "report", objective: program ? "Implement square function and measure runtime" : "Write an evidence-supported report",
       deliverable: { kind: program ? "software" : "report", entries: ["rules"] }, resources, windows, capabilities: ["file-read", "file-edit"],
       workers: [{ id: "sources", purpose: "Inspect source support", resources: ["rules", "public"], actions: ["read"] }],

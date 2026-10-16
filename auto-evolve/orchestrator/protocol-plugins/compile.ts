@@ -8,7 +8,7 @@ function shape(value: unknown, keys: string[], label: string) {
 }
 
 function settings(binding: Binding): Settings {
-  shape(binding, ["id", "version", "settings", "name", "target", "stage", "required", "mechanism", "privateInputs", "feedback"], "binding")
+  shape(binding, ["id", "version", "settings", "name", "target", "stage", "required", "mechanism", "privateInputs", "skillInputs", "materialInputs", "feedback"], "binding")
   const value = binding.settings
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Explicit plugin settings required")
   function check(item: unknown) {
@@ -49,7 +49,7 @@ export function compile(input: unknown, registry: Registry): Snapshot {
   const executors = new Map<string, ExecutorPluginDescriptor>()
   const checkers = new Map<string, CheckerPluginDescriptor>()
   for (const [phase, plan] of Object.entries(phases)) {
-    shape(plan, ["claim", "executor", "checks"], "phase")
+    shape(plan, ["claim", "executor", "executionInputs", "checks"], "phase")
     if (!["source", "merge", "replay", "test"].includes(phase) || !plan ||
         !["skill_check", "task_execution"].includes(plan.claim) || !Array.isArray(plan.checks)) {
       throw new Error(`Invalid protocol phase: ${phase}`)
@@ -72,6 +72,12 @@ export function compile(input: unknown, registry: Registry): Snapshot {
       throw new Error(`Skill-only phase must not specify executor: ${phase}`)
     }
     const names = new Set<string>()
+    if (plan.executionInputs !== undefined) {
+      if (!plan.executor) throw new Error("Execution input scope requires an executor")
+      shape(plan.executionInputs, ["skill", "materials"], "execution inputs")
+      strings(plan.executionInputs.skill, "execution skill inputs")
+      strings(plan.executionInputs.materials, "execution material inputs", true)
+    }
     for (const check of plan.checks) {
       if (!check || typeof check.name !== "string" || !check.name.trim() || names.has(check.name) ||
           typeof check.required !== "boolean" || !["skill", "product"].includes(check.target) ||
@@ -83,6 +89,8 @@ export function compile(input: unknown, registry: Registry): Snapshot {
         throw new Error("Invalid checker feedback policy")
       }
       if (check.privateInputs !== undefined) strings(check.privateInputs, "private input bindings", true)
+      if (check.skillInputs !== undefined) strings(check.skillInputs, "checker skill inputs", check.target !== "skill")
+      if (check.materialInputs !== undefined) strings(check.materialInputs, "checker material inputs", true)
       if (check.target === "product" && check.stage !== "after_execution") throw new Error("Product check before execution")
       if (plan.claim === "skill_check" && (check.target !== "skill" || check.stage !== "before_execution")) {
         throw new Error("Skill-only phase cannot claim product execution")
