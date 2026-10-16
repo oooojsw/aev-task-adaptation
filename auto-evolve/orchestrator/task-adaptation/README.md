@@ -279,3 +279,34 @@ without task adaptation retain their previous selection behavior.
 This is input-routing validation, not an OS security sandbox. Global request
 budgets, complete executable configuration generation and the three real task
 acceptance runs remain separate unfinished requirements.
+
+## Executable configuration preparation (2026-10-16)
+
+`prepare-task-run.ts` connects the existing one-time task interpretation to
+`prepare-execution.ts`. Host-owned bindings still choose the actual checker,
+executor, formats, explicit role models and work budgets; the interpreting model
+cannot invent these. Missing required bindings return `missing_bindings` rather
+than weakening the selected acceptance rules.
+
+Preparation copies the frozen candidate seed and permitted resources into a new
+input bundle, generates the project manifest, scoped protocol, plan and ordinary
+Long Task spec, and verifies their agreement. Source materials are not edited.
+It freezes complete output coverage, hashes, source identity and plugin identity;
+unchanged preparation reuses outputs, while incomplete or modified evidence
+blocks recovery rather than regenerating over it. Only the configured
+interpretation stage may call a model; preparation itself never calls a checker,
+executor or Campaign. The previous plan-only CLI remains available unchanged.
+
+```
+bun run auto-evolve/scripts/prepare-task-run.ts --input <absolute-config.json>
+```
+
+The config contains `intake` (the existing intake config) and `execution` (the
+explicit `ExecutionPreparation` fields other than root, plan and capabilities,
+which come from the frozen intake). The command returns an ordinary `specPath`;
+it does not launch training. `ready` means structurally prepared, not a claim
+that an actual model/task has passed or that global request budgets are enforced.
+Host availability, safe execution, dependency checks and the final same-controller
+real task runs remain necessary. Offline tests pass the generated Skill/report/
+software specs through the real spec loader, protocol entry preparation and task
+binding, without API requests.
