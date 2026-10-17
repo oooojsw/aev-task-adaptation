@@ -130,7 +130,8 @@ function meter(dialect: BudgetTransportConfig["dialect"], streaming: boolean) {
 }
 
 export async function budgetedProviderFetch(input: RequestInfo | URL, init: RequestInit,
-  config: BudgetTransportConfig, modelContextTokens: number, transport: typeof fetch = fetch): Promise<Response> {
+  config: BudgetTransportConfig, modelContextTokens: number, transport: typeof fetch = fetch,
+  stableRequestID?: string): Promise<Response> {
   const cfg = validateBudgetTransport(config)
   if (!positive(modelContextTokens) || cfg.maxInputTokens < modelContextTokens) throw new Error("Provider input reservation must cover declared model context")
   if ((init.method ?? "GET").toUpperCase() !== "POST" || typeof init.body !== "string") throw new Error("Provider budget adapter requires explicit JSON POST")
@@ -142,7 +143,7 @@ export async function budgetedProviderFetch(input: RequestInfo | URL, init: Requ
       cfg.dialect === "anthropic_messages" && !Array.isArray(body.messages)) throw new Error("Provider wire dialect does not match budget adapter")
   const reservationTokens = cfg.maxInputTokens + Number(output)
   if (!positive(reservationTokens)) throw new Error("Provider reservation overflow")
-  const id = `provider-${randomUUID()}`
+  const id = stableRequestID ? `provider-${stableRequestID}` : `provider-${randomUUID()}`
   const request = fingerprint({ endpoint: String(input), body: init.body, role: cfg.role })
   await reserveRequest(cfg.budget, { id, request, model: body.model, role: cfg.role, reservationTokens })
   let response: Response

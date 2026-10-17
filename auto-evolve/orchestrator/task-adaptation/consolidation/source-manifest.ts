@@ -4,8 +4,22 @@ import { digest } from "./contract"
 
 export interface SourceRow { id: string; caseID: string; path: string; sha256: string }
 export interface SourceManifest { schema: "aev.consolidation-sources.v1"; sources: SourceRow[] }
+export interface AuthorSourceRow { id: string; path: string; sha256: string; topic?: string }
+export interface AuthorSourceManifest { schema: "aev.consolidation-author-sources.v1"; sources: AuthorSourceRow[] }
 const valid = (value: string) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)
 const sha = (value: string) => /^[a-f0-9]{64}$/.test(value)
+
+export function sanitizeAuthorSources(sources: Array<{ id: string; path: string; sha256: string; topic?: string }>): AuthorSourceManifest {
+  return {
+    schema: "aev.consolidation-author-sources.v1",
+    sources: sources.map(s => ({
+      id: s.id,
+      path: s.path,
+      sha256: s.sha256,
+      ...(s.topic ? { topic: s.topic } : {}),
+    })),
+  }
+}
 
 // Checks every source before model access; returns immutable, absolute read-only file locations.
 export async function freezeSources(root: string, file: string, cases: string[]) {

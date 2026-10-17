@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import type { CheckerPlugin, ExecutorPlugin, Settings } from "./contract"
@@ -12,6 +12,7 @@ import { runDirectChatEvaluation } from "../direct-chat/runner"
 import type { DirectChatModelsConfig } from "../direct-chat/contract"
 import {
   CONSOLIDATION_CHECKER_ID, CONSOLIDATION_EXECUTOR_ID,
+  buildConsolidationFeedback,
   digest, frozenModels, publication, score, type DirectChatSummary,
 } from "../task-adaptation/consolidation/contract"
 
@@ -60,6 +61,31 @@ function checker(raw: Settings): Common {
   return raw as unknown as Common
 }
 
+async function caseDependencies(cases: Array<any>) {
+  const files = new Set<string>()
+  for (const c of cases) {
+    if (c.privateOracle?.scriptPath) files.add(path.resolve(c.privateOracle.scriptPath))
+    if (c.privateOracle?.answerPath) files.add(path.resolve(c.privateOracle.answerPath))
+    if (c.privateOracle?.rewardPath) files.add(path.resolve(c.privateOracle.rewardPath))
+    if (Array.isArray(c.materials)) {
+      for (const m of c.materials) {
+        if (m.sourcePathInternal) files.add(path.resolve(m.sourcePathInternal))
+        if (m.metadata?.imagePathInternal) files.add(path.resolve(m.metadata.imagePathInternal))
+        if (m.metadata?.assetPathInternal) files.add(path.resolve(m.metadata.assetPathInternal))
+      }
+    }
+  }
+  const sorted = Array.from(files).sort()
+  const entries: Array<{ path: string; sha256: string; bytes: number }> = []
+  for (const file of sorted) {
+    const info = await lstat(file)
+    if (!info.isFile()) throw new Error(`Invalid non-file dependency: ${file}`)
+    const bytes = await readFile(file)
+    entries.push({ path: file, sha256: digest(bytes), bytes: bytes.byteLength })
+  }
+  return digest(JSON.stringify(entries))
+}
+
 async function inputs(s: Execution) {
   const [data, models] = await Promise.all([readFile(s.datasetPath), readFile(s.modelsPath)])
   if (digest(data) !== s.datasetSHA256 || digest(models) !== s.modelsSHA256) {
@@ -70,10 +96,11 @@ async function inputs(s: Execution) {
       cases.some(row => !safe(row.caseID) || !row.privateOracle?.scriptPath || row.materialAudit?.omittedSources?.length)) {
     throw new Error("Missing, duplicate or incomplete Direct Chat cases/oracles")
   }
+  const dependenciesSHA = await caseDependencies(cases)
   const config = JSON.parse(models.toString("utf8")) as DirectChatModelsConfig
   if (config.models?.[s.modelID]?.id && config.models[s.modelID].id !== s.modelID) throw new Error("Model identity mismatch")
   const selected = frozenModels(config, s.modelID)
-  return { cases: cases.map(row => row.caseID), models: selected }
+  return { cases: cases.map(row => row.caseID), models: selected, dependenciesSHA }
 }
 
 // Do not trust only the runner's aggregate; verify every actual request and structured validator verdict.
@@ -100,7 +127,8 @@ async function verifyTraces(root: string, summary: DirectChatSummary) {
     const verdict = JSON.parse(await readFile(row.validatorResultPath!, "utf8"))
     if (typeof verdict.parsed?.passed !== "boolean" ||
         verdict.parsed.passed !== row.passed || verdict.passed !== row.passed ||
-        verdict.score !== row.score || ![0, 1].includes(verdict.exitCode)) {
+        verdict.score !== row.score || ![0, 1].includes(verdict.exitCode) ||
+        (verdict.parsed.passed === true && verdict.exitCode !== 0)) {
       throw new Error("Direct Chat validator lacks a trustworthy structured verdict")
     }
   }
@@ -132,7 +160,7 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
       throw new Error("Consolidation requires exactly one candidate publication entry")
     }
     const pub = publication(input.skill[0].bytes, s.maxChars)
-    const { cases, models } = await preflight(input.settings)
+    const { cases, models, dependenciesSHA } = await preflight(input.settings)
     const id = randomUUID()
     const dir = path.join(root, id)
     await mkdir(dir)
@@ -171,7 +199,7 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
     if (result.results.length !== metrics.total) throw new Error("Direct Chat execution count mismatch")
     const product = {
       schema: "aev.consolidation-eval.v1", runID: id, candidate_sha256: pub.sha256,
-      dataset_sha256: s.datasetSHA256, model_id: s.modelID, skill_chars: pub.chars,
+      dataset_sha256: s.datasetSHA256, dependencies_sha256: dependenciesSHA, model_id: s.modelID, skill_chars: pub.chars,
       ...metrics, evidence_sha256: digest(data),
     }
     const tokens = result.results.reduce((acc, row) => ({
@@ -211,12 +239,23 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
           snapshot.includeNoSkillBaseline !== false || snapshot.noSkillOnly !== false) {
         throw new Error("Direct Chat snapshot identity mismatch")
       }
+      if (product.dependencies_sha256) {
+        if (!sha(product.dependencies_sha256)) throw new Error("Invalid dependencies digest in consolidation product")
+        if (snapshot.datasetBundlePath) {
+          const currentCases = await readDirectChatDatasetBundle(snapshot.datasetBundlePath)
+          const currentDepSHA = await caseDependencies(currentCases)
+          if (currentDepSHA !== product.dependencies_sha256) {
+            throw new Error("Direct Chat evaluation dependency drift: validator or external material changed")
+          }
+        }
+      }
       const metrics = score({ summary, cases: snapshot.caseIDs, modelID: s.modelID,
         skillHash: pub.sha256, datasetHash: s.datasetSHA256 })
       await verifyTraces(dir, summary)
       if (metrics.passed !== product.passed || metrics.failed !== product.failed ||
           metrics.pass_rate !== product.pass_rate) throw new Error("Reported pass rate does not match cases")
-      return { status: "passed", message: `Verified ${metrics.passed}/${metrics.total}; pass_rate=${metrics.pass_rate}` }
+      const feedback = buildConsolidationFeedback(summary)
+      return { status: "passed", message: feedback.message }
     } catch (error) {
       return { status: "scoring_error", message: error instanceof Error ? error.message : String(error) }
     }

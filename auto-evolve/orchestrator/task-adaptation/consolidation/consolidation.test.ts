@@ -2,7 +2,10 @@ import { expect, test } from "bun:test"
 import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { CONSOLIDATION_PROFILE_ID, digest, frozenModels, publication, score, type DirectChatSummary } from "./contract"
+import {
+  CONSOLIDATION_PROFILE_ID, buildConsolidationFeedback, digest,
+  frozenModels, publication, score, type DirectChatSummary,
+} from "./contract"
 import { freezeSources } from "./source-manifest"
 import { consolidationCatalogue, consolidationProfile } from "./profile"
 import { compileTask } from "../catalogue"
@@ -148,4 +151,96 @@ test("existing best_pass selector retains second of three accepted rounds (38 â†
   const selected = chooseTaskVersion(spec as never, versions as never, 3, 3)
   expect(selected.selectedTaskVersionPath).toBe("accepted-round-2")
   expect(selected.taskStopReason).toBe("round_budget")
+})
+
+test("T09: author view isolates caseID and private benchmark associations", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "consolidation-author-"))
+  await mkdir(path.join(root, "skills"))
+  const cases = Array.from({ length: 50 }, (_, i) => `case_${i + 1}`)
+  const sources = await Promise.all(cases.map(async (id, i) => {
+    const name = `skills/skill-${i + 1}.md`
+    const bytes = Buffer.from(`Skill method ${i + 1}`)
+    await writeFile(path.join(root, name), bytes)
+    return { id: `s_${i + 1}`, caseID: id, path: name, sha256: digest(bytes) }
+  }))
+  const manifest = path.join(root, "sources.json")
+  await writeFile(manifest, JSON.stringify({ schema: "aev.consolidation-sources.v1", sources }))
+  await writeFile(path.join(root, "DIRECT_CHAT.md"), "A candidate.")
+
+  const cat = await consolidationCatalogue({
+    root, manifest: "sources.json", cases, id: "task-auth-iso",
+    objective: "Test author window", stop: { rounds: 1, calls: 50, tokens: 1000, stagnant: 1 },
+  })
+
+  // The author source index file must be created and referenced by source_index
+  const indexResource = cat.resources.find(r => r.id === "source_index")
+  expect(indexResource).toBeDefined()
+  expect(indexResource?.path).toBe("author-source-index.json")
+
+  const authorIndex = JSON.parse(await readFile(path.join(root, "author-source-index.json"), "utf8"))
+  expect(authorIndex.schema).toBe("aev.consolidation-author-sources.v1")
+  expect(authorIndex.sources).toHaveLength(50)
+  // Crucial: NOT A SINGLE row in author index may contain caseID
+  for (const row of authorIndex.sources) {
+    expect(row.caseID).toBeUndefined()
+    expect(row.id).toBeDefined()
+    expect(row.path).toBeDefined()
+    expect(row.sha256).toBeDefined()
+  }
+})
+
+test("T11: publication rejects zero-width chars, unclosed code fences, and broken markdown links", () => {
+  // Zero-width characters rejected
+  expect(() => publication(Buffer.from("Valid text\u200Bwith hidden space"))).toThrow("Forbidden zero-width")
+  expect(() => publication(Buffer.from("Valid text\u200Cwith zero-width joiner"))).toThrow("Forbidden zero-width")
+
+  // Unclosed code fences rejected
+  expect(() => publication(Buffer.from("```markdown\nUnclosed code fence"))).toThrow("Unclosed Markdown code fence")
+  expect(publication(Buffer.from("```markdown\nClosed code fence\n```")).chars).toBeGreaterThan(0)
+
+  // Broken markdown links rejected
+  expect(() => publication(Buffer.from("See [Documentation](http://example.com/broken"))).toThrow("Broken Markdown link")
+  expect(publication(Buffer.from("See [Documentation](http://example.com/valid)")).chars).toBeGreaterThan(0)
+})
+
+test("T12: 40/50 failure produces at most 3 redacted diagnostic cases bounded to <=1200 chars", () => {
+  const results = Array.from({ length: 50 }, (_, i) => {
+    const passed = i < 10
+    const cat = passed ? "none" : (i % 3 === 0 ? "validation" : i % 3 === 1 ? "answer_extraction" : "context_length")
+    return {
+      caseID: `q${i + 1}`,
+      modelID: "model",
+      skillHash: key,
+      passed,
+      score: passed ? 1 : 0,
+      attempts: 1,
+      errorCategory: cat,
+      requestAuditPath: `/private/fs/results/model/q${i + 1}/request.json`,
+      responseAuditPath: `/private/fs/results/model/q${i + 1}/response.json`,
+      validatorResultPath: `/private/fs/results/model/q${i + 1}/validator.json`,
+    }
+  })
+
+  const summary: DirectChatSummary = {
+    validity: { status: "valid", skillHash: key, datasetHash: dataset },
+    summary: [{ modelID: "model", total: 50, passed: 10, failed: 40, passRate: 0.2 }],
+    results,
+  }
+
+  const feedback = buildConsolidationFeedback(summary)
+  expect(feedback.total).toBe(50)
+  expect(feedback.passed).toBe(10)
+  expect(feedback.failed).toBe(40)
+  expect(feedback.passRate).toBe(0.2)
+
+  // At most 3 diagnostic cases even though 40 failed
+  expect(feedback.sampleDiagnostics.length).toBeLessThanOrEqual(3)
+  expect(feedback.sampleDiagnostics.length).toBe(3)
+
+  // Strictly bounded to <= 1200 characters
+  expect(feedback.message.length).toBeLessThanOrEqual(1200)
+
+  // Must not leak private file paths or answers
+  expect(feedback.message).not.toContain("/private/fs")
+  expect(feedback.message).not.toContain("validator.json")
 })

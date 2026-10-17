@@ -1,6 +1,7 @@
 import path from "node:path"
+import { writeFile } from "node:fs/promises"
 import { validateCatalogue, type TaskCatalogue, type Profile } from "../catalogue"
-import { freezeSources } from "./source-manifest"
+import { freezeSources, sanitizeAuthorSources } from "./source-manifest"
 import { CONSOLIDATION_PROFILE_ID } from "./contract"
 
 // An opt-in profile; host must separately bind an approved evaluator and checker.
@@ -38,6 +39,7 @@ export async function consolidationCatalogue(input: {
   id: string
   objective: string
   stop: TaskCatalogue["stop"]
+  authorIndexFile?: string
 }) {
   const files = await freezeSources(input.root, input.manifest, input.cases)
   const relative = (file: string) => path.relative(input.root, file).replace(/\\/g, "/")
@@ -45,7 +47,15 @@ export async function consolidationCatalogue(input: {
   const sources = files.map(row => ({
     id: `source_${row.id}`, path: relative(row.path), audience: "training" as const, mutable: false,
   }))
-  const index = relative(path.resolve(input.root, input.manifest))
+  const authorIndexName = input.authorIndexFile ?? "author-source-index.json"
+  const authorIndexPath = path.resolve(input.root, authorIndexName)
+  const authorManifest = sanitizeAuthorSources(files.map(row => ({
+    id: row.id,
+    path: relative(row.path),
+    sha256: row.sha256,
+  })))
+  await writeFile(authorIndexPath, JSON.stringify(authorManifest, null, 2), "utf8")
+  const index = relative(authorIndexPath)
   const catalogue: TaskCatalogue = {
     id: input.id,
     request: input.objective,

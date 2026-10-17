@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { consolidationPlugins, preflightConsolidation } from "../../protocol-plugins/consolidation"
+import { budgetedProviderFetch } from "../budget-transport"
 import { digest } from "./contract"
 
 // Real Direct Chat runner + mock provider + real isolated validator process; no API credentials.
@@ -258,6 +259,151 @@ test("T03: dual campaigns concurrent in same process with distinct budgets have 
 
     // Verify neither process.env nor cross-campaign ledgers leaked
     expect(process.env.OPENCODE_AEV_REQUEST_BUDGET_FILE).toBeUndefined()
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test("T08: modifying validator script after execution causes evaluation dependency drift rejection", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aev-drift-test-"))
+  const validator = path.join(dir, "validator.mjs")
+  await writeFile(validator, [
+    'import { readFileSync } from "node:fs"',
+    'console.log(JSON.stringify({ passed: true }))',
+  ].join("\n"))
+  const rows = ["q1"].map((caseID) => ({
+    schema: "direct-chat-case/v1", caseID, dataset: "test", split: "train",
+    question: { text: "Question?", outputInstruction: "One number" },
+    materials: [{ id: "m", title: "M", type: "text", content: "Content" }],
+    materialAudit: { caseID, expectedSources: [], includedMaterials: ["m"], omittedSources: [], warnings: [], tokenEstimate: 2, compressionPolicy: "none" },
+    privateOracle: { validatorID: "v", runner: "bun", scriptPath: validator, args: ["--candidate", ""], candidateArgName: "--candidate" },
+  }))
+  const data = path.join(dir, "cases.jsonl")
+  const models = path.join(dir, "models.json")
+  await writeFile(data, rows.map(r => JSON.stringify(r)).join("\n") + "\n")
+  await writeFile(models, JSON.stringify({ models: { m: { transport: "mock", mockResponse: "<answer>42</answer>", contextWindowTokens: 4096, maxOutputTokens: 64 } } }))
+
+  const settings = {
+    candidateID: "merged_skill", maxChars: 5000, expectedCases: 1, modelID: "m",
+    datasetPath: data, datasetSHA256: digest(await readFile(data)),
+    modelsPath: models, modelsSHA256: digest(await readFile(models)), concurrency: 1,
+  }
+  const gate = { candidateID: settings.candidateID, maxChars: 5000, expectedCases: 1, modelID: "m", datasetSHA256: settings.datasetSHA256 }
+  const publication = Buffer.from("Skill content")
+  const skill = [{ id: "merged_skill", kind: "text", bytes: publication, sha256: digest(publication), length: publication.length }]
+
+  const plugin = await consolidationPlugins(path.join(dir, "plugin"))
+  const res = await plugin.execute({ task: "merge", phase: "source", settings, skill, materials: [] })
+  expect(res.status).toBe("completed")
+
+  // Tamper with the validator script on disk
+  await writeFile(validator, [
+    'console.log(JSON.stringify({ passed: false }))',
+  ].join("\n"))
+
+  // Evaluating the product now must detect that the validator dependency drifted!
+  const post = await plugin.evaluate({
+    task: "merge", phase: "source", settings: gate,
+    skill, materials: [], privateInputs: [],
+    candidate: [{ id: "execution-product", kind: "json", bytes: res.product!.bytes,
+      sha256: digest(res.product!.bytes), length: res.product!.bytes.length }],
+    check: { name: "consolidation_score", target: "product", stage: "after_execution", mechanism: "script" },
+  })
+  expect(post.status).toBe("scoring_error")
+  expect(post.message).toContain("dependency drift")
+})
+
+test("T10: validator passed=true with non-zero exitCode is rejected as untrustworthy", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aev-exitcode-test-"))
+  const validator = path.join(dir, "validator.mjs")
+  await writeFile(validator, [
+    'console.log(JSON.stringify({ passed: true }))',
+    'process.exit(1)',
+  ].join("\n"))
+  const rows = ["q1"].map((caseID) => ({
+    schema: "direct-chat-case/v1", caseID, dataset: "test", split: "train",
+    question: { text: "Question?", outputInstruction: "One number" },
+    materials: [{ id: "m", title: "M", type: "text", content: "Content" }],
+    materialAudit: { caseID, expectedSources: [], includedMaterials: ["m"], omittedSources: [], warnings: [], tokenEstimate: 2, compressionPolicy: "none" },
+    privateOracle: { validatorID: "v", runner: "bun", scriptPath: validator, args: ["--candidate", ""], candidateArgName: "--candidate" },
+  }))
+  const data = path.join(dir, "cases.jsonl")
+  const models = path.join(dir, "models.json")
+  await writeFile(data, rows.map(r => JSON.stringify(r)).join("\n") + "\n")
+  await writeFile(models, JSON.stringify({ models: { m: { transport: "mock", mockResponse: "<answer>42</answer>", contextWindowTokens: 4096, maxOutputTokens: 64 } } }))
+
+  const settings = {
+    candidateID: "merged_skill", maxChars: 5000, expectedCases: 1, modelID: "m",
+    datasetPath: data, datasetSHA256: digest(await readFile(data)),
+    modelsPath: models, modelsSHA256: digest(await readFile(models)), concurrency: 1,
+  }
+  const publication = Buffer.from("Skill content")
+  const skill = [{ id: "merged_skill", kind: "text", bytes: publication, sha256: digest(publication), length: publication.length }]
+
+  const plugin = await consolidationPlugins(path.join(dir, "plugin"))
+  await expect(plugin.execute({ task: "merge", phase: "source", settings, skill, materials: [] }))
+    .rejects.toThrow("Direct Chat validator lacks a trustworthy structured verdict")
+})
+
+test("T06/T07: stableRequestID prevents duplicate dispatch in same budget and ensures idempotence", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aev-idempotence-"))
+  let dispatches = 0
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: async () => {
+      dispatches++
+      return Response.json({
+        model: "mock-llm",
+        choices: [{ message: { content: "answer" } }],
+        usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+      })
+    },
+  })
+
+  try {
+    const budgetConfig = {
+      schema: "aev.budget-transport.v1" as const,
+      budget: { root: path.join(dir, "ledger"), scope: "idempotent-scope", calls: 10, tokens: 50000 },
+      role: "independent",
+      dialect: "openai_chat" as const,
+      expectedModels: ["mock-llm"],
+      maxInputTokens: 4096,
+      maxOutputTokens: 128,
+    }
+
+    const body = JSON.stringify({
+      model: "mock-llm",
+      messages: [{ role: "user", content: "test" }],
+      max_tokens: 128,
+    })
+
+    const stableID = "campaign1__round1__case1__m1__attempt1"
+
+    // First call with stableID succeeds
+    const resp1 = await budgetedProviderFetch(
+      server.url.toString(),
+      { method: "POST", headers: { "content-type": "application/json" }, body },
+      budgetConfig,
+      4096,
+      fetch,
+      stableID,
+    )
+    expect(resp1.ok).toBe(true)
+    expect(dispatches).toBe(1)
+
+    // Second call with same stableID in same budget MUST fail closed with prior reservation
+    await expect(budgetedProviderFetch(
+      server.url.toString(),
+      { method: "POST", headers: { "content-type": "application/json" }, body },
+      budgetConfig,
+      4096,
+      fetch,
+      stableID,
+    )).rejects.toThrow("Prior request reservation exists; inspect before retry")
+
+    // Real HTTP dispatches remains 1 (zero duplicate dispatch)
+    expect(dispatches).toBe(1)
   } finally {
     await server.stop(true)
   }

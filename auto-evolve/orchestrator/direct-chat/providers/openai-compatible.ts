@@ -95,7 +95,8 @@ export async function callOpenAICompatibleChatCompletions(
       const { readBudgetTransport, budgetedProviderFetch } = await import("../../task-adaptation/budget-transport")
       const cfg = budgetConfig ?? (await readBudgetTransport(budgetFile!, process.env.OPENCODE_AEV_REQUEST_BUDGET_SHA256))
       const contextTokens = model.contextWindowTokens ?? 16384
-      return budgetedProviderFetch(url, init, cfg, contextTokens, fetch)
+      const stableID = _input?.stableRequestID ? `${_input.stableRequestID}__attempt${_input.attempt ?? 1}` : undefined
+      return budgetedProviderFetch(url, init, cfg, contextTokens, fetch, stableID)
     }
     const response = await transportFetch(reqUrl, reqInit)
     const text = await response.text()
