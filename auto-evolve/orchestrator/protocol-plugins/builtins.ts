@@ -7,7 +7,6 @@ import { modelJudge } from "./model-judge"
 import { toolSession } from "./tool-session"
 import { scriptExecutor } from "./script-executor"
 import { activeJudge } from "./active-judge"
-import { consolidationPlugins } from "./consolidation"
 import type { InvokeTool } from "./tool-session"
 
 export interface BuiltinOptions {
@@ -49,6 +48,7 @@ export async function builtins(root: string, options: BuiltinOptions = {}) {
       judge.evaluate, options.tool.preflight))
   }
   if (options.consolidation) {
+    const { consolidationPlugins } = await import("./consolidation")
     const plugin = await consolidationPlugins(path.join(root, "consolidation"))
     runtime.addExecutor(plugin.executor, cachedExecution(path.join(root, "cache"), plugin.executor, plugin.execute, async input => {
       await plugin.preflight(input.settings)

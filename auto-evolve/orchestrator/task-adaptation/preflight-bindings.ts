@@ -2,7 +2,6 @@ import type { Registry } from "../protocol-plugins/registry"
 import type { Binding, Settings } from "../protocol-plugins/contract"
 import { verifyScriptExecution } from "../protocol-plugins/script-executor"
 import { verifyScriptChecker } from "../protocol-plugins/script-checker"
-import { preflightConsolidation } from "../protocol-plugins/consolidation"
 
 export async function preflightBindings(input: { executor?: Binding; checkers: Array<{ name: string; binding: Binding }> },
   registry: Registry, credential: (name: string) => string | undefined = name => process.env[name]) {
@@ -18,7 +17,11 @@ export async function preflightBindings(input: { executor?: Binding; checkers: A
     descriptor.validate(binding.settings)
     const checks = ["registered_plugin", "settings_valid"]
     if (binding.id === "script-json-executor") { await verifyScriptExecution(binding.settings); checks.push("local_dependency_hashes") }
-    if (binding.id === "consolidation-direct-chat") { await preflightConsolidation(binding.settings); checks.push("frozen_consolidation_dataset_and_model") }
+    if (binding.id === "consolidation-direct-chat") {
+      const { preflightConsolidation } = await import("../protocol-plugins/consolidation")
+      await preflightConsolidation(binding.settings)
+      checks.push("frozen_consolidation_dataset_and_model")
+    }
     if (binding.id === "script-json-checker") { await verifyScriptChecker(binding.settings); checks.push("local_dependency_hashes") }
     if (binding.id === "http-text-chat") { checkCredential(binding.settings); checks.push("credential_reference_present") }
     if (binding.id === "http-model-judge") { checkCredential(binding.settings.http as Settings); checks.push("credential_reference_present") }
