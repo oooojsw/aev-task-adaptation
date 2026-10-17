@@ -28,6 +28,8 @@ export interface TaskCatalogue {
   profiles: Profile[]
   stop: Plan["stop"]
   maxWorkers: number
+  // 宿主事先批准的静态 Plan canonical fingerprint；不是用户自报的哈希。
+  approvedPlans?: string[]
 }
 
 export interface Decision {
@@ -42,13 +44,16 @@ function texts(value: unknown): asserts value is string[] {
   if (!Array.isArray(value) || value.some(item => typeof item !== "string" || !item.trim()) || new Set(value).size !== value.length) throw new Error("Unique catalogue identifiers required")
 }
 
-function fields(value: unknown, keys: string[]) {
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !keys.includes(key)) ||
+function fields(value: unknown, keys: string[], optional: string[] = []) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !keys.includes(key) && !optional.includes(key)) ||
     keys.some(key => !(key in value))) throw new Error("Unexpected task catalogue fields")
 }
 
 export function validateCatalogue(value: TaskCatalogue) {
-  fields(value, ["id", "request", "resources", "entries", "capabilities", "profiles", "stop", "maxWorkers"])
+  fields(value, ["id", "request", "resources", "entries", "capabilities", "profiles", "stop", "maxWorkers"], ["approvedPlans"])
+  if (value.approvedPlans !== undefined && (!Array.isArray(value.approvedPlans) || value.approvedPlans.length > 64 ||
+    value.approvedPlans.some(item => typeof item !== "string" || !/^[a-f0-9]{64}$/.test(item)) ||
+    new Set(value.approvedPlans).size !== value.approvedPlans.length)) throw new Error("Invalid approved Plan fingerprints")
   if (!value || ![value.id, value.request].every(item => typeof item === "string" && item.trim()) ||
     !Number.isSafeInteger(value.maxWorkers) || value.maxWorkers < 0 || value.maxWorkers > 16 ||
     !Array.isArray(value.capabilities) || !Array.isArray(value.profiles) || !value.profiles.length ||
@@ -108,7 +113,7 @@ function assemble(input: TaskCatalogue, decision: Decision): Readonly<Plan> {
   })
   windows.find(item => item.role === "worker")!.actions = [...new Set<Action>(["read", ...workers.flatMap(item => item.actions)])]
   // 脚本执行同样需要独立输入窗，不能继承检查器的私有材料。
-  if (modes[0] && modes[0] !== "none") windows.push({ role: "independent", stage: "accept", reads: publicReads, writes: [], inline: [], actions: ["read"] })
+  if (modes.length) windows.push({ role: "independent", stage: "accept", reads: publicReads, writes: [], inline: [], actions: ["read"] })
   return validatePlan({ schema: "aev.task-plan.v1", id: input.id, objective: input.request,
     deliverable: { kind: decision.kind, entries: input.entries }, resources: input.resources, capabilities: requires,
     windows, workers, acceptance: { execution: modes[0] ?? "none", checks },

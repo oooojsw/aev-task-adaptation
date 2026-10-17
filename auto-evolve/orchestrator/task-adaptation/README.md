@@ -620,3 +620,56 @@ budgets and available capabilities do not expand. Backend/model mismatch, abort,
 material drift and uncertain billing never enter this correction loop. A failed or
 interrupted intake still blocks implicit recovery. Configuration revisions must
 preserve the old stage and cumulative budget rather than remove its claim.
+
+## Three-track task intake (2026-10-17: implementation addendum)
+
+`prepareTask` supports `auto` (default), `manual_decision` and `manual_plan`.
+All modes run under the same catalogue, material binding, claim, identity-drift
+checks, preparation, capability preflight, final acceptance and delivery.
+**Only the task-interpretation model invocation is bypassed in manual modes.**
+Campaign roles, active judges and independent agents may still call models.
+
+- `auto`: keep existing `IntakeInput` fields (`model`, `expectedModel`, `timeoutMs`,
+  `maxInputBytes`, `maxDecisionBytes`, optional `maxDecisionRepairs`). Auto's driver
+  receipts and bounded repair logic remain unchanged.
+- `manual_decision`: specify `mode: "manual_decision"`, and **exactly one** of
+  `decision` (the JSON object) or `decisionPath` (absolute path to a regular JSON
+  file). Optional `maxDecisionBytes` (default 1 MiB, maximum 1 MiB).
+  Compilation still goes through `compileTask(catalogue, decision)`, and a
+  missing capability returns `missing_capabilities` rather than a usable Plan.
+- `manual_plan`: specify `mode: "manual_plan"` and an absolute `planPath` to a
+  regular JSON file. The host-owned `catalogue.approvedPlans` must contain the
+  canonical `fingerprint(validatePlan(plan))`, calculated with
+  `bun run auto-evolve/scripts/print-task-plan-fingerprint.ts <absolute-plan-file>`.
+  The catalogue identity, resources, deliverable entry list, stop limits and
+  capability actions are additionally enforced. **The approval list is trusted
+  host policy; do not let task authors supply or modify it.** If task authors
+  can edit `catalogue.approvedPlans` in the same input JSON, approval is *not*
+  a security boundary. Integrations handling untrusted jobs must keep the
+  catalogue in separate host-controlled configuration and merge it server-side.
+
+Manual input MUST OMIT automatic-model fields (`model`, `expectedModel`,
+`timeoutMs`, `maxInputBytes`, `maxDecisionRepairs`). The shared execution
+`requestBudget` is still required for the `run-task.ts` launcher and still
+covers all subsequent model requests. It is *not* an Intake model request.
+
+Three-track evidence under `intake.dir`: `intake.started.claim`,
+`intake.snapshot.json`, `intake.result.json`, `intake.completed.json`,
+`workspace/decision.json` or `workspace/approved-plan.json`, and on a ready
+result `task-plan.json`. Manual modes do not create fake
+`intake.backend-result.json` receipts. Failure, tampering, incomplete evidence,
+mode changes, source changes or catalogue/material/source-code drift fail closed.
+Manual source paths must be absolute and outside the evidence directory; no
+symbolic-link endpoint or multiply-linked source files.
+
+**Migration:** Existing claimed Intake directories are not in-place upgraded.
+The legacy auto binding hashes source files including `intake.ts`, so even an
+otherwise identical auto request can fail identity checks after this patch.
+Use a new run/evidence directory for new three-track jobs; preserve the
+previous code version for resuming already-claimed jobs. Do not delete `.claim`
+files or reset frozen budget ledgers just to force a rerun.
+
+Run `bun test auto-evolve/orchestrator/task-adaptation/intake-three-track.test.ts`
+and the existing full regression suite, then typecheck and exercise the real
+software/report/skill end-to-end jobs in an isolated new run directory before
+production promotion.
