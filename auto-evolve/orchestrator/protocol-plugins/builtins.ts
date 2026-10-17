@@ -49,7 +49,9 @@ export async function builtins(root: string, options: BuiltinOptions = {}) {
   }
   if (options.consolidation) {
     const { consolidationPlugins } = await import("./consolidation")
-    const plugin = await consolidationPlugins(path.join(root, "consolidation"))
+    const plugin = await consolidationPlugins(path.join(root, "consolidation"), {
+      budget: options.httpBudgets?.execution,
+    })
     runtime.addExecutor(plugin.executor, cachedExecution(path.join(root, "cache"), plugin.executor, plugin.execute, async input => {
       await plugin.preflight(input.settings)
     }))

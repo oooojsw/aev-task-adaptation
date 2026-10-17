@@ -61,7 +61,8 @@ export async function callOpenAICompatibleChatCompletions(
   try {
     const outputTokenParameter = model.outputTokenParameter || "max_tokens"
     const outputTokenLimit = { [outputTokenParameter]: model.maxOutputTokens ?? 2048 }
-    const response = await fetch(`${baseURL.replace(/\/+$/g, "")}/chat/completions`, {
+    const reqUrl = `${baseURL.replace(/\/+$/g, "")}/chat/completions`
+    const reqInit: RequestInit = {
       method: "POST",
       signal: controller.signal,
       headers: {
@@ -76,7 +77,25 @@ export async function callOpenAICompatibleChatCompletions(
         ...(model.reasoningEffort ? { reasoning_effort: model.reasoningEffort } : {}),
         ...outputTokenLimit,
       }),
-    })
+    }
+    const transportFetch = async (url: string, init: RequestInit): Promise<Response> => {
+      const budgetFile = process.env.OPENCODE_AEV_REQUEST_BUDGET_FILE
+      if (!budgetFile) {
+        if (process.env.AEV_CONSOLIDATION_ENFORCE_BUDGET === "1") {
+          throw new DirectChatProviderError(
+            "Consolidation non-mock model requires explicit request budget",
+            "config",
+            undefined,
+            false,
+          )
+        }
+        return fetch(url, init)
+      }
+      const { readBudgetTransport, budgetedProviderFetch } = await import("../../task-adaptation/budget-transport")
+      const cfg = await readBudgetTransport(budgetFile, process.env.OPENCODE_AEV_REQUEST_BUDGET_SHA256)
+      return budgetedProviderFetch(url, init, cfg, model.contextTokens ?? 16384, fetch)
+    }
+    const response = await transportFetch(reqUrl, reqInit)
     const text = await response.text()
     if (!response.ok) {
       const classification = classifyHttp(response.status, text)

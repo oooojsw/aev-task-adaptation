@@ -82,3 +82,89 @@ test("trusted executor verifies two independent single-turn mock cases", async (
   await writeFile(models, "{}")
   await expect(preflightConsolidation(settings)).rejects.toThrow("changed")
 })
+
+test("G2: atomic pre-dispatch request budget limits concurrent HTTP dispatches and fails closed", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aev-consolidation-budget-"))
+  const validator = path.join(dir, "validator.mjs")
+  await writeFile(validator, [
+    'console.log(JSON.stringify({ passed: true }))',
+  ].join("\n"))
+
+  let httpDispatches = 0
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: async () => {
+      httpDispatches++
+      return Response.json({
+        model: "mock-llm",
+        choices: [{ message: { content: "answer is 42" } }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      })
+    },
+  })
+
+  try {
+    const cases = Array.from({ length: 5 }, (_, i) => `case_${i + 1}`)
+    const rows = cases.map(caseID => ({
+      schema: "direct-chat-case/v1", caseID, dataset: "budget-test", split: "train",
+      question: { text: `Question for ${caseID}`, outputInstruction: "number" },
+      materials: [{ id: "m1", title: "mat", type: "text", content: "data" }],
+      materialAudit: { caseID, expectedSources: [], includedMaterials: ["m1"], omittedSources: [], warnings: [], tokenEstimate: 2, compressionPolicy: "none" },
+      privateOracle: { validatorID: "v", runner: "bun", scriptPath: validator,
+        args: ["--candidate", ""], candidateArgName: "--candidate" },
+    }))
+    const data = path.join(dir, "cases.jsonl")
+    const models = path.join(dir, "models.json")
+    await writeFile(data, rows.map(r => JSON.stringify(r)).join("\n") + "\n")
+    await writeFile(models, JSON.stringify({
+      models: {
+        "http-model": {
+          transport: "openai-compatible",
+          baseURL: server.url.toString(),
+          model: "mock-llm",
+          apiKey: "sk-mock-key",
+          contextTokens: 4096,
+          maxOutputTokens: 128,
+        },
+      },
+    }))
+
+    const settings = {
+      candidateID: "merged_skill", maxChars: 5000, expectedCases: 5, modelID: "http-model",
+      datasetPath: data, datasetSHA256: digest(await readFile(data)),
+      modelsPath: models, modelsSHA256: digest(await readFile(models)), concurrency: 5,
+    }
+    const publication = Buffer.from("Skill rules")
+    const skill = [{ id: "merged_skill", kind: "text", bytes: publication,
+      sha256: digest(publication), length: publication.length }]
+
+    // 1. Without budget configured: non-mock model must fail closed
+    const unbudgetedPlugin = await consolidationPlugins(path.join(dir, "unbudgeted"))
+    await expect(unbudgetedPlugin.execute({ task: "merge", phase: "source", settings, skill, materials: [] }))
+      .rejects.toThrow()
+    expect(httpDispatches).toBe(0)
+
+    // 2. With budget configured: calls=3, tokens=100000 across 5 concurrent cases
+    const budgetRoot = path.join(dir, "budget-ledger")
+    const budgetConfig = {
+      root: budgetRoot,
+      scope: "consolidation-test",
+      calls: 3,
+      tokens: 100000,
+    }
+    const budgetedPlugin = await consolidationPlugins(path.join(dir, "budgeted"), {
+      budget: { config: budgetConfig, tokenCeiling: 4096, role: "independent" },
+    })
+
+    // Execute with 5 cases concurrently; calls limit is 3
+    // Must fail closed because cases 4 and 5 were blocked before dispatch
+    await expect(budgetedPlugin.execute({ task: "merge", phase: "source", settings, skill, materials: [] }))
+      .rejects.toThrow()
+
+    // Key assertion: server must have received AT MOST 3 HTTP dispatches!
+    expect(httpDispatches).toBe(3)
+  } finally {
+    await server.stop(true)
+  }
+})

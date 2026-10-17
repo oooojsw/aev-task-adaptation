@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import type { DirectChatModelsConfig } from "../../direct-chat/contract"
 
 export const CONSOLIDATION_PROFILE_ID = "multi_skill_consolidation_v1"
 export const CONSOLIDATION_EXECUTOR_ID = "consolidation-direct-chat"
@@ -100,7 +101,7 @@ export function score(input: ScoreInput) {
   return { total: cases.length, passed, failed: cases.length - passed, pass_rate: rate }
 }
 
-export function frozenModels(source: { models: Record<string, any>; retry?: any; transientRecovery?: any; skillInput?: any }, modelID: string) {
+export function frozenModels(source: DirectChatModelsConfig, modelID: string): DirectChatModelsConfig {
   if (!source || !source.models || !Object.hasOwn(source.models, modelID)) throw new Error("Selected Direct Chat model missing")
   const model = source.models[modelID]
   if (model.skillInputMode && model.skillInputMode !== "full") throw new Error("Skill truncation is forbidden")

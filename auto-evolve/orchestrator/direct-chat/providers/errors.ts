@@ -16,7 +16,7 @@ export function classifyDirectChatError(error: unknown): DirectChatErrorCategory
   if (error instanceof DirectChatProviderError) return error.category
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
   if (message.includes("api key") || message.includes("unauthorized") || message.includes("forbidden")) return "auth"
-  if (message.includes("quota") || message.includes("insufficient balance")) return "quota"
+  if (message.includes("quota") || message.includes("budget") || message.includes("insufficient balance")) return "quota"
   if (message.includes("rate") || message.includes("429")) return "rate_limit"
   if (message.includes("context") || message.includes("token") || message.includes("too long")) return "context_length"
   if (message.includes("abort") || message.includes("timeout")) return "timeout"
