@@ -11,6 +11,8 @@ import { taskRequestBudget, type TaskBudgetPolicy } from "./budget-policy"
 import { bindLocalSearch } from "./local-search"
 import { validateRecomputeScope } from "./recompute"
 
+import { authorizeResourceAccess, type LogicalResource } from "../task-profile-access/unified-access"
+
 export interface Invocation {
   bound: BoundPlan
   role: Role
@@ -20,6 +22,7 @@ export interface Invocation {
   maxInlineBytes: number
   candidate?: { root: string; entries: Array<{ id: string; path: string }> }
   feedback?: FeedbackReference
+  feedbackResource?: LogicalResource
   advice?: AdviceReference[]
   requestBudget?: TaskBudgetPolicy
 }
@@ -54,6 +57,30 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
   const view = { ...original, reads: original.reads.map(location), writes: original.writes.map(location) }
   const feedback = input.feedback && original.runtime?.includes("feedback") ? await taskFeedback(input.bound, input.feedback) : undefined
   if (feedback) view.reads.push({ id: "runtime:feedback", path: feedback.path })
+  if (input.feedbackResource) {
+    const decision = await authorizeResourceAccess(
+      {
+        principalID: `${input.bound.fingerprint}:${input.role}${input.worker ? `:${input.worker}` : ""}`,
+        roleID: input.role,
+        workerID: input.worker,
+        campaignID: (input.feedbackResource.metadata?.campaignID as string) ?? "unknown",
+        round: (input.feedbackResource.metadata?.round as number) ?? 1,
+        runtime: original.runtime,
+      },
+      input.feedbackResource,
+      "read",
+      ["public", "training"],
+    )
+    if (!decision.granted) {
+      throw new Error(`Unified access denied for feedbackResource: ${decision.reasonCode}`)
+    }
+    if (decision.allowedPaths) {
+      for (const filePath of decision.allowedPaths) {
+        const fileName = path.basename(filePath)
+        view.reads.push({ id: `runtime:feedback:${fileName}`, path: filePath })
+      }
+    }
+  }
   const advice: Array<Awaited<ReturnType<typeof taskAdvice>>> = []
   for (const reference of input.advice ?? []) {
     if (!original.runtime?.includes(reference.kind)) continue
@@ -113,6 +140,7 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
     ...(localSearch ? { localSearch } : {}),
     ...(recompute ? { recompute } : {}),
     ...(feedback ? { feedback: { path: feedback.path, fingerprint: feedback.sha256, candidate: feedback.view.candidate } } : {}),
+    ...(input.feedbackResource ? { feedbackResource: { resourceID: input.feedbackResource.resourceID, version: input.feedbackResource.version, sha256: input.feedbackResource.sha256 } } : {}),
     ...(advice.length ? { advice: advice.map(item => ({ path: item.path, fingerprint: item.fingerprint, kind: item.view.kind, round: item.view.round })) } : {}),
     ...(input.candidate ? { candidate: [...relocated.values()] } : {}) } }
 }
