@@ -3,6 +3,7 @@ import path from "node:path"
 import { cp, readFile } from "node:fs/promises"
 import { spawn } from "node:child_process"
 import { ensureDirectory, pathExists, readJsonFile, writeJsonFile, writeTextFile } from "../fs"
+import type { BudgetTransportConfig } from "../task-adaptation/budget-transport"
 import type {
   DirectChatCaseBundle,
   DirectChatCaseResult,
@@ -529,6 +530,8 @@ async function runOneCase(input: {
   outDir: string
   cwd: string
   modelsConfig: DirectChatModelsConfig
+  requestBudgetTransport?: BudgetTransportConfig
+  enforceRequestBudget?: boolean
 }) {
   const modelResultID = input.skillMode === "no-skill" ? `${input.model.id}__no-skill` : input.model.id
   const caseDir = path.join(input.outDir, "results", modelResultID, input.testCase.caseID)
@@ -604,6 +607,11 @@ async function runOneCase(input: {
     const { result: callResult, attempts } = await retryDirectChatCall(input.model, messages, {
       maxAttempts: input.modelsConfig.retry?.maxAttempts ?? 3,
       backoffMs: input.modelsConfig.retry?.backoffMs ?? 3000,
+    }, {
+      caseID: input.testCase.caseID,
+      requestBudgetTransport: input.requestBudgetTransport,
+      enforceRequestBudget: input.enforceRequestBudget,
+      stableRequestID: `${input.testCase.caseID}__${input.model.id}`,
     })
     const responsePath = path.join(caseDir, "response.txt")
     await writeTextFile(responsePath, callResult.content)
@@ -927,6 +935,8 @@ export async function runDirectChatEvaluation(config: DirectChatRunConfig) {
               outDir,
               cwd,
               modelsConfig: config.models,
+              requestBudgetTransport: config.requestBudgetTransport,
+              enforceRequestBudget: config.enforceRequestBudget,
             })
           } finally {
             const spacingMs = modelRequestSpacing.get(execution.model.id) || 0

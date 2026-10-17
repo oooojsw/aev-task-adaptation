@@ -79,9 +79,10 @@ export async function callOpenAICompatibleChatCompletions(
       }),
     }
     const transportFetch = async (url: string, init: RequestInit): Promise<Response> => {
+      const budgetConfig = _input?.requestBudgetTransport
       const budgetFile = process.env.OPENCODE_AEV_REQUEST_BUDGET_FILE
-      if (!budgetFile) {
-        if (process.env.AEV_CONSOLIDATION_ENFORCE_BUDGET === "1") {
+      if (!budgetConfig && !budgetFile) {
+        if (_input?.enforceRequestBudget || process.env.AEV_CONSOLIDATION_ENFORCE_BUDGET === "1") {
           throw new DirectChatProviderError(
             "Consolidation non-mock model requires explicit request budget",
             "config",
@@ -92,8 +93,9 @@ export async function callOpenAICompatibleChatCompletions(
         return fetch(url, init)
       }
       const { readBudgetTransport, budgetedProviderFetch } = await import("../../task-adaptation/budget-transport")
-      const cfg = await readBudgetTransport(budgetFile, process.env.OPENCODE_AEV_REQUEST_BUDGET_SHA256)
-      return budgetedProviderFetch(url, init, cfg, model.contextTokens ?? 16384, fetch)
+      const cfg = budgetConfig ?? (await readBudgetTransport(budgetFile!, process.env.OPENCODE_AEV_REQUEST_BUDGET_SHA256))
+      const contextTokens = model.contextWindowTokens ?? 16384
+      return budgetedProviderFetch(url, init, cfg, contextTokens, fetch)
     }
     const response = await transportFetch(reqUrl, reqInit)
     const text = await response.text()

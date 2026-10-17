@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url"
 import type { CheckerPlugin, ExecutorPlugin, Settings } from "./contract"
 import type { Execute, Evaluate } from "./runtime"
 import type { HttpRequestBudget } from "./http-chat"
-import { budgetTransportEnvironment, type BudgetTransportConfig } from "../task-adaptation/budget-transport"
+import type { BudgetTransportConfig } from "../task-adaptation/budget-transport"
 import { fingerprint } from "./identity"
 import { readDirectChatDatasetBundle } from "../direct-chat/dataset-bundler"
 import { runDirectChatEvaluation } from "../direct-chat/runner"
@@ -140,11 +140,11 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
     await writeFile(skill, input.skill[0].bytes)
     const run = path.join(dir, "direct-chat")
 
-    let envVars: { OPENCODE_AEV_REQUEST_BUDGET_FILE?: string; OPENCODE_AEV_REQUEST_BUDGET_SHA256?: string } = {}
+    let transportConfig: BudgetTransportConfig | undefined
     if (options.budget) {
       const selectedModel = models.models[s.modelID]
       const wireModel = selectedModel?.model ?? s.modelID
-      const transportConfig: BudgetTransportConfig = {
+      transportConfig = {
         schema: "aev.budget-transport.v1",
         budget: options.budget.config,
         role: options.budget.role || "independent",
@@ -153,33 +153,16 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
         maxInputTokens: options.budget.tokenCeiling,
         maxOutputTokens: selectedModel?.maxOutputTokens ?? 2048,
       }
-      envVars = await budgetTransportEnvironment(transportConfig, dir)
     }
 
-    const prevFile = process.env.OPENCODE_AEV_REQUEST_BUDGET_FILE
-    const prevSha = process.env.OPENCODE_AEV_REQUEST_BUDGET_SHA256
-    const prevEnforce = process.env.AEV_CONSOLIDATION_ENFORCE_BUDGET
-    let result
-    try {
-      if (envVars.OPENCODE_AEV_REQUEST_BUDGET_FILE) {
-        process.env.OPENCODE_AEV_REQUEST_BUDGET_FILE = envVars.OPENCODE_AEV_REQUEST_BUDGET_FILE
-        process.env.OPENCODE_AEV_REQUEST_BUDGET_SHA256 = envVars.OPENCODE_AEV_REQUEST_BUDGET_SHA256
-      }
-      process.env.AEV_CONSOLIDATION_ENFORCE_BUDGET = "1"
-      result = await runDirectChatEvaluation({
-        skillBundlePath: skill, datasetBundlePath: s.datasetPath, outDir: run,
-        models, modelIDs: [s.modelID], globalConcurrency: s.concurrency,
-        includeNoSkillBaseline: false, noSkillOnly: false, allowOmittedMaterials: false,
-        resumeExisting: false, skillInputMode: "full", updateMasterReport: false,
-      })
-    } finally {
-      if (prevFile !== undefined) process.env.OPENCODE_AEV_REQUEST_BUDGET_FILE = prevFile
-      else delete process.env.OPENCODE_AEV_REQUEST_BUDGET_FILE
-      if (prevSha !== undefined) process.env.OPENCODE_AEV_REQUEST_BUDGET_SHA256 = prevSha
-      else delete process.env.OPENCODE_AEV_REQUEST_BUDGET_SHA256
-      if (prevEnforce !== undefined) process.env.AEV_CONSOLIDATION_ENFORCE_BUDGET = prevEnforce
-      else delete process.env.AEV_CONSOLIDATION_ENFORCE_BUDGET
-    }
+    const result = await runDirectChatEvaluation({
+      skillBundlePath: skill, datasetBundlePath: s.datasetPath, outDir: run,
+      models, modelIDs: [s.modelID], globalConcurrency: s.concurrency,
+      includeNoSkillBaseline: false, noSkillOnly: false, allowOmittedMaterials: false,
+      resumeExisting: false, skillInputMode: "full", updateMasterReport: false,
+      requestBudgetTransport: transportConfig,
+      enforceRequestBudget: true,
+    })
     const data = await readFile(path.join(run, "summary.json"))
     const report = JSON.parse(data.toString("utf8")) as DirectChatSummary
     const metrics = score({ summary: report, cases, modelID: s.modelID,

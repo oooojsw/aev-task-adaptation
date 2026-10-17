@@ -1,3 +1,5 @@
+import type { BudgetTransportConfig } from "../task-adaptation/budget-transport"
+
 export type DirectChatTransport = "openai-compatible" | "mock"
 export type DirectChatImageInputMode = "none" | "openai-image-url"
 export type DirectChatFileInputMode = "none" | "openai-file-data" | "siliconflow-image-url-pdf"
@@ -265,6 +267,9 @@ export interface DirectChatRunConfig {
   preflightOnly?: boolean
   /** Keep legacy reports unchanged unless an internal trusted evaluation opts out. */
   updateMasterReport?: boolean
+  /** Host-owned explicit per-run request budget transport to prevent process.env cross-campaign contention */
+  requestBudgetTransport?: BudgetTransportConfig
+  enforceRequestBudget?: boolean
 }
 
 export interface DirectChatCallResult {

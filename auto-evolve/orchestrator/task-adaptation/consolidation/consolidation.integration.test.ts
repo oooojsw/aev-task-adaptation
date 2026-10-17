@@ -124,7 +124,7 @@ test("G2: atomic pre-dispatch request budget limits concurrent HTTP dispatches a
           baseURL: server.url.toString(),
           model: "mock-llm",
           apiKey: "sk-mock-key",
-          contextTokens: 4096,
+          contextWindowTokens: 4096,
           maxOutputTokens: 128,
         },
       },
@@ -164,6 +164,100 @@ test("G2: atomic pre-dispatch request budget limits concurrent HTTP dispatches a
 
     // Key assertion: server must have received AT MOST 3 HTTP dispatches!
     expect(httpDispatches).toBe(3)
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test("T03: dual campaigns concurrent in same process with distinct budgets have zero crosstalk", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aev-consolidation-dual-"))
+  const validator = path.join(dir, "validator.mjs")
+  await writeFile(validator, 'console.log(JSON.stringify({ passed: true }))\n')
+
+  let dispatchesA = 0
+  let dispatchesB = 0
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: async req => {
+      const body = await req.json()
+      if (body.model === "model-a") dispatchesA++
+      else dispatchesB++
+      return Response.json({
+        model: body.model,
+        choices: [{ message: { content: "ans" } }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      })
+    },
+  })
+
+  try {
+    const makeData = async (prefix: string, modelName: string) => {
+      const rows = ["q1", "q2"].map(caseID => ({
+        schema: "direct-chat-case/v1", caseID: `${prefix}_${caseID}`, dataset: "test", split: "train",
+        question: { text: "Q", outputInstruction: "num" },
+        materials: [{ id: "m", title: "m", type: "text", content: "data" }],
+        materialAudit: { caseID: `${prefix}_${caseID}`, expectedSources: [], includedMaterials: ["m"], omittedSources: [], warnings: [], tokenEstimate: 2, compressionPolicy: "none" },
+        privateOracle: { validatorID: "v", runner: "bun", scriptPath: validator, args: ["--candidate", ""], candidateArgName: "--candidate" },
+      }))
+      const dataFile = path.join(dir, `${prefix}_cases.jsonl`)
+      const modelsFile = path.join(dir, `${prefix}_models.json`)
+      await writeFile(dataFile, rows.map(r => JSON.stringify(r)).join("\n") + "\n")
+      await writeFile(modelsFile, JSON.stringify({
+        models: {
+          [modelName]: {
+            transport: "openai-compatible",
+            baseURL: server.url.toString(),
+            model: modelName,
+            apiKey: "sk-key",
+            contextWindowTokens: 4096,
+            maxOutputTokens: 128,
+          },
+        },
+      }))
+      return { dataFile, modelsFile }
+    }
+
+    const setA = await makeData("a", "model-a")
+    const setB = await makeData("b", "model-b")
+
+    const budgetA = { root: path.join(dir, "ledger-a"), scope: "scope-a", calls: 2, tokens: 50000 }
+    const budgetB = { root: path.join(dir, "ledger-b"), scope: "scope-b", calls: 2, tokens: 50000 }
+
+    const pluginA = await consolidationPlugins(path.join(dir, "plugin-a"), {
+      budget: { config: budgetA, tokenCeiling: 4096, role: "independent" },
+    })
+    const pluginB = await consolidationPlugins(path.join(dir, "plugin-b"), {
+      budget: { config: budgetB, tokenCeiling: 4096, role: "independent" },
+    })
+
+    const pub = Buffer.from("Skill")
+    const skill = [{ id: "merged_skill", kind: "text", bytes: pub, sha256: digest(pub), length: pub.length }]
+
+    const settingsA = {
+      candidateID: "merged_skill", maxChars: 5000, expectedCases: 2, modelID: "model-a",
+      datasetPath: setA.dataFile, datasetSHA256: digest(await readFile(setA.dataFile)),
+      modelsPath: setA.modelsFile, modelsSHA256: digest(await readFile(setA.modelsFile)), concurrency: 2,
+    }
+    const settingsB = {
+      candidateID: "merged_skill", maxChars: 5000, expectedCases: 2, modelID: "model-b",
+      datasetPath: setB.dataFile, datasetSHA256: digest(await readFile(setB.dataFile)),
+      modelsPath: setB.modelsFile, modelsSHA256: digest(await readFile(setB.modelsFile)), concurrency: 2,
+    }
+
+    // Run both campaigns concurrently in the same process
+    const [resA, resB] = await Promise.all([
+      pluginA.execute({ task: "merge", phase: "source", settings: settingsA, skill, materials: [] }),
+      pluginB.execute({ task: "merge", phase: "source", settings: settingsB, skill, materials: [] }),
+    ])
+
+    expect(resA.status).toBe("completed")
+    expect(resB.status).toBe("completed")
+    expect(dispatchesA).toBe(2)
+    expect(dispatchesB).toBe(2)
+
+    // Verify neither process.env nor cross-campaign ledgers leaked
+    expect(process.env.OPENCODE_AEV_REQUEST_BUDGET_FILE).toBeUndefined()
   } finally {
     await server.stop(true)
   }

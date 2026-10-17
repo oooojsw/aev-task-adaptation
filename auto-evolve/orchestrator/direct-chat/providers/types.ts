@@ -6,8 +6,14 @@ import type {
   DirectChatModelConfig,
 } from "../contract"
 
+import type { BudgetTransportConfig } from "../../task-adaptation/budget-transport"
+
 export interface DirectChatProviderCallInput {
   attempt?: number
+  caseID?: string
+  requestBudgetTransport?: BudgetTransportConfig
+  enforceRequestBudget?: boolean
+  stableRequestID?: string
 }
 
 export interface DirectChatProviderAdapter {
