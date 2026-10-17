@@ -18,7 +18,7 @@ export async function freezeSources(root: string, file: string, cases: string[])
   if (!within(manifestPath) || path.resolve(await realpath(manifestPath)) !== manifestPath) throw new Error("Source manifest must be a real file under root")
   const raw = JSON.parse(await readFile(manifestPath, "utf8")) as SourceManifest
   if (raw.schema !== "aev.consolidation-sources.v1" || !Array.isArray(raw.sources) ||
-      raw.sources.length !== cases.length || new Set(cases).size !== cases.length ||
+      raw.sources.length !== cases.length || !cases.length || cases.length > 500 || new Set(cases).size !== cases.length ||
       new Set(raw.sources.map(item => item.id)).size !== raw.sources.length ||
       new Set(raw.sources.map(item => item.caseID)).size !== raw.sources.length) throw new Error("Source manifest count or identity mismatch")
   const expected = new Set(cases)

@@ -1,4 +1,6 @@
-import type { Profile } from "../catalogue"
+import path from "node:path"
+import { validateCatalogue, type TaskCatalogue, type Profile } from "../catalogue"
+import { freezeSources } from "./source-manifest"
 import { CONSOLIDATION_PROFILE_ID } from "./contract"
 
 // An opt-in profile; host must separately bind an approved evaluator and checker.
@@ -24,4 +26,37 @@ export function consolidationProfile(entry: string, capability: string): Profile
     ],
     selection: { rule: "best_pass", metric: "pass_rate", direction: "max" },
   }
+}
+
+ 
+// Host-only builder. It makes each Skill a frozen, read-only training resource;
+// the independent evaluator receives only the public candidate publication.
+export async function consolidationCatalogue(input: {
+  root: string
+  manifest: string
+  cases: string[]
+  id: string
+  objective: string
+  stop: TaskCatalogue["stop"]
+}) {
+  const files = await freezeSources(input.root, input.manifest, input.cases)
+  const relative = (file: string) => path.relative(input.root, file).replace(/\\/g, "/")
+  const entries = [{ id: "merged_skill", path: "DIRECT_CHAT.md", audience: "public" as const, mutable: true }]
+  const sources = files.map(row => ({
+    id: `source_${row.id}`, path: relative(row.path), audience: "training" as const, mutable: false,
+  }))
+  const index = relative(path.resolve(input.root, input.manifest))
+  const catalogue: TaskCatalogue = {
+    id: input.id,
+    request: input.objective,
+    resources: [...entries, { id: "source_index", path: index, audience: "training", mutable: false }, ...sources],
+    entries: ["merged_skill"],
+    capabilities: [{ id: "consolidation_author", version: "1",
+      description: "Read frozen Skills, deduplicate and edit the candidate publication",
+      actions: ["read", "edit", "optimize", "repair"], available: true }],
+    profiles: [consolidationProfile("merged_skill", "consolidation_author")],
+    stop: input.stop,
+    maxWorkers: 4,
+  }
+  return validateCatalogue(catalogue)
 }

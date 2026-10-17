@@ -4,7 +4,9 @@ import os from "node:os"
 import path from "node:path"
 import { CONSOLIDATION_PROFILE_ID, digest, frozenModels, publication, score, type DirectChatSummary } from "./contract"
 import { freezeSources } from "./source-manifest"
-import { consolidationProfile } from "./profile"
+import { consolidationCatalogue, consolidationProfile } from "./profile"
+import { compileTask } from "../catalogue"
+import { chooseTaskVersion } from "../selection"
 
 const key = digest("candidate")
 const dataset = digest("frozen-data")
@@ -101,6 +103,21 @@ test("50 frozen source Skill paths are read-only and hash bound", async () => {
   await writeFile(manifest, JSON.stringify({ schema: "aev.consolidation-sources.v1", sources }))
   const valid = await freezeSources(root, "sources.json", cases)
   expect(valid.length).toBe(50)
+  await writeFile(path.join(root, "DIRECT_CHAT.md"), "A first candidate.")
+  const cat = await consolidationCatalogue({
+    root, manifest: "sources.json", cases, id: "consolidate-50",
+    objective: "Consolidate source Skills and improve single-turn answers",
+    stop: { rounds: 3, calls: 500, tokens: 100000, stagnant: 2 },
+  })
+  expect(cat.resources).toHaveLength(52)
+  const compiled = compileTask(cat, { kind: "skill",
+    profiles: [CONSOLIDATION_PROFILE_ID], needs: [], workers: [], rationale: "Trust frozen sources and acceptance" })
+  expect(compiled.status).toBe("ready")
+  if (compiled.status === "ready") {
+    expect(compiled.plan.selection).toEqual({ rule: "best_pass", metric: "pass_rate", direction: "max" })
+    expect(compiled.plan.resources.filter(item => item.audience === "training")).toHaveLength(51)
+    expect(compiled.plan.windows.find(w => w.role === "independent")?.reads).toEqual(["merged_skill"])
+  }
   await writeFile(path.join(root, sources[0]!.path), "tampered")
   await expect(freezeSources(root, "sources.json", cases)).rejects.toThrow("hash drift")
   sources[0]!.path = "../escape.md"
@@ -116,4 +133,19 @@ test("50 frozen source Skill paths are read-only and hash bound", async () => {
   await writeFile(manifest, JSON.stringify({ schema: "aev.consolidation-sources.v1", sources }))
   await expect(freezeSources(root, "sources.json", cases)).rejects.toThrow("Invalid linked")
   expect((await readFile(manifest, "utf8")).length).toBeGreaterThan(0)
+})
+
+ 
+test("existing best_pass selector retains second of three accepted rounds (38 → 43 → 41)", () => {
+  const spec = { taskAdaptationContext: { plan: {
+    selection: { rule: "best_pass", metric: "pass_rate", direction: "max" },
+    stop: { rounds: 3, stagnant: 2 },
+  } } }
+  const versions = [38, 43, 41].map((count, i) => ({
+    record: { round: i + 1, metric: count / 50 },
+    path: `accepted-round-${i + 1}`,
+  }))
+  const selected = chooseTaskVersion(spec as never, versions as never, 3, 3)
+  expect(selected.selectedTaskVersionPath).toBe("accepted-round-2")
+  expect(selected.taskStopReason).toBe("round_budget")
 })
