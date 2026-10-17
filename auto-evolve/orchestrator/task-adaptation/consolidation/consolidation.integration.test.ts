@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { consolidationPlugins, preflightConsolidation } from "../../protocol-plugins/consolidation"
 import { budgetedProviderFetch } from "../budget-transport"
+import { inspectBudget } from "../request-budget"
 import { digest } from "./contract"
 
 // Real Direct Chat runner + mock provider + real isolated validator process; no API credentials.
@@ -407,4 +408,206 @@ test("T06/T07: stableRequestID prevents duplicate dispatch in same budget and en
   } finally {
     await server.stop(true)
   }
+})
+
+test("T04: unbudgeted non-mock model or insufficient token ceiling aborts before dispatch with 0 HTTP POSTs", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aev-t04-test-"))
+  let dispatches = 0
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: async () => {
+      dispatches++
+      return Response.json({
+        model: "llm",
+        choices: [{ message: { content: "ans" } }],
+        usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+      })
+    },
+  })
+
+  try {
+    const validator = path.join(dir, "validator.mjs")
+    await writeFile(validator, 'console.log(JSON.stringify({ passed: true }))\n')
+    const rows = ["q1"].map((caseID) => ({
+      schema: "direct-chat-case/v1", caseID, dataset: "test", split: "train",
+      question: { text: "Q", outputInstruction: "number" },
+      materials: [{ id: "m", title: "M", type: "text", content: "Content" }],
+      materialAudit: { caseID, expectedSources: [], includedMaterials: ["m"], omittedSources: [], warnings: [], tokenEstimate: 2, compressionPolicy: "none" },
+      privateOracle: { validatorID: "v", runner: "bun", scriptPath: validator, args: ["--candidate", ""], candidateArgName: "--candidate" },
+    }))
+    const data = path.join(dir, "cases.jsonl")
+    const models = path.join(dir, "models.json")
+    await writeFile(data, rows.map(r => JSON.stringify(r)).join("\n") + "\n")
+    await writeFile(models, JSON.stringify({
+      models: {
+        m: {
+          transport: "openai-compatible",
+          baseURL: server.url.toString(),
+          model: "llm",
+          apiKey: "sk-fake",
+          contextWindowTokens: 4096,
+          maxOutputTokens: 64,
+        },
+      },
+    }))
+
+    const settings = {
+      candidateID: "merged_skill", maxChars: 5000, expectedCases: 1, modelID: "m",
+      datasetPath: data, datasetSHA256: digest(await readFile(data)),
+      modelsPath: models, modelsSHA256: digest(await readFile(models)), concurrency: 1,
+    }
+    const pub = Buffer.from("Skill content")
+    const skill = [{ id: "merged_skill", kind: "text", bytes: pub, sha256: digest(pub), length: pub.length }]
+
+    // 1. Without budget: fails closed before any HTTP dispatch
+    const pluginWithoutBudget = await consolidationPlugins(path.join(dir, "plugin-nobudget"))
+    await expect(pluginWithoutBudget.execute({ task: "merge", phase: "source", settings, skill, materials: [] }))
+      .rejects.toThrow()
+    expect(dispatches).toBe(0)
+
+    // 2. Insufficient tokens in budget: fails before HTTP dispatch
+    const budgetConfig = {
+      schema: "aev.budget-transport.v1" as const,
+      budget: { root: path.join(dir, "ledger-small"), scope: "scope-small", calls: 10, tokens: 50 },
+      role: "independent",
+      dialect: "openai_chat" as const,
+      expectedModels: ["llm"],
+      maxInputTokens: 4096,
+      maxOutputTokens: 64,
+    }
+    const body = JSON.stringify({ model: "llm", messages: [{ role: "user", content: "hi" }], max_tokens: 64 })
+    await expect(budgetedProviderFetch(
+      server.url.toString(),
+      { method: "POST", headers: { "content-type": "application/json" }, body },
+      budgetConfig,
+      4096,
+      fetch,
+      "t04-test-req",
+    )).rejects.toThrow("Request budget exhausted")
+    expect(dispatches).toBe(0)
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test("T06: failed request marks attempt as unknown and blocks further requests without refund", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aev-t06-test-"))
+  let dispatches = 0
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: async () => {
+      dispatches++
+      // Simulate broken 500 response without valid usage or body
+      return new Response(null, { status: 500, statusText: "Internal Error" })
+    },
+  })
+
+  try {
+    const budgetConfig = {
+      schema: "aev.budget-transport.v1" as const,
+      budget: { root: path.join(dir, "ledger"), scope: "t06-scope", calls: 5, tokens: 10000 },
+      role: "independent",
+      dialect: "openai_chat" as const,
+      expectedModels: ["mock-llm"],
+      maxInputTokens: 4096,
+      maxOutputTokens: 128,
+    }
+
+    const body = JSON.stringify({
+      model: "mock-llm",
+      messages: [{ role: "user", content: "test" }],
+      max_tokens: 128,
+    })
+
+    const stableID = "req-fail-1"
+
+    // Call fails because 500 with empty body triggers settleRequest with undefined usage
+    const resp = await budgetedProviderFetch(
+      server.url.toString(),
+      { method: "POST", headers: { "content-type": "application/json" }, body },
+      budgetConfig,
+      4096,
+      fetch,
+      stableID,
+    )
+    expect(resp.status).toBe(500)
+    await resp.text()
+    expect(dispatches).toBe(1)
+
+    // Inspect budget: attempt status must be 'unknown', reservation retained (not refunded)
+    const inspection = await inspectBudget(budgetConfig.budget)
+    expect(inspection.unknownAttempts).toBe(1)
+    expect(inspection.outstandingTokens).toBe(4096 + 128)
+
+    // Subsequent request on same budget is strictly blocked due to unresolved status
+    await expect(budgetedProviderFetch(
+      server.url.toString(),
+      { method: "POST", headers: { "content-type": "application/json" }, body },
+      budgetConfig,
+      4096,
+      fetch,
+      "req-after-fail",
+    )).rejects.toThrow("Request budget needs unresolved usage inspection")
+
+    // Real HTTP dispatches stays at 1 (no extra dispatch)
+    expect(dispatches).toBe(1)
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test("T08b: modifying external material asset after execution causes evaluation dependency drift rejection", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aev-asset-drift-"))
+  const validator = path.join(dir, "validator.mjs")
+  await writeFile(validator, 'console.log(JSON.stringify({ passed: true }))\n')
+
+  const assetFile = path.join(dir, "document-asset.txt")
+  await writeFile(assetFile, "Initial reference text content\n")
+
+  const rows = ["q1"].map((caseID) => ({
+    schema: "direct-chat-case/v1", caseID, dataset: "test", split: "train",
+    question: { text: "Question with external asset?", outputInstruction: "One number" },
+    materials: [{
+      id: "asset_mat",
+      title: "External Asset",
+      type: "text",
+      content: "External Asset Content",
+      sourcePathInternal: assetFile,
+    }],
+    materialAudit: { caseID, expectedSources: [], includedMaterials: ["asset_mat"], omittedSources: [], warnings: [], tokenEstimate: 4, compressionPolicy: "none" },
+    privateOracle: { validatorID: "v", runner: "bun", scriptPath: validator, args: ["--candidate", ""], candidateArgName: "--candidate" },
+  }))
+  const data = path.join(dir, "cases.jsonl")
+  const models = path.join(dir, "models.json")
+  await writeFile(data, rows.map(r => JSON.stringify(r)).join("\n") + "\n")
+  await writeFile(models, JSON.stringify({ models: { m: { transport: "mock", mockResponse: "<answer>42</answer>", contextWindowTokens: 4096, maxOutputTokens: 64 } } }))
+
+  const settings = {
+    candidateID: "merged_skill", maxChars: 5000, expectedCases: 1, modelID: "m",
+    datasetPath: data, datasetSHA256: digest(await readFile(data)),
+    modelsPath: models, modelsSHA256: digest(await readFile(models)), concurrency: 1,
+  }
+  const gate = { candidateID: settings.candidateID, maxChars: 5000, expectedCases: 1, modelID: "m", datasetSHA256: settings.datasetSHA256 }
+  const publication = Buffer.from("Skill content")
+  const skill = [{ id: "merged_skill", kind: "text", bytes: publication, sha256: digest(publication), length: publication.length }]
+
+  const plugin = await consolidationPlugins(path.join(dir, "plugin"))
+  const res = await plugin.execute({ task: "merge", phase: "source", settings, skill, materials: [] })
+  expect(res.status).toBe("completed")
+
+  // Tamper with the external asset file
+  await writeFile(assetFile, "Modified reference text content that drifted!\n")
+
+  // Evaluating must fail with dependency drift
+  const post = await plugin.evaluate({
+    task: "merge", phase: "source", settings: gate,
+    skill, materials: [], privateInputs: [],
+    candidate: [{ id: "execution-product", kind: "json", bytes: res.product!.bytes,
+      sha256: digest(res.product!.bytes), length: res.product!.bytes.length }],
+    check: { name: "consolidation_score", target: "product", stage: "after_execution", mechanism: "script" },
+  })
+  expect(post.status).toBe("scoring_error")
+  expect(post.message).toContain("dependency drift")
 })
