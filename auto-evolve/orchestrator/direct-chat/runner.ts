@@ -1011,6 +1011,6 @@ export async function runDirectChatEvaluation(config: DirectChatRunConfig) {
     expectedResultCount: executions.length,
     skillTierSelection,
   })
-  await updateMasterReport(outDir)
+  if (config.updateMasterReport !== false) await updateMasterReport(outDir)
   return { outDir, results }
 }

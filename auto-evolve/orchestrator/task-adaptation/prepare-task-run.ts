@@ -19,7 +19,9 @@ async function preparationRuntime(input: TaskRunPreparation) {
   const tool = requiresTool ? await opencodeDriver({ cwd: input.intake.cwd, evidenceRoot: path.join(root, "host") }) : undefined
   await tool?.preflight()
   const runtime = await builtins(root, { ...(tool ? { tool } : {}), scriptExecution: input.execution.executor?.id === "script-json-executor",
-    ...taskRuntimeBudgets(input.execution.requestBudget, input.intake.catalogue.stop) })
+    ...taskRuntimeBudgets(input.execution.requestBudget, input.intake.catalogue.stop),
+    consolidation: input.execution.executor?.id === "consolidation-direct-chat" ||
+      input.execution.checkers.some(item => item.binding.id === "consolidation-checker") })
   await preflightBindings(input.execution, runtime.registry)
   return runtime
 }

@@ -263,6 +263,8 @@ export interface DirectChatRunConfig {
   resumeExisting?: boolean
   skillInputMode?: "full" | "head-tail" | "core-files"
   preflightOnly?: boolean
+  /** Keep legacy reports unchanged unless an internal trusted evaluation opts out. */
+  updateMasterReport?: boolean
 }
 
 export interface DirectChatCallResult {
