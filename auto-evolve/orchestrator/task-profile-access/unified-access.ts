@@ -4,8 +4,24 @@ import { pathExists } from "../fs"
 import type {
   InformationViewAccess,
   InformationViewSensitivity,
-  RoleAccessPolicy,
 } from "./contract"
+
+export type TrustedAccessContext = {
+  principalKind: "agent" | "host_checker" | "host_publisher" | "independent"
+  role: "worker" | "lead" | "planner" | "reviewer" | "checker" | "independent"
+  workerID?: string
+  stage: "explore" | "revise" | "accept" | "deliver"
+  taskPlanFingerprint?: string
+  campaignID: string
+  taskID?: string
+  phase?: string
+  currentRound: number
+  requestedFeedbackRound?: number
+  feedbackPassID?: string
+  receiptFingerprint?: string
+  policyFingerprint?: string
+  runtime?: string[]
+}
 
 export type AccessPrincipal = {
   principalID: string
@@ -15,6 +31,7 @@ export type AccessPrincipal = {
   round: number
   pass?: number
   runtime?: string[]
+  context?: TrustedAccessContext
 }
 
 export type LogicalResourceKind =
@@ -34,7 +51,27 @@ export type LogicalResource = {
   boundaryRoots: string[]
   paths: string[]
   entryPaths?: string[]
-  metadata?: Record<string, unknown>
+  metadata?: {
+    campaignID?: string
+    round?: number
+    totalCases?: number
+    passedCases?: number
+    manifestPath?: string
+    [key: string]: unknown
+  }
+}
+
+export type VerifiedFeedbackResource = {
+  schema: "aev.verified-feedback-resource.v1"
+  resourceID: string
+  manifestPath: string
+  manifestSHA256: string
+  campaignID: string
+  sourceRound: number
+  sourcePassID?: string
+  expectedCases: number
+  boundaryRoots: string[]
+  paths: string[]
 }
 
 export type AccessDecision = {
@@ -49,6 +86,7 @@ export type AccessDecision = {
     | "RUNTIME_NOT_PERMITTED"
     | "BOUNDARY_ESCAPED"
     | "PRINCIPAL_MISMATCH"
+    | "TEMPORAL_VIOLATION"
     | "UNKNOWN_RESOURCE"
   message?: string
   allowedPaths?: string[]
@@ -78,6 +116,8 @@ export async function authorizeResourceAccess(
   action: "read" | "write" | "search",
   allowedSensitivities: InformationViewSensitivity[] = ["public", "training"],
 ): Promise<AccessDecision> {
+  const role = principal.roleID.toLowerCase()
+
   // 1. 私有 Oracle 绝对禁止对任何优化 Agent（Worker、Lead 等）开放
   if (resource.sensitivity === "private_oracle") {
     return {
@@ -90,7 +130,7 @@ export async function authorizeResourceAccess(
     }
   }
 
-  // 2. 敏感度检查
+  // 2. 敏感度检查（必须在明确允许列表中）
   if (!allowedSensitivities.includes(resource.sensitivity)) {
     return {
       granted: false,
@@ -124,9 +164,9 @@ export async function authorizeResourceAccess(
     }
   }
 
-  // 4. Runtime 权限检查（针对训练反馈）
+  // 4. Runtime 权限检查（Deny by default：严禁 ?? true）
   if (resource.kind === "training_feedback") {
-    const hasFeedbackRuntime = principal.runtime?.includes("feedback") ?? true
+    const hasFeedbackRuntime = Boolean(principal.runtime && principal.runtime.includes("feedback"))
     if (!hasFeedbackRuntime) {
       return {
         granted: false,
@@ -134,12 +174,52 @@ export async function authorizeResourceAccess(
         roleID: principal.roleID,
         resourceID: resource.resourceID,
         reasonCode: "RUNTIME_NOT_PERMITTED",
-        message: "Principal lacks runtime.feedback authorization.",
+        message: "Principal lacks explicit runtime.feedback authorization.",
+      }
+    }
+
+    // 训练角色仅限 lead 与 worker，其他角色（如 reviewer、checker）无权以 Agent 身份读取训练题目正文
+    if (!["lead", "worker"].includes(role)) {
+      return {
+        granted: false,
+        principalID: principal.principalID,
+        roleID: principal.roleID,
+        resourceID: resource.resourceID,
+        reasonCode: "RUNTIME_NOT_PERMITTED",
+        message: `Role '${principal.roleID}' is not authorized to consume training feedback cases.`,
+      }
+    }
+
+    // 5. 跨 Campaign 隔离检查
+    const resourceCampaign = resource.metadata?.campaignID
+    if (resourceCampaign && principal.campaignID && resourceCampaign !== principal.campaignID) {
+      return {
+        granted: false,
+        principalID: principal.principalID,
+        roleID: principal.roleID,
+        resourceID: resource.resourceID,
+        reasonCode: "PRINCIPAL_MISMATCH",
+        message: `Cross-campaign access denied: principal=${principal.campaignID}, resource=${resourceCampaign}`,
+      }
+    }
+
+    // 6. 轮次时序规则：严禁超前读取未来轮次
+    const resourceRound = resource.metadata?.round
+    if (typeof resourceRound === "number" && typeof principal.round === "number") {
+      if (resourceRound > principal.round) {
+        return {
+          granted: false,
+          principalID: principal.principalID,
+          roleID: principal.roleID,
+          resourceID: resource.resourceID,
+          reasonCode: "TEMPORAL_VIOLATION",
+          message: `Cannot access future round feedback: current=${principal.round}, resource=${resourceRound}`,
+        }
       }
     }
   }
 
-  // 5. 物理路径边界检查（防目录穿越与软链接逃逸）
+  // 7. 物理路径边界检查（防目录穿越与软链接逃逸）
   const boundaryRoots = resource.boundaryRoots.map((root) => path.resolve(root))
   const allowedPaths: string[] = []
 

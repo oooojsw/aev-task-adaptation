@@ -26,12 +26,12 @@ function generateMockCases(total: number, passedCount: number): RawTestCaseResul
     const passed = i <= passedCount
     cases.push({
       caseID,
-      title: `Direct Chat Training Case ${i}`,
-      prompt: `Prompt for case ${i}: Please synthesize guidance on task adaptation topic ${i}.`,
+      title: `Direct Chat Training Case ${i} 训练用例`,
+      prompt: `Prompt for case ${i}: 请针对自演化控制层与反馈提炼第 ${i} 题给出高质量指导原则。`,
       materials: [
-        { id: `mat_${i}`, name: `sample_${i}.txt`, content: `Reference material text for case ${i}` },
+        { id: `mat_${i}`, name: `sample_${i}.txt`, content: `题目 ${i} 参考材料：包含中文、英文与特殊字符验证 🚀` },
       ],
-      modelResponse: `Model drafted response for case ${i}.`,
+      modelResponse: `Model drafted response for case ${i}: 已完成指导方案分析。`,
       score: passed ? 1.0 : 0.0,
       passed,
       diagnostics: passed ? ["Check passed cleanly"] : ["Failed on constraint assertion: missing guidance"],
@@ -44,7 +44,7 @@ function generateMockCases(total: number, passedCount: number): RawTestCaseResul
   return cases
 }
 
-describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3)", () => {
+describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep Verification)", () => {
   test("U01 & U12: Publisher safely publishes 50-case view (0/50, 43/50, 50/50) with valid manifest", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "aev-publisher-test-"))
     try {
@@ -68,6 +68,7 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3)", () => {
         // 验证物理文件真实落盘
         const manifestDisk = JSON.parse(await readFile(manifestPath, "utf8"))
         expect(manifestDisk.manifestSHA256).toBe(manifest.manifestSHA256)
+        expect(manifestDisk.cases.length).toBe(50)
       }
     } finally {
       await rm(tempDir, { recursive: true, force: true })
@@ -105,8 +106,10 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3)", () => {
         {
           principalID: "worker_1",
           roleID: "worker",
+          workerID: "worker_1",
           campaignID: "camp_sanitize",
           round: 1,
+          runtime: ["feedback"],
         },
         privateOracleResource,
         "read",
@@ -118,18 +121,17 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3)", () => {
     }
   })
 
-  test("U02 & U10: AuthorizeInvocation injects all 50 cases into permissionReadPaths for worker and lead", async () => {
-    const tempDir = await mkdtemp(path.join(tmpdir(), "aev-invocation-grant-test-"))
+  test("U02 & U10: AuthorizeInvocation injects all 50 cases into permissionReadPaths for both Worker and Lead", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "aev-invocation-dual-role-test-"))
     try {
       const rawCases = generateMockCases(50, 43)
       const { logicalResource } = await publishTrainingFeedbackResource({
         targetDir: tempDir,
-        campaignID: "camp_invocation",
+        campaignID: "camp_dual_role",
         round: 1,
         cases: rawCases,
       })
 
-      // 构建一个合法的 Task-Adaptation Plan
       const candidateDir = path.join(tempDir, "candidate")
       await mkdir(candidateDir, { recursive: true })
 
@@ -138,6 +140,7 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3)", () => {
       const sampleAssetPath = path.join(candidateDir, "task_spec.txt")
       await writeFile(sampleAssetPath, "Task spec definition\n", "utf8")
 
+      // 构建包含 worker 和 lead 双角色的完整 Plan
       const plan: Plan = {
         schema: "aev.task-plan.v1",
         id: "direct_chat_consolidation",
@@ -155,6 +158,15 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3)", () => {
             reads: ["candidate", "spec"],
             writes: ["candidate"],
             actions: ["read", "edit"],
+            runtime: ["feedback"],
+            inline: [],
+          },
+          {
+            role: "worker",
+            stage: "explore",
+            reads: ["candidate", "spec"],
+            writes: [],
+            actions: ["read"],
             runtime: ["feedback"],
             inline: [],
           },
@@ -182,14 +194,21 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3)", () => {
           ],
         },
         rejection: [{ check: "check_skill", actions: ["research"] }],
-        workers: [],
+        workers: [
+          {
+            id: "worker_01",
+            purpose: "Analyze 50-case failure patterns",
+            resources: ["candidate", "spec"],
+            actions: ["read"],
+          },
+        ],
         selection: { rule: "first_pass" },
         stop: { rounds: 2, calls: 10, tokens: 10000, stagnant: 1 },
       }
 
       const bound = await bindPlan(candidateDir, plan, ["read"])
 
-      // 测试 Lead 角色调用授权
+      // 1. 验证 Lead 角色授权成功获得 51 个受控路径，且保留 candidate 编辑权
       const leadResult = await authorizeInvocation(
         {
           bound,
@@ -201,91 +220,106 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3)", () => {
         },
         { model: "mock-model", config: { permissionConfig: { version: 1, mode: "restricted" } } },
       )
-
-      // 验证全部 50 个 case 视图文件以及 manifest 均进入 permissionReadPaths
       expect(leadResult.request.permissionReadPaths.length).toBeGreaterThanOrEqual(51)
       expect(leadResult.request.permissionEditPaths).toEqual([sampleSkillPath.replaceAll("\\", "/")])
       expect(leadResult.scope.feedbackResource?.resourceID).toBe(logicalResource.resourceID)
 
-      // 测试缺少 runtime: feedback 的角色被统一授权拒绝
-      const planWithoutFeedback: Plan = {
-        ...plan,
-        windows: [
-          {
-            ...plan.windows[0],
-            runtime: [], // 去除 feedback runtime
-          },
-          plan.windows[1],
-        ],
-      }
-      const boundWithoutFeedback = await bindPlan(candidateDir, planWithoutFeedback, ["read"])
+      // 2. 验证真实 Worker 角色授权成功获得全部 51 个受控路径，且编辑权为 0（严格只读）
+      const workerResult = await authorizeInvocation(
+        {
+          bound,
+          role: "worker",
+          worker: "worker_01",
+          stage: "explore",
+          output: "Provide worker analysis",
+          maxInlineBytes: 10000,
+          feedbackResource: logicalResource,
+        },
+        { model: "mock-model", config: { permissionConfig: { version: 1, mode: "restricted" } } },
+      )
+      expect(workerResult.request.permissionReadPaths.length).toBeGreaterThanOrEqual(51)
+      expect(workerResult.request.permissionEditPaths).toEqual([]) // Worker 严格只读
+      expect(workerResult.scope.feedbackResource?.resourceID).toBe(logicalResource.resourceID)
 
+      // 3. 验证未授权的 reviewer 角色被拒绝
       await expect(
-        authorizeInvocation(
+        authorizeResourceAccess(
           {
-            bound: boundWithoutFeedback,
-            role: "lead",
-            stage: "revise",
-            output: "Output",
-            maxInlineBytes: 10000,
-            feedbackResource: logicalResource,
+            principalID: "reviewer_1",
+            roleID: "reviewer",
+            campaignID: "camp_dual_role",
+            round: 1,
+            runtime: ["feedback"],
           },
-          { model: "mock-model", config: { permissionConfig: { version: 1, mode: "restricted" } } },
+          logicalResource,
+          "read",
         ),
-      ).rejects.toThrow("Unified access denied for feedbackResource: RUNTIME_NOT_PERMITTED")
+      ).resolves.toMatchObject({
+        granted: false,
+        reasonCode: "RUNTIME_NOT_PERMITTED",
+      })
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }
   })
 
-  test("U04 & U06: Scoped reader supports chunked pagination of large cases (>8MiB) with EOF and hash preservation", async () => {
-    const tempDir = await mkdtemp(path.join(tmpdir(), "aev-large-case-reader-test-"))
+  test("U04 & U06 & R3: Scoped reader supports chunked pagination of large cases (>8MiB) with UTF-8 character alignment and no corrupt glyphs", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "aev-large-case-reader-utf8-test-"))
     try {
-      // 构造一个约 9 MiB 的超大长文本（测试超过 8 MiB 单文件限制的分页流式读取）
-      const largeChunk = "0123456789ABCDEF".repeat(64) // 1024 字节
-      const repeatCount = 9 * 1024 // 9 MB
-      const largeContent = largeChunk.repeat(repeatCount)
+      // 构造包含中文（3字节）、Emoji（4字节）、全角符号与英数的富文本块（1024 字节）
+      const richBlock = "【深度评测数据块】AutoPrompt自演化任务自适应测试行：包含各种中文字符、符号和表情 🌟🚀🎯！".padEnd(256, "—")
+      const richUnit = Buffer.from(richBlock, "utf8").subarray(0, 512) // 精确 512 字节
+      const repeatCount = 18 * 1024 // 18 * 512 = 9 MB
+      const buffers: Buffer[] = []
+      for (let i = 0; i < repeatCount; i++) {
+        buffers.push(richUnit)
+      }
+      const largeContentBuffer = Buffer.concat(buffers)
+      const largeContentText = largeContentBuffer.toString("utf8")
 
       const rawCases: RawTestCaseResult[] = [
         {
-          caseID: "dc_huge_001",
-          title: "Huge Context Case",
-          prompt: "Huge Case Prompt",
-          materials: [{ id: "mat_huge", name: "huge.txt", content: largeContent }],
-          modelResponse: "Response to huge case",
+          caseID: "dc_huge_chinese",
+          title: "超大规模中文多模态测试用例",
+          prompt: "Huge Chinese Case Prompt",
+          materials: [{ id: "mat_huge", name: "huge_chinese.txt", content: largeContentText }],
+          modelResponse: "Response to huge chinese case",
           score: 1.0,
           passed: true,
-          diagnostics: ["Passed huge verification"],
+          diagnostics: ["Passed huge chinese verification"],
         },
       ]
 
       const { manifest, logicalResource } = await publishTrainingFeedbackResource({
         targetDir: tempDir,
-        campaignID: "camp_huge",
+        campaignID: "camp_huge_chinese",
         round: 1,
         cases: rawCases,
       })
 
       const readerBinding = bindScopedReader(logicalResource, manifest)
-      expect(readerBinding.allowedCases.has("dc_huge_001")).toBe(true)
+      expect(readerBinding.allowedCases.has("dc_huge_chinese")).toBe(true)
 
       // 通过 ScopedReader 循环逐页分段读取，直到 EOF
-      const collectedChunks: string[] = []
+      const collectedData: string[] = []
       let cursor: string | undefined = undefined
-      let totalReadBytes = 0
+      let totalReturnedBytes = 0
       let pageCount = 0
 
       while (true) {
         pageCount++
         const chunkResult = await readResourceChunk(readerBinding, {
           resourceID: logicalResource.resourceID,
-          caseID: "dc_huge_001",
+          caseID: "dc_huge_chinese",
           cursor,
           maxBytes: 64000, // 每次 64 KB 分段
         })
 
-        collectedChunks.push(chunkResult.data)
-        totalReadBytes += chunkResult.returnedBytes
+        // 核心安全断言：每一段解码出的 UTF-8 文本绝不能包含半字损坏乱码 '\uFFFD'
+        expect(chunkResult.data.includes("\uFFFD")).toBe(false)
+
+        collectedData.push(chunkResult.data)
+        totalReturnedBytes += chunkResult.returnedBytes
 
         if (chunkResult.eof) {
           expect(chunkResult.nextCursor).toBeUndefined()
@@ -296,11 +330,11 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3)", () => {
       }
 
       expect(pageCount).toBeGreaterThan(100) // 9MB / 64KB 应该超过 140 页
-      const reconstructed = collectedChunks.join("")
-      expect(Buffer.byteLength(reconstructed, "utf8")).toBe(totalReadBytes)
+      const reconstructed = collectedData.join("")
+      expect(Buffer.byteLength(reconstructed, "utf8")).toBe(totalReturnedBytes)
 
-      // 验证重组后的内容与落盘文件完全一致
-      const diskCaseContent = await readFile(path.join(tempDir, "cases", "case_dc_huge_001.json"), "utf8")
+      // 验证重组后的内容与落盘文件物理内容 SHA256 100% 完全相同
+      const diskCaseContent = await readFile(path.join(tempDir, "cases", "case_dc_huge_chinese.json"), "utf8")
       expect(createHash("sha256").update(reconstructed).digest("hex")).toBe(
         createHash("sha256").update(diskCaseContent).digest("hex"),
       )
@@ -309,7 +343,7 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3)", () => {
     }
   })
 
-  test("U08 & U13: Forged cursor, unknown caseID and boundary escape are strictly rejected", async () => {
+  test("U08 & U13 & R3: Forged cursor, tampered signature, unknown caseID and boundary escape are strictly rejected", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "aev-security-reject-test-"))
     try {
       const rawCases = generateMockCases(3, 2)
@@ -330,13 +364,14 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3)", () => {
         }),
       ).rejects.toThrow("Unauthorized or unknown caseID 'dc_unauthorized_999'")
 
-      // 2. 伪造 cursor 拒绝
+      // 2. 伪造 cursor（篡改 offset 与伪造签名）拒绝
       const forgedCursor = Buffer.from(
         JSON.stringify({
           resourceID: logicalResource.resourceID,
           caseID: "dc_001",
           version: "v999.fake",
           offset: 999999999,
+          sig: "fake_signature_abc",
         }),
       ).toString("base64")
 
@@ -357,14 +392,77 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3)", () => {
         {
           principalID: "worker_1",
           roleID: "worker",
+          workerID: "worker_1",
           campaignID: "camp_reject",
           round: 1,
+          runtime: ["feedback"],
         },
         escapedResource,
         "read",
       )
       expect(decision.granted).toBe(false)
       expect(decision.reasonCode).toBe("BOUNDARY_ESCAPED")
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test("U14 & U15 & R0: Temporal ordering prevents reading future round feedback and enforces cross-campaign isolation", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "aev-temporal-isolation-test-"))
+    try {
+      const rawCases = generateMockCases(2, 2)
+      const { logicalResource } = await publishTrainingFeedbackResource({
+        targetDir: tempDir,
+        campaignID: "camp_alpha",
+        round: 2, // 轮次 2 的反馈
+        cases: rawCases,
+      })
+
+      // 1. 跨 Campaign 隔离断言：来自 camp_beta 的 Principal 试图读取 camp_alpha 的资源被拒绝
+      const crossCampDecision = await authorizeResourceAccess(
+        {
+          principalID: "worker_1",
+          roleID: "worker",
+          workerID: "worker_1",
+          campaignID: "camp_beta", // 不同的 Campaign ID
+          round: 2,
+          runtime: ["feedback"],
+        },
+        logicalResource,
+        "read",
+      )
+      expect(crossCampDecision.granted).toBe(false)
+      expect(crossCampDecision.reasonCode).toBe("PRINCIPAL_MISMATCH")
+
+      // 2. 时序违规断言：第 1 轮的 Principal 试图超前读取第 2 轮的反馈资源被拒绝
+      const futureRoundDecision = await authorizeResourceAccess(
+        {
+          principalID: "lead_1",
+          roleID: "lead",
+          campaignID: "camp_alpha",
+          round: 1, // 当前仅在第 1 轮，而资源来自第 2 轮
+          runtime: ["feedback"],
+        },
+        logicalResource,
+        "read",
+      )
+      expect(futureRoundDecision.granted).toBe(false)
+      expect(futureRoundDecision.reasonCode).toBe("TEMPORAL_VIOLATION")
+
+      // 3. 正常同轮或过去轮次读取允许通过
+      const validDecision = await authorizeResourceAccess(
+        {
+          principalID: "lead_1",
+          roleID: "lead",
+          campaignID: "camp_alpha",
+          round: 2, // 轮次对齐
+          runtime: ["feedback"],
+        },
+        logicalResource,
+        "read",
+      )
+      expect(validDecision.granted).toBe(true)
+      expect(validDecision.reasonCode).toBe("GRANTED")
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }

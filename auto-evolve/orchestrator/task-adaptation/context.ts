@@ -130,7 +130,9 @@ export async function seedTaskCandidate(spec: LongTaskSpec, root: string) {
   }
 }
 
-export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; feedbackPath?: string; advice?: Array<Omit<AdviceReference, "root">> } = {}): Invocation | undefined {
+import type { LogicalResource } from "../task-profile-access/unified-access"
+
+export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; feedbackPath?: string; feedbackResource?: LogicalResource; advice?: Array<Omit<AdviceReference, "root">> } = {}): Invocation | undefined {
   if (!spec.taskAdaptation) return undefined
   const bound = spec.taskAdaptationContext
   if (!bound) throw new Error("Frozen task adaptation context missing")
@@ -150,5 +152,6 @@ export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidat
     ...(input.advice?.length ? { advice: input.advice.map(item => ({ ...item, root: spec.taskAdaptationCampaignRoot! })) } : {}),
     ...(feedback ? { feedback: { root: spec.taskAdaptationCampaignRoot!, path: feedback,
       task: spec.protocolPlugins!.taskID, phase: spec.protocolPlugins!.phase } } : {}),
+    ...(input.feedbackResource ? { feedbackResource: input.feedbackResource } : {}),
     ...(input.candidateRoot ? { candidate: { root: input.candidateRoot, entries: entries!.map(entry => ({ id: entry.id, path: entry.path })) } } : {}) }
 }
