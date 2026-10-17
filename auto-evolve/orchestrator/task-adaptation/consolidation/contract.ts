@@ -10,7 +10,10 @@ export function digest(bytes: Uint8Array | string) {
 
 export function publication(bytes: Uint8Array, limit = 5000) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5000) throw new Error("Invalid Skill character cap")
-  const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    throw new Error("Empty or BOM-prefixed Skill")
+  }
+  const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
   if (!content.trim() || content.charCodeAt(0) === 0xfeff) throw new Error("Empty or BOM-prefixed Skill")
   // Count visible Unicode code points, not UTF-8 bytes or JS UTF-16 code units.
   const chars = Array.from(content.normalize("NFC").replace(/\s/gu, "")).length
