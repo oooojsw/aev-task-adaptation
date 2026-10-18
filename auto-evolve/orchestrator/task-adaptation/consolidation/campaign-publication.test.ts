@@ -13,6 +13,8 @@ import { authorizeInvocation } from "../invocation"
 import { fingerprint } from "../../protocol-plugins/identity"
 import { DEFAULT_CONFIG } from "../../schema"
 import type { Plan } from "../plan"
+import { taskInvocation } from "../context"
+import { loadLongTaskSpec } from "../../long-task/spec"
 
 test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 passes", async () => {
   for (const count of [0, 43, 50]) {
@@ -62,6 +64,10 @@ test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 pa
       windows: [
         { role: "lead", stage: "revise", reads: ["merged"], writes: ["merged"], inline: [], actions: ["read", "edit"], runtime: ["feedback"] },
         { role: "worker", stage: "explore", reads: ["merged"], writes: [], inline: [], actions: ["read"], runtime: ["feedback"] },
+        { role: "planner", stage: "explore", reads: ["merged"], writes: [], inline: [], actions: ["read"], runtime: ["feedback"] },
+        { role: "executor", stage: "explore", reads: ["merged"], writes: ["merged"], inline: [], actions: ["read", "edit"], runtime: ["feedback"] },
+        { role: "reviewer", stage: "accept", reads: ["merged"], writes: [], inline: [], actions: ["read"], runtime: ["feedback"] },
+        { role: "diagnostician", stage: "revise", reads: ["merged"], writes: [], inline: [], actions: ["read"], runtime: ["feedback"] },
         { role: "checker", stage: "accept", reads: ["merged"], writes: [], inline: [], actions: ["read"] },
       ], workers: [{ id: "worker1", purpose: "Analyze failures", resources: ["merged"], actions: ["read"] }],
       acceptance: { execution: "script", checks: [
@@ -101,12 +107,31 @@ test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 pa
     for (const role of ["lead", "worker"] as const) {
       const invocation = { bound, role, stage: role === "lead" ? "revise" as const : "explore" as const,
         ...(role === "worker" ? { worker: "worker1" } : {}), output: "Review guidance", maxInlineBytes: 100,
-        campaignID: "campaign", round: 2, feedback: reference }
+        campaignID: "campaign", round: 2, passID: "pass-02", feedback: reference }
       const authorized = await authorizeInvocation(invocation, request)
       expect(authorized.request.resourceReaderGrant?.allowedCaseIDs).toHaveLength(50)
+      expect(authorized.request.resourceReaderGrant?.passID).toBe("pass-02")
       expect(authorized.request.permissionReadPaths).toHaveLength(3)
       await expect(authorizeInvocation({ ...invocation, campaignID: "other" }, request)).rejects.toThrow()
       await expect(authorizeInvocation({ ...invocation, feedback: undefined, feedbackResource: (await taskFeedback(bound, reference)).feedbackResource }, request)).rejects.toThrow("Formal feedback reference required")
+    }
+    // 经真实spec加载的第二轮摘要不能被逐题Reader角色门禁误拦。
+    const specPath = path.join(root, "round-spec.json")
+    await writeFile(path.join(root, "plan.json"), JSON.stringify(plan))
+    await writeFile(specPath, JSON.stringify({ title: "Round two", goal: "Consolidate reusable guidance", validators: [],
+      protocolPlugins: options.entry,
+      taskAdaptation: { schema: "aev.task-adaptation.v1", planPath: path.join(root, "plan.json"), root: candidate,
+        capabilities: ["read"], entries: [{ id: "merged", path: "DIRECT_CHAT.md" }] },
+      taskAdaptationCampaignRoot: campaign, taskAdaptationRound: 2, taskAdaptationFeedbackPath: reference.path }))
+    const spec = (await loadLongTaskSpec(specPath)).spec
+    spec.taskAdaptationContext = bound
+    for (const role of ["planner", "executor", "reviewer", "diagnostician"] as const) {
+      const invocation = taskInvocation(spec, role)!
+      const authorized = await authorizeInvocation(invocation, request)
+      expect(authorized.request.resourceReaderGrant).toBeUndefined()
+      expect(authorized.request.permissionReadPaths).toContain(path.join(attempt, "task.feedback.json").replaceAll("\\", "/"))
+      expect(authorized.request.permissionReadPaths).not.toContain(feedback.caseFeedback.manifestPath)
+      await expect(authorizeInvocation({ ...invocation, feedbackResource: (await taskFeedback(bound, reference)).feedbackResource }, request)).rejects.toThrow("authorized role window")
     }
     const backends = await readdir(path.join(campaign, "protocol-backends", "consolidation"))
     expect(backends).toHaveLength(1)

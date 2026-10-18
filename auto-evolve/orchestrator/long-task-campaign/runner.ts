@@ -3572,6 +3572,7 @@ async function runCampaignSuggestionTask(input: {
   taskWorker?: string
   taskCandidateRoot?: string
   taskFeedbackPath?: string
+  taskPassID?: string
   taskAdvice?: Array<{ kind: "analysis" | "review"; path: string }>
   cwd: string
   baseSpec: LongTaskSpec
@@ -3598,6 +3599,7 @@ async function runCampaignSuggestionTask(input: {
     role: input.trainingRole ?? input.phase,
     adaptation: input.trainingRole ? taskInvocation(input.baseSpec, input.trainingRole, {
       worker: input.taskWorker, candidateRoot: input.taskCandidateRoot, feedbackPath: input.taskFeedbackPath,
+      passID: input.taskPassID,
       round: Number(path.relative(input.baseSpec.taskAdaptationCampaignRoot ?? input.stageDir, input.stageDir).replaceAll("\\", "/").match(/^rounds\/round-(\d+)\//)?.[1]) || undefined,
       advice: input.taskAdvice }) : undefined }, {
     cwd: input.cwd,
@@ -4223,6 +4225,7 @@ function validatorRepairHint(validatorID: string, details: string[]): string {
 }
 
 async function runCampaignLead(input: {
+  passID: string
   cwd: string
   campaignSpec: LongTaskCampaignSpec
   baseSpec: LongTaskSpec
@@ -4363,6 +4366,7 @@ async function runCampaignLead(input: {
     prompt,
     selectionPhase: "solve",
     trainingRole: "lead",
+    taskPassID: input.passID,
     taskCandidateRoot: input.nextPendingPackageRoot,
     taskFeedbackPath: input.finalAcceptanceFeedbackPath,
     taskAdvice: [
@@ -5684,6 +5688,7 @@ export async function runLongTaskCampaign(input: {
             skill: baseSpec.protocolAuthorContext?.skill,
           })
           const leadResult = await runCampaignLead({
+            passID,
             cwd: input.cwd,
             campaignSpec,
             baseSpec,
@@ -6730,6 +6735,7 @@ export async function resumeLongTaskCampaign(input: {
             skill: baseSpec.protocolAuthorContext?.skill,
           })
           await runCampaignLead({
+            passID,
             cwd: input.cwd,
             campaignSpec,
             baseSpec,

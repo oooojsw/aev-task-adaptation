@@ -65,7 +65,9 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
   const feedback = input.feedback && original.runtime?.includes("feedback") ? await taskFeedback(input.bound, input.feedback) : undefined
   if (feedback) view.reads.push({ id: "runtime:feedback", path: feedback.path })
   let resourceReaderGrant: ResourceReaderGrant | undefined
-  const effectiveResource = input.feedbackResource ?? feedback?.feedbackResource
+  // 摘要权限不等于逐题权限，非分析角色仍可正常进入下一轮。
+  const reader = input.role === "worker" && input.stage === "explore" || input.role === "lead" && input.stage === "revise"
+  const effectiveResource = input.feedbackResource ?? (reader ? feedback?.feedbackResource : undefined)
   if (effectiveResource) {
     // B04: 调用者真实身份来自 Host，严禁以 resource 自身声明冒充
     const callerCampaignID = input.campaignID

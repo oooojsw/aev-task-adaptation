@@ -861,7 +861,8 @@ export async function loadLongTaskSpec(
   if (spec.taskProfile && !spec.taskProfile.id) {
     throw new Error(`Long-task taskProfile.id must be non-empty: ${resolvedSpecPath}`)
   }
-  if (!spec.materials.length) {
+  // 自适应任务由冻结资源窗供料，不将训练专用Skill伪装成公开材料。
+  if (!spec.materials.length && !(taskAdaptation && protocolPlugins)) {
     throw new Error(`Long-task spec must include at least one material: ${resolvedSpecPath}`)
   }
   if (!spec.validators.length && !protocolPlugins) {
