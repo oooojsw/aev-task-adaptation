@@ -25,6 +25,7 @@ const published = await Promise.all(["alpha", "beta"].map(async id => {
   const grant: ResourceReaderGrant = { sessionID: randomUUID().replaceAll("-", ""), principalID: `fixture:${id}`,
     role: id === "alpha" ? "lead" : "worker", stage: id === "alpha" ? "revise" : "explore",
     planFingerprint: "c".repeat(64), policyFingerprint: "d".repeat(64),
+    expiresAt: Date.now() + 3600000,
     ...(id === "beta" ? { workerID: "worker1" } : {}), campaignID: id, round: 1,
     resourceID: result.logicalResource.resourceID, version: result.manifest.version, manifestPath: result.manifestPath,
     manifestSHA256: result.manifest.manifestSHA256, casesDir: path.join(dir, "feedback", "cases"),

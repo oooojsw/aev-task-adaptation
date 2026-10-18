@@ -1,9 +1,9 @@
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, open, readFile, realpath } from "node:fs/promises"
+import { mkdir, open, readFile, realpath, unlink } from "node:fs/promises"
 import { pathExists } from "../../fs"
 import { writeFileAtomic } from "../../atomic-write"
-import { safeCaseID, verifyPublication } from "./publication-evidence"
+import { safeCaseID, verifyPublication, regular, fileDigest } from "./publication-evidence"
 import type { LogicalResource } from "../../task-profile-access/unified-access"
 
 export type RawTestCaseResult = {
@@ -74,6 +74,7 @@ export async function publishTrainingFeedbackResource(input: {
   expectedCaseIDs?: string[]
   binding?: Record<string, string>
   maxTotalBytes?: number
+  recoverIncomplete?: boolean
 }) {
   if (!path.isAbsolute(input.targetDir) || !input.campaignID || !Number.isSafeInteger(input.round) || input.round < 1) {
     throw new Error("Absolute publication location and explicit Campaign identity required")
@@ -108,32 +109,65 @@ export async function publishTrainingFeedbackResource(input: {
     }
     return finish(saved)
   }
-  // 永久claim防并发覆盖；中断现场须显式恢复，不自动重发评测。
-  try { const claim = await open(path.join(root, "publication.started.claim"), "wx"); await claim.close() }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("Incomplete publication requires explicit recovery")
-    throw error
-  }
-  if (await pathExists(file) || await pathExists(path.join(root, "cases"))) throw new Error("Unclaimed publication evidence exists")
-  await mkdir(path.join(root, "cases"))
-  const cases: PublishedFeedbackManifest["cases"] = []
-  let total = 0
-  for (const item of input.cases) {
-    const bytes = Buffer.from(publication(item))
-    total += bytes.length
-    if (total > limit) throw new Error("capacity_exceeded")
-    const relative = `cases/case_${item.caseID}.json`
-    await writeFileAtomic(path.join(root, relative), bytes.toString("utf8"))
-    const disk = await readFile(path.join(root, relative))
-    if (!bytes.equals(disk)) throw new Error("Publication disk content drift")
-    cases.push({ caseID: item.caseID, path: relative, sha256: sha(disk), bytes: disk.length, passed: item.passed })
-  }
-  const body = { schema: "aev.training-feedback-manifest.v1" as const, resourceID: `feedback:${input.campaignID}:round_${input.round}`,
+  const intentPath = path.join(root, "publication.intent.json")
+  const failurePath = path.join(root, "publication.failed.json")
+  const planned = input.cases.map(item => {
+    const bytes = publication(item)
+    return { caseID: item.caseID, path: `cases/case_${item.caseID}.json`, sha256: sha(bytes), bytes: Buffer.byteLength(bytes), passed: item.passed }
+  })
+  let body = { schema: "aev.training-feedback-manifest.v1" as const, resourceID: `feedback:${input.campaignID}:round_${input.round}`,
     campaignID: input.campaignID, round: input.round, version: `v${input.round}.${randomUUID()}`,
-    totalCases: cases.length, passedCases: input.cases.filter(item => item.passed).length, publishedAt: new Date().toISOString(),
-    ...(input.binding ? { binding: input.binding } : {}), cases }
-  const manifest = { ...body, manifestSHA256: sha(JSON.stringify(body, null, 2)) }
-  await writeFileAtomic(file, `${JSON.stringify(manifest, null, 2)}\n`)
-  await writeFileAtomic(path.join(root, ".published"), manifest.manifestSHA256)
-  return finish(await verifyPublication(file, manifest.manifestSHA256))
+    totalCases: planned.length, passedCases: input.cases.filter(item => item.passed).length, publishedAt: new Date().toISOString(),
+    ...(input.binding ? { binding: input.binding } : {}), cases: planned }
+  let lock: string | undefined
+  if (input.recoverIncomplete) {
+    // 只恢复已明确失败的出版，不接管仍在运行或未知中断的调用。
+    await regular(intentPath)
+    await regular(failurePath)
+    const saved = JSON.parse((await readFile(intentPath, "utf8")).replace(/^\uFEFF/, "")) as typeof body
+    const failure = JSON.parse((await readFile(failurePath, "utf8")).replace(/^\uFEFF/, ""))
+    if (failure.intent !== sha(JSON.stringify(saved)) || saved.campaignID !== body.campaignID || saved.round !== body.round ||
+        JSON.stringify(saved.cases) !== JSON.stringify(planned) || JSON.stringify(saved.binding) !== JSON.stringify(body.binding)) throw new Error("Publication recovery identity mismatch")
+    body = saved
+    lock = path.join(root, "publication.recovery.lock")
+    const handle = await open(lock, "wx")
+    await handle.close()
+  } else {
+    try { const claim = await open(path.join(root, "publication.started.claim"), "wx"); await claim.close() }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("Incomplete publication requires explicit recovery")
+      throw error
+    }
+    if (await pathExists(file) || await pathExists(path.join(root, "cases"))) throw new Error("Unclaimed publication evidence exists")
+    await mkdir(path.join(root, "cases"))
+    await writeFileAtomic(intentPath, JSON.stringify(body))
+  }
+  try {
+    if (path.resolve(await realpath(path.join(root, "cases"))).toLowerCase() !== path.join(root, "cases").toLowerCase()) throw new Error("Linked publication cases rejected")
+    let total = 0
+    for (let index = 0; index < input.cases.length; index++) {
+      const item = planned[index]
+      total += item.bytes
+      if (total > limit) throw new Error("capacity_exceeded")
+      const target = path.join(root, item.path)
+      if (input.recoverIncomplete && await pathExists(target)) {
+        const actual = await fileDigest(target)
+        if (actual.bytes !== item.bytes || actual.sha256 !== item.sha256) throw new Error("Publication recovery content drift")
+        continue
+      }
+      await writeFileAtomic(target, publication(input.cases[index]))
+      const actual = await fileDigest(target)
+      if (actual.bytes !== item.bytes || actual.sha256 !== item.sha256) throw new Error("Publication disk content drift")
+    }
+    const manifest = { ...body, manifestSHA256: sha(JSON.stringify(body, null, 2)) }
+    if (await pathExists(file)) {
+      await regular(file)
+      if (JSON.stringify(JSON.parse((await readFile(file, "utf8")).replace(/^\uFEFF/, ""))) !== JSON.stringify(manifest)) throw new Error("Existing publication manifest drift")
+    } else await writeFileAtomic(file, `${JSON.stringify(manifest, null, 2)}\n`)
+    await writeFileAtomic(path.join(root, ".published"), manifest.manifestSHA256)
+    return finish(await verifyPublication(file, manifest.manifestSHA256))
+  } catch (error) {
+    await writeFileAtomic(failurePath, JSON.stringify({ status: "incomplete", intent: sha(JSON.stringify(body)) }))
+    throw error
+  } finally { if (lock) await unlink(lock) }
 }

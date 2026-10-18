@@ -140,6 +140,7 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
           planFingerprint: input.bound.fingerprint,
           policyFingerprint: policy,
           stage: input.stage,
+          expiresAt: Date.now() + 3600000,
         }
       }
     } else throw new Error("Feedback manifest identity required")

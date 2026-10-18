@@ -1,6 +1,6 @@
 import path from "node:path"
-import { open, stat, readFile, realpath } from "node:fs/promises"
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto"
+import { open, readFile, realpath, mkdir } from "node:fs/promises"
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
 import { pathExists } from "../../fs"
 import { writeJsonAtomic } from "../../atomic-write"
 import { regular, verifyPublication } from "./publication-evidence"
@@ -26,6 +26,7 @@ export type ResourceReaderGrant = {
   planFingerprint: string
   policyFingerprint: string
   stage: string
+  expiresAt: number
 }
 
 function within(root: string, file: string) {
@@ -38,6 +39,7 @@ async function validateGrant(grant: ResourceReaderGrant) {
       !grant.principalID || !["lead", "worker"].includes(grant.role) ||
       !/^[a-f0-9]{64}$/.test(grant.planFingerprint) || !/^[a-f0-9]{64}$/.test(grant.policyFingerprint) ||
       grant.stage !== (grant.role === "worker" ? "explore" : "revise") ||
+      !Number.isSafeInteger(grant.expiresAt) || grant.expiresAt <= Date.now() ||
       grant.role === "worker" && !grant.workerID || !grant.campaignID ||
       !Number.isSafeInteger(grant.round) || grant.round < 1 || !path.isAbsolute(grant.manifestPath) ||
       !/^[a-f0-9]{64}$/.test(grant.manifestSHA256) || !Array.isArray(grant.allowedCaseIDs)) {
@@ -78,6 +80,33 @@ export type ScopedReaderBinding = {
   campaignID?: string
   round?: number
   evidenceRoot?: string
+  workerID?: string
+  passID?: string
+  planFingerprint?: string
+  policyFingerprint?: string
+  stage?: string
+  expiresAt?: number
+}
+
+const sessions = new WeakMap<ScopedReaderBinding, Promise<Map<string, Awaited<ReturnType<typeof regular>>>>>()
+const configured = new Map<string, { binding: ScopedReaderBinding; stamp: Awaited<ReturnType<typeof regular>> }>()
+const unchanged = (a: Awaited<ReturnType<typeof regular>>, b: Awaited<ReturnType<typeof regular>>) =>
+  a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs
+
+async function snapshot(binding: ScopedReaderBinding) {
+  let pending = sessions.get(binding)
+  if (!pending) {
+    pending = (async () => {
+      const identities = new Map<string, Awaited<ReturnType<typeof regular>>>()
+      const manifest = await verifyPublication(binding.manifestPath, binding.sha256, identities)
+      if (manifest.resourceID !== binding.resourceID || manifest.version !== binding.version ||
+          path.resolve(binding.casesDir) !== path.join(path.dirname(binding.manifestPath), "cases") ||
+          binding.allowedCases.size !== manifest.cases.length || manifest.cases.some(item => !binding.allowedCases.has(item.caseID))) throw new Error("Reader publication identity mismatch")
+      return identities
+    })()
+    sessions.set(binding, pending)
+  }
+  return pending
 }
 
 export type ReadChunkResult = {
@@ -93,22 +122,20 @@ export type ReadChunkResult = {
 }
 
 function computeCursorHmac(
-  secret: string,
-  resourceID: string,
+  binding: ScopedReaderBinding,
   caseID: string,
-  version: string,
   offset: number,
-  manifestSHA: string,
-  sessionID?: string,
-  principalID?: string,
 ): string {
-  return createHmac("sha256", secret)
-    .update(`${sessionID ?? ""}:${principalID ?? ""}:${resourceID}:${caseID}:${version}:${offset}:${manifestSHA}`)
+  return createHmac("sha256", binding.hmacSecret)
+    .update(JSON.stringify({ session: binding.sessionID, actor: binding.principalID, role: binding.role, worker: binding.workerID,
+      campaign: binding.campaignID, round: binding.round, pass: binding.passID, plan: binding.planFingerprint,
+      policy: binding.policyFingerprint, stage: binding.stage, expiry: binding.expiresAt, resource: binding.resourceID,
+      version: binding.version, manifest: binding.sha256, caseID, field: "public_case", offset }))
     .digest("hex")
 }
 
 function safeHmacEqual(a: string, b: string): boolean {
-  if (typeof a !== "string" || typeof b !== "string") return false
+  if (typeof a !== "string" || typeof b !== "string" || !/^[a-f0-9]{64}$/.test(a) || !/^[a-f0-9]{64}$/.test(b)) return false
   const bufA = Buffer.from(a, "hex")
   const bufB = Buffer.from(b, "hex")
   if (bufA.length !== bufB.length) return false
@@ -173,6 +200,7 @@ export function bindScopedReader(
     casesDir,
     allowedCases,
     hmacSecret: secret ?? randomBytes(32).toString("hex"),
+    sessionID: randomBytes(16).toString("hex"), expiresAt: Date.now() + 3600000,
   }
 }
 
@@ -184,7 +212,10 @@ export async function readResourceChunk(
     cursor?: string
     maxBytes?: number
   },
+  signal?: AbortSignal,
 ): Promise<ReadChunkResult> {
+  signal?.throwIfAborted()
+  if (!Number.isSafeInteger(binding.expiresAt) || binding.expiresAt! <= Date.now()) throw new Error("Reader session expired")
   // 1. 资源 ID 校验
   if (input.resourceID !== binding.resourceID) {
     throw new Error(
@@ -212,29 +243,25 @@ export async function readResourceChunk(
 
   // 4. 解析与核验 Cursor（HMAC 密码学防伪签名校验）
   let offset = 0
-  const fileStats = await stat(caseFile)
+  const identities = await snapshot(binding)
+  // 首次流式核验全文件；后续页绑定相同物理身份，不逐页重读全量。
+  for (const file of [binding.manifestPath, path.join(path.dirname(binding.manifestPath), ".published"), caseFile]) {
+    if (!unchanged(identities.get(file)!, await regular(file))) throw new Error("Reader source changed after verification")
+  }
+  const fileStats = identities.get(caseFile)!
   const totalLength = fileStats.size
 
   if (input.cursor) {
     try {
       const decoded = JSON.parse(Buffer.from(input.cursor, "base64").toString("utf8"))
-      const expectedHmac = computeCursorHmac(
-        binding.hmacSecret,
-        binding.resourceID,
-        input.caseID,
-        binding.version,
-        decoded.offset,
-        binding.sha256,
-        binding.sessionID,
-        binding.principalID,
-      )
+      const expectedHmac = computeCursorHmac(binding, input.caseID, decoded.offset)
 
       if (
         decoded.resourceID !== binding.resourceID ||
         decoded.caseID !== input.caseID ||
         decoded.version !== binding.version ||
         !safeHmacEqual(decoded.sig, expectedHmac) ||
-        typeof decoded.offset !== "number" ||
+        !Number.isSafeInteger(decoded.offset) ||
         decoded.offset < 0 ||
         decoded.offset > totalLength
       ) {
@@ -242,7 +269,7 @@ export async function readResourceChunk(
       }
       offset = decoded.offset
     } catch {
-      throw new Error(`Forged, corrupt or incompatible cursor rejected: ${input.cursor}`)
+      throw new Error("Forged, corrupt or incompatible cursor rejected")
     }
   }
 
@@ -261,9 +288,17 @@ export async function readResourceChunk(
   const handle = await open(caseFile, "r")
   let rawBytes: Buffer
   try {
+    if (!unchanged(fileStats, await handle.stat())) throw new Error("Reader source replaced before open")
     const rawBuffer = Buffer.alloc(readLen)
-    const { bytesRead } = await handle.read(rawBuffer, 0, readLen, offset)
-    rawBytes = rawBuffer.subarray(0, bytesRead)
+    let used = 0
+    while (used < readLen) {
+      signal?.throwIfAborted()
+      const { bytesRead } = await handle.read(rawBuffer, used, readLen - used, offset + used)
+      if (!bytesRead) throw new Error("Reader reached unexpected EOF without progress")
+      used += bytesRead
+    }
+    if (!unchanged(fileStats, await handle.stat()) || !unchanged(fileStats, await regular(caseFile))) throw new Error("Reader source changed during read")
+    rawBytes = rawBuffer
   } finally {
     await handle.close()
   }
@@ -284,16 +319,7 @@ export async function readResourceChunk(
       caseID: input.caseID,
       version: binding.version,
       offset: actualEnd,
-      sig: computeCursorHmac(
-        binding.hmacSecret,
-        binding.resourceID,
-        input.caseID,
-        binding.version,
-        actualEnd,
-        binding.sha256,
-        binding.sessionID,
-        binding.principalID,
-      ),
+      sig: computeCursorHmac(binding, input.caseID, actualEnd),
     }
     nextCursor = Buffer.from(JSON.stringify(nextCursorObj), "utf8").toString("base64")
   }
@@ -307,7 +333,7 @@ export async function readResourceChunk(
     returnedBytes,
     nextCursor,
     eof,
-    data: chunkSlice.toString("utf8"),
+    data: new TextDecoder("utf-8", { fatal: true }).decode(chunkSlice),
   }
 }
 
@@ -346,6 +372,7 @@ export async function resourceReaderEnvironment(
 export async function readResourceFromEnvironment(
   input: { resourceID: string; caseID: string; cursor?: string; maxBytes?: number },
   env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
 ): Promise<ReadChunkResult> {
   const configFile = env.OPENCODE_AEV_RESOURCE_READER_FILE
   const expectedSHA = env.OPENCODE_AEV_RESOURCE_READER_SHA256
@@ -354,15 +381,17 @@ export async function readResourceFromEnvironment(
   }
   const info = await regular(configFile)
   if (info.size > 1048576) throw new Error("Resource reader config capacity exceeded")
+  const previous = configured.get(expectedSHA)
+  if (previous && !unchanged(previous.stamp, info)) throw new Error("Resource reader config changed after binding")
   const fileBytes = await readFile(configFile)
   const actualSHA = createHash("sha256").update(fileBytes).digest("hex")
   if (actualSHA !== expectedSHA) {
     throw new Error("Resource reader config SHA mismatch; possible tampering")
   }
   const grant = JSON.parse(fileBytes.toString("utf8").replace(/^\uFEFF/, "")) as ResourceReaderGrant
-  await validateGrant(grant)
+  if (!previous) await validateGrant(grant)
   const allowedCases = new Set(grant.allowedCaseIDs)
-  const binding: ScopedReaderBinding = {
+  const binding: ScopedReaderBinding = previous?.binding ?? {
     resourceID: grant.resourceID,
     version: grant.version,
     sha256: grant.manifestSHA256,
@@ -376,6 +405,24 @@ export async function readResourceFromEnvironment(
     campaignID: grant.campaignID,
     round: grant.round,
     evidenceRoot: grant.evidenceRoot,
+    workerID: grant.workerID, passID: grant.passID, planFingerprint: grant.planFingerprint,
+    policyFingerprint: grant.policyFingerprint, stage: grant.stage, expiresAt: grant.expiresAt,
   }
-  return readResourceChunk(binding, input)
+  if (!previous) {
+    if (configured.size >= 64) configured.delete(configured.keys().next().value!)
+    configured.set(expectedSHA, { binding, stamp: info })
+  }
+  const audit = async (status: string, result?: ReadChunkResult) => {
+    if (!binding.evidenceRoot || !path.isAbsolute(binding.evidenceRoot)) throw new Error("Private reader audit required")
+    await mkdir(binding.evidenceRoot, { recursive: true })
+    if (path.resolve(await realpath(binding.evidenceRoot)).toLowerCase() !== path.resolve(binding.evidenceRoot).toLowerCase()) throw new Error("Linked reader audit rejected")
+    await writeJsonAtomic(path.join(binding.evidenceRoot, `${randomUUID()}.json`), { schema: "aev.reader-audit.v1",
+      sessionID: binding.sessionID, resourceID: binding.resourceID, caseID: binding.allowedCases.has(input.caseID) ? input.caseID : "unauthorized",
+      status, ...(result ? { offset: result.offset, bytes: result.returnedBytes, chunkSHA256: result.chunkSHA256, eof: result.eof } : {}) })
+  }
+  try {
+    const result = await readResourceChunk(binding, input, signal)
+    await audit("completed", result)
+    return result
+  } catch (error) { await audit("rejected"); throw error }
 }

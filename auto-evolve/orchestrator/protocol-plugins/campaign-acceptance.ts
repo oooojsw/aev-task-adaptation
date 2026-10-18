@@ -15,6 +15,7 @@ import { protocolRepairDirective } from "./failure-routing"
 import { taskFromPack } from "./project-pack"
 import { attemptAccounting } from "./attempt-accounting"
 import type { BuiltinOptions } from "./builtins"
+import { regular } from "../task-adaptation/consolidation/publication-evidence"
 
 export async function campaignAcceptance(input: {
   budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets">
@@ -28,19 +29,27 @@ export async function campaignAcceptance(input: {
   attemptRoot: string
   resultPath: string
   taskBinding?: { planFingerprint: string; policyFingerprint: string }
+  recoverPublication?: boolean
+  publicationCapacityBytes?: number
 }, runtime?: Runtime) {
   // 先阻断历史结果覆盖，避免发出请求后才发现证据路径冲突。
   if (await pathExists(input.resultPath)) throw new Error("Campaign acceptance result already exists; inspect original evidence")
   await mkdir(path.dirname(input.resultPath), { recursive: true })
   // 永久占位防并发覆盖；中断后必须核查，不自动重发。
-  try { await mkdir(`${input.resultPath}.claim`) }
+  if (input.recoverPublication) {
+    // 出版恢复只使用已完成回执，缺任一证据绝不进入执行器。
+    for (const name of ["protocol.receipt.json", "protocol.completed.json", "publication_error.json"]) await regular(path.join(input.attemptRoot, name))
+    const failure = JSON.parse((await readFile(path.join(input.attemptRoot, "publication_error.json"), "utf8")).replace(/^\uFEFF/, ""))
+    const receipt = JSON.parse((await readFile(path.join(input.attemptRoot, "protocol.receipt.json"), "utf8")).replace(/^\uFEFF/, ""))
+    if (failure.receipt !== fingerprint(receipt)) throw new Error("Publication recovery receipt drift")
+  } else try { await mkdir(`${input.resultPath}.claim`) }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("Campaign acceptance result already claimed; inspect interrupted evidence")
     throw error
   }
   if (await pathExists(input.resultPath)) throw new Error("Campaign acceptance result already exists; inspect original evidence")
   const engine = runtime ?? await selectedRuntime(path.join(input.campaignRoot, "protocol-backends"), input.cwd, input.entry, undefined, input.budgets)
-  const receipt = await runEntry(input.campaignRoot, input.entry, input.candidateRoot, input.attemptRoot, engine)
+  const receipt = await runEntry(input.campaignRoot, input.entry, input.candidateRoot, input.attemptRoot, engine, { reuseCompleted: input.recoverPublication })
   const prepared = await prepareEntry(input.campaignRoot, input.entry, engine)
   if (!prepared) throw new Error("Frozen feedback protocol required")
   const receiptPath = path.join(input.attemptRoot, "protocol.receipt.json")
@@ -79,6 +88,8 @@ export async function campaignAcceptance(input: {
       const { publishTrainingFeedbackResource } = await import("../task-adaptation/consolidation/feedback-publisher")
       const published = await publishTrainingFeedbackResource({ targetDir: path.join(input.attemptRoot, "training-feedback"),
         campaignID: input.campaignID, round: input.roundNumber, cases: evidence.cases,
+        ...(input.publicationCapacityBytes !== undefined ? { maxTotalBytes: input.publicationCapacityBytes } : {}),
+        ...(input.recoverPublication && await pathExists(path.join(input.attemptRoot, "training-feedback", "publication.intent.json")) ? { recoverIncomplete: true } : {}),
         expectedCaseIDs: evidence.cases.map(item => item.caseID), binding: { task: receipt.task, phase: receipt.phase,
           protocolFingerprint: receipt.protocolFingerprint, receiptFingerprint: fingerprint(receipt),
           candidateSHA256: product.candidate_sha256, datasetSHA256: product.dataset_sha256, modelID: product.model_id,

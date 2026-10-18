@@ -37,7 +37,11 @@ test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 pa
     const common = { candidateID: "merged", maxChars: 5000, expectedCases: 50, modelID: "m", datasetSHA256: digest(await readFile(dataset)) }
     const settings = { ...common, datasetPath: dataset, modelsPath: models, modelsSHA256: digest(await readFile(models)), concurrency: 2 }
     const plugin = await consolidationPlugins(path.join(campaign, "protocol-backends", "consolidation"))
-    const runtime = new Runtime().addChecker(plugin.checker, plugin.evaluate).addExecutor(plugin.executor, plugin.execute)
+    let executions = 0
+    const runtime = new Runtime().addChecker(plugin.checker, plugin.evaluate).addExecutor(plugin.executor, (...args) => {
+      executions++
+      return plugin.execute(...args)
+    })
     const project = { id: "consolidation-test", version: "1", skillFormats: ["text"], productKinds: ["json"], materialKinds: ["text"] }
     const selection = { schema: "aev.protocol-plugins.v1", project, run: { skillFormat: "text", productKind: "json", materialKinds: ["text"] },
       protocol: { id: "consolidation", version: "1", phases: { source: { claim: "task_execution",
@@ -67,10 +71,17 @@ test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 pa
       selection: { rule: "first_pass" }, stop: { rounds: 2, calls: 100, tokens: 10000, stagnant: 2 } }
     const bound = await bindPlan(candidate, plan, ["read"])
     const policyFingerprint = fingerprint({ windows: plan.windows, workers: plan.workers })
-    const result = await campaignAcceptance({ campaignRoot: campaign, cwd: root, campaignID: "campaign", roundNumber: 1,
+    const options = { campaignRoot: campaign, cwd: root, campaignID: "campaign", roundNumber: 1,
       runID: "author-run", entry: { schema: "aev.protocol-entry.v1", selectionPath, projectManifestPath, taskID: "task", phase: "source" },
       candidateRoot: candidate, attemptRoot: attempt, resultPath: path.join(attempt, "result.json"),
-      taskBinding: { planFingerprint: bound.fingerprint, policyFingerprint } }, runtime)
+      taskBinding: { planFingerprint: bound.fingerprint, policyFingerprint } } as const
+    if (count === 43) {
+      await expect(campaignAcceptance({ ...options, publicationCapacityBytes: 1 }, runtime)).rejects.toThrow("publication_error")
+      expect(executions).toBe(1)
+      await expect(readFile(path.join(attempt, "training-feedback", ".published"))).rejects.toThrow()
+    }
+    const result = await campaignAcceptance({ ...options, ...(count === 43 ? { recoverPublication: true } : {}) }, runtime)
+    expect(executions).toBe(1)
     expect(result.passed).toBe(true)
     const feedback = JSON.parse(await readFile(path.join(attempt, "protocol.training-feedback.json"), "utf8"))
     const manifest = await verifyPublication(feedback.caseFeedback.manifestPath, feedback.caseFeedback.manifestSHA256)

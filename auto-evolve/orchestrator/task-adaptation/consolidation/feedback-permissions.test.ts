@@ -613,6 +613,7 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
       const env = await resourceReaderEnvironment({
         sessionID: "a".repeat(32), principalID: "fixture:lead", role: "lead",
         stage: "revise", planFingerprint: "c".repeat(64), policyFingerprint: "d".repeat(64),
+        expiresAt: Date.now() + 3600000, evidenceRoot: path.join(tempDir, "private-audit"),
         campaignID: "campaign_e2e_50", round: 1,
         resourceID: published.logicalResource.resourceID, version: published.logicalResource.version,
         manifestPath: published.manifestPath, manifestSHA256: published.manifest.manifestSHA256,
