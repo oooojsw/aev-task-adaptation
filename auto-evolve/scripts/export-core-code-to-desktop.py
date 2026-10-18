@@ -14,6 +14,8 @@ INCLUDE_FILES = {
     "cli.ts",
     "monitor-server.ts",
     "README.md",
+    "README-SYSTEM.md",
+    "进度报告/系统架构探索树.md",
 }
 
 INCLUDE_DIRS = {
@@ -212,7 +214,9 @@ def read_text(path: str) -> str:
 
 
 def main():
-    files = sorted(iter_files(), key=lambda x: x[1].lower())
+    # 先交代通用定位，避免将具体合并适配误读为整个系统。
+    priority = {"README-SYSTEM.md": 0, "进度报告/系统架构探索树.md": 1}
+    files = sorted(iter_files(), key=lambda x: (priority.get(x[1].replace(os.sep, "/"), 2), x[1].lower()))
     with open(OUT, "w", encoding="utf-8") as out:
         out.write("# auto-evolve core code export\n")
         out.write("# export_kind: clean-full-picture\n")

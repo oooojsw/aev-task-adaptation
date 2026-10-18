@@ -1,5 +1,10 @@
 # Task-driven adaptation (in development)
 
+Current system overview: [系统定位与总体流程](../../README-SYSTEM.md).
+Design decisions and current evidence: [系统架构探索树](../../进度报告/系统架构探索树.md).
+The 50-case Consolidation profile is one task using the shared Campaign.
+The dated checkpoints below preserve historical states; consult the tree for current status.
+
 This opt-in extension uses the existing Long Task Campaign and Long Task Runner.
 It does not replace the legacy Skill workflow or introduce a parallel demo controller.
 Do not deploy this development branch as a completed general-purpose system yet.
