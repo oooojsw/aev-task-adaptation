@@ -1,7 +1,7 @@
 import path from "node:path"
 import { createHash } from "node:crypto"
 import { mkdir, writeFile, readFile } from "node:fs/promises"
-import { ensureDirectory } from "../../fs"
+import { ensureDirectory, pathExists } from "../../fs"
 import { writeFileAtomic, writeJsonAtomic } from "../../atomic-write"
 import type { LogicalResource } from "../../task-profile-access/unified-access"
 
@@ -75,13 +75,67 @@ export async function publishTrainingFeedbackResource(input: {
   const casesDir = path.join(baseDir, "cases")
   await ensureDirectory(casesDir)
 
+  // 幂等复用与防覆写检查（A2-5）
+  const manifestPath = path.join(baseDir, "manifest.json")
+  const markerPath = path.join(baseDir, ".published")
+  if (await pathExists(markerPath) && await pathExists(manifestPath)) {
+    try {
+      const existing = JSON.parse((await readFile(manifestPath, "utf8")).replace(/^\uFEFF/, ""))
+      if (existing.campaignID === input.campaignID && existing.round === input.round) {
+        if (existing.totalCases === input.cases.length && existing.cases?.length === input.cases.length) {
+          const existingMarker = (await readFile(markerPath, "utf8")).trim()
+          if (existingMarker === existing.manifestSHA256) {
+            const allCasePaths = existing.cases.map((c: any) => path.resolve(baseDir, c.path).replaceAll("\\", "/"))
+            allCasePaths.push(path.resolve(manifestPath).replaceAll("\\", "/"))
+            const logicalResource: LogicalResource = {
+              resourceID: existing.resourceID,
+              kind: "training_feedback",
+              version: existing.version,
+              sha256: existing.manifestSHA256,
+              sensitivity: "training",
+              access: "read_only",
+              boundaryRoots: [baseDir.replaceAll("\\", "/")],
+              paths: allCasePaths,
+              metadata: {
+                campaignID: existing.campaignID,
+                round: existing.round,
+                totalCases: existing.totalCases,
+                passedCases: existing.passedCases,
+                manifestPath: path.resolve(manifestPath).replaceAll("\\", "/"),
+              },
+            }
+            return { manifest: existing, logicalResource, manifestPath: path.resolve(manifestPath).replaceAll("\\", "/") }
+          }
+        }
+        throw new Error("Attempting to overwrite existing published feedback with different content")
+      }
+    } catch (err: any) {
+      if (err.message?.includes("Attempting to overwrite")) throw err
+    }
+  }
+
   const publishedCases: PublishedFeedbackManifest["cases"] = []
   const allCasePaths: string[] = []
   let passedCount = 0
 
+  const SAFE_CASE_ID_REGEX = /^[A-Za-z0-9_-]{1,64}$/
+  const seenCaseIDs = new Set<string>()
+
   for (const rawCase of input.cases) {
-    if (!rawCase.caseID || typeof rawCase.caseID !== "string") {
-      throw new Error("Each case must have a valid string caseID")
+    if (!rawCase.caseID || typeof rawCase.caseID !== "string" || !SAFE_CASE_ID_REGEX.test(rawCase.caseID)) {
+      throw new Error(`Invalid, dangerous or empty caseID: '${rawCase.caseID}'`)
+    }
+    if (seenCaseIDs.has(rawCase.caseID)) {
+      throw new Error(`Duplicate caseID in feedback publication: '${rawCase.caseID}'`)
+    }
+    seenCaseIDs.add(rawCase.caseID)
+
+    if (typeof rawCase.passed !== "boolean") {
+      throw new Error(`Case '${rawCase.caseID}' must have an explicit boolean 'passed' verdict`)
+    }
+    const expectedScore = rawCase.passed ? 1 : 0
+    if (typeof rawCase.score !== "number" || !Number.isFinite(rawCase.score) || rawCase.score !== expectedScore) {
+      throw new Error(`Case '${rawCase.caseID}' score must be finite and match passed verdict exactly (${expectedScore})`)
     }
 
     // 1. 严格剥离私有 Oracle 字段（fail closed，杜绝泄题）
@@ -91,8 +145,8 @@ export async function publishTrainingFeedbackResource(input: {
       prompt: rawCase.prompt ?? "",
       materials: rawCase.materials ?? [],
       modelResponse: rawCase.modelResponse ?? "",
-      score: Number(rawCase.score) || 0,
-      passed: Boolean(rawCase.passed),
+      score: rawCase.score,
+      passed: rawCase.passed,
       diagnostics: Array.isArray(rawCase.diagnostics) ? rawCase.diagnostics : [],
       sha256: "",
     }
@@ -147,7 +201,6 @@ export async function publishTrainingFeedbackResource(input: {
     cases: publishedCases,
   }
 
-  const manifestPath = path.join(baseDir, "manifest.json")
   // manifestSHA256 作为权威内容摘要
   const manifestBodySHA = createHash("sha256").update(JSON.stringify(manifestBody, null, 2)).digest("hex")
 

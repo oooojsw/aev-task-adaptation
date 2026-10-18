@@ -58,74 +58,101 @@ export async function campaignAcceptance(input: {
     passedCases: number
   } | undefined
 
+  let isConsolidation = false
+  let prodJson: any = null
   if (productPath && await pathExists(productPath)) {
     try {
-      const prodJson = JSON.parse((await readFile(productPath, "utf8")).replace(/^\uFEFF/, ""))
-      if (prodJson.schema === "aev.consolidation-eval.v1" && prodJson.runID) {
-        const directChatDir = path.join(input.campaignRoot, "protocol-backends", prodJson.runID, "direct-chat")
-        const summaryFile = path.join(directChatDir, "summary.json")
-        const snapshotFile = path.join(directChatDir, "config.snapshot.json")
-        if (await pathExists(summaryFile) && await pathExists(snapshotFile)) {
-          const summary = JSON.parse((await readFile(summaryFile, "utf8")).replace(/^\uFEFF/, ""))
-          const snapshot = JSON.parse((await readFile(snapshotFile, "utf8")).replace(/^\uFEFF/, ""))
-          const resultsMap = new Map((summary.results || []).map((r: any) => [r.caseID, r]))
-
-          let rawCases: any[] = []
-          if (snapshot.datasetBundlePath && await pathExists(snapshot.datasetBundlePath)) {
-            const { readDirectChatDatasetBundle } = await import("../direct-chat/dataset-bundler")
-            const datasetCases = await readDirectChatDatasetBundle(snapshot.datasetBundlePath)
-            rawCases = datasetCases.map(dc => {
-              const res = resultsMap.get(dc.caseID) as any
-              return {
-                caseID: dc.caseID,
-                prompt: dc.question?.text ?? "",
-                materials: (dc.materials || []).map((m: any) => ({
-                  id: m.id,
-                  name: m.title ?? m.id,
-                  content: m.content ?? "",
-                })),
-                modelResponse: res?.modelResponse ?? "",
-                score: res?.score ?? 0,
-                passed: Boolean(res?.passed),
-                diagnostics: res?.errorCategory ? [res.errorCategory] : [],
-                oracleAnswer: dc.privateOracle?.expectedAnswer,
-                validatorScript: dc.privateOracle?.scriptPath,
-              }
-            })
-          } else if (Array.isArray(summary.results)) {
-            rawCases = summary.results.map((r: any) => ({
-              caseID: r.caseID,
-              prompt: `Case ${r.caseID}`,
-              materials: [],
-              modelResponse: "",
-              score: r.score ?? 0,
-              passed: Boolean(r.passed),
-              diagnostics: r.errorCategory ? [r.errorCategory] : [],
-            }))
-          }
-
-          if (rawCases.length > 0) {
-            const { publishTrainingFeedbackResource } = await import("../task-adaptation/consolidation/feedback-publisher")
-            const published = await publishTrainingFeedbackResource({
-              targetDir: path.join(input.attemptRoot, "training-feedback"),
-              campaignID: input.campaignID,
-              round: input.roundNumber,
-              cases: rawCases,
-            })
-            caseFeedbackMeta = {
-              resourceID: published.logicalResource.resourceID,
-              manifestPath: published.manifestPath,
-              manifestSHA256: published.manifest.manifestSHA256,
-              totalCases: published.manifest.totalCases,
-              passedCases: published.manifest.passedCases,
-            }
-          }
-        }
+      const content = (await readFile(productPath, "utf8")).replace(/^\uFEFF/, "")
+      prodJson = JSON.parse(content)
+      if (prodJson && prodJson.schema === "aev.consolidation-eval.v1" && prodJson.runID) {
+        isConsolidation = true
       }
     } catch {
-      // 容错保护：非 Direct Chat 任务或解析异常不阻断主 Acceptance 流程
+      isConsolidation = false
     }
   }
+
+  if (isConsolidation && prodJson) {
+    let directChatDir = path.join(input.campaignRoot, "protocol-backends", "consolidation", prodJson.runID, "direct-chat")
+    if (!await pathExists(directChatDir)) {
+      directChatDir = path.join(input.campaignRoot, "protocol-backends", prodJson.runID, "direct-chat")
+    }
+    if (!await pathExists(directChatDir)) {
+      throw new Error(`publication_error: Missing direct-chat evidence directory at ${directChatDir}`)
+    }
+      const summaryFile = path.join(directChatDir, "summary.json")
+      const snapshotFile = path.join(directChatDir, "config.snapshot.json")
+      if (!await pathExists(summaryFile) || !await pathExists(snapshotFile)) {
+        throw new Error("publication_error: Missing summary.json or config.snapshot.json in direct-chat directory")
+      }
+      const summary = JSON.parse((await readFile(summaryFile, "utf8")).replace(/^\uFEFF/, ""))
+      const snapshot = JSON.parse((await readFile(snapshotFile, "utf8")).replace(/^\uFEFF/, ""))
+      const resultsMap = new Map((summary.results || []).map((r: any) => [r.caseID, r]))
+      const selectedModelID = prodJson.model_id ?? summary.summary?.[0]?.modelID
+
+      if (!snapshot.datasetBundlePath || !await pathExists(snapshot.datasetBundlePath)) {
+        throw new Error(`publication_error: Missing datasetBundlePath at ${snapshot.datasetBundlePath}`)
+      }
+      const { readDirectChatDatasetBundle } = await import("../direct-chat/dataset-bundler")
+      const datasetCases = await readDirectChatDatasetBundle(snapshot.datasetBundlePath)
+
+      const rawCases = await Promise.all(datasetCases.map(async dc => {
+        const res = resultsMap.get(dc.caseID) as any
+        if (!res) {
+          throw new Error(`publication_error: Missing evaluation result row for case ${dc.caseID}`)
+        }
+        let modelAnswer = ""
+        if (selectedModelID) {
+          const caseResultPath = path.join(directChatDir, "results", selectedModelID, dc.caseID, "result.json")
+          if (await pathExists(caseResultPath)) {
+            try {
+              const caseResult = JSON.parse((await readFile(caseResultPath, "utf8")).replace(/^\uFEFF/, ""))
+              modelAnswer = caseResult.answer ?? ""
+              if (!modelAnswer && caseResult.rawResponsePath && await pathExists(caseResult.rawResponsePath)) {
+                modelAnswer = (await readFile(caseResult.rawResponsePath, "utf8")).trim()
+              }
+            } catch {}
+          }
+        }
+        if (!modelAnswer && typeof res.answer === "string") {
+          modelAnswer = res.answer
+        }
+        const passedVal = Boolean(res.passed)
+        const scoreVal = passedVal ? 1 : 0
+        return {
+          caseID: dc.caseID,
+          prompt: dc.question?.text ?? "",
+          materials: (dc.materials || []).map((m: any) => ({
+            id: m.id,
+            name: m.title ?? m.id,
+            content: m.content ?? "",
+          })),
+          modelResponse: modelAnswer,
+          score: scoreVal,
+          passed: passedVal,
+          diagnostics: res.errorCategory && res.errorCategory !== "none" ? [res.errorCategory] : [],
+          oracleAnswer: dc.privateOracle?.expectedAnswer,
+          validatorScript: dc.privateOracle?.scriptPath,
+        }
+      }))
+
+      if (rawCases.length > 0) {
+        const { publishTrainingFeedbackResource } = await import("../task-adaptation/consolidation/feedback-publisher")
+        const published = await publishTrainingFeedbackResource({
+          targetDir: path.join(input.attemptRoot, "training-feedback"),
+          campaignID: input.campaignID,
+          round: input.roundNumber,
+          cases: rawCases,
+        })
+        caseFeedbackMeta = {
+          resourceID: published.logicalResource.resourceID,
+          manifestPath: published.manifestPath,
+          manifestSHA256: published.manifest.manifestSHA256,
+          totalCases: published.manifest.totalCases,
+          passedCases: published.manifest.passedCases,
+        }
+      }
+    }
 
   // 训练侧证据引用只指向反馈视图，原始回执仍供审计保存。
   await writeJsonAtomic(trainingPath, { schema: "aev.training-feedback.v1", task: receipt.task,
@@ -165,7 +192,6 @@ export async function campaignAcceptance(input: {
     blankAgentEvidenceReadPaths: [
       trainingPath,
       ...(productPath ? [productPath] : []),
-      ...(caseFeedbackMeta ? [caseFeedbackMeta.manifestPath] : []),
     ],
     blankAgentReadPaths: [] as string[],
     validatorPartitions: { surfaceValidatorIDs: receipt.checks.filter((item) =>

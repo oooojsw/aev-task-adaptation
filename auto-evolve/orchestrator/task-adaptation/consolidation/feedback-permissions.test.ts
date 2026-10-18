@@ -611,4 +611,287 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
       await rm(tempDir, { recursive: true, force: true })
     }
   })
+
+  test("GATE-A: T-A3 publisher rejects dangerous caseID, duplicate caseID, and score mismatch", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "aev-gatea-publisher-fail-"))
+    try {
+      const validCases = generateMockCases(3, 2)
+      // 1. 危险 caseID (路径穿越)
+      const dangerousCases = [{ ...validCases[0], caseID: "../escape_case" }, validCases[1], validCases[2]]
+      await expect(
+        publishTrainingFeedbackResource({
+          targetDir: path.join(tempDir, "dangerous"),
+          campaignID: "camp_fail",
+          round: 1,
+          cases: dangerousCases,
+        }),
+      ).rejects.toThrow("Invalid, dangerous or empty caseID")
+
+      // 2. 重复 caseID
+      const dupCases = [{ ...validCases[0], caseID: "dc_001" }, { ...validCases[1], caseID: "dc_001" }]
+      await expect(
+        publishTrainingFeedbackResource({
+          targetDir: path.join(tempDir, "dup"),
+          campaignID: "camp_fail",
+          round: 1,
+          cases: dupCases,
+        }),
+      ).rejects.toThrow("Duplicate caseID")
+
+      // 3. 分数与 passed 不匹配 (passed=true but score=0)
+      const scoreMismatchCases = [{ ...validCases[0], passed: true, score: 0 }]
+      await expect(
+        publishTrainingFeedbackResource({
+          targetDir: path.join(tempDir, "mismatch"),
+          campaignID: "camp_fail",
+          round: 1,
+          cases: scoreMismatchCases,
+        }),
+      ).rejects.toThrow("score must be finite and match passed verdict exactly")
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test("GATE-A: T-A5 publisher idempotence safe reuse and overwrite rejection with differing content", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "aev-gatea-idempotence-"))
+    try {
+      const targetDir = path.join(tempDir, "feedback")
+      const casesA = generateMockCases(10, 8)
+      // 第一次发布
+      const res1 = await publishTrainingFeedbackResource({
+        targetDir,
+        campaignID: "camp_idemp",
+        round: 1,
+        cases: casesA,
+      })
+      expect(res1.manifest.totalCases).toBe(10)
+
+      // 相同内容重复发布：安全复用
+      const res2 = await publishTrainingFeedbackResource({
+        targetDir,
+        campaignID: "camp_idemp",
+        round: 1,
+        cases: casesA,
+      })
+      expect(res2.manifest.manifestSHA256).toBe(res1.manifest.manifestSHA256)
+
+      // 内容冲突重新发布（cases 数量变了）：拒绝覆写
+      const casesB = generateMockCases(5, 3)
+      await expect(
+        publishTrainingFeedbackResource({
+          targetDir,
+          campaignID: "camp_idemp",
+          round: 1,
+          cases: casesB,
+        }),
+      ).rejects.toThrow("Attempting to overwrite existing published feedback with different content")
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test("GATE-A: T-A1 & T-A2 campaignAcceptance end-to-end 50-case publication and error on missing directChat", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "aev-gatea-acceptance-"))
+    try {
+      const campaignRoot = path.join(tempDir, "campaign")
+      const attemptRoot = path.join(campaignRoot, "rounds", "round-001", "final-acceptance")
+      const runID = "consolidation-run-uuid-999"
+      const directChatDir = path.join(campaignRoot, "protocol-backends", "consolidation", runID, "direct-chat")
+      await mkdir(directChatDir, { recursive: true })
+      await mkdir(attemptRoot, { recursive: true })
+
+      // 1. 创建 50 题测试数据
+      const raw50Cases = generateMockCases(50, 50)
+      const datasetBundlePath = path.join(tempDir, "dataset.jsonl")
+      const datasetRows = raw50Cases.map((c) => ({
+        schema: "direct-chat-case/v1",
+        caseID: c.caseID,
+        dataset: "consolidation-test",
+        split: "train",
+        question: { text: c.prompt, outputInstruction: "detailed answer" },
+        materials: c.materials,
+        privateOracle: { expectedAnswer: c.oracleAnswer, scriptPath: c.validatorScript },
+      }))
+      await writeFile(datasetBundlePath, datasetRows.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8")
+
+      const configSnapshot = {
+        datasetBundlePath,
+        datasetHash: "dataset_sha_999",
+        caseIDs: raw50Cases.map((c) => c.caseID),
+        modelIDs: ["mock-model-a"],
+      }
+      await writeFile(path.join(directChatDir, "config.snapshot.json"), JSON.stringify(configSnapshot, null, 2), "utf8")
+
+      const summaryResults = raw50Cases.map((c) => ({
+        caseID: c.caseID,
+        modelID: "mock-model-a",
+        passed: true,
+        score: 1.0,
+        answer: c.modelResponse,
+      }))
+      const summary = {
+        validity: { status: "valid" },
+        summary: [{ modelID: "mock-model-a", total: 50, passed: 50, failed: 0, passRate: 1.0 }],
+        results: summaryResults,
+      }
+      await writeFile(path.join(directChatDir, "summary.json"), JSON.stringify(summary, null, 2), "utf8")
+
+      // 2. 创建 selection.json 与 manifest.json 支撑 campaignAcceptance
+      const project = { id: "aev-gatea", version: "1", skillFormats: ["text"], productKinds: ["aev.consolidation-eval.v1"], materialKinds: ["text"] }
+      const selection = {
+        schema: "aev.protocol-plugins.v1",
+        project,
+        run: { skillFormat: "text", productKind: "aev.consolidation-eval.v1", materialKinds: ["text"] },
+        protocol: {
+          id: "consolidation-protocol",
+          version: "1",
+          phases: {
+            source: {
+              claim: "task_execution",
+              checks: [
+                { id: "check", version: "1", settings: {}, name: "eval", target: "product", stage: "after_execution", required: true, mechanism: "script" },
+              ],
+              executor: { id: "exec", version: "1", settings: {} },
+            },
+          },
+        },
+      }
+      const selectionPath = path.join(tempDir, "selection.json")
+      const projectManifestPath = path.join(tempDir, "manifest.json")
+      await writeFile(selectionPath, JSON.stringify(selection))
+      await writeFile(
+        projectManifestPath,
+        JSON.stringify({
+          schema: "aev.project-pack.v1",
+          project,
+          skill: { format: "text", entries: [{ id: "skill", kind: "text", path: "rules.txt" }] },
+          tasks: [{ id: "task_01", split: "train", materials: [{ id: "q", kind: "text", path: "public.txt" }], privateInputs: [] }],
+        }),
+      )
+
+      await mkdir(path.join(tempDir, "candidate"), { recursive: true })
+      await writeFile(path.join(tempDir, "candidate", "rules.txt"), "Reusable rule for 50 cases")
+      await writeFile(path.join(tempDir, "public.txt"), "Question text")
+
+      // 3. 构建 runtime，模拟返回 aev.consolidation-eval.v1 的 product
+      const productObj = {
+        schema: "aev.consolidation-eval.v1",
+        runID,
+        model_id: "mock-model-a",
+        total: 50,
+        passed: 50,
+      }
+      const productBytes = Buffer.from(JSON.stringify(productObj, null, 2))
+
+      const { Runtime } = await import("../../protocol-plugins/runtime")
+      const runtime = new Runtime()
+        .addChecker(
+          { id: "check", version: "1", implementation: "c".repeat(64), targets: ["product"], mechanisms: ["script"], productKinds: ["aev.consolidation-eval.v1"], validate() {} },
+          async () => ({ status: "passed", message: "check passed" }),
+        )
+        .addExecutor(
+          {
+            id: "exec",
+            version: "1",
+            implementation: "e".repeat(64),
+            skillFormats: ["text"],
+            productKinds: ["aev.consolidation-eval.v1"],
+            materialKinds: ["text"],
+            settings: {},
+            validate() {},
+          },
+          async () => ({
+            status: "completed",
+            product: { kind: "aev.consolidation-eval.v1", bytes: productBytes },
+          }),
+        )
+
+      const { campaignAcceptance } = await import("../../protocol-plugins/campaign-acceptance")
+      const entry = {
+        schema: "aev.protocol-entry.v1" as const,
+        selectionPath,
+        projectManifestPath,
+        taskID: "task_01",
+        phase: "source" as const,
+      }
+
+      const acceptanceResult = await campaignAcceptance(
+        {
+          campaignRoot,
+          cwd: tempDir,
+          campaignID: "camp_gatea_001",
+          roundNumber: 1,
+          runID,
+          entry,
+          candidateRoot: path.join(tempDir, "candidate"),
+          attemptRoot,
+          resultPath: path.join(attemptRoot, "acceptance-result.json"),
+        },
+        runtime,
+      )
+
+      expect(acceptanceResult.passed).toBe(true)
+
+      // 4. 验证生成的 protocol.training-feedback.json 中已由 campaignAcceptance 正式发布 50 题视图
+      const feedbackPath = path.join(attemptRoot, "protocol.training-feedback.json")
+      const feedback = JSON.parse(await readFile(feedbackPath, "utf8"))
+      expect(feedback.caseFeedback).toBeDefined()
+      expect(feedback.caseFeedback.totalCases).toBe(50)
+      expect(feedback.caseFeedback.passedCases).toBe(50)
+
+      // 5. 验证 blankAgentEvidenceReadPaths 中不含 caseFeedback.manifestPath (B10 验证)
+      expect(acceptanceResult.blankAgentEvidenceReadPaths.some((p: string) => p.includes("manifest.json"))).toBe(false)
+
+      // 6. 验证 T-A2: 若缺失 directChat 目录，抛出 publication_error
+      const missingAttemptRoot = path.join(campaignRoot, "rounds", "round-002", "final-acceptance")
+      const missingProductObj = {
+        schema: "aev.consolidation-eval.v1",
+        runID: "non-existent-run-id",
+        total: 50,
+        passed: 50,
+      }
+      const missingProductBytes = Buffer.from(JSON.stringify(missingProductObj))
+      const missingRuntime = new Runtime()
+        .addChecker(
+          { id: "check", version: "1", implementation: "c".repeat(64), targets: ["product"], mechanisms: ["script"], productKinds: ["aev.consolidation-eval.v1"], validate() {} },
+          async () => ({ status: "passed", message: "check passed" }),
+        )
+        .addExecutor(
+          {
+            id: "exec",
+            version: "1",
+            implementation: "e".repeat(64),
+            skillFormats: ["text"],
+            productKinds: ["aev.consolidation-eval.v1"],
+            materialKinds: ["text"],
+            settings: {},
+            validate() {},
+          },
+          async () => ({
+            status: "completed",
+            product: { kind: "aev.consolidation-eval.v1", bytes: missingProductBytes },
+          }),
+        )
+      await expect(
+        campaignAcceptance(
+          {
+            campaignRoot,
+            cwd: tempDir,
+            campaignID: "camp_gatea_002",
+            roundNumber: 2,
+            runID: "non-existent-run-id",
+            entry,
+            candidateRoot: path.join(tempDir, "candidate"),
+            attemptRoot: missingAttemptRoot,
+            resultPath: path.join(missingAttemptRoot, "acceptance-result.json"),
+          },
+          missingRuntime,
+        ),
+      ).rejects.toThrow("publication_error")
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
 })
+
