@@ -16,6 +16,7 @@ import { randomBytes } from "node:crypto"
 import type { ResourceReaderGrant } from "./consolidation/scoped-reader"
 import { verifyPublication } from "./consolidation/publication-evidence"
 import { fingerprint } from "../protocol-plugins/identity"
+import { readerDeadline, resolveRuntimeBudget } from "../opencode-runtime-budget"
 
 export interface Invocation {
   bound: BoundPlan
@@ -65,6 +66,7 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
   const feedback = input.feedback && original.runtime?.includes("feedback") ? await taskFeedback(input.bound, input.feedback) : undefined
   if (feedback) view.reads.push({ id: "runtime:feedback", path: feedback.path })
   let resourceReaderGrant: ResourceReaderGrant | undefined
+  let runtimeBudget = request.runtimeBudget
   // 摘要权限不等于逐题权限，非分析角色仍可正常进入下一轮。
   const reader = input.role === "worker" && input.stage === "explore" || input.role === "lead" && input.stage === "revise"
   const effectiveResource = input.feedbackResource ?? (reader ? feedback?.feedbackResource : undefined)
@@ -121,6 +123,7 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
       view.reads.push({ id: `runtime:feedback:${fileName}`, path: manifestPath })
 
       if (original.runtime?.includes("feedback") && view.actions.includes("read") && ["lead", "worker"].includes(input.role)) {
+        runtimeBudget = resolveRuntimeBudget(request.runtimeBudget)
         const hmacSecret = randomBytes(32).toString("hex")
         const casesDir = path.join(path.dirname(manifestPath), "cases")
         const allowedCaseIDs = manifest.cases.map(item => item.caseID)
@@ -142,7 +145,7 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
           planFingerprint: input.bound.fingerprint,
           policyFingerprint: policy,
           stage: input.stage,
-          expiresAt: Date.now() + 3600000,
+          expiresAt: readerDeadline(runtimeBudget),
         }
       }
     } else throw new Error("Feedback manifest identity required")
@@ -191,6 +194,7 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
   ].join("\n")
   // 丢弃原请求附件及内联上下文，避免旧角色授权借新入口混入。
   return { request: { ...request, prompt, allowShell: false, sourceHost: true,
+    ...(resourceReaderGrant ? { runtimeBudget } : {}),
     requestBudget: budget,
     localSearch, localSearchEvidenceRoot: undefined,
     recompute, recomputeEvidenceRoot: undefined,

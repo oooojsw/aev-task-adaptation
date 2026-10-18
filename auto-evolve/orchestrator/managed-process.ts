@@ -12,17 +12,19 @@ export interface ManagedProcessInput {
   stdinText?: string
   runtimeScope?: string
   timeoutMs: number
+  deadlineAt?: number
   silentTimeoutMs?: number
   silentTimeoutAfterActivityMs?: number
   pulseIntervalMs?: number
   backend?: "auto" | "direct" | "python_subprocess"
-  onSpawn?: () => Promise<void> | void
-  onPulse?: () => Promise<void> | void
+  onSpawn?: (signal?: AbortSignal) => Promise<void> | void
+  onPulse?: (signal?: AbortSignal) => Promise<void> | void
   onStdoutChunk?: (chunk: Buffer) => void
   onStderrChunk?: (chunk: Buffer) => void
 }
 
 export interface ManagedProcessResult {
+  processPID?: number
   exitCode: number
   stdout: string
   stderr: string
@@ -90,7 +92,11 @@ function processRegistryTimeoutMs() {
 function isBrokenStdinPipe(error: unknown) {
   const code = typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : ""
   const message = error instanceof Error ? error.message : String(error)
-  return code === "EPIPE" || code === "ERR_STREAM_DESTROYED" || /broken pipe|stream.*destroyed|write after end/i.test(message)
+  return (
+    code === "EPIPE" ||
+    code === "ERR_STREAM_DESTROYED" ||
+    /broken pipe|stream.*destroyed|write after end/i.test(message)
+  )
 }
 
 async function writeStdinAndEnd(
@@ -199,6 +205,9 @@ function buildPythonWrapperCode() {
 }
 
 export async function runManagedProcess(input: ManagedProcessInput): Promise<ManagedProcessResult> {
+  if (input.deadlineAt !== undefined && (!Number.isSafeInteger(input.deadlineAt) || input.deadlineAt <= Date.now())) {
+    throw new Error("Managed process deadline expired before spawn")
+  }
   if (!input.command[0]) {
     throw new Error(`Managed process ${input.title} has no executable command.`)
   }
@@ -221,20 +230,20 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
           title: input.title,
         })
       : backend === "python_subprocess"
-      ? nodeSpawn("python", ["-c", buildPythonWrapperCode()], {
-          cwd: ensureValidCwd(input.cwd),
-          env: environment,
-          stdio: ["pipe", "pipe", "pipe"],
-          shell: false,
-          windowsHide: true,
-        })
-      : nodeSpawn(normalizePathForSpawn(input.command[0] ?? ""), input.command.slice(1).map(normalizeArgForSpawn), {
-          cwd: ensureValidCwd(input.cwd),
-          env: environment,
-          stdio: ["pipe", "pipe", "pipe"],
-          shell: false,
-          windowsHide: true,
-        })
+        ? nodeSpawn("python", ["-c", buildPythonWrapperCode()], {
+            cwd: ensureValidCwd(input.cwd),
+            env: environment,
+            stdio: ["pipe", "pipe", "pipe"],
+            shell: false,
+            windowsHide: true,
+          })
+        : nodeSpawn(normalizePathForSpawn(input.command[0] ?? ""), input.command.slice(1).map(normalizeArgForSpawn), {
+            cwd: ensureValidCwd(input.cwd),
+            env: environment,
+            stdio: ["pipe", "pipe", "pipe"],
+            shell: false,
+            windowsHide: true,
+          })
   const child = "child" in proxy ? proxy.child : proxy
   let stdoutData = ""
   let stderrData = ""
@@ -243,14 +252,22 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
   let silentTimedOut = false
   let silentTimeoutAfterActivity = false
   let observedRuntimeOutput = false
+  let closed = false
+  const controller = input.deadlineAt === undefined ? undefined : new AbortController()
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined
   let silentTimeoutHandle: ReturnType<typeof setTimeout> | undefined
   let refreshSilentTimeout: (() => void) | undefined
   let startTimeouts: (() => void) | undefined
 
   const exitPromise = new Promise<number>((resolve) => {
-    child.on("exit", (code) => resolve(code ?? 0))
-    child.on("error", () => resolve(1))
+    child.on("exit", (code) => {
+      closed = true
+      resolve(code ?? 0)
+    })
+    child.on("error", () => {
+      closed = true
+      resolve(1)
+    })
   })
   const timeoutPromise = new Promise<number>((resolve) => {
     let settled = false
@@ -258,20 +275,32 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
       if (settled) return
       settled = true
       timedOut = true
+      controller?.abort()
       if (kind === "hard") hardTimedOut = true
       if (kind === "silent") {
         silentTimedOut = true
         silentTimeoutAfterActivity = observedRuntimeOutput
       }
+      let terminated = false
       try {
-        await terminateProcessTree(child.pid)
+        terminated = await terminateProcessTree(child.pid)
       } catch {}
+      // 终止未确认时保持调用和gate，不能放行另一个写者。
+      if (controller && !terminated && !closed) {
+        stderrData += "[managed-process] termination unconfirmed; awaiting actual child exit.\n"
+        await exitPromise
+      }
       resolve(124)
     }
     const start = () => {
-      timeoutHandle = setTimeout(async () => {
-        await killAndResolve("hard")
-      }, input.timeoutMs)
+      timeoutHandle = setTimeout(
+        async () => {
+          await killAndResolve("hard")
+        },
+        input.deadlineAt === undefined
+          ? input.timeoutMs
+          : Math.max(0, Math.min(input.timeoutMs, input.deadlineAt - Date.now())),
+      )
     }
     const startSilent = () => {
       if (typeof input.silentTimeoutMs !== "number" || input.silentTimeoutMs <= 0) return
@@ -281,8 +310,8 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
           observedRuntimeOutput &&
           typeof input.silentTimeoutAfterActivityMs === "number" &&
           input.silentTimeoutAfterActivityMs > 0
-          ? input.silentTimeoutAfterActivityMs
-          : input.silentTimeoutMs
+            ? input.silentTimeoutAfterActivityMs
+            : input.silentTimeoutMs
         silentTimeoutHandle = setTimeout(async () => {
           await killAndResolve("silent")
         }, nextSilentTimeoutMs)
@@ -310,61 +339,82 @@ export async function runManagedProcess(input: ManagedProcessInput): Promise<Man
 
   const abortAfterSpawn = async (cause: unknown): Promise<never> => {
     const error = cause instanceof Error ? cause : new Error(String(cause))
+    controller?.abort()
+    let terminated = false
     try {
-      await terminateProcessTree(child.pid)
+      terminated = await terminateProcessTree(child.pid)
     } catch {}
+    if (controller && !terminated && !closed) await exitPromise
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+    if (silentTimeoutHandle) clearTimeout(silentTimeoutHandle)
     throw error
   }
 
+  // 有绝对期限的调用在任何异步启动步骤前计时，旧调用保持旧时序。
+  if (input.deadlineAt !== undefined) startTimeouts?.()
   try {
-    const ms = processRegistryTimeoutMs()
-    const started = Date.now()
-    let registryError: unknown
-    const registry = registerRuntimeProcess(input.runtimeScope, child.pid, input.title).catch((error) => {
-      registryError = error
-    })
-    await waitRegistry(registry, ms)
-    if (registryError) {
-      const message = registryError instanceof Error ? registryError.message : String(registryError)
-      stderrData += `[managed-process] process registry failed: ${message}\n`
-    } else if (Date.now() - started >= ms) {
-      stderrData += `[managed-process] process registry did not finish within ${ms}ms; continuing task execution.\n`
-    }
+    const initialize = async () => {
+      const ms = processRegistryTimeoutMs()
+      const started = Date.now()
+      let registryError: unknown
+      const registry = registerRuntimeProcess(input.runtimeScope, child.pid, input.title).catch((error) => {
+        registryError = error
+      })
+      await waitRegistry(registry, ms)
+      if (timedOut || (input.deadlineAt !== undefined && closed)) return
+      if (registryError) {
+        const message = registryError instanceof Error ? registryError.message : String(registryError)
+        stderrData += `[managed-process] process registry failed: ${message}\n`
+      } else if (Date.now() - started >= ms) {
+        stderrData += `[managed-process] process registry did not finish within ${ms}ms; continuing task execution.\n`
+      }
 
-    const stdinPayload =
-      "stdinPayload" in proxy
-        ? proxy.stdinPayload
-        : backend === "python_subprocess"
-        ? JSON.stringify({
-            command: input.command,
-            cwd: input.cwd,
-            env: input.env ?? {},
-            stdin_text: input.stdinText,
-          })
-        : input.stdinText
-    const stdinWrite = await writeStdinAndEnd(child.stdin, stdinPayload)
-    if (!stdinWrite.ok) {
-      stderrData += `[managed-process] ${stdinWrite.message}. Treating child as a controlled process failure instead of crashing orchestrator.\n`
-    }
+      const stdinPayload =
+        "stdinPayload" in proxy
+          ? proxy.stdinPayload
+          : backend === "python_subprocess"
+            ? JSON.stringify({
+                command: input.command,
+                cwd: input.cwd,
+                env: input.env ?? {},
+                stdin_text: input.stdinText,
+              })
+            : input.stdinText
+      const stdinWrite = await writeStdinAndEnd(child.stdin, stdinPayload)
+      if (timedOut || (input.deadlineAt !== undefined && closed)) return
+      if (!stdinWrite.ok) {
+        stderrData += `[managed-process] ${stdinWrite.message}. Treating child as a controlled process failure instead of crashing orchestrator.\n`
+      }
 
-    await input.onSpawn?.()
-    await input.onPulse?.()
+      await input.onSpawn?.(controller?.signal)
+      if (timedOut || (input.deadlineAt !== undefined && closed)) return
+      await input.onPulse?.(controller?.signal)
+    }
+    if (input.deadlineAt === undefined) await initialize()
+    else await Promise.race([initialize(), timeoutPromise, exitPromise])
   } catch (error) {
     return abortAfterSpawn(error)
   }
 
   const pulseHandle = setInterval(() => {
-    void Promise.resolve(input.onPulse?.()).catch(() => undefined)
+    if (timedOut) return
+    void Promise.resolve(input.onPulse?.(controller?.signal)).catch(() => undefined)
     if (observedRuntimeOutput) refreshSilentTimeout?.()
   }, input.pulseIntervalMs ?? 60_000)
 
-  startTimeouts?.()
-  const exitCode = await Promise.race([exitPromise, timeoutPromise])
+  if (input.deadlineAt === undefined) startTimeouts?.()
+  const code = await Promise.race([exitPromise, timeoutPromise])
+  if (input.deadlineAt !== undefined && timedOut) {
+    await timeoutPromise
+    await exitPromise
+  }
+  const exitCode = input.deadlineAt !== undefined && timedOut ? 124 : code
   if (timeoutHandle) clearTimeout(timeoutHandle)
   if (silentTimeoutHandle) clearTimeout(silentTimeoutHandle)
   clearInterval(pulseHandle)
 
   return {
+    ...(input.deadlineAt !== undefined ? { processPID: child.pid } : {}),
     exitCode,
     stdout: stdoutData,
     stderr: stderrData,

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import path from "node:path"
 import os from "node:os"
 import { mkdtemp, mkdir, open, readFile, writeFile, readdir, link } from "node:fs/promises"
@@ -19,6 +19,19 @@ async function fixture(content = "中文🙂Valid public material\n".repeat(200)
     casesDir: binding.casesDir, allowedCaseIDs: ["case1"], evidenceRoot: path.join(root, "audit") }
   return { root, binding, grant, result }
 }
+
+test("reader actually reads after one hour inside the role deadline and rejects at its boundary", async () => {
+  const f = await fixture()
+  const binding = bindScopedReader(f.result.logicalResource, f.result.manifest, undefined, { hardTimeoutMs: 3 * 3600000 })
+  const now = Date.now()
+  const clock = spyOn(Date, "now").mockReturnValue(now + 61 * 60000)
+  try {
+    const chunk = await readResourceChunk(binding, { resourceID: binding.resourceID, caseID: "case1", maxBytes: 1024 })
+    expect(chunk.returnedBytes).toBeGreaterThan(0)
+    clock.mockReturnValue(binding.expiresAt!)
+    await expect(readResourceChunk(binding, { resourceID: binding.resourceID, caseID: "case1", cursor: chunk.nextCursor })).rejects.toThrow("expired")
+  } finally { clock.mockRestore() }
+})
 
 test("valid Unicode above 9MiB round-trips every byte across bounded pages", async () => {
   const content = "中文🙂NoNewline".repeat(700000)

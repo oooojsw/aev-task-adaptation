@@ -221,10 +221,13 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
           feedbackResource: logicalResource,
           campaignID: "camp_dual_role", round: 1,
         },
-        { model: "mock-model", config: { permissionConfig: { version: 1, mode: "restricted" } } },
+        { model: "mock-model", runtimeBudget: { profile: "long", hardTimeoutMs: 3 * 3600000 },
+          config: { permissionConfig: { version: 1, mode: "restricted" } } },
       )
       expect(leadResult.request.permissionReadPaths.length).toBe(3)
       expect(leadResult.request.resourceReaderGrant?.allowedCaseIDs.length).toBe(50)
+      expect(leadResult.request.runtimeBudget?.hardTimeoutMs).toBe(3 * 3600000)
+      expect(leadResult.request.resourceReaderGrant!.expiresAt - Date.now()).toBeGreaterThan(179 * 60000)
       expect(leadResult.request.permissionEditPaths).toEqual([sampleSkillPath.replaceAll("\\", "/")])
       expect(leadResult.scope.feedbackResource?.resourceID).toBe(logicalResource.resourceID)
 

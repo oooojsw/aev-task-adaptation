@@ -1,10 +1,12 @@
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, open, readFile, realpath, unlink } from "node:fs/promises"
+import { mkdir, readFile, realpath } from "node:fs/promises"
 import { pathExists } from "../../fs"
 import { writeFileAtomic } from "../../atomic-write"
 import { safeCaseID, verifyPublication, regular, fileDigest } from "./publication-evidence"
 import type { LogicalResource } from "../../task-profile-access/unified-access"
+import { identifyProcessOwner, readCurrentProcessCreationTick } from "../../process-identity"
+import { withPublicationLock } from "./publication-lock"
 
 export type RawTestCaseResult = {
   caseID: string
@@ -69,13 +71,23 @@ export function publicationResource(file: string, manifest: PublishedFeedbackMan
       passedCases: manifest.passedCases, manifestPath: file.replaceAll("\\", "/"), ...manifest.binding } }
 }
 
-export async function publishTrainingFeedbackResource(input: {
+type PublicationInput = {
   targetDir: string; campaignID: string; round: number; cases: RawTestCaseResult[]
   expectedCaseIDs?: string[]
   binding?: Record<string, string>
   maxTotalBytes?: number
   recoverIncomplete?: boolean
-}) {
+}
+
+export async function publishTrainingFeedbackResource(input: PublicationInput) {
+  if (!path.isAbsolute(input.targetDir)) throw new Error("Absolute publication location required")
+  const root = path.resolve(input.targetDir)
+  await mkdir(root, { recursive: true })
+  if (path.resolve(await realpath(root)).toLowerCase() !== root.toLowerCase()) throw new Error("Linked publication root rejected")
+  return withPublicationLock(root, () => publish(input))
+}
+
+async function publish(input: PublicationInput) {
   if (!path.isAbsolute(input.targetDir) || !input.campaignID || !Number.isSafeInteger(input.round) || input.round < 1) {
     throw new Error("Absolute publication location and explicit Campaign identity required")
   }
@@ -119,28 +131,48 @@ export async function publishTrainingFeedbackResource(input: {
     campaignID: input.campaignID, round: input.round, version: `v${input.round}.${randomUUID()}`,
     totalCases: planned.length, passedCases: input.cases.filter(item => item.passed).length, publishedAt: new Date().toISOString(),
     ...(input.binding ? { binding: input.binding } : {}), cases: planned }
-  let lock: string | undefined
+  const claimPath = path.join(root, "publication.started.claim")
+  const owner = { schema: "aev.publication-owner.v1", mutex: "sqlite-v1", pid: process.pid,
+    creationTick: await readCurrentProcessCreationTick() }
   if (input.recoverIncomplete) {
-    // 只恢复已明确失败的出版，不接管仍在运行或未知中断的调用。
+    // 缺失败标记仅对新版死亡owner恢复；未知身份保留现场。
     await regular(intentPath)
-    await regular(failurePath)
-    const saved = JSON.parse((await readFile(intentPath, "utf8")).replace(/^\uFEFF/, "")) as typeof body
-    const failure = JSON.parse((await readFile(failurePath, "utf8")).replace(/^\uFEFF/, ""))
-    if (failure.intent !== sha(JSON.stringify(saved)) || saved.campaignID !== body.campaignID || saved.round !== body.round ||
+    const intent = JSON.parse((await readFile(intentPath, "utf8")).replace(/^\uFEFF/, ""))
+    const saved = (intent.schema === "aev.publication-intent.v1" ? intent.body : intent) as typeof body
+    if (saved.campaignID !== body.campaignID || saved.round !== body.round ||
         JSON.stringify(saved.cases) !== JSON.stringify(planned) || JSON.stringify(saved.binding) !== JSON.stringify(body.binding)) throw new Error("Publication recovery identity mismatch")
-    body = saved
-    lock = path.join(root, "publication.recovery.lock")
-    const handle = await open(lock, "wx")
-    await handle.close()
-  } else {
-    try { const claim = await open(path.join(root, "publication.started.claim"), "wx"); await claim.close() }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("Incomplete publication requires explicit recovery")
-      throw error
+    if (await pathExists(path.join(root, "publication.recovery.lock"))) throw new Error("Legacy recovery owner requires inspection")
+    if (await pathExists(failurePath)) {
+      await regular(failurePath)
+      const failure = JSON.parse((await readFile(failurePath, "utf8")).replace(/^\uFEFF/, ""))
+      if (failure.intent !== sha(JSON.stringify(saved))) throw new Error("Publication recovery failure identity mismatch")
+    } else {
+      const prior = intent.schema === "aev.publication-intent.v1" ? intent.owner : undefined
+      if (!prior || prior.schema !== "aev.publication-owner.v1" || prior.mutex !== "sqlite-v1" ||
+          !Number.isSafeInteger(prior.pid) || prior.pid < 1) throw new Error("Publication recovery owner requires inspection")
+      if (await pathExists(claimPath)) {
+        await regular(claimPath)
+        const claim = JSON.parse((await readFile(claimPath, "utf8")).replace(/^\uFEFF/, ""))
+        if (JSON.stringify(claim) !== JSON.stringify(prior)) throw new Error("Publication recovery owner requires inspection")
+      }
+      const identity = await identifyProcessOwner({ pid: prior.pid, expectedCreationTick: prior.creationTick })
+      if (identity.ownership !== "dead" && !(prior.creationTick && identity.creationTick &&
+          prior.creationTick !== identity.creationTick)) throw new Error("Publication recovery owner not proven terminated")
     }
+    body = saved
+    if (!await pathExists(claimPath)) {
+      if (!intent.owner) throw new Error("Publication recovery owner requires inspection")
+      await writeFileAtomic(claimPath, JSON.stringify(intent.owner))
+    }
+    await mkdir(path.join(root, "cases"), { recursive: true })
+  } else {
+    if (await pathExists(claimPath) || await pathExists(intentPath)) throw new Error("Incomplete publication requires explicit recovery")
     if (await pathExists(file) || await pathExists(path.join(root, "cases"))) throw new Error("Unclaimed publication evidence exists")
+    // 先原子冻结意图与owner，避免认领后无意图的不可恢复窗口。
+    await writeFileAtomic(intentPath, JSON.stringify({ schema: "aev.publication-intent.v1", owner, body }))
+    if (await pathExists(claimPath)) throw new Error("Incomplete publication requires explicit recovery")
+    await writeFileAtomic(claimPath, JSON.stringify(owner))
     await mkdir(path.join(root, "cases"))
-    await writeFileAtomic(intentPath, JSON.stringify(body))
   }
   try {
     if (path.resolve(await realpath(path.join(root, "cases"))).toLowerCase() !== path.join(root, "cases").toLowerCase()) throw new Error("Linked publication cases rejected")
@@ -167,7 +199,14 @@ export async function publishTrainingFeedbackResource(input: {
     await writeFileAtomic(path.join(root, ".published"), manifest.manifestSHA256)
     return finish(await verifyPublication(file, manifest.manifestSHA256))
   } catch (error) {
-    await writeFileAtomic(failurePath, JSON.stringify({ status: "incomplete", intent: sha(JSON.stringify(body)) }))
+    const failure = JSON.stringify({ status: "incomplete", intent: sha(JSON.stringify(body)),
+      attempt: randomUUID(), at: new Date().toISOString(), stage: "publish_cases_manifest_or_marker",
+      reason: error instanceof Error && ["capacity_exceeded", "Publication recovery content drift", "Publication disk content drift",
+        "Existing publication manifest drift", "Linked publication cases rejected"].includes(error.message)
+        ? error.message : "publication_io_or_integrity_failure" })
+    // 首次失败标记只写一次，每次失败另存证据，不覆盖旧诊断。
+    await writeFileAtomic(path.join(root, "publication.failures", `${randomUUID()}.json`), failure)
+    if (!await pathExists(failurePath)) await writeFileAtomic(failurePath, failure)
     throw error
-  } finally { if (lock) await unlink(lock) }
+  }
 }

@@ -30,72 +30,10 @@ import {
   type TaskArtifactStatus,
 } from "./task-artifacts"
 import { createTaskDescriptor } from "./task-model"
+import { activeCallbacks, readerRuntimeBudget } from "./opencode-runtime-budget"
+import type { OpencodeRuntimeBudget } from "./opencode-runtime-budget"
+export type { OpencodeRuntimeBudget, OpencodeRuntimeBudgetProfile } from "./opencode-runtime-budget"
 
-export type OpencodeRuntimeBudgetProfile = "short" | "medium" | "long" | "unbounded-with-watchdog"
-
-export type OpencodeRuntimeBudget = {
-  profile?: OpencodeRuntimeBudgetProfile
-  softDeadlineMs?: number
-  hardTimeoutMs?: number
-  silentTimeoutMs?: number
-  silentTimeoutAfterActivityMs?: number
-}
-
-const RUNTIME_BUDGET_PROFILES: Record<OpencodeRuntimeBudgetProfile, Required<OpencodeRuntimeBudget>> = {
-  short: {
-    profile: "short",
-    softDeadlineMs: 30 * 60 * 1000,
-    hardTimeoutMs: 60 * 60 * 1000,
-    silentTimeoutMs: 15 * 60 * 1000,
-    silentTimeoutAfterActivityMs: 60 * 60 * 1000,
-  },
-  medium: {
-    profile: "medium",
-    softDeadlineMs: 90 * 60 * 1000,
-    hardTimeoutMs: 2 * 60 * 60 * 1000,
-    silentTimeoutMs: 20 * 60 * 1000,
-    silentTimeoutAfterActivityMs: 75 * 60 * 1000,
-  },
-  long: {
-    profile: "long",
-    softDeadlineMs: 2 * 60 * 60 * 1000,
-    hardTimeoutMs: 3 * 60 * 60 * 1000,
-    silentTimeoutMs: 30 * 60 * 1000,
-    silentTimeoutAfterActivityMs: 90 * 60 * 1000,
-  },
-  "unbounded-with-watchdog": {
-    profile: "unbounded-with-watchdog",
-    softDeadlineMs: 2 * 60 * 60 * 1000,
-    hardTimeoutMs: 12 * 60 * 60 * 1000,
-    silentTimeoutMs: 30 * 60 * 1000,
-    silentTimeoutAfterActivityMs: 2 * 60 * 60 * 1000,
-  },
-}
-
-function numberEnv(name: string, fallback: number) {
-  const value = Number.parseInt(process.env[name] ?? "", 10)
-  return Number.isFinite(value) && value > 0 ? value : fallback
-}
-
-function defaultRuntimeBudgetProfile(): OpencodeRuntimeBudgetProfile {
-  const raw = process.env.AUTO_EVOLVE_OPENCODE_RUNTIME_PROFILE
-  if (raw === "short" || raw === "medium" || raw === "long" || raw === "unbounded-with-watchdog") return raw
-  return "long"
-}
-
-function resolveRuntimeBudget(input?: OpencodeRuntimeBudget): Required<OpencodeRuntimeBudget> {
-  const profile = input?.profile ?? defaultRuntimeBudgetProfile()
-  const base = RUNTIME_BUDGET_PROFILES[profile]
-  return {
-    profile,
-    softDeadlineMs: input?.softDeadlineMs ?? numberEnv("AUTO_EVOLVE_OPENCODE_SOFT_DEADLINE_MS", base.softDeadlineMs),
-    hardTimeoutMs: input?.hardTimeoutMs ?? numberEnv("AUTO_EVOLVE_OPENCODE_HARD_TIMEOUT_MS", base.hardTimeoutMs),
-    silentTimeoutMs: input?.silentTimeoutMs ?? numberEnv("AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_MS", base.silentTimeoutMs),
-    silentTimeoutAfterActivityMs:
-      input?.silentTimeoutAfterActivityMs ??
-      numberEnv("AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_AFTER_ACTIVITY_MS", base.silentTimeoutAfterActivityMs),
-  }
-}
 const OPENCODE_PROMPT_INLINE_TEXT_FILE_MAX_BYTES = 256 * 1024
 const OPENCODE_PROMPT_INLINE_TEXT_EXTENSIONS = new Set([".md", ".txt", ".json", ".jsonl", ".yaml", ".yml"])
 const OPENCODE_PROMPT_STDIN_THRESHOLD_CHARS = 500
@@ -184,8 +122,8 @@ export interface OpencodeTaskInput {
   isolateHostRuntime?: boolean
   /** Disable only for the dedicated concurrency probe, which writes its own authoritative state. */
   recordAdaptiveConcurrency?: boolean
-  onSpawn?: () => Promise<void> | void
-  onPulse?: () => Promise<void> | void
+  onSpawn?: (signal?: AbortSignal) => Promise<void> | void
+  onPulse?: (signal?: AbortSignal) => Promise<void> | void
   onRuntimeProcessExit?: () => Promise<void> | void
   live?: TaskArtifactInput & {
     stageDir: string
@@ -1210,7 +1148,7 @@ async function runOpencodeTaskOnce(
   }
 
   const runStart = new Date()
-  const runtimeBudget = resolveRuntimeBudget(input.runtimeBudget)
+  const runtimeBudget = readerRuntimeBudget(input.runtimeBudget, input.resourceReaderGrant?.expiresAt, runStart.getTime())
   const startedAt = runStart.toISOString()
   const runtimePrompt = withRuntimeBudgetPrompt({ prompt: input.prompt, runStart, budget: runtimeBudget })
   const promptStdinText =
@@ -1317,13 +1255,10 @@ async function runOpencodeTaskOnce(
       stdinText: promptStdinText,
       runtimeScope: input.runtimeScope,
       timeoutMs: runtimeBudget.hardTimeoutMs,
+      deadlineAt: input.resourceReaderGrant?.expiresAt,
       silentTimeoutMs: runtimeBudget.silentTimeoutMs,
       silentTimeoutAfterActivityMs: runtimeBudget.silentTimeoutAfterActivityMs,
-      onSpawn: async () => {
-        await input.onSpawn?.()
-        await input.onPulse?.()
-        await flush()
-      },
+      onSpawn: signal => activeCallbacks(signal, [() => input.onSpawn?.(signal), () => input.onPulse?.(signal), () => flush()]),
       onPulse: input.onPulse,
       onStdoutChunk: (chunk) => {
         stdoutData += chunk.toString()
@@ -1452,10 +1387,7 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
   })
   const gatedInput: OpencodeTaskInput = {
     ...effectiveInput,
-    onPulse: async () => {
-      await effectiveInput.onPulse?.()
-      await permit.touch()
-    },
+    onPulse: signal => activeCallbacks(signal, [() => effectiveInput.onPulse?.(signal), () => permit.touch()]),
     onRuntimeProcessExit: async () => {
       await effectiveInput.onRuntimeProcessExit?.()
       await permit.release()

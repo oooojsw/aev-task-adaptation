@@ -6,6 +6,7 @@ import { writeJsonAtomic } from "../../atomic-write"
 import { regular, verifyPublication } from "./publication-evidence"
 import type { LogicalResource } from "../../task-profile-access/unified-access"
 import type { PublishedFeedbackManifest } from "./feedback-publisher"
+import { readerDeadline, type OpencodeRuntimeBudget } from "../../opencode-runtime-budget"
 
 export type ResourceReaderGrant = {
   sessionID: string
@@ -180,6 +181,7 @@ export function bindScopedReader(
   resource: LogicalResource,
   manifest: PublishedFeedbackManifest,
   secret?: string,
+  budget?: OpencodeRuntimeBudget,
 ): ScopedReaderBinding {
   if (resource.kind !== "training_feedback") {
     throw new Error(`Cannot bind scoped reader to non-feedback resource kind: ${resource.kind}`)
@@ -200,7 +202,7 @@ export function bindScopedReader(
     casesDir,
     allowedCases,
     hmacSecret: secret ?? randomBytes(32).toString("hex"),
-    sessionID: randomBytes(16).toString("hex"), expiresAt: Date.now() + 3600000,
+    sessionID: randomBytes(16).toString("hex"), expiresAt: readerDeadline(budget),
   }
 }
 
