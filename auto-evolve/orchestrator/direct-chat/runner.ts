@@ -611,7 +611,8 @@ async function runOneCase(input: {
       caseID: input.testCase.caseID,
       requestBudgetTransport: input.requestBudgetTransport,
       enforceRequestBudget: input.enforceRequestBudget,
-      stableRequestID: `${input.testCase.caseID}__${input.model.id}`,
+      // 同题不同候选属不同评测；原目录重发仍由同一账本拒绝。
+      stableRequestID: sha256(path.resolve(caseDir).replaceAll("\\", "/")),
     })
     const responsePath = path.join(caseDir, "response.txt")
     await writeTextFile(responsePath, callResult.content)

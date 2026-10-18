@@ -1,5 +1,5 @@
 import path from "node:path"
-import { access, mkdir, open, readFile, realpath } from "node:fs/promises"
+import { access, lstat, mkdir, open, readFile, realpath } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { withFileLock } from "../jsonl"
 import { writeJsonAtomic } from "../atomic-write"
@@ -73,8 +73,22 @@ export async function runTask(input: TaskRunPreparation, dependencies?: {
   if (result.terminal && result.selectedTaskVersionPath) {
     const spec = (await loadLongTaskSpec(prepared.specPath)).spec
     spec.taskAdaptationContext = await restoreTaskContext(spec, await parse(result.campaignDir, "task-adaptation/task-plan.snapshot.json"))
-    delivery = await exportTaskDelivery(spec, { root: result.campaignDir,
-      selectedTaskVersionPath: result.selectedTaskVersionPath, dir: path.join(dir, "delivery") })
+    const legacy = path.join(dir, "delivery")
+    const existing = await lstat(legacy).catch(error => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      return undefined
+    })
+    if (existing) {
+      const previous = await parse(legacy, "delivery.json")
+      // 先核验旧交付，不能借新版本绕过旧产物的篡改检查。
+      const checked = await exportTaskDelivery(spec, { root: result.campaignDir,
+        selectedTaskVersionPath: previous.version, dir: legacy })
+      if (path.resolve(previous.version) === path.resolve(result.selectedTaskVersionPath)) delivery = checked
+    }
+    // 故障后继续择优时保留旧交付，新版本另存而不混写。
+    delivery ??= await exportTaskDelivery(spec, { root: result.campaignDir,
+      selectedTaskVersionPath: result.selectedTaskVersionPath,
+      dir: path.join(dir, "deliveries", fingerprint({ version: result.selectedTaskVersionPath })) })
   }
   // 故障时已有合格版本可保留交付，但故障状态绝不改报成功。
   const outcome = { status: result.status, campaignID: result.campaignID, campaignDir: result.campaignDir,

@@ -5592,6 +5592,8 @@ export async function runLongTaskCampaign(input: {
               blankAgentAcceptanceDiagnosisPath: campaignPaths.blankAgentAcceptanceDiagnosisPath,
               acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
               acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
+              // 分析与修订共享上一轮正式反馈，不靠摘要路径猜测。
+              finalAcceptanceFeedbackPath: priorProtocolFeedback,
               reviewerSuggestionPath: latestReviewerSuggestionPath,
               blankAgentEvidenceBundlePath: latestBlankEvidence,
               blankAgentEvidenceReadPaths: latestBlankEvidenceReadPaths,
@@ -6624,6 +6626,8 @@ export async function resumeLongTaskCampaign(input: {
               blankAgentAcceptanceDiagnosisPath: campaignPaths.blankAgentAcceptanceDiagnosisPath,
               acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
               acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
+              // 恢复入口同样传递已核验反馈，避免分析角色断链。
+              finalAcceptanceFeedbackPath: priorProtocolFeedback,
               reviewerSuggestionPath: latestReviewerSuggestionPath,
               blankAgentEvidenceBundlePath: latestBlankEvidence,
               blankAgentEvidenceReadPaths: latestBlankEvidenceReadPaths,
