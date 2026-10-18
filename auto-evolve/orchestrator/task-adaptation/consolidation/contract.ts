@@ -34,6 +34,7 @@ export function publication(bytes: Uint8Array, limit = 5000) {
 
 export interface EvidenceRow {
   caseID: string
+  answer?: string
   modelID: string
   skillHash: string
   skillMode?: string

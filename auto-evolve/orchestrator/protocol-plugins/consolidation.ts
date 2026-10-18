@@ -138,6 +138,54 @@ export async function preflightConsolidation(settings: Settings) {
   return inputs(execution(settings))
 }
 
+export async function loadVerifiedConsolidationEvidence(root: string, product: Record<string, unknown>, settings: Settings) {
+  const s = common(settings)
+  if (product.schema !== "aev.consolidation-eval.v1" || typeof product.runID !== "string" ||
+      !/^[0-9a-f-]{36}$/.test(product.runID) || product.dataset_sha256 !== s.datasetSHA256 ||
+      product.model_id !== s.modelID || product.total !== s.expectedCases || !sha(product.candidate_sha256) ||
+      !sha(product.evidence_sha256) || !sha(product.dependencies_sha256)) throw new Error("Consolidation publication identity mismatch")
+  const dir = path.join(root, product.runID, "direct-chat")
+  const { regular } = await import("../task-adaptation/consolidation/publication-evidence")
+  await regular(path.join(dir, "summary.json"))
+  await regular(path.join(dir, "config.snapshot.json"))
+  const data = await readFile(path.join(dir, "summary.json"))
+  if (digest(data) !== product.evidence_sha256) throw new Error("Direct Chat evidence digest mismatch")
+  const summary = JSON.parse(data.toString("utf8")) as DirectChatSummary
+  const snapshot = JSON.parse(await readFile(path.join(dir, "config.snapshot.json"), "utf8"))
+  if (snapshot.datasetHash !== s.datasetSHA256 || snapshot.modelIDs?.length !== 1 || snapshot.modelIDs[0] !== s.modelID ||
+      snapshot.resumeExisting !== false || snapshot.includeNoSkillBaseline !== false || snapshot.noSkillOnly !== false ||
+      typeof snapshot.datasetBundlePath !== "string" || !path.isAbsolute(snapshot.datasetBundlePath) ||
+      digest(await readFile(snapshot.datasetBundlePath)) !== s.datasetSHA256) throw new Error("Direct Chat publication snapshot mismatch")
+  const cases = await readDirectChatDatasetBundle(snapshot.datasetBundlePath)
+  const ids = cases.map(item => item.caseID)
+  if (ids.length !== s.expectedCases || fingerprint(ids) !== fingerprint(snapshot.caseIDs) ||
+      await caseDependencies(cases) !== product.dependencies_sha256) throw new Error("Direct Chat dependency or case identity drift")
+  const metrics = score({ summary, cases: ids, modelID: s.modelID,
+    skillHash: product.candidate_sha256 as string, datasetHash: s.datasetSHA256 })
+  await verifyTraces(dir, summary)
+  if (metrics.passed !== product.passed || metrics.failed !== product.failed || metrics.pass_rate !== product.pass_rate) {
+    throw new Error("Reported pass rate does not match cases")
+  }
+  const rows = []
+  for (const task of cases) {
+    const result = summary.results.find(row => row.caseID === task.caseID)!
+    const file = path.join(dir, "results", s.modelID, task.caseID, "result.json")
+    await regular(file)
+    const actual = JSON.parse(await readFile(file, "utf8"))
+    if (actual.caseID !== task.caseID || actual.modelID !== s.modelID || actual.answer !== result.answer ||
+        actual.passed !== result.passed || actual.score !== result.score || typeof actual.answer !== "string") {
+      throw new Error("Direct Chat actual answer identity mismatch")
+    }
+    if (!task.question.text.trim() || task.materials.some(item => item.type !== "text" || typeof item.content !== "string")) {
+      throw new Error("unsupported_media: full textual public materials required")
+    }
+    rows.push({ caseID: task.caseID, prompt: [task.question.text, task.question.outputInstruction].filter(Boolean).join("\n"),
+      materials: task.materials.map(item => ({ id: item.id, name: item.title ?? item.id, content: item.content })),
+      modelResponse: actual.answer, score: result.score, passed: result.passed, diagnostics: [] as string[] })
+  }
+  return { cases: rows, metrics }
+}
+
 export async function consolidationPlugins(root: string, options: { budget?: HttpRequestBudget } = {}) {
   if (!path.isAbsolute(root)) throw new Error("Consolidation evidence root must be absolute")
   await mkdir(root, { recursive: true })

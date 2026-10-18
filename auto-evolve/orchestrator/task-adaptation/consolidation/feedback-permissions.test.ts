@@ -691,7 +691,7 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
     }
   })
 
-  test("GATE-A: T-A1 & T-A2 campaignAcceptance end-to-end 50-case publication and error on missing directChat", async () => {
+  test("non-Consolidation executor cannot self-enable training feedback by naming its product schema", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "aev-gatea-acceptance-"))
     try {
       const campaignRoot = path.join(tempDir, "campaign")
@@ -836,9 +836,7 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
       // 4. 验证生成的 protocol.training-feedback.json 中已由 campaignAcceptance 正式发布 50 题视图
       const feedbackPath = path.join(attemptRoot, "protocol.training-feedback.json")
       const feedback = JSON.parse(await readFile(feedbackPath, "utf8"))
-      expect(feedback.caseFeedback).toBeDefined()
-      expect(feedback.caseFeedback.totalCases).toBe(50)
-      expect(feedback.caseFeedback.passedCases).toBe(50)
+      expect(feedback.caseFeedback).toBeUndefined()
 
       // 5. 验证 blankAgentEvidenceReadPaths 中不含 caseFeedback.manifestPath (B10 验证)
       expect(acceptanceResult.blankAgentEvidenceReadPaths.some((p: string) => p.includes("manifest.json"))).toBe(false)
@@ -888,7 +886,7 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
           },
           missingRuntime,
         ),
-      ).rejects.toThrow("publication_error")
+      ).resolves.toMatchObject({ passed: true })
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }

@@ -1,8 +1,9 @@
 import path from "node:path"
-import { createHash } from "node:crypto"
-import { mkdir, writeFile, readFile } from "node:fs/promises"
-import { ensureDirectory, pathExists } from "../../fs"
-import { writeFileAtomic, writeJsonAtomic } from "../../atomic-write"
+import { createHash, randomUUID } from "node:crypto"
+import { mkdir, open, readFile, realpath } from "node:fs/promises"
+import { pathExists } from "../../fs"
+import { writeFileAtomic } from "../../atomic-write"
+import { safeCaseID, verifyPublication } from "./publication-evidence"
 import type { LogicalResource } from "../../task-profile-access/unified-access"
 
 export type RawTestCaseResult = {
@@ -14,20 +15,13 @@ export type RawTestCaseResult = {
   score: number
   passed: boolean
   diagnostics?: string[]
-  // 私有 Oracle 字段（必须在发布前彻底剥离）
   oracleAnswer?: string
   validatorScript?: string
   evaluatorTrace?: unknown
 }
 
-export type PublishedCaseView = {
-  caseID: string
-  title?: string
-  prompt: string
+export type PublishedCaseView = Omit<RawTestCaseResult, "oracleAnswer" | "validatorScript" | "evaluatorTrace"> & {
   materials: Array<{ id: string; name: string; content: string }>
-  modelResponse: string
-  score: number
-  passed: boolean
   diagnostics: string[]
   sha256: string
 }
@@ -41,203 +35,105 @@ export type PublishedFeedbackManifest = {
   totalCases: number
   passedCases: number
   publishedAt: string
-  cases: Array<{
-    caseID: string
-    path: string
-    sha256: string
-    bytes: number
-    passed: boolean
-  }>
+  binding?: Record<string, string>
+  cases: Array<{ caseID: string; path: string; sha256: string; bytes: number; passed: boolean }>
   manifestSHA256: string
 }
 
+const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex")
+
+function publication(raw: RawTestCaseResult) {
+  if (!safeCaseID(raw.caseID)) throw new Error("Invalid, dangerous or empty caseID")
+  if (typeof raw.passed !== "boolean" || typeof raw.score !== "number" ||
+      !Number.isFinite(raw.score) || raw.score !== (raw.passed ? 1 : 0)) throw new Error("score must be finite and match passed verdict exactly")
+  if (typeof raw.prompt !== "string" || !raw.prompt.trim() || typeof raw.modelResponse !== "string" ||
+      raw.title !== undefined && typeof raw.title !== "string" ||
+      raw.diagnostics !== undefined && (!Array.isArray(raw.diagnostics) || raw.diagnostics.some(item => typeof item !== "string")) ||
+      raw.materials !== undefined && (!Array.isArray(raw.materials) || raw.materials.some(item =>
+        !item || typeof item.id !== "string" || typeof item.name !== "string" || typeof item.content !== "string"))) {
+    throw new Error("Explicit public prompt, answer and textual materials required")
+  }
+  // 逐字段复制公开数据，嵌套对象也不能夹带私有字段。
+  const body = { caseID: raw.caseID, ...(raw.title !== undefined ? { title: raw.title } : {}), prompt: raw.prompt,
+    materials: (raw.materials ?? []).map(({ id, name, content }) => ({ id, name, content })),
+    modelResponse: raw.modelResponse, score: raw.score, passed: raw.passed, diagnostics: raw.diagnostics ?? [] }
+  return `${JSON.stringify({ ...body, sha256: sha(JSON.stringify(body)) }, null, 2)}\n`
+}
+
+export function publicationResource(file: string, manifest: PublishedFeedbackManifest): LogicalResource {
+  const root = path.dirname(file).replaceAll("\\", "/")
+  return { resourceID: manifest.resourceID, kind: "training_feedback", version: manifest.version,
+    sha256: manifest.manifestSHA256, sensitivity: "training", access: "read_only", boundaryRoots: [root],
+    paths: [...manifest.cases.map(item => path.resolve(root, item.path).replaceAll("\\", "/")), file.replaceAll("\\", "/")],
+    metadata: { campaignID: manifest.campaignID, round: manifest.round, totalCases: manifest.totalCases,
+      passedCases: manifest.passedCases, manifestPath: file.replaceAll("\\", "/"), ...manifest.binding } }
+}
+
 export async function publishTrainingFeedbackResource(input: {
-  targetDir: string
-  campaignID: string
-  round: number
-  cases: RawTestCaseResult[]
-}): Promise<{
-  manifest: PublishedFeedbackManifest
-  logicalResource: LogicalResource
-  manifestPath: string
-}> {
-  if (!input.targetDir || !path.isAbsolute(input.targetDir)) {
-    throw new Error("Absolute targetDir required for feedback publishing")
+  targetDir: string; campaignID: string; round: number; cases: RawTestCaseResult[]
+  expectedCaseIDs?: string[]
+  binding?: Record<string, string>
+  maxTotalBytes?: number
+}) {
+  if (!path.isAbsolute(input.targetDir) || !input.campaignID || !Number.isSafeInteger(input.round) || input.round < 1) {
+    throw new Error("Absolute publication location and explicit Campaign identity required")
   }
-  if (!Number.isSafeInteger(input.round) || input.round < 1) {
-    throw new Error("Valid positive round number required")
+  if (!Array.isArray(input.cases) || !input.cases.length) throw new Error("Cannot publish empty training cases feedback")
+  if (input.binding && Object.entries(input.binding).some(([key, value]) =>
+      !["task", "phase", "protocolFingerprint", "receiptFingerprint", "candidateSHA256", "datasetSHA256", "modelID", "runID", "passID", "planFingerprint", "policyFingerprint"].includes(key) ||
+      typeof value !== "string" || !value)) throw new Error("Invalid host publication binding")
+  const seen = new Set<string>()
+  for (const item of input.cases) {
+    publication(item)
+    if (seen.has(item.caseID)) throw new Error("Duplicate caseID")
+    seen.add(item.caseID)
   }
-  if (!Array.isArray(input.cases) || input.cases.length === 0) {
-    throw new Error("Cannot publish empty training cases feedback")
-  }
-
-  const baseDir = path.resolve(input.targetDir)
-  const casesDir = path.join(baseDir, "cases")
-  await ensureDirectory(casesDir)
-
-  // 幂等复用与防覆写检查（A2-5）
-  const manifestPath = path.join(baseDir, "manifest.json")
-  const markerPath = path.join(baseDir, ".published")
-  if (await pathExists(markerPath) && await pathExists(manifestPath)) {
-    try {
-      const existing = JSON.parse((await readFile(manifestPath, "utf8")).replace(/^\uFEFF/, ""))
-      if (existing.campaignID === input.campaignID && existing.round === input.round) {
-        if (existing.totalCases === input.cases.length && existing.cases?.length === input.cases.length) {
-          const existingMarker = (await readFile(markerPath, "utf8")).trim()
-          if (existingMarker === existing.manifestSHA256) {
-            const allCasePaths = existing.cases.map((c: any) => path.resolve(baseDir, c.path).replaceAll("\\", "/"))
-            allCasePaths.push(path.resolve(manifestPath).replaceAll("\\", "/"))
-            const logicalResource: LogicalResource = {
-              resourceID: existing.resourceID,
-              kind: "training_feedback",
-              version: existing.version,
-              sha256: existing.manifestSHA256,
-              sensitivity: "training",
-              access: "read_only",
-              boundaryRoots: [baseDir.replaceAll("\\", "/")],
-              paths: allCasePaths,
-              metadata: {
-                campaignID: existing.campaignID,
-                round: existing.round,
-                totalCases: existing.totalCases,
-                passedCases: existing.passedCases,
-                manifestPath: path.resolve(manifestPath).replaceAll("\\", "/"),
-              },
-            }
-            return { manifest: existing, logicalResource, manifestPath: path.resolve(manifestPath).replaceAll("\\", "/") }
-          }
-        }
-        throw new Error("Attempting to overwrite existing published feedback with different content")
-      }
-    } catch (err: any) {
-      if (err.message?.includes("Attempting to overwrite")) throw err
+  if (input.expectedCaseIDs && (input.expectedCaseIDs.length !== seen.size || new Set(input.expectedCaseIDs).size !== seen.size ||
+      input.expectedCaseIDs.some(id => !seen.has(id)))) throw new Error("Frozen expected case set mismatch")
+  const limit = input.maxTotalBytes ?? 536870912
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1073741824) throw new Error("Invalid publication capacity")
+  const root = path.resolve(input.targetDir)
+  await mkdir(root, { recursive: true })
+  if (path.resolve(await realpath(root)).toLowerCase() !== root.toLowerCase()) throw new Error("Linked publication root rejected")
+  const file = path.join(root, "manifest.json")
+  const finish = (manifest: PublishedFeedbackManifest) => ({ manifest, manifestPath: file.replaceAll("\\", "/"),
+    logicalResource: publicationResource(file, manifest) })
+  if (await pathExists(path.join(root, ".published"))) {
+    const saved = await verifyPublication(file)
+    if (saved.campaignID !== input.campaignID || saved.round !== input.round || saved.totalCases !== input.cases.length ||
+        JSON.stringify(saved.binding) !== JSON.stringify(input.binding)) throw new Error("Attempting to overwrite existing published feedback with different content")
+    for (const item of input.cases) {
+      const previous = saved.cases.find(row => row.caseID === item.caseID)
+      if (!previous || previous.sha256 !== sha(publication(item))) throw new Error("Attempting to overwrite existing published feedback with different content")
     }
+    return finish(saved)
   }
-
-  const publishedCases: PublishedFeedbackManifest["cases"] = []
-  const allCasePaths: string[] = []
-  let passedCount = 0
-
-  const SAFE_CASE_ID_REGEX = /^[A-Za-z0-9_-]{1,64}$/
-  const seenCaseIDs = new Set<string>()
-
-  for (const rawCase of input.cases) {
-    if (!rawCase.caseID || typeof rawCase.caseID !== "string" || !SAFE_CASE_ID_REGEX.test(rawCase.caseID)) {
-      throw new Error(`Invalid, dangerous or empty caseID: '${rawCase.caseID}'`)
-    }
-    if (seenCaseIDs.has(rawCase.caseID)) {
-      throw new Error(`Duplicate caseID in feedback publication: '${rawCase.caseID}'`)
-    }
-    seenCaseIDs.add(rawCase.caseID)
-
-    if (typeof rawCase.passed !== "boolean") {
-      throw new Error(`Case '${rawCase.caseID}' must have an explicit boolean 'passed' verdict`)
-    }
-    const expectedScore = rawCase.passed ? 1 : 0
-    if (typeof rawCase.score !== "number" || !Number.isFinite(rawCase.score) || rawCase.score !== expectedScore) {
-      throw new Error(`Case '${rawCase.caseID}' score must be finite and match passed verdict exactly (${expectedScore})`)
-    }
-
-    // 1. 严格剥离私有 Oracle 字段（fail closed，杜绝泄题）
-    const sanitizedView: PublishedCaseView = {
-      caseID: rawCase.caseID,
-      title: rawCase.title,
-      prompt: rawCase.prompt ?? "",
-      materials: rawCase.materials ?? [],
-      modelResponse: rawCase.modelResponse ?? "",
-      score: rawCase.score,
-      passed: rawCase.passed,
-      diagnostics: Array.isArray(rawCase.diagnostics) ? rawCase.diagnostics : [],
-      sha256: "",
-    }
-
-    if (sanitizedView.passed) passedCount++
-
-    // 先计算基础内容指纹
-    const contentToHash = JSON.stringify({
-      caseID: sanitizedView.caseID,
-      prompt: sanitizedView.prompt,
-      materials: sanitizedView.materials,
-      modelResponse: sanitizedView.modelResponse,
-      score: sanitizedView.score,
-      passed: sanitizedView.passed,
-      diagnostics: sanitizedView.diagnostics,
-    })
-    sanitizedView.sha256 = createHash("sha256").update(contentToHash).digest("hex")
-
-    // 写入安全 Case 文件
-    const safeCaseFile = path.join(casesDir, `case_${rawCase.caseID}.json`)
-    const finalContent = `${JSON.stringify(sanitizedView, null, 2)}\n`
-    await writeFileAtomic(safeCaseFile, finalContent)
-
-    // 逐文件物理测定实际落盘的 bytes 与 sha256，确保与磁盘物理文件绝对一致
-    const diskBytes = await readFile(safeCaseFile)
-    const diskSHA = createHash("sha256").update(diskBytes).digest("hex")
-    const diskLen = diskBytes.length
-
-    const relPath = path.relative(baseDir, safeCaseFile).replaceAll("\\", "/")
-    publishedCases.push({
-      caseID: rawCase.caseID,
-      path: relPath,
-      sha256: diskSHA,
-      bytes: diskLen,
-      passed: sanitizedView.passed,
-    })
-    allCasePaths.push(path.resolve(safeCaseFile).replaceAll("\\", "/"))
+  // 永久claim防并发覆盖；中断现场须显式恢复，不自动重发评测。
+  try { const claim = await open(path.join(root, "publication.started.claim"), "wx"); await claim.close() }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("Incomplete publication requires explicit recovery")
+    throw error
   }
-
-  const resourceID = `feedback:${input.campaignID}:round_${input.round}`
-  const version = `v${input.round}.${Date.now()}`
-
-  const manifestBody: Omit<PublishedFeedbackManifest, "manifestSHA256"> = {
-    schema: "aev.training-feedback-manifest.v1",
-    resourceID,
-    campaignID: input.campaignID,
-    round: input.round,
-    version,
-    totalCases: publishedCases.length,
-    passedCases: passedCount,
-    publishedAt: new Date().toISOString(),
-    cases: publishedCases,
+  if (await pathExists(file) || await pathExists(path.join(root, "cases"))) throw new Error("Unclaimed publication evidence exists")
+  await mkdir(path.join(root, "cases"))
+  const cases: PublishedFeedbackManifest["cases"] = []
+  let total = 0
+  for (const item of input.cases) {
+    const bytes = Buffer.from(publication(item))
+    total += bytes.length
+    if (total > limit) throw new Error("capacity_exceeded")
+    const relative = `cases/case_${item.caseID}.json`
+    await writeFileAtomic(path.join(root, relative), bytes.toString("utf8"))
+    const disk = await readFile(path.join(root, relative))
+    if (!bytes.equals(disk)) throw new Error("Publication disk content drift")
+    cases.push({ caseID: item.caseID, path: relative, sha256: sha(disk), bytes: disk.length, passed: item.passed })
   }
-
-  // manifestSHA256 作为权威内容摘要
-  const manifestBodySHA = createHash("sha256").update(JSON.stringify(manifestBody, null, 2)).digest("hex")
-
-  const fullManifest: PublishedFeedbackManifest = {
-    ...manifestBody,
-    manifestSHA256: manifestBodySHA,
-  }
-
-  const manifestJson = `${JSON.stringify(fullManifest, null, 2)}\n`
-  await writeFileAtomic(manifestPath, manifestJson)
-
-  allCasePaths.push(path.resolve(manifestPath).replaceAll("\\", "/"))
-
-  // 写入原子完成标志
-  await writeFile(path.join(baseDir, ".published"), manifestBodySHA, "utf8")
-
-  const logicalResource: LogicalResource = {
-    resourceID,
-    kind: "training_feedback",
-    version,
-    sha256: manifestBodySHA,
-    sensitivity: "training",
-    access: "read_only",
-    boundaryRoots: [baseDir.replaceAll("\\", "/")],
-    paths: allCasePaths,
-    metadata: {
-      campaignID: input.campaignID,
-      round: input.round,
-      totalCases: publishedCases.length,
-      passedCases: passedCount,
-      manifestPath: path.resolve(manifestPath).replaceAll("\\", "/"),
-    },
-  }
-
-  return {
-    manifest: fullManifest,
-    logicalResource,
-    manifestPath: path.resolve(manifestPath).replaceAll("\\", "/"),
-  }
+  const body = { schema: "aev.training-feedback-manifest.v1" as const, resourceID: `feedback:${input.campaignID}:round_${input.round}`,
+    campaignID: input.campaignID, round: input.round, version: `v${input.round}.${randomUUID()}`,
+    totalCases: cases.length, passedCases: input.cases.filter(item => item.passed).length, publishedAt: new Date().toISOString(),
+    ...(input.binding ? { binding: input.binding } : {}), cases }
+  const manifest = { ...body, manifestSHA256: sha(JSON.stringify(body, null, 2)) }
+  await writeFileAtomic(file, `${JSON.stringify(manifest, null, 2)}\n`)
+  await writeFileAtomic(path.join(root, ".published"), manifest.manifestSHA256)
+  return finish(await verifyPublication(file, manifest.manifestSHA256))
 }
