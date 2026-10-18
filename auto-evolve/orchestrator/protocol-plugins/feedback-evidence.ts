@@ -25,6 +25,18 @@ export async function protocolFeedbackEvidence(feedbackPath?: string) {
     }
     paths.push(file)
   }
+  if (view.caseFeedback) {
+    const manifestFile = path.resolve(view.caseFeedback.manifestPath)
+    const relative = path.relative(root, manifestFile)
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error("Training case feedback manifest path escape")
+    }
+    const manifestJson = JSON.parse((await readFile(manifestFile, "utf8")).replace(/^\uFEFF/, ""))
+    if (manifestJson.manifestSHA256 !== view.caseFeedback.manifestSHA256) {
+      throw new Error("Training case feedback manifest hash drift")
+    }
+    paths.push(manifestFile)
+  }
   return paths
 }
 

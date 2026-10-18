@@ -57,17 +57,18 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
   const view = { ...original, reads: original.reads.map(location), writes: original.writes.map(location) }
   const feedback = input.feedback && original.runtime?.includes("feedback") ? await taskFeedback(input.bound, input.feedback) : undefined
   if (feedback) view.reads.push({ id: "runtime:feedback", path: feedback.path })
-  if (input.feedbackResource) {
+  const effectiveResource = input.feedbackResource ?? feedback?.feedbackResource
+  if (effectiveResource) {
     const decision = await authorizeResourceAccess(
       {
         principalID: `${input.bound.fingerprint}:${input.role}${input.worker ? `:${input.worker}` : ""}`,
         roleID: input.role,
         workerID: input.worker,
-        campaignID: (input.feedbackResource.metadata?.campaignID as string) ?? "unknown",
-        round: (input.feedbackResource.metadata?.round as number) ?? 1,
+        campaignID: (effectiveResource.metadata?.campaignID as string) ?? "unknown",
+        round: (effectiveResource.metadata?.round as number) ?? 1,
         runtime: original.runtime,
       },
-      input.feedbackResource,
+      effectiveResource,
       "read",
       ["public", "training"],
     )
@@ -79,6 +80,9 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
         const fileName = path.basename(filePath)
         view.reads.push({ id: `runtime:feedback:${fileName}`, path: filePath })
       }
+    }
+    if (effectiveResource.metadata?.manifestPath) {
+      process.env.OPENCODE_AEV_RESOURCE_READER_FILE = String(effectiveResource.metadata.manifestPath)
     }
   }
   const advice: Array<Awaited<ReturnType<typeof taskAdvice>>> = []

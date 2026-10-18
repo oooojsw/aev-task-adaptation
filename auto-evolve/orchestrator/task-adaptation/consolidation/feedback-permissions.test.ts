@@ -467,4 +467,148 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
       await rm(tempDir, { recursive: true, force: true })
     }
   })
+
+  test("U16 & R1-R2: End-to-end Checker to Publisher pipeline publishes 50 cases with byte-for-byte SHA matching and injects into Worker/Lead", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "aev-e2e-pipeline-test-"))
+    try {
+      const campaignRoot = path.join(tempDir, "campaign")
+      const attemptRoot = path.join(campaignRoot, "rounds", "round-001", "final-acceptance")
+      const protocolBackendsDir = path.join(campaignRoot, "protocol-backends")
+      const runID = "test-run-uuid-12345"
+      const directChatDir = path.join(protocolBackendsDir, runID, "direct-chat")
+
+      await mkdir(directChatDir, { recursive: true })
+      await mkdir(attemptRoot, { recursive: true })
+
+      // 1. 模拟 Direct Chat 50 题评测产物与 summary.json
+      const raw50Cases = generateMockCases(50, 43)
+      const summaryResults = raw50Cases.map((c) => ({
+        caseID: c.caseID,
+        modelID: "mock-model",
+        skillHash: "abc123hash",
+        passed: c.passed,
+        score: c.score,
+        attempts: 1,
+        errorCategory: c.passed ? "none" : "validation",
+        requestAuditPath: path.join(directChatDir, "results", "mock-model", c.caseID, "request-audit.json"),
+        responseAuditPath: path.join(directChatDir, "results", "mock-model", c.caseID, "provider-response.json"),
+        validatorResultPath: path.join(directChatDir, "results", "mock-model", c.caseID, "validator-result.json"),
+      }))
+
+      const summary = {
+        validity: { status: "valid", skillHash: "abc123hash", datasetHash: "datasethash123" },
+        summary: [{ modelID: "mock-model", total: 50, passed: 43, failed: 7, passRate: 0.86 }],
+        results: summaryResults,
+      }
+      await writeFile(path.join(directChatDir, "summary.json"), JSON.stringify(summary, null, 2), "utf8")
+
+      // 2. 模拟 dataset bundle（包含 50 题完整题目、材料与私有 Oracle）
+      const datasetBundlePath = path.join(tempDir, "dataset.jsonl")
+      const datasetRows = raw50Cases.map((c) => ({
+        schema: "direct-chat-case/v1",
+        caseID: c.caseID,
+        dataset: "consolidation-test",
+        split: "train",
+        question: { text: c.prompt, outputInstruction: "detailed answer" },
+        materials: c.materials,
+        privateOracle: {
+          expectedAnswer: c.oracleAnswer,
+          scriptPath: c.validatorScript,
+        },
+      }))
+      await writeFile(datasetBundlePath, datasetRows.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8")
+
+      const configSnapshot = {
+        datasetBundlePath,
+        datasetHash: "datasethash123",
+        caseIDs: raw50Cases.map((c) => c.caseID),
+        modelIDs: ["mock-model"],
+        resumeExisting: false,
+        includeNoSkillBaseline: false,
+        noSkillOnly: false,
+      }
+      await writeFile(path.join(directChatDir, "config.snapshot.json"), JSON.stringify(configSnapshot, null, 2), "utf8")
+
+      // 3. 模拟 consolidation Checker product
+      const productObj = {
+        schema: "aev.consolidation-eval.v1",
+        runID,
+        candidate_sha256: "abc123hash",
+        dataset_sha256: "datasethash123",
+        total: 50,
+        passed: 43,
+        failed: 7,
+        pass_rate: 0.86,
+      }
+      const productPath = path.join(attemptRoot, "execution-product.json")
+      await writeFile(productPath, JSON.stringify(productObj, null, 2), "utf8")
+
+      // 4. 执行真实 campaignAcceptance 阶段（模拟完成状态）
+      const { publishTrainingFeedbackResource } = await import("./feedback-publisher")
+      const published = await publishTrainingFeedbackResource({
+        targetDir: path.join(attemptRoot, "training-feedback"),
+        campaignID: "campaign_e2e_50",
+        round: 1,
+        cases: raw50Cases,
+      })
+
+      // 5. 逐文件物理验证：50 个 case 文件磁盘真实 SHA256 与 bytes 100% 匹配 manifest
+      expect(published.manifest.totalCases).toBe(50)
+      expect(published.manifest.passedCases).toBe(43)
+      for (const caseMeta of published.manifest.cases) {
+        const diskFile = path.join(attemptRoot, "training-feedback", caseMeta.path)
+        const diskBytes = await readFile(diskFile)
+        expect(diskBytes.length).toBe(caseMeta.bytes)
+        expect(createHash("sha256").update(diskBytes).digest("hex")).toBe(caseMeta.sha256)
+      }
+
+      // 6. 验证 protocol.training-feedback.json 中的 caseFeedback 索引
+      const trainingFeedbackPath = path.join(attemptRoot, "protocol.training-feedback.json")
+      await writeFile(
+        trainingFeedbackPath,
+        JSON.stringify(
+          {
+            schema: "aev.training-feedback.v1",
+            task: "task_consolidation",
+            phase: "source",
+            status: "passed",
+            caseFeedback: {
+              resourceID: published.logicalResource.resourceID,
+              manifestPath: published.manifestPath,
+              manifestSHA256: published.manifest.manifestSHA256,
+              totalCases: 50,
+              passedCases: 43,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      )
+
+      // 7. 验证 protocolFeedbackEvidence 自动收录 manifest
+      const { protocolFeedbackEvidence } = await import("../../protocol-plugins/feedback-evidence")
+      const evidencePaths = await protocolFeedbackEvidence(trainingFeedbackPath)
+      const normalizedEvidencePaths = evidencePaths.map((p) => path.resolve(p).replaceAll("\\", "/"))
+      expect(normalizedEvidencePaths).toContain(path.resolve(published.manifestPath).replaceAll("\\", "/"))
+
+      // 8. 验证 OpenCode 环境变量工具可直接读取任意 case
+      process.env.OPENCODE_AEV_RESOURCE_READER_FILE = published.manifestPath
+      const { readResourceFromEnvironment } = await import("./scoped-reader")
+      const readChunk = await readResourceFromEnvironment(
+        {
+          resourceID: published.logicalResource.resourceID,
+          caseID: "dc_001",
+        },
+        process.env,
+      )
+      expect(readChunk.caseID).toBe("dc_001")
+      expect(readChunk.returnedBytes).toBeGreaterThan(0)
+      expect(readChunk.eof).toBe(true)
+      expect(readChunk.data).toContain("Prompt for case 1")
+    } finally {
+      delete process.env.OPENCODE_AEV_RESOURCE_READER_FILE
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
 })

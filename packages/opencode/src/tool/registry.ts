@@ -29,6 +29,7 @@ import { Truncate } from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
 import { AevLocalSearchTool } from "./aev-local-search"
 import { AevRecomputeTool } from "./aev-recompute"
+import { AevReadResourceTool } from "./aev-read-resource"
 import { Glob } from "../util/glob"
 import { pathToFileURL } from "url"
 import { Effect, Layer, ServiceMap } from "effect"
@@ -135,6 +136,7 @@ export namespace ToolRegistry {
           ApplyPatchTool,
           ...(process.env.OPENCODE_AEV_LOCAL_SEARCH_FILE ? [AevLocalSearchTool] : []),
           ...(process.env.OPENCODE_AEV_RECOMPUTE_FILE ? [AevRecomputeTool] : []),
+          ...(process.env.OPENCODE_AEV_RESOURCE_READER_FILE ? [AevReadResourceTool] : []),
           ...(Flag.OPENCODE_EXPERIMENTAL_LSP_TOOL ? [LspTool] : []),
           ...(cfg.experimental?.batch_tool === true ? [BatchTool] : []),
           ...(Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE && Flag.OPENCODE_CLIENT === "cli" ? [PlanExitTool] : []),

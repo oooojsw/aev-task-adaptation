@@ -6,6 +6,7 @@ import type { Runtime } from "../protocol-plugins/runtime"
 import type { BoundPlan } from "./binding"
 import { resolveResource, verifyBinding } from "./binding"
 import { writeJsonAtomic } from "../atomic-write"
+import type { LogicalResource } from "../task-profile-access/unified-access"
 
 export interface FeedbackReference { root: string; path: string; task: string; phase: Phase }
 
@@ -58,5 +59,37 @@ export async function taskFeedback(bound: BoundPlan, input: FeedbackReference) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
     await writeJsonAtomic(target, view)
   }
-  return { path: target.replaceAll("\\", "/"), sha256: fingerprint(view), view }
+
+  let feedbackResource: LogicalResource | undefined
+  try {
+    const trainingFile = path.join(dir, "protocol.training-feedback.json")
+    const trainingContent = JSON.parse((await readFile(trainingFile, "utf8")).replace(/^\uFEFF/, ""))
+    if (trainingContent.caseFeedback?.manifestPath) {
+      const manifestPath = path.resolve(trainingContent.caseFeedback.manifestPath)
+      const manifest = JSON.parse((await readFile(manifestPath, "utf8")).replace(/^\uFEFF/, ""))
+      const baseDir = path.dirname(manifestPath)
+      const casePaths = manifest.cases.map((c: any) => path.resolve(baseDir, c.path).replaceAll("\\", "/"))
+      feedbackResource = {
+        resourceID: manifest.resourceID,
+        kind: "training_feedback",
+        version: manifest.version,
+        sha256: manifest.manifestSHA256,
+        sensitivity: "training",
+        access: "read_only",
+        boundaryRoots: [baseDir.replaceAll("\\", "/")],
+        paths: [path.resolve(manifestPath).replaceAll("\\", "/"), ...casePaths],
+        metadata: {
+          campaignID: manifest.campaignID,
+          round: manifest.round,
+          totalCases: manifest.totalCases,
+          passedCases: manifest.passedCases,
+          manifestPath: path.resolve(manifestPath).replaceAll("\\", "/"),
+        },
+      }
+    }
+  } catch {
+    // 容错处理
+  }
+
+  return { path: target.replaceAll("\\", "/"), sha256: fingerprint(view), view, feedbackResource }
 }

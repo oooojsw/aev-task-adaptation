@@ -1,7 +1,7 @@
 import path from "node:path"
-import { readFile } from "node:fs/promises"
-import { createHash } from "node:crypto"
-import { pathExists } from "../../fs"
+import { open, stat } from "node:fs/promises"
+import { createHash, createHmac, randomBytes } from "node:crypto"
+import { pathExists, readJsonFile } from "../../fs"
 import type { LogicalResource } from "../../task-profile-access/unified-access"
 import type { PublishedFeedbackManifest } from "./feedback-publisher"
 
@@ -12,6 +12,7 @@ export type ScopedReaderBinding = {
   manifestPath: string
   casesDir: string
   allowedCases: Set<string>
+  hmacSecret: string
 }
 
 export type ReadChunkResult = {
@@ -26,48 +27,58 @@ export type ReadChunkResult = {
   data: string
 }
 
-function computeCursorSignature(
+function computeCursorHmac(
+  secret: string,
   resourceID: string,
   caseID: string,
   version: string,
   offset: number,
   manifestSHA: string,
 ): string {
-  return createHash("sha256")
+  return createHmac("sha256", secret)
     .update(`${resourceID}:${caseID}:${version}:${offset}:${manifestSHA}`)
     .digest("hex")
-    .slice(0, 16)
+    .slice(0, 32)
 }
 
 /**
- * 确保分段切片边界严格对齐 UTF-8 字符边界，绝不将多字节字符（如 3 字节中文字符、4 字节 Emoji）截断
+ * 确保分段切片边界严格对齐 UTF-8 字符边界，绝不将多字节字符（如 3 字节中文字符、4 字节 Emoji）截断。
+ * 检查 buffer 末尾是否落在未闭合的多字节字符序列中，若是，则退回至该字符之前。
  */
-function findSafeUtf8End(buffer: Buffer, start: number, targetEnd: number): number {
-  if (targetEnd >= buffer.length) return buffer.length
-  let pos = targetEnd
+function findSafeUtf8Length(buffer: Buffer): number {
+  const len = buffer.length
+  if (len === 0) return 0
 
-  // 若 targetEnd 恰好落在 continuation byte (0b10xxxxxx, 即 0x80 ~ 0xBF)，往前退回至该字符的首字节
-  while (pos > start && (buffer[pos] & 0xc0) === 0x80) {
-    pos--
+  // 往后最多回溯 4 个字节，寻找最后一个可能未闭合字符的 lead byte
+  for (let i = 1; i <= Math.min(4, len); i++) {
+    const byte = buffer[len - i]
+    // ASCII 字符自成一体
+    if ((byte & 0x80) === 0x00) {
+      break
+    }
+    // 找到了多字节字符的 lead byte
+    if ((byte & 0xc0) === 0xc0) {
+      let expectedLen = 1
+      if ((byte & 0xe0) === 0xc0) expectedLen = 2
+      else if ((byte & 0xf0) === 0xe0) expectedLen = 3
+      else if ((byte & 0xf8) === 0xf0) expectedLen = 4
+
+      // 如果这个字符在当前 buffer 中包含的字节数 i 小于它所需要的完整字节数 expectedLen
+      // 说明它被截断了！安全的末尾必须排空这 i 个未闭合字节，留给下一个分段
+      if (i < expectedLen) {
+        return len - i
+      }
+      return len
+    }
+    // continuation byte (0b10xxxxxx)，继续往前寻找其所属的 lead byte
   }
-
-  // 此时 buffer[pos] 是一个字符的首字节（或 ASCII 字节）
-  const leadByte = buffer[pos]
-  let charLen = 1
-  if ((leadByte & 0xe0) === 0xc0) charLen = 2
-  else if ((leadByte & 0xf0) === 0xe0) charLen = 3
-  else if ((leadByte & 0xf8) === 0xf0) charLen = 4
-
-  // 如果首字节所在的完整字符超出了 targetEnd，则放弃该字符（将其留给下一页），确保当前页绝不含半字
-  if (pos + charLen > targetEnd) {
-    return pos
-  }
-  return pos + charLen
+  return len
 }
 
 export function bindScopedReader(
   resource: LogicalResource,
   manifest: PublishedFeedbackManifest,
+  secret?: string,
 ): ScopedReaderBinding {
   if (resource.kind !== "training_feedback") {
     throw new Error(`Cannot bind scoped reader to non-feedback resource kind: ${resource.kind}`)
@@ -87,6 +98,7 @@ export function bindScopedReader(
     manifestPath,
     casesDir,
     allowedCases,
+    hmacSecret: secret ?? randomBytes(32).toString("hex"),
   }
 }
 
@@ -119,15 +131,16 @@ export async function readResourceChunk(
     throw new Error(`Physical case file missing for valid caseID: ${input.caseID}`)
   }
 
-  const rawBytes = await readFile(caseFile)
-  const totalLength = rawBytes.length
-
-  // 4. 解析与核验 Cursor（签名防伪与防越权）
+  // 4. 解析与核验 Cursor（HMAC 密码学防伪签名校验）
   let offset = 0
+  const fileStats = await stat(caseFile)
+  const totalLength = fileStats.size
+
   if (input.cursor) {
     try {
       const decoded = JSON.parse(Buffer.from(input.cursor, "base64").toString("utf8"))
-      const expectedSig = computeCursorSignature(
+      const expectedHmac = computeCursorHmac(
+        binding.hmacSecret,
         binding.resourceID,
         input.caseID,
         binding.version,
@@ -139,12 +152,12 @@ export async function readResourceChunk(
         decoded.resourceID !== binding.resourceID ||
         decoded.caseID !== input.caseID ||
         decoded.version !== binding.version ||
-        decoded.sig !== expectedSig ||
+        decoded.sig !== expectedHmac ||
         typeof decoded.offset !== "number" ||
         decoded.offset < 0 ||
         decoded.offset > totalLength
       ) {
-        throw new Error("Invalid cursor structure or version drift")
+        throw new Error("Invalid cursor structure or HMAC verification failed")
       }
       offset = decoded.offset
     } catch {
@@ -154,12 +167,25 @@ export async function readResourceChunk(
 
   const maxBytes = Math.min(Math.max(input.maxBytes ?? 64000, 1024), 128000)
   const targetEnd = Math.min(offset + maxBytes, totalLength)
+  const readLen = targetEnd - offset
 
-  // 5. UTF-8 字符边界对齐（防止截断中文字符造成乱码）
-  const end = targetEnd >= totalLength ? totalLength : findSafeUtf8End(rawBytes, offset, targetEnd)
-  const chunkSlice = rawBytes.subarray(offset, end)
+  // 5. 真实的“物理有界 I/O”：仅使用 FileHandle 读取指定区间字节，绝不加载整份文件
+  const handle = await open(caseFile, "r")
+  let rawBytes: Buffer
+  try {
+    const rawBuffer = Buffer.alloc(readLen)
+    const { bytesRead } = await handle.read(rawBuffer, 0, readLen, offset)
+    rawBytes = rawBuffer.subarray(0, bytesRead)
+  } finally {
+    await handle.close()
+  }
+
+  // 6. UTF-8 字符边界对齐（防止截断中文字符造成乱码）
+  const actualSafeLen = targetEnd >= totalLength ? rawBytes.length : findSafeUtf8Length(rawBytes)
+  const chunkSlice = rawBytes.subarray(0, actualSafeLen)
+  const actualEnd = offset + chunkSlice.length
   const returnedBytes = chunkSlice.length
-  const eof = end >= totalLength
+  const eof = actualEnd >= totalLength
 
   const chunkSHA256 = createHash("sha256").update(chunkSlice).digest("hex")
 
@@ -169,12 +195,13 @@ export async function readResourceChunk(
       resourceID: binding.resourceID,
       caseID: input.caseID,
       version: binding.version,
-      offset: end,
-      sig: computeCursorSignature(
+      offset: actualEnd,
+      sig: computeCursorHmac(
+        binding.hmacSecret,
         binding.resourceID,
         input.caseID,
         binding.version,
-        end,
+        actualEnd,
         binding.sha256,
       ),
     }
@@ -192,4 +219,48 @@ export async function readResourceChunk(
     eof,
     data: chunkSlice.toString("utf8"),
   }
+}
+
+/**
+ * 供 OpenCode 工具 aev_read_resource 调用的环境适配器
+ */
+export async function readResourceFromEnvironment(
+  input: { resourceID: string; caseID: string; cursor?: string; maxBytes?: number },
+  env: NodeJS.ProcessEnv,
+): Promise<ReadChunkResult> {
+  const configFile = env.OPENCODE_AEV_RESOURCE_READER_FILE
+  if (!configFile || !(await pathExists(configFile))) {
+    throw new Error("aev_read_resource is not configured or permitted in this session")
+  }
+  const rawJson = await readJsonFile<any>(configFile)
+  let binding: ScopedReaderBinding
+  if (rawJson.schema === "aev.training-feedback-manifest.v1") {
+    const casesDir = path.join(path.dirname(configFile), "cases")
+    const allowedCases = new Set<string>((rawJson.cases || []).map((c: any) => c.caseID))
+    binding = {
+      resourceID: rawJson.resourceID,
+      version: rawJson.version,
+      sha256: rawJson.manifestSHA256,
+      manifestPath: configFile,
+      casesDir,
+      allowedCases,
+      hmacSecret:
+        env.OPENCODE_AEV_HMAC_SECRET ??
+        createHash("sha256").update(`${rawJson.manifestSHA256}:aev_internal_reader`).digest("hex"),
+    }
+  } else if (rawJson.casesDir && (rawJson.allowedCases || rawJson.resourceID)) {
+    binding = {
+      ...rawJson,
+      allowedCases: new Set(
+        Array.isArray(rawJson.allowedCases)
+          ? rawJson.allowedCases
+          : rawJson.allowedCases instanceof Set
+            ? Array.from(rawJson.allowedCases)
+            : Object.keys(rawJson.allowedCases ?? {}),
+      ),
+    }
+  } else {
+    throw new Error("Invalid resource reader configuration file")
+  }
+  return readResourceChunk(binding, input)
 }

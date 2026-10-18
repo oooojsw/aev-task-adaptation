@@ -1,8 +1,8 @@
 import path from "node:path"
 import { createHash } from "node:crypto"
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, writeFile, readFile } from "node:fs/promises"
 import { ensureDirectory } from "../../fs"
-import { writeJsonAtomic } from "../../atomic-write"
+import { writeFileAtomic, writeJsonAtomic } from "../../atomic-write"
 import type { LogicalResource } from "../../task-profile-access/unified-access"
 
 export type RawTestCaseResult = {
@@ -99,21 +99,34 @@ export async function publishTrainingFeedbackResource(input: {
 
     if (sanitizedView.passed) passedCount++
 
-    const serialized = JSON.stringify(sanitizedView, null, 2)
-    const caseSHA = createHash("sha256").update(serialized).digest("hex")
-    sanitizedView.sha256 = caseSHA
+    // 先计算基础内容指纹
+    const contentToHash = JSON.stringify({
+      caseID: sanitizedView.caseID,
+      prompt: sanitizedView.prompt,
+      materials: sanitizedView.materials,
+      modelResponse: sanitizedView.modelResponse,
+      score: sanitizedView.score,
+      passed: sanitizedView.passed,
+      diagnostics: sanitizedView.diagnostics,
+    })
+    sanitizedView.sha256 = createHash("sha256").update(contentToHash).digest("hex")
 
-    // 重新写入带有 sha256 的最终 JSON
-    const finalContent = JSON.stringify(sanitizedView, null, 2)
+    // 写入安全 Case 文件
     const safeCaseFile = path.join(casesDir, `case_${rawCase.caseID}.json`)
-    await writeJsonAtomic(safeCaseFile, JSON.parse(finalContent))
+    const finalContent = `${JSON.stringify(sanitizedView, null, 2)}\n`
+    await writeFileAtomic(safeCaseFile, finalContent)
+
+    // 逐文件物理测定实际落盘的 bytes 与 sha256，确保与磁盘物理文件绝对一致
+    const diskBytes = await readFile(safeCaseFile)
+    const diskSHA = createHash("sha256").update(diskBytes).digest("hex")
+    const diskLen = diskBytes.length
 
     const relPath = path.relative(baseDir, safeCaseFile).replaceAll("\\", "/")
     publishedCases.push({
       caseID: rawCase.caseID,
       path: relPath,
-      sha256: caseSHA,
-      bytes: Buffer.byteLength(finalContent, "utf8"),
+      sha256: diskSHA,
+      bytes: diskLen,
       passed: sanitizedView.passed,
     })
     allCasePaths.push(path.resolve(safeCaseFile).replaceAll("\\", "/"))
@@ -134,26 +147,28 @@ export async function publishTrainingFeedbackResource(input: {
     cases: publishedCases,
   }
 
-  const manifestSerialized = JSON.stringify(manifestBody, null, 2)
-  const manifestSHA = createHash("sha256").update(manifestSerialized).digest("hex")
+  const manifestPath = path.join(baseDir, "manifest.json")
+  // manifestSHA256 作为权威内容摘要
+  const manifestBodySHA = createHash("sha256").update(JSON.stringify(manifestBody, null, 2)).digest("hex")
 
   const fullManifest: PublishedFeedbackManifest = {
     ...manifestBody,
-    manifestSHA256: manifestSHA,
+    manifestSHA256: manifestBodySHA,
   }
 
-  const manifestPath = path.join(baseDir, "manifest.json")
-  await writeJsonAtomic(manifestPath, fullManifest)
+  const manifestJson = `${JSON.stringify(fullManifest, null, 2)}\n`
+  await writeFileAtomic(manifestPath, manifestJson)
+
   allCasePaths.push(path.resolve(manifestPath).replaceAll("\\", "/"))
 
   // 写入原子完成标志
-  await writeFile(path.join(baseDir, ".published"), manifestSHA, "utf8")
+  await writeFile(path.join(baseDir, ".published"), manifestBodySHA, "utf8")
 
   const logicalResource: LogicalResource = {
     resourceID,
     kind: "training_feedback",
     version,
-    sha256: manifestSHA,
+    sha256: manifestBodySHA,
     sensitivity: "training",
     access: "read_only",
     boundaryRoots: [baseDir.replaceAll("\\", "/")],
