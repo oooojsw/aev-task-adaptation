@@ -27,6 +27,7 @@ export async function campaignAcceptance(input: {
   candidateRoot: string
   attemptRoot: string
   resultPath: string
+  taskBinding?: { planFingerprint: string; policyFingerprint: string }
 }, runtime?: Runtime) {
   // 先阻断历史结果覆盖，避免发出请求后才发现证据路径冲突。
   if (await pathExists(input.resultPath)) throw new Error("Campaign acceptance result already exists; inspect original evidence")
@@ -81,7 +82,7 @@ export async function campaignAcceptance(input: {
         expectedCaseIDs: evidence.cases.map(item => item.caseID), binding: { task: receipt.task, phase: receipt.phase,
           protocolFingerprint: receipt.protocolFingerprint, receiptFingerprint: fingerprint(receipt),
           candidateSHA256: product.candidate_sha256, datasetSHA256: product.dataset_sha256, modelID: product.model_id,
-          runID: product.runID, passID: path.basename(input.attemptRoot) } })
+          runID: product.runID, passID: path.basename(input.attemptRoot), ...input.taskBinding } })
       caseFeedbackMeta = { resourceID: published.logicalResource.resourceID, manifestPath: published.manifestPath,
         manifestSHA256: published.manifest.manifestSHA256, totalCases: published.manifest.totalCases, passedCases: published.manifest.passedCases }
     } catch (error) {

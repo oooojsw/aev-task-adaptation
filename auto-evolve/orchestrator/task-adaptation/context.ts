@@ -132,7 +132,7 @@ export async function seedTaskCandidate(spec: LongTaskSpec, root: string) {
 
 import type { LogicalResource } from "../task-profile-access/unified-access"
 
-export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; feedbackPath?: string; feedbackResource?: LogicalResource; advice?: Array<Omit<AdviceReference, "root">> } = {}): Invocation | undefined {
+export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; feedbackPath?: string; feedbackResource?: LogicalResource; round?: number; passID?: string; advice?: Array<Omit<AdviceReference, "root">> } = {}): Invocation | undefined {
   if (!spec.taskAdaptation) return undefined
   const bound = spec.taskAdaptationContext
   if (!bound) throw new Error("Frozen task adaptation context missing")
@@ -147,6 +147,8 @@ export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidat
   if (feedback && (!spec.taskAdaptationCampaignRoot || !spec.protocolPlugins)) throw new Error("Task feedback campaign identity missing")
   if (input.advice?.length && !spec.taskAdaptationCampaignRoot) throw new Error("Task advice campaign identity missing")
   return { bound, role, stage: role === "lead" || role === "diagnostician" ? "revise" : role === "reviewer" || role === "checker" || role === "independent" ? "accept" : "explore",
+    ...(spec.taskAdaptationCampaignRoot ? { campaignID: path.basename(spec.taskAdaptationCampaignRoot), round: input.round ?? spec.taskAdaptationRound,
+      ...(input.passID ? { passID: input.passID } : {}) } : {}),
     ...(input.worker ? { worker: input.worker } : {}), output: input.output ?? output, maxInlineBytes: 16000,
     ...(spec.taskAdaptation.requestBudget ? { requestBudget: spec.taskAdaptation.requestBudget } : {}),
     ...(input.advice?.length ? { advice: input.advice.map(item => ({ ...item, root: spec.taskAdaptationCampaignRoot! })) } : {}),

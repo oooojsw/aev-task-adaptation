@@ -3,6 +3,7 @@ import { readFile, realpath } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { productEvidenceName } from "./runtime"
 import type { Phase } from "./contract"
+import { verifyPublication } from "../task-adaptation/consolidation/publication-evidence"
 
 export async function protocolFeedbackEvidence(feedbackPath?: string) {
   if (!feedbackPath) return [] as string[]
@@ -31,10 +32,9 @@ export async function protocolFeedbackEvidence(feedbackPath?: string) {
     if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
       throw new Error("Training case feedback manifest path escape")
     }
-    const manifestJson = JSON.parse((await readFile(manifestFile, "utf8")).replace(/^\uFEFF/, ""))
-    if (manifestJson.manifestSHA256 !== view.caseFeedback.manifestSHA256) {
-      throw new Error("Training case feedback manifest hash drift")
-    }
+    const manifestJson = await verifyPublication(manifestFile, view.caseFeedback.manifestSHA256)
+    if (manifestJson.resourceID !== view.caseFeedback.resourceID || manifestJson.totalCases !== view.caseFeedback.totalCases ||
+        manifestJson.passedCases !== view.caseFeedback.passedCases) throw new Error("Training case feedback identity drift")
     paths.push(manifestFile)
   }
   return paths

@@ -604,6 +604,8 @@ export async function loadLongTaskSpec(
   for (const key of ["taskAdaptationCampaignRoot", "taskAdaptationFeedbackPath"]) {
     if (raw[key] !== undefined && (!taskAdaptation || typeof raw[key] !== "string" || !path.isAbsolute(raw[key] as string))) throw new Error("Invalid task runtime context path")
   }
+  // 轮内子进程恢复时保留Host轮次，不从反馈自报身份。
+  if (raw.taskAdaptationRound !== undefined && (!taskAdaptation || !Number.isSafeInteger(raw.taskAdaptationRound) || Number(raw.taskAdaptationRound) < 1)) throw new Error("Invalid task runtime round")
   if (protocolTraining && !protocolPlugins) throw new Error("Explicit training config requires protocol plugins")
   if (protocolTraining && raw.budgets !== undefined && canonical(raw.budgets) !== canonical(protocolTraining.budgets)) throw new Error("Conflicting training work budgets")
   if (raw.protocolTrainingRoot !== undefined && (!protocolTraining || typeof raw.protocolTrainingRoot !== "string" || !path.isAbsolute(raw.protocolTrainingRoot))) throw new Error("Invalid frozen training root")
@@ -806,6 +808,7 @@ export async function loadLongTaskSpec(
     taskAdaptationContext: await restoreTaskContext({ taskAdaptation, protocolPlugins } as LongTaskSpec, raw.taskAdaptationContext),
     taskAdaptationCampaignRoot: raw.taskAdaptationCampaignRoot as string | undefined,
     taskAdaptationFeedbackPath: raw.taskAdaptationFeedbackPath as string | undefined,
+    taskAdaptationRound: raw.taskAdaptationRound as number | undefined,
     blankEvalExecutor: blankEvalExecutor as LongTaskSpec["blankEvalExecutor"],
     validators,
     planning,

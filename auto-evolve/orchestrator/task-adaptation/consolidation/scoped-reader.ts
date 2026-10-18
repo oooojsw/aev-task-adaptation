@@ -1,9 +1,68 @@
 import path from "node:path"
-import { open, stat } from "node:fs/promises"
-import { createHash, createHmac, randomBytes } from "node:crypto"
-import { pathExists, readJsonFile } from "../../fs"
+import { open, stat, readFile, realpath } from "node:fs/promises"
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto"
+import { pathExists } from "../../fs"
+import { writeJsonAtomic } from "../../atomic-write"
+import { regular, verifyPublication } from "./publication-evidence"
 import type { LogicalResource } from "../../task-profile-access/unified-access"
 import type { PublishedFeedbackManifest } from "./feedback-publisher"
+
+export type ResourceReaderGrant = {
+  sessionID: string
+  principalID: string
+  role: string
+  workerID?: string
+  campaignID: string
+  round: number
+  passID?: string
+  resourceID: string
+  version: string
+  manifestPath: string
+  manifestSHA256: string
+  casesDir: string
+  allowedCaseIDs: string[]
+  hmacSecret: string
+  evidenceRoot?: string
+  planFingerprint: string
+  policyFingerprint: string
+  stage: string
+}
+
+function within(root: string, file: string) {
+  const tail = path.relative(path.resolve(root), path.resolve(file))
+  return !tail || !path.isAbsolute(tail) && tail !== ".." && !tail.startsWith(`..${path.sep}`)
+}
+
+async function validateGrant(grant: ResourceReaderGrant) {
+  if (!grant || !/^[a-f0-9]{32}$/.test(grant.sessionID) || !/^[a-f0-9]{64}$/.test(grant.hmacSecret) ||
+      !grant.principalID || !["lead", "worker"].includes(grant.role) ||
+      !/^[a-f0-9]{64}$/.test(grant.planFingerprint) || !/^[a-f0-9]{64}$/.test(grant.policyFingerprint) ||
+      grant.stage !== (grant.role === "worker" ? "explore" : "revise") ||
+      grant.role === "worker" && !grant.workerID || !grant.campaignID ||
+      !Number.isSafeInteger(grant.round) || grant.round < 1 || !path.isAbsolute(grant.manifestPath) ||
+      !/^[a-f0-9]{64}$/.test(grant.manifestSHA256) || !Array.isArray(grant.allowedCaseIDs)) {
+    throw new Error("Invalid resource reader configuration grant")
+  }
+  const manifest = await verifyPublication(grant.manifestPath, grant.manifestSHA256)
+  if (manifest.campaignID !== grant.campaignID || manifest.round > grant.round || manifest.version !== grant.version ||
+      manifest.resourceID !== grant.resourceID || path.resolve(grant.casesDir) !== path.join(path.dirname(grant.manifestPath), "cases") ||
+      grant.allowedCaseIDs.length !== manifest.cases.length || new Set(grant.allowedCaseIDs).size !== manifest.cases.length ||
+      manifest.cases.some(item => !grant.allowedCaseIDs.includes(item.caseID))) throw new Error("Resource reader publication binding mismatch")
+  return manifest
+}
+
+export async function validateResourceReaderAccess(grant: ResourceReaderGrant, reads: string[], edits: string[], evidenceRoot: string) {
+  await validateGrant(grant)
+  if (!path.isAbsolute(evidenceRoot) || !reads.some(file => path.resolve(file) === path.resolve(grant.manifestPath))) {
+    throw new Error("Reader requires explicit index permission and private evidence root")
+  }
+  // 大题只经专用工具读取；审计和授权密钥不能成为模型材料。
+  if ([...reads, ...edits].some(file => within(file, evidenceRoot)) ||
+      reads.some(file => within(file, grant.casesDir) || within(grant.casesDir, file)) ||
+      edits.some(file => within(file, grant.manifestPath) || within(file, grant.casesDir))) {
+    throw new Error("Resource reader scope exceeds actual file permissions")
+  }
+}
 
 export type ScopedReaderBinding = {
   resourceID: string
@@ -13,6 +72,12 @@ export type ScopedReaderBinding = {
   casesDir: string
   allowedCases: Set<string>
   hmacSecret: string
+  sessionID?: string
+  principalID?: string
+  role?: string
+  campaignID?: string
+  round?: number
+  evidenceRoot?: string
 }
 
 export type ReadChunkResult = {
@@ -34,11 +99,20 @@ function computeCursorHmac(
   version: string,
   offset: number,
   manifestSHA: string,
+  sessionID?: string,
+  principalID?: string,
 ): string {
   return createHmac("sha256", secret)
-    .update(`${resourceID}:${caseID}:${version}:${offset}:${manifestSHA}`)
+    .update(`${sessionID ?? ""}:${principalID ?? ""}:${resourceID}:${caseID}:${version}:${offset}:${manifestSHA}`)
     .digest("hex")
-    .slice(0, 32)
+}
+
+function safeHmacEqual(a: string, b: string): boolean {
+  if (typeof a !== "string" || typeof b !== "string") return false
+  const bufA = Buffer.from(a, "hex")
+  const bufB = Buffer.from(b, "hex")
+  if (bufA.length !== bufB.length) return false
+  return timingSafeEqual(bufA, bufB)
 }
 
 /**
@@ -125,10 +199,15 @@ export async function readResourceChunk(
     )
   }
 
-  // 3. 物理文件定位
+  // 3. 物理文件定位与防逃逸检查
   const caseFile = path.join(binding.casesDir, `case_${input.caseID}.json`)
   if (!(await pathExists(caseFile))) {
     throw new Error(`Physical case file missing for valid caseID: ${input.caseID}`)
+  }
+  const resolvedCasesDir = await realpath(binding.casesDir)
+  const resolvedCaseFile = await realpath(caseFile)
+  if (!resolvedCaseFile.startsWith(resolvedCasesDir + path.sep)) {
+    throw new Error(`Path traversal or symlink escape detected for case ${input.caseID}`)
   }
 
   // 4. 解析与核验 Cursor（HMAC 密码学防伪签名校验）
@@ -146,13 +225,15 @@ export async function readResourceChunk(
         binding.version,
         decoded.offset,
         binding.sha256,
+        binding.sessionID,
+        binding.principalID,
       )
 
       if (
         decoded.resourceID !== binding.resourceID ||
         decoded.caseID !== input.caseID ||
         decoded.version !== binding.version ||
-        decoded.sig !== expectedHmac ||
+        !safeHmacEqual(decoded.sig, expectedHmac) ||
         typeof decoded.offset !== "number" ||
         decoded.offset < 0 ||
         decoded.offset > totalLength
@@ -165,7 +246,14 @@ export async function readResourceChunk(
     }
   }
 
-  const maxBytes = Math.min(Math.max(input.maxBytes ?? 64000, 1024), 128000)
+  let maxBytes = 64000
+  if (input.maxBytes !== undefined) {
+    if (typeof input.maxBytes !== "number" || !Number.isSafeInteger(input.maxBytes) || input.maxBytes < 1024 || input.maxBytes > 128000) {
+      throw new Error(`Invalid maxBytes: ${input.maxBytes}. Must be safe integer between 1024 and 128000.`)
+    }
+    maxBytes = input.maxBytes
+  }
+
   const targetEnd = Math.min(offset + maxBytes, totalLength)
   const readLen = targetEnd - offset
 
@@ -203,6 +291,8 @@ export async function readResourceChunk(
         binding.version,
         actualEnd,
         binding.sha256,
+        binding.sessionID,
+        binding.principalID,
       ),
     }
     nextCursor = Buffer.from(JSON.stringify(nextCursorObj), "utf8").toString("base64")
@@ -222,45 +312,70 @@ export async function readResourceChunk(
 }
 
 /**
+ * 供 Host 在为子进程准备 overrideConfigDir 时写入私有受信 reader 配置与 SHA
+ */
+export async function resourceReaderEnvironment(
+  grant: ResourceReaderGrant | undefined,
+  dir: string,
+): Promise<{
+  OPENCODE_AEV_RESOURCE_READER_FILE?: string
+  OPENCODE_AEV_RESOURCE_READER_SHA256?: string
+}> {
+  if (!grant) {
+    return {
+      OPENCODE_AEV_RESOURCE_READER_FILE: undefined,
+      OPENCODE_AEV_RESOURCE_READER_SHA256: undefined,
+    }
+  }
+  if (!path.isAbsolute(dir)) throw new Error("Absolute private reader path required")
+  await validateGrant(grant)
+  const file = path.join(dir, "resource-reader.json")
+  await writeJsonAtomic(file, grant)
+  const fileBytes = await readFile(file)
+  const sha = createHash("sha256").update(fileBytes).digest("hex")
+  return {
+    OPENCODE_AEV_RESOURCE_READER_FILE: file.replaceAll("\\", "/"),
+    OPENCODE_AEV_RESOURCE_READER_SHA256: sha,
+  }
+}
+
+/**
  * 供 OpenCode 工具 aev_read_resource 调用的环境适配器
+ * 必须校验 Host 写入的私有 config 及其 SHA256，严禁从公开 manifest 自推导秘钥
  */
 export async function readResourceFromEnvironment(
   input: { resourceID: string; caseID: string; cursor?: string; maxBytes?: number },
   env: NodeJS.ProcessEnv,
 ): Promise<ReadChunkResult> {
   const configFile = env.OPENCODE_AEV_RESOURCE_READER_FILE
-  if (!configFile || !(await pathExists(configFile))) {
+  const expectedSHA = env.OPENCODE_AEV_RESOURCE_READER_SHA256
+  if (!configFile || !expectedSHA || !(await pathExists(configFile))) {
     throw new Error("aev_read_resource is not configured or permitted in this session")
   }
-  const rawJson = await readJsonFile<any>(configFile)
-  let binding: ScopedReaderBinding
-  if (rawJson.schema === "aev.training-feedback-manifest.v1") {
-    const casesDir = path.join(path.dirname(configFile), "cases")
-    const allowedCases = new Set<string>((rawJson.cases || []).map((c: any) => c.caseID))
-    binding = {
-      resourceID: rawJson.resourceID,
-      version: rawJson.version,
-      sha256: rawJson.manifestSHA256,
-      manifestPath: configFile,
-      casesDir,
-      allowedCases,
-      hmacSecret:
-        env.OPENCODE_AEV_HMAC_SECRET ??
-        createHash("sha256").update(`${rawJson.manifestSHA256}:aev_internal_reader`).digest("hex"),
-    }
-  } else if (rawJson.casesDir && (rawJson.allowedCases || rawJson.resourceID)) {
-    binding = {
-      ...rawJson,
-      allowedCases: new Set(
-        Array.isArray(rawJson.allowedCases)
-          ? rawJson.allowedCases
-          : rawJson.allowedCases instanceof Set
-            ? Array.from(rawJson.allowedCases)
-            : Object.keys(rawJson.allowedCases ?? {}),
-      ),
-    }
-  } else {
-    throw new Error("Invalid resource reader configuration file")
+  const info = await regular(configFile)
+  if (info.size > 1048576) throw new Error("Resource reader config capacity exceeded")
+  const fileBytes = await readFile(configFile)
+  const actualSHA = createHash("sha256").update(fileBytes).digest("hex")
+  if (actualSHA !== expectedSHA) {
+    throw new Error("Resource reader config SHA mismatch; possible tampering")
+  }
+  const grant = JSON.parse(fileBytes.toString("utf8").replace(/^\uFEFF/, "")) as ResourceReaderGrant
+  await validateGrant(grant)
+  const allowedCases = new Set(grant.allowedCaseIDs)
+  const binding: ScopedReaderBinding = {
+    resourceID: grant.resourceID,
+    version: grant.version,
+    sha256: grant.manifestSHA256,
+    manifestPath: grant.manifestPath,
+    casesDir: grant.casesDir,
+    allowedCases,
+    hmacSecret: grant.hmacSecret,
+    sessionID: grant.sessionID,
+    principalID: grant.principalID,
+    role: grant.role,
+    campaignID: grant.campaignID,
+    round: grant.round,
+    evidenceRoot: grant.evidenceRoot,
   }
   return readResourceChunk(binding, input)
 }

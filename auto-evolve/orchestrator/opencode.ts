@@ -1,4 +1,4 @@
-﻿import path from "node:path"
+import path from "node:path"
 import process from "node:process"
 import os from "node:os"
 import { randomUUID } from "node:crypto"
@@ -152,6 +152,8 @@ export interface OpencodeTaskInput {
   localSearchEvidenceRoot?: string
   recompute?: import("./task-adaptation/recompute").RecomputeScope
   recomputeEvidenceRoot?: string
+  resourceReaderGrant?: import("./task-adaptation/consolidation/scoped-reader").ResourceReaderGrant
+  resourceReaderEvidenceRoot?: string
   requestBudget?: BudgetTransportConfig
   infrastructureAttempts?: number
   /** Repository root used to find dependencies, runtime config, and local OpenCode binary. */
@@ -365,7 +367,15 @@ export async function buildEditPermissionRules(cwd: string, paths: string[]) {
 
 async function makeOverridePermissions(
   cwd: string,
-  input: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[]; localSearch?: boolean; recompute?: boolean },
+  input: {
+    readPaths: string[]
+    editPaths: string[]
+    allowShell?: boolean
+    externalPaths?: string[]
+    localSearch?: boolean
+    recompute?: boolean
+    resourceReader?: boolean
+  },
 ) {
   return {
     "*": "deny",
@@ -387,6 +397,7 @@ async function makeOverridePermissions(
     skill: "deny",
     ...(input.localSearch ? { aev_local_search: "allow" } : {}),
     ...(input.recompute ? { aev_recompute: "allow" } : {}),
+    ...(input.resourceReader ? { aev_read_resource: "allow" } : {}),
     lsp: "deny",
   } as const
 }
@@ -711,7 +722,15 @@ async function ensureOverrideConfig(
   cwd: string,
   model: string | undefined,
   permissionConfig: LoadedPermissionConfig,
-  permissions: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[]; localSearch?: boolean; recompute?: boolean },
+  permissions: {
+    readPaths: string[]
+    editPaths: string[]
+    allowShell?: boolean
+    externalPaths?: string[]
+    localSearch?: boolean
+    recompute?: boolean
+    resourceReader?: boolean
+  },
   runLabel: string,
   injectPlatformSafetyRules = true,
   isolateHostRuntime = false,
@@ -797,6 +816,7 @@ async function ensureOverrideConfig(
             allowShell: permissions.allowShell ?? (permissions.readPaths.length > 0 || isolateHostRuntime),
             localSearch: permissions.localSearch,
             recompute: permissions.recompute,
+            resourceReader: permissions.resourceReader,
           }),
   }
   await ensureDirectory(dir)
@@ -1118,6 +1138,14 @@ async function runOpencodeTaskOnce(
     const { validateRecomputeAccess } = await import("./task-adaptation/recompute")
     validateRecomputeAccess(input.recompute, permissionReadPaths, permissionEditPaths, input.recomputeEvidenceRoot)
   }
+  if (input.resourceReaderGrant) {
+    // 反馈读取仅通过本次私有配置授权，绝不放宽文件或Shell权限。
+    if (!input.sourceHost || input.allowShell !== false || input.config.permissionConfig.mode !== "restricted" || !input.resourceReaderEvidenceRoot) {
+      throw new Error("Resource reader requires restricted source host and durable evidence")
+    }
+    const { validateResourceReaderAccess } = await import("./task-adaptation/consolidation/scoped-reader")
+    await validateResourceReaderAccess(input.resourceReaderGrant, permissionReadPaths, permissionEditPaths, input.resourceReaderEvidenceRoot)
+  }
   const isolateHostRuntime = shouldIsolateHostRuntime(input)
   const overrideConfigDir = await ensureOverrideConfig(
     input.cwd,
@@ -1130,6 +1158,7 @@ async function runOpencodeTaskOnce(
       allowShell: input.allowShell,
       localSearch: Boolean(input.localSearch),
       recompute: Boolean(input.recompute),
+      resourceReader: Boolean(input.resourceReaderGrant),
     },
     runLabel,
     input.injectPlatformSafetyRules !== false,
@@ -1147,6 +1176,9 @@ async function runOpencodeTaskOnce(
   const { recomputeEnvironment } = await import("./task-adaptation/recompute")
   const recomputeEnv = await recomputeEnvironment(input.recompute
     ? { ...input.recompute, evidenceRoot: input.recomputeEvidenceRoot! } : undefined, overrideConfigDir)
+  const { resourceReaderEnvironment } = await import("./task-adaptation/consolidation/scoped-reader")
+  const resourceReaderEnv = await resourceReaderEnvironment(input.resourceReaderGrant
+    ? { ...input.resourceReaderGrant, evidenceRoot: input.resourceReaderEvidenceRoot! } : undefined, overrideConfigDir)
 
   const opencodeCmd = input.sourceHost ? process.execPath : await resolveOpencodeCommand(input.cwd)
   const sourceEntry = path.join(input.cwd, "packages", "opencode", "src", "index.ts")
@@ -1273,6 +1305,7 @@ async function runOpencodeTaskOnce(
         ...requestBudgetEnv,
         ...localSearchEnv,
         ...recomputeEnv,
+        ...resourceReaderEnv,
         ...(input.sourceHost ? { OPENCODE_AEV_ABSOLUTE_PERMISSIONS: "1" } : {}),
         OPENCODE_CONFIG_DIR: overrideConfigDir,
         ...(typeof input.config.modelConfig.limits.requestsPerMinute === "number"

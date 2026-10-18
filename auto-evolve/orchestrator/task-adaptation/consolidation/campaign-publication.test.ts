@@ -7,6 +7,12 @@ import { consolidationPlugins } from "../../protocol-plugins/consolidation"
 import { campaignAcceptance } from "../../protocol-plugins/campaign-acceptance"
 import { digest } from "./contract"
 import { verifyPublication } from "./publication-evidence"
+import { bindPlan } from "../binding"
+import { taskFeedback } from "../feedback"
+import { authorizeInvocation } from "../invocation"
+import { fingerprint } from "../../protocol-plugins/identity"
+import { DEFAULT_CONFIG } from "../../schema"
+import type { Plan } from "../plan"
 
 test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 passes", async () => {
   for (const count of [0, 43, 50]) {
@@ -46,9 +52,25 @@ test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 pa
       skill: { format: "text", entries: [{ id: "merged", kind: "text", path: "DIRECT_CHAT.md" }] },
       tasks: [{ id: "task", split: "train", materials: [{ id: "q", kind: "text", path: "public.txt" }], privateInputs: [] }] }))
     const attempt = path.join(campaign, "rounds", "round-001", "final-acceptance")
+    const plan: Plan = { schema: "aev.task-plan.v1", id: "consolidation", objective: "Learn reusable guidance",
+      deliverable: { kind: "skill", entries: ["merged"] }, capabilities: ["read"],
+      resources: [{ id: "merged", path: "DIRECT_CHAT.md", audience: "public", mutable: true }],
+      windows: [
+        { role: "lead", stage: "revise", reads: ["merged"], writes: ["merged"], inline: [], actions: ["read", "edit"], runtime: ["feedback"] },
+        { role: "worker", stage: "explore", reads: ["merged"], writes: [], inline: [], actions: ["read"], runtime: ["feedback"] },
+        { role: "checker", stage: "accept", reads: ["merged"], writes: [], inline: [], actions: ["read"] },
+      ], workers: [{ id: "worker1", purpose: "Analyze failures", resources: ["merged"], actions: ["read"] }],
+      acceptance: { execution: "script", checks: [
+        { id: "surface", target: "candidate", mechanism: "script", purpose: "Check guidance", required: true, resources: ["merged"], feedback: "status_only" },
+        { id: "score", target: "product", mechanism: "script", purpose: "Check results", required: true, resources: ["merged"], feedback: "status_only" },
+      ] }, rejection: [{ check: "surface", actions: ["repair"] }, { check: "score", actions: ["repair"] }],
+      selection: { rule: "first_pass" }, stop: { rounds: 2, calls: 100, tokens: 10000, stagnant: 2 } }
+    const bound = await bindPlan(candidate, plan, ["read"])
+    const policyFingerprint = fingerprint({ windows: plan.windows, workers: plan.workers })
     const result = await campaignAcceptance({ campaignRoot: campaign, cwd: root, campaignID: "campaign", roundNumber: 1,
       runID: "author-run", entry: { schema: "aev.protocol-entry.v1", selectionPath, projectManifestPath, taskID: "task", phase: "source" },
-      candidateRoot: candidate, attemptRoot: attempt, resultPath: path.join(attempt, "result.json") }, runtime)
+      candidateRoot: candidate, attemptRoot: attempt, resultPath: path.join(attempt, "result.json"),
+      taskBinding: { planFingerprint: bound.fingerprint, policyFingerprint } }, runtime)
     expect(result.passed).toBe(true)
     const feedback = JSON.parse(await readFile(path.join(attempt, "protocol.training-feedback.json"), "utf8"))
     const manifest = await verifyPublication(feedback.caseFeedback.manifestPath, feedback.caseFeedback.manifestSHA256)
@@ -62,6 +84,19 @@ test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 pa
       expect(JSON.stringify(row)).not.toContain("validator.mjs")
     }
     expect(result.blankAgentEvidenceReadPaths).not.toContain(feedback.caseFeedback.manifestPath)
+    const reference = { root: campaign, path: result.protocolTrainingResultPath, task: "task", phase: "source" as const }
+    expect((await taskFeedback(bound, reference)).feedbackResource?.resourceID).toBe(manifest.resourceID)
+    const request = { cwd: root, config: DEFAULT_CONFIG, title: "Feedback test", prompt: "unused" }
+    for (const role of ["lead", "worker"] as const) {
+      const invocation = { bound, role, stage: role === "lead" ? "revise" as const : "explore" as const,
+        ...(role === "worker" ? { worker: "worker1" } : {}), output: "Review guidance", maxInlineBytes: 100,
+        campaignID: "campaign", round: 2, feedback: reference }
+      const authorized = await authorizeInvocation(invocation, request)
+      expect(authorized.request.resourceReaderGrant?.allowedCaseIDs).toHaveLength(50)
+      expect(authorized.request.permissionReadPaths).toHaveLength(3)
+      await expect(authorizeInvocation({ ...invocation, campaignID: "other" }, request)).rejects.toThrow()
+      await expect(authorizeInvocation({ ...invocation, feedback: undefined, feedbackResource: (await taskFeedback(bound, reference)).feedbackResource }, request)).rejects.toThrow("Formal feedback reference required")
+    }
     const backends = await readdir(path.join(campaign, "protocol-backends", "consolidation"))
     expect(backends).toHaveLength(1)
   }

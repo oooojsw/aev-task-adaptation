@@ -3520,6 +3520,7 @@ export function buildGeneratedRoundSpec(input: {
   return {
     ...input.baseSpec,
     // 内层也必须知道验收执行模式，避免修复不存在的工具故障。
+    ...(input.baseSpec.taskAdaptation ? { taskAdaptationRound: input.roundNumber } : {}),
     goal: input.baseSpec.protocolAuthorContext
       ? [input.baseSpec.goal, ...protocolAuthorLines(input.baseSpec.protocolAuthorContext, false)].join("\n")
       : input.baseSpec.blankEvalExecutor?.kind === "single_turn_http"
@@ -3597,6 +3598,7 @@ async function runCampaignSuggestionTask(input: {
     role: input.trainingRole ?? input.phase,
     adaptation: input.trainingRole ? taskInvocation(input.baseSpec, input.trainingRole, {
       worker: input.taskWorker, candidateRoot: input.taskCandidateRoot, feedbackPath: input.taskFeedbackPath,
+      round: Number(path.relative(input.baseSpec.taskAdaptationCampaignRoot ?? input.stageDir, input.stageDir).replaceAll("\\", "/").match(/^rounds\/round-(\d+)\//)?.[1]) || undefined,
       advice: input.taskAdvice }) : undefined }, {
     cwd: input.cwd,
     config,
@@ -4655,6 +4657,10 @@ async function runCampaignFinalAcceptance(input: {
     return campaignAcceptance({ campaignRoot: input.campaignPaths.root, cwd: input.cwd, campaignID: input.campaignID,
       budgets: await taskBudgetOptions(input.baseSpec),
       roundNumber: input.roundNumber, runID: input.sourceRunID, entry: input.baseSpec.protocolPlugins,
+      ...(input.baseSpec.taskAdaptationContext ? { taskBinding: {
+        planFingerprint: input.baseSpec.taskAdaptationContext.fingerprint,
+        policyFingerprint: fingerprint({ windows: input.baseSpec.taskAdaptationContext.plan.windows, workers: input.baseSpec.taskAdaptationContext.plan.workers }),
+      } } : {}),
       candidateRoot: input.pendingPackageRoot, attemptRoot: acceptanceRoot, resultPath: acceptanceResultPath })
   }
   const validatorPartitions = partitionCampaignFinalAcceptanceValidators(input.baseSpec)

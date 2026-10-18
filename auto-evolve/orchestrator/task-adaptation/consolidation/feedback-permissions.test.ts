@@ -10,6 +10,8 @@ import {
 import {
   bindScopedReader,
   readResourceChunk,
+  resourceReaderEnvironment,
+  readResourceFromEnvironment,
 } from "./scoped-reader"
 import {
   authorizeResourceAccess,
@@ -121,7 +123,7 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
     }
   })
 
-  test("U02 & U10: AuthorizeInvocation injects all 50 cases into permissionReadPaths for both Worker and Lead", async () => {
+  test("U02 & U10: Worker and Lead receive only index permissions and independent reader grants", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "aev-invocation-dual-role-test-"))
     try {
       const rawCases = generateMockCases(50, 43)
@@ -217,10 +219,12 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
           output: "Provide updated Skill",
           maxInlineBytes: 10000,
           feedbackResource: logicalResource,
+          campaignID: "camp_dual_role", round: 1,
         },
         { model: "mock-model", config: { permissionConfig: { version: 1, mode: "restricted" } } },
       )
-      expect(leadResult.request.permissionReadPaths.length).toBeGreaterThanOrEqual(51)
+      expect(leadResult.request.permissionReadPaths.length).toBe(3)
+      expect(leadResult.request.resourceReaderGrant?.allowedCaseIDs.length).toBe(50)
       expect(leadResult.request.permissionEditPaths).toEqual([sampleSkillPath.replaceAll("\\", "/")])
       expect(leadResult.scope.feedbackResource?.resourceID).toBe(logicalResource.resourceID)
 
@@ -234,12 +238,24 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
           output: "Provide worker analysis",
           maxInlineBytes: 10000,
           feedbackResource: logicalResource,
+          campaignID: "camp_dual_role", round: 1,
         },
         { model: "mock-model", config: { permissionConfig: { version: 1, mode: "restricted" } } },
       )
-      expect(workerResult.request.permissionReadPaths.length).toBeGreaterThanOrEqual(51)
+      expect(workerResult.request.permissionReadPaths.length).toBe(3)
+      expect(workerResult.request.resourceReaderGrant?.allowedCaseIDs.length).toBe(50)
+      expect(workerResult.request.resourceReaderGrant?.sessionID).not.toBe(leadResult.request.resourceReaderGrant?.sessionID)
+      expect(leadResult.request.prompt).not.toContain(leadResult.request.resourceReaderGrant!.hmacSecret)
       expect(workerResult.request.permissionEditPaths).toEqual([]) // Worker 严格只读
       expect(workerResult.scope.feedbackResource?.resourceID).toBe(logicalResource.resourceID)
+
+      for (const identity of [{}, { campaignID: "other", round: 1 }, { campaignID: "camp_dual_role", round: 0 }]) {
+        await expect(authorizeInvocation({ bound, role: "lead", stage: "revise", output: "Update", maxInlineBytes: 100,
+          feedbackResource: logicalResource, ...identity }, { model: "mock", config: { permissionConfig: { version: 1, mode: "restricted" } } } as never)).rejects.toThrow()
+      }
+      await expect(authorizeInvocation({ bound, role: "worker", worker: "unknown", stage: "explore", output: "Update", maxInlineBytes: 100,
+        campaignID: "camp_dual_role", round: 1, feedbackResource: logicalResource },
+        { model: "mock", config: { permissionConfig: { version: 1, mode: "restricted" } } } as never)).rejects.toThrow()
 
       // 3. 验证未授权的 reviewer 角色被拒绝
       await expect(
@@ -468,7 +484,7 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
     }
   })
 
-  test("U16 & R1-R2: End-to-end Checker to Publisher pipeline publishes 50 cases with byte-for-byte SHA matching and injects into Worker/Lead", async () => {
+  test("U16: Published synthetic fixture verifies all case digests and reads through a private child configuration", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "aev-e2e-pipeline-test-"))
     try {
       const campaignRoot = path.join(tempDir, "campaign")
@@ -593,21 +609,28 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
       expect(normalizedEvidencePaths).toContain(path.resolve(published.manifestPath).replaceAll("\\", "/"))
 
       // 8. 验证 OpenCode 环境变量工具可直接读取任意 case
-      process.env.OPENCODE_AEV_RESOURCE_READER_FILE = published.manifestPath
-      const { readResourceFromEnvironment } = await import("./scoped-reader")
+      // 授权仅传给本次调用，不写父进程全局环境。
+      const env = await resourceReaderEnvironment({
+        sessionID: "a".repeat(32), principalID: "fixture:lead", role: "lead",
+        stage: "revise", planFingerprint: "c".repeat(64), policyFingerprint: "d".repeat(64),
+        campaignID: "campaign_e2e_50", round: 1,
+        resourceID: published.logicalResource.resourceID, version: published.logicalResource.version,
+        manifestPath: published.manifestPath, manifestSHA256: published.manifest.manifestSHA256,
+        casesDir: path.join(attemptRoot, "training-feedback", "cases"),
+        allowedCaseIDs: published.manifest.cases.map(item => item.caseID), hmacSecret: "b".repeat(64),
+      }, path.join(tempDir, "private"))
       const readChunk = await readResourceFromEnvironment(
         {
           resourceID: published.logicalResource.resourceID,
           caseID: "dc_001",
         },
-        process.env,
+        env,
       )
       expect(readChunk.caseID).toBe("dc_001")
       expect(readChunk.returnedBytes).toBeGreaterThan(0)
       expect(readChunk.eof).toBe(true)
       expect(readChunk.data).toContain("Prompt for case 1")
     } finally {
-      delete process.env.OPENCODE_AEV_RESOURCE_READER_FILE
       await rm(tempDir, { recursive: true, force: true })
     }
   })

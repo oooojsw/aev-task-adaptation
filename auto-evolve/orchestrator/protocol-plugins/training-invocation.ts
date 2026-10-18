@@ -32,6 +32,7 @@ export async function runProtocolTrainingTask(options: { enabled: boolean; stage
   await mkdir(dir, { recursive: true })
   if (request.localSearch) request = { ...request, localSearchEvidenceRoot: path.join(dir, "local-search") }
   if (request.recompute) request = { ...request, recomputeEvidenceRoot: path.join(dir, "recompute") }
+  if (request.resourceReaderGrant) request = { ...request, resourceReaderEvidenceRoot: path.join(dir, "resource-reader") }
   // 同阶段可有多次正常修订，每次留独立账，恢复仍由控制器决定。
   const claim = await open(path.join(dir, "started.claim"), "wx")
   await claim.close()
@@ -42,6 +43,7 @@ export async function runProtocolTrainingTask(options: { enabled: boolean; stage
     ...(request.requestBudget ? { requestBudget: request.requestBudget } : {}),
     ...(request.localSearch ? { localSearch: request.localSearch } : {}),
     ...(request.recompute ? { recompute: request.recompute } : {}),
+    ...(request.resourceReaderGrant ? { resourceReader: { resourceID: request.resourceReaderGrant.resourceID, sessionID: request.resourceReaderGrant.sessionID } } : {}),
     references: request.referencePaths ?? [], reads: request.permissionReadPaths ?? [], edits: request.permissionEditPaths ?? [],
     ...(adapted ? { taskWindow: adapted.scope, allowShell: request.allowShell, isolateHostRuntime: request.isolateHostRuntime,
       infrastructureAttempts: request.infrastructureAttempts, permissionMode: request.config.permissionConfig.mode } : {}) })
