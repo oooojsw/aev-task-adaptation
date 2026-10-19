@@ -1,8 +1,9 @@
 import path from "node:path"
 import { mkdir, readFile, realpath, open, lstat } from "node:fs/promises"
 import { withFileLock } from "../jsonl"
-import { writeJsonAtomic } from "../atomic-write"
+import { writeFileAtomic, writeJsonAtomic } from "../atomic-write"
 import { canonical, fingerprint } from "../protocol-plugins/identity"
+import { admission, nextAdmission, type Admission } from "./exploration/admission"
 
 export interface RequestBudget {
   root: string
@@ -19,12 +20,14 @@ interface Attempt {
   reservationTokens: number
   status: "reserved" | "settled" | "unknown" | "overrun"
   usedTokens?: number
+  gate?: string
 }
 
 interface State {
   schema: "aev.request-budget.v1"
   binding: string
   attempts: Attempt[]
+  gates?: Array<{ id: string; policy: Admission; start: number }>
   lastDenial?: {
     reason: "calls" | "tokens" | "unresolved"
     request: string
@@ -32,6 +35,8 @@ interface State {
     model: string
     reservationTokens: number
     atState: string
+    layer?: "stage" | "protected"
+    gate?: string
   }
 }
 
@@ -69,7 +74,37 @@ async function transaction<T>(config: RequestBudget, apply: (state: State) => Pr
         state.lastDenial && (typeof state.lastDenial !== "object" || Array.isArray(state.lastDenial) || !["calls", "tokens", "unresolved"].includes(state.lastDenial.reason) ||
           !/^[a-f0-9]{64}$/.test(state.lastDenial.request) || !/^[a-f0-9]{64}$/.test(state.lastDenial.atState) ||
           ![state.lastDenial.role, state.lastDenial.model].every(value => typeof value === "string" && value.trim()) ||
-          !positive(state.lastDenial.reservationTokens))) throw new Error("Request budget evidence or limits drift")
+          !positive(state.lastDenial.reservationTokens) ||
+          state.lastDenial.layer !== undefined && !["stage", "protected"].includes(state.lastDenial.layer) ||
+          state.lastDenial.gate !== undefined && !/^[a-f0-9]{64}$/.test(state.lastDenial.gate))) throw new Error("Request budget evidence or limits drift")
+    if (state.gates !== undefined) {
+      if (!Array.isArray(state.gates) || !state.gates.length) throw new Error("Request stage gate evidence drift")
+      for (const [index, gate] of state.gates.entries()) {
+        if (admission(gate.policy).id !== gate.id || !Number.isSafeInteger(gate.start) || gate.start < 0 ||
+          gate.start > state.attempts.length || (index === 0 ? gate.start !== 0 || gate.policy.round !== 1 ||
+            gate.policy.generation !== 0 || gate.policy.stage !== "author" : gate.start < state.gates[index - 1].start))
+          throw new Error("Request stage gate evidence drift")
+        if (index) nextAdmission(state.gates[index - 1].policy, gate.policy)
+        const end = state.gates[index + 1]?.start ?? state.attempts.length
+        if (state.attempts.slice(gate.start, end).some(item => item.gate !== gate.id || !gate.policy.roles.includes(item.role)))
+          throw new Error("Request stage ownership drift")
+        const local = budgetTotals(state.attempts.slice(gate.start, end))
+        if (local.admittedAttempts > gate.policy.calls || local.reportedTokens + local.outstandingTokens > gate.policy.tokens && !local.overrunAttempts ||
+          index < state.gates.length - 1 && (local.unresolvedAttempts || local.overrunAttempts))
+          throw new Error("Request stage settlement or local limits drift")
+      }
+    } else if (state.attempts.some(item => item.gate !== undefined)) throw new Error("Request stage policy missing")
+    const marker = `${file}.stages.claim`
+    const expected = state.gates ? fingerprint({ binding, policy: state.gates[0].policy.policy }) : undefined
+    let marked = false
+    try {
+      const info = await lstat(marker)
+      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || !expected || (await readFile(marker, "utf8")) !== expected)
+        throw new Error("Request stage initialization binding drift")
+      marked = true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    }
     const claim = `${file}.started.claim`
     try {
       const info = await lstat(claim)
@@ -87,6 +122,10 @@ async function transaction<T>(config: RequestBudget, apply: (state: State) => Pr
     const before = canonical(state)
     const result = await apply(state)
     if (canonical(state) !== before) await writeJsonAtomic(file, state)
+    if (state.gates && !marked) {
+      // 成功返回前留永久标记，空账本也不能恢复成无阶段保护模式。
+      await writeFileAtomic(marker, fingerprint({ binding, policy: state.gates[0].policy.policy }))
+    }
     return result
   }, { staleMs: 600000, timeoutMs: 60000 })
 }
@@ -107,24 +146,64 @@ export async function reserveRequest(config: RequestBudget, attempt: Omit<Attemp
       !/^[a-f0-9]{64}$/.test(attempt.request) || !positive(attempt.reservationTokens)) throw new Error("Explicit request token ceiling required")
   const result = await transaction(config, state => {
     if (state.attempts.some(item => item.id === attempt.id)) throw new Error("Prior request reservation exists; inspect before retry")
+    const gate = state.gates?.at(-1)
+    if (gate ? attempt.gate !== gate.id || !gate.policy.roles.includes(attempt.role) : attempt.gate !== undefined)
+      throw new Error("Request stage gate mismatch")
     const totals = budgetTotals(state.attempts)
+    const local = gate ? budgetTotals(state.attempts.slice(gate.start)) : undefined
     // 未知计费不释放预留，不能以失败或重试偷偷扩大预算。
     const reason = totals.unknownAttempts || totals.overrunAttempts ? "unresolved" as const
       : totals.admittedAttempts >= config.calls ? "calls" as const
-      : totals.reportedTokens + totals.outstandingTokens + attempt.reservationTokens > config.tokens ? "tokens" as const : undefined
+      : totals.reportedTokens + totals.outstandingTokens + attempt.reservationTokens > config.tokens ? "tokens" as const
+      : gate && local!.admittedAttempts >= gate.policy.calls ? "calls" as const
+      : gate && local!.reportedTokens + local!.outstandingTokens + attempt.reservationTokens > gate.policy.tokens ? "tokens" as const
+      : totals.admittedAttempts + (gate?.policy.protectedCalls ?? 0) >= config.calls ? "calls" as const
+      : totals.reportedTokens + totals.outstandingTokens + attempt.reservationTokens + (gate?.policy.protectedTokens ?? 0) > config.tokens ? "tokens" as const : undefined
+    const global = reason === "unresolved" || totals.admittedAttempts >= config.calls ||
+      totals.reportedTokens + totals.outstandingTokens + attempt.reservationTokens > config.tokens
+    const layer = global ? undefined : gate && (local!.admittedAttempts >= gate.policy.calls ||
+      local!.reportedTokens + local!.outstandingTokens + attempt.reservationTokens > gate.policy.tokens) ? "stage" as const : "protected" as const
     if (reason) {
       // 拒绝也原子留证；无发送不增调用，后续停止不靠解析异常文本。
       state.lastDenial = { reason, request: attempt.request, role: attempt.role, model: attempt.model,
-        reservationTokens: attempt.reservationTokens, atState: fingerprint(state.attempts) }
+        reservationTokens: attempt.reservationTokens, atState: fingerprint(state.attempts),
+        ...(layer ? { layer } : {}), ...(gate ? { gate: gate.id } : {}) }
       return { totals, reason }
     }
     delete state.lastDenial
     state.attempts.push({ id: attempt.id, request: attempt.request, model: attempt.model, role: attempt.role,
-      reservationTokens: attempt.reservationTokens, status: "reserved" })
+      reservationTokens: attempt.reservationTokens, status: "reserved", ...(attempt.gate ? { gate: attempt.gate } : {}) })
     return { totals: budgetTotals(state.attempts), reason: undefined }
   })
   if (result.reason) throw new Error(result.reason === "unresolved" ? "Request budget needs unresolved usage inspection" : "Request budget exhausted")
   return result.totals
+}
+
+export async function openRequestStage(config: RequestBudget, policy: Admission, previous: string | null) {
+  const next = admission(policy)
+  return transaction(config, state => {
+    const current = state.gates?.at(-1)
+    if (current?.id === next.id) {
+      const before = state.gates!.at(-2)?.id ?? null
+      if (previous !== before || canonical(current.policy) !== canonical(next.policy)) throw new Error("Request stage retry drift")
+      return structuredClone(current)
+    }
+    if ((current?.id ?? null) !== previous) throw new Error("Request stage predecessor drift")
+    const totals = budgetTotals(state.attempts)
+    if (totals.unresolvedAttempts || totals.overrunAttempts) throw new Error("Request stage has unresolved usage")
+    if (current) nextAdmission(current.policy, next.policy)
+    else if (state.attempts.length || next.policy.round !== 1 || next.policy.generation !== 0 || next.policy.stage !== "author")
+      throw new Error("Request stages must be installed before the first author request")
+    const calls = next.policy.calls + next.policy.protectedCalls, tokens = next.policy.tokens + next.policy.protectedTokens
+    if (!Number.isSafeInteger(calls) || !Number.isSafeInteger(tokens) || totals.admittedAttempts + calls > config.calls ||
+      totals.reportedTokens + tokens > config.tokens) throw new Error("Request stage minimum resources unavailable")
+    const gate = { ...next, start: state.attempts.length }
+    // 只冻结准入上限，不新增虚拟消费；所有计费仍来自原请求账本。
+    state.gates ??= []
+    state.gates.push(gate)
+    if (state.lastDenial?.gate) delete state.lastDenial
+    return structuredClone(gate)
+  })
 }
 
 export async function settleRequest(config: RequestBudget, id: string, tokens: number | undefined) {
@@ -146,5 +225,8 @@ export async function settleRequest(config: RequestBudget, id: string, tokens: n
 export async function inspectBudget(config: RequestBudget) {
   return transaction(config, state => ({ ...budgetTotals(state.attempts), scope: config.scope,
     limits: { calls: config.calls, tokens: config.tokens },
-    ...(state.lastDenial && state.lastDenial.atState === fingerprint(state.attempts) ? { denial: structuredClone(state.lastDenial) } : {}) }))
+    ...(state.lastDenial && state.lastDenial.atState === fingerprint(state.attempts) &&
+      (!state.lastDenial.gate || state.lastDenial.gate === state.gates?.at(-1)?.id) ?
+      state.lastDenial.layer ? state.lastDenial.gate === state.gates?.at(-1)?.id ? { stageDenial: structuredClone(state.lastDenial) } : {} :
+      { denial: structuredClone(state.lastDenial) } : {}) }))
 }
