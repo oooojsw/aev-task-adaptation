@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 import { randomUUID, createHash } from "node:crypto"
+import { existsSync } from "node:fs"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { buildOfflineCampaign } from "../../protocol-plugins/offline-campaign-fixture"
 import { TRAINING_ROLES, type TrainingConfig } from "../../protocol-plugins/training"
@@ -14,10 +16,16 @@ import { inspectBudget } from "../request-budget"
 
 const hash = async (file: string) => createHash("sha256").update(await readFile(file)).digest("hex")
 
+const testEvidenceRoot = () =>
+  process.env.AEV_TEST_EVIDENCE_ROOT ||
+  (existsSync("E:/project/AEV-task-adaptation-20261016/test-evidence")
+    ? "E:/project/AEV-task-adaptation-20261016/test-evidence"
+    : path.join(tmpdir(), "aev-test-evidence"))
+
 // 仅替换模型边界；两类任务走同一个真实Campaign、判卷进程和探索闭环。
 for (const kind of ["report", "software"] as const) test(`${kind} exploration uses common Campaign and first-pass delivery`, async () => {
   const cwd = path.resolve(import.meta.dir, "../../../..")
-  const root = path.join("E:/project/AEV-task-adaptation-20261016/test-evidence", `${kind}-${randomUUID()}`)
+  const root = path.join(testEvidenceRoot(), `${kind}-${randomUUID()}`)
   const source = path.join(root, "sources")
   await mkdir(source, { recursive: true })
   await writeFile(path.join(source, "candidate.txt"), kind === "report" ? "initial argument" : "function solve() { return 0 }")

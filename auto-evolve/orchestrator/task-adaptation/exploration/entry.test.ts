@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
+import { existsSync } from "node:fs"
 import { mkdir, writeFile, link } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import { fingerprint } from "../../protocol-plugins/identity"
 import { validatePlan, planIdentity } from "../plan"
@@ -11,6 +13,12 @@ import type { LongTaskSpec } from "../../long-task/contract"
 import type { Registry } from "../../protocol-plugins/registry"
 import { requireExplorationHost } from "./entry"
 import { plan, policy } from "./policy.test"
+
+const testEvidenceRoot = () =>
+  process.env.AEV_TEST_EVIDENCE_ROOT ||
+  (existsSync("E:/project/AEV-task-adaptation-20261016/test-evidence")
+    ? "E:/project/AEV-task-adaptation-20261016/test-evidence"
+    : path.join(tmpdir(), "aev-test-evidence"))
 
 test("optional policy freezes in Plan identity without adding an absent default", () => {
   const original = plan(), before = fingerprint(original)
@@ -34,7 +42,7 @@ test("validating a policy does not authorize execution or self-reported Host cap
 })
 
 test("preset preparation rejects exploration before backend creation or any intake call", async () => {
-  const root = path.join("E:/project/AEV-task-adaptation-20261016/test-evidence", `exploration-preflight-${randomUUID()}`)
+  const root = path.join(testEvidenceRoot(), `exploration-preflight-${randomUUID()}`)
   await mkdir(root, { recursive: true })
   const file = path.join(root, "plan.json")
   await writeFile(file, "\uFEFF" + JSON.stringify({ ...plan(), exploration: policy() }))
@@ -60,7 +68,7 @@ test("a constructed role context cannot omit required Host windows", () => {
 })
 
 test("preset preflight keeps the original size and hardlink protection before backend creation", async () => {
-  const root = path.join("E:/project/AEV-task-adaptation-20261016/test-evidence", `exploration-unsafe-plan-${randomUUID()}`)
+  const root = path.join(testEvidenceRoot(), `exploration-unsafe-plan-${randomUUID()}`)
   await mkdir(root, { recursive: true })
   const oversized = path.join(root, "oversized.json"), original = path.join(root, "original.json"), linked = path.join(root, "linked.json")
   await writeFile(oversized, " ".repeat(1024 * 1024 + 1))
