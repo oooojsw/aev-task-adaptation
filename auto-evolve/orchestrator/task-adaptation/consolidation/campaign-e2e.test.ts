@@ -10,7 +10,7 @@ import { digest } from "./contract"
 import { TRAINING_ROLES, type TrainingConfig } from "../../protocol-plugins/training"
 import { runOpencodeTask, type OpencodeTaskInput } from "../../opencode"
 import { DEFAULT_CONFIG } from "../../schema"
-import { inspectBudget } from "../request-budget"
+import { inspectBudget, reserveRequest } from "../request-budget"
 import { compileTask } from "../catalogue"
 import { fingerprint } from "../../protocol-plugins/identity"
 import { harvest } from "../../protocol-plugins/harvest"
@@ -43,6 +43,7 @@ for (const mode of ["original", "recovery", "exploration"] as const) test(`unifi
   const errors: string[] = []
   let evaluations = 0
   let leads = 0
+  let origins = 0
   let interrupted = false
   function reply(body: Body, content: string, actions: Action[] = []) {
     const id = randomUUID()
@@ -128,14 +129,16 @@ for (const mode of ["original", "recovery", "exploration"] as const) test(`unifi
         throw new Error("Offline interruption before dispatch")
       }
       if (input.title.startsWith("Campaign Lead")) leads++
-      if (exploration && input.title.startsWith("Campaign Lead") && input.title.includes("round-003")) {
+      if (exploration && input.title.startsWith("Campaign Lead") && input.title.includes("round-003") && leads === 3) {
+        origins++
         expect(await readFile(input.permissionEditPaths![0], "utf8")).toContain("ROUND_TARGET=1")
       }
       await input.onSpawn?.()
       if (input.title.startsWith("Campaign Lead") || input.resourceReaderGrant) {
         const id = randomUUID()
         const round = Number(input.title.match(/round-(\d+)/)?.[1])
-        const item = { input, target: [38, 43, 41][round - 1], stage: 0, reads: 0, oversized: recovery && leads === 1 }
+        const item = { input, target: [38, 43, 41][round - 1], stage: 0, reads: 0,
+          oversized: recovery && leads === 1 || exploration && round === 3 }
         invocations.set(id, item)
         const result = await runOpencodeTask({ ...input, cwd, prompt: input.prompt + `\nOFFLINE_INVOCATION:${id}`,
           recordAdaptiveConcurrency: false, runtimeBudget: { profile: "short", hardTimeoutMs: 120000, silentTimeoutMs: 90000 } })
@@ -236,11 +239,12 @@ for (const mode of ["original", "recovery", "exploration"] as const) test(`unifi
     await writeFile(path.join(root, "outcome.json"), JSON.stringify(result, null, 2))
     expect(errors).toEqual([])
     expect(result.status).toBe("verified_success")
-    expect(leads).toBe(recovery ? 4 : 3)
-    expect(evaluations).toBe(150)
+    expect(leads).toBe(recovery || exploration ? 4 : 3)
+    expect(evaluations).toBe(exploration ? 100 : 150)
     const records = await readdir(path.join(result.campaignDir, "task-adaptation/versions"))
     const versions = await Promise.all(records.map(async name => JSON.parse(await readFile(path.join(result.campaignDir, "task-adaptation/versions", name, "record.json"), "utf8"))))
-    expect(versions.sort((a, b) => a.round - b.round).map(row => row.metric)).toEqual([38 / 50, 43 / 50, 41 / 50])
+    expect(versions.sort((a, b) => a.round - b.round).map(row => row.metric))
+      .toEqual(exploration ? [38 / 50, 43 / 50] : [38 / 50, 43 / 50, 41 / 50])
     const delivery = JSON.parse(await readFile(result.delivery.path, "utf8"))
     expect(await readFile(path.join(path.dirname(result.delivery.path), delivery.files[0].path), "utf8")).toContain("ROUND_TARGET=43")
     if (preserved) {
@@ -256,10 +260,11 @@ for (const mode of ["original", "recovery", "exploration"] as const) test(`unifi
     const resumed = await actual.runTask(launch)
     const after = await inspectBudget(budget)
     expect(resumed.delivery).toEqual({ ...result.delivery, reused: true })
-    expect(evaluations).toBe(150)
-    expect(leads).toBe(recovery ? 4 : 3)
+    expect(evaluations).toBe(exploration ? 100 : 150)
+    expect(leads).toBe(recovery || exploration ? 4 : 3)
     expect(after).toEqual(before)
     if (exploration) {
+      expect(origins).toBe(1)
       const saved = JSON.parse(await readFile(path.join(result.campaignDir, "task-adaptation/exploration/host/state.json"), "utf8"))
       expect(saved.record.observations.map((item: { branch: string }) => item.branch)).toEqual(["original", "original", "alternative"])
       expect(saved.record.decision.reason).toBe("global_limit")
@@ -267,7 +272,23 @@ for (const mode of ["original", "recovery", "exploration"] as const) test(`unifi
       await harvest({ cwd, campaignRoot: result.campaignDir, taskID: compiled.plan.id, targetRoot })
       expect(await readFile(path.join(targetRoot, "DIRECT_CHAT.md"), "utf8")).toContain("ROUND_TARGET=43")
       await harvest({ cwd, campaignRoot: result.campaignDir, taskID: compiled.plan.id, targetRoot })
-      expect(evaluations).toBe(150)
+      expect(evaluations).toBe(100)
+      const file = path.join(result.campaignDir, "campaign.json")
+      const state = JSON.parse(await readFile(file, "utf8"))
+      expect(state.lastFinalAcceptancePassed).toBe(false)
+      // 用真实准入拒绝证明预算终态，拒绝本身不制造请求或费用。
+      const ledger = JSON.parse(await readFile(path.join(budget.root, "budget.json"), "utf8"))
+      const gate = ledger.gates.at(-1)
+      await expect(reserveRequest(budget, { id: randomUUID(), request: "a".repeat(64),
+        role: gate.policy.roles[0], model: "consumer", reservationTokens: budget.tokens, gate: gate.id })).rejects.toThrow("exhausted")
+      await writeFile(file, JSON.stringify({ ...state, taskStopReason: "request_token_budget" }))
+      const limited = path.join(root, "harvested-budget-stop")
+      await harvest({ cwd, campaignRoot: result.campaignDir, taskID: compiled.plan.id, targetRoot: limited })
+      expect(await readFile(path.join(limited, "DIRECT_CHAT.md"), "utf8")).toContain("ROUND_TARGET=43")
+      await writeFile(file, JSON.stringify({ ...state, taskStopReason: "request_call_budget" }))
+      await expect(harvest({ cwd, campaignRoot: result.campaignDir, taskID: compiled.plan.id,
+        targetRoot: path.join(root, "harvested-false-stop") })).rejects.toThrow("budget evidence drift")
+      await writeFile(file, JSON.stringify(state))
     }
     await writeFile(path.join(root, "summary.json"), JSON.stringify({ passed: true, externalModelCalls: 0, evaluations, calls, versions, errors }, null, 2))
     console.log(`Consolidation full chain evidence: ${root}`)

@@ -12,6 +12,7 @@ import { loadLongTaskSpec } from "../long-task/spec"
 import { restoreTaskContext, taskBudgetOptions } from "../task-adaptation/context"
 import { readTaskVersions, selectTaskVersion } from "../task-adaptation/selection"
 import { exportTaskDelivery } from "../task-adaptation/delivery"
+import { isRequestBudgetStop, requestBudgetStop } from "../task-adaptation/budget-stop"
 import { readTaskExplorationDecision } from "../task-adaptation/exploration/lifecycle"
 import { authorContext } from "./author-context"
 
@@ -49,10 +50,17 @@ export async function harvest(input: { cwd: string; campaignRoot: string; taskID
     spec.taskAdaptationContext = await restoreTaskContext(spec, saved)
     // 停止决定绑定原协议，磁盘spec不包含运行时作者上下文。
     spec.protocolAuthorContext = authorContext(entry, prepared.protocol, prepared.project)
-    const choice = await selectTaskVersion(spec, { root, round: state.currentRound, maxRounds: state.maxRounds, readonly: true })
-    const decision = await readTaskExplorationDecision(spec, { root, round: state.currentRound })
+    const budget = isRequestBudgetStop(state.taskStopReason) ? await requestBudgetStop(spec) : undefined
+    if (isRequestBudgetStop(state.taskStopReason) && (!budget || budget.inspectionRequired || budget.reason !== state.taskStopReason)) {
+      throw new Error("Selected source budget evidence drift")
+    }
+    const choice = await selectTaskVersion(spec, { root, round: state.currentRound, maxRounds: state.maxRounds,
+      forcedReason: budget?.reason, readonly: true })
+    // 预算终态沿用真实账本，不要求未闭轮产生探索决定。
+    const decision = budget ? undefined : await readTaskExplorationDecision(spec, { root, round: state.currentRound })
     if (!choice.passed || choice.selectedTaskVersionPath !== state.selectedTaskVersionPath ||
-        decision.action !== "finish" || decision.reason !== state.taskStopReason) throw new Error("Selected source state drift")
+        (decision ? decision.action !== "finish" || decision.reason !== state.taskStopReason
+          : !choice.stop || choice.taskStopReason !== state.taskStopReason)) throw new Error("Selected source state drift")
     const version = (await readTaskVersions(spec, root)).find(item => item.path === state.selectedTaskVersionPath)
     if (!version || !version.record.feedback.endsWith(".training.json")) throw new Error("Selected source version missing")
     const dir = `${input.targetRoot}.verified-delivery`

@@ -35,6 +35,7 @@ for (const kind of ["report", "software"] as const) test(`${kind} exploration us
   const holder = globalThis as Record<string, unknown>
   const calls: string[] = []
   let leads = 0
+  let interrupted = false
   try {
     const profile = path.join(root, "profile")
     await mkdir(profile)
@@ -46,6 +47,10 @@ for (const kind of ["report", "software"] as const) test(`${kind} exploration us
     config.monitorConfig.enabled = false
     config.monitorConfig.autoStart = false
     holder[key] = { async loadConfig() { return config }, async runOpencodeTask(input: OpencodeTaskInput) {
+      if (kind === "software" && !interrupted && input.title === "Campaign Worker task-sources round-003") {
+        interrupted = true
+        throw new Error("Offline new-generation interruption before dispatch")
+      }
       calls.push(input.title)
       await input.onSpawn?.()
       if (input.title.startsWith("Campaign Lead")) {
@@ -103,7 +108,21 @@ for (const kind of ["report", "software"] as const) test(`${kind} exploration us
         requestBudget: { schema: "aev.task-budget-policy.v1", root: path.join(root, "budget"), scope: kind,
           models: [{ model: "fixture/actor", dialect: "openai_chat", expectedModels: ["actor"], maxInputTokens: 20000, maxOutputTokens: 4096 }] },
         maxBundleBytes: 1000000 } }
-    const result = await actual.runTask(input)
+    let result = await actual.runTask(input)
+    if (kind === "software") {
+      expect(interrupted).toBe(true)
+      expect(result.status).toBe("failed")
+      await writeFile(path.join(root, "interrupted-outcome.json"), JSON.stringify(result, null, 2))
+      const file = path.join(result.campaignDir, "campaign.json")
+      const state = JSON.parse(await readFile(file, "utf8"))
+      const before = JSON.parse(await readFile(path.join(result.campaignDir, "task-adaptation/exploration/host/state.json"), "utf8"))
+      expect(before.record.observations.map((item: { branch: string }) => item.branch)).toEqual(["original", "original"])
+      // 已返回终态后模拟人工确认接管，保留同一Campaign及内轮现场。
+      await writeFile(file, JSON.stringify({ ...state, status: "recovery_pending", ownerPID: undefined,
+        ownerCreationTick: undefined, ownerCommandHint: undefined, heartbeatAt: undefined }))
+      result = await actual.runTask(input)
+      expect(result.campaignID).toBe(state.id)
+    }
     await writeFile(path.join(root, "outcome.json"), JSON.stringify(result, null, 2))
     expect(result.status).toBe("verified_success")
     expect(leads).toBe(5)
