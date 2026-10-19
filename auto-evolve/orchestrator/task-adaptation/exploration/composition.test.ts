@@ -6,7 +6,7 @@ import path from "node:path"
 import { writeFileAtomic, writeJsonAtomic } from "../../atomic-write"
 import { bindPlan } from "../binding"
 import { withFileTransaction, directoryBytes } from "../../file-transaction"
-import { saveCandidate, type ArchiveInput } from "./archive"
+import { readCandidate, saveCandidate, type ArchiveInput } from "./archive"
 import { compose } from "./composition"
 import { explorationIdentity } from "./policy"
 import { plan, policy } from "./policy.test"
@@ -93,6 +93,39 @@ test("composition replaces only declared entries and preserves current facts wit
   expect(result.record.files.map((item) => item.source.id)).toEqual([input.origin, input.current])
   expect(await readFile(path.join(input.bound.root, "report.md"), "utf8")).toBe("failed current report")
   expect(await compose(input)).toEqual(result)
+})
+
+test("historical origin precedes the new frozen policy without a self-referential candidate ID", async () => {
+  const prior = await fixture({ report: "historical method", facts: "historical facts" })
+  const next = await fixture({ facts: "new facts" })
+  const cfg = structuredClone(next.policy)
+  cfg.origin = { kind: "candidate", fingerprint: prior.current, archive: prior.archive, scope: prior.scope }
+  const task = structuredClone(next.bound.plan)
+  task.exploration = cfg
+  const bound = await bindPlan(next.bound.root, task, [])
+  const scope = { ...next.scope, campaign: "new-campaign", plan: bound.fingerprint,
+    policy: explorationIdentity(cfg, bound.plan)! }
+  const saved = await readCandidate(next.archive, next.current, next.scope, cfg.bounds.archiveBytes)
+  const current = await saveCandidate({ root: next.archive, candidateRoot: bound.root,
+    evidenceRoot: path.join(next.root, "..", "evidence"), scope, round: 1, pass: 1,
+    branch: "original", parent: null, closure: saved.record.closure,
+    entries: saved.record.files, feedback: saved.record.feedback, bounds: cfg.bounds })
+  const input = { ...next, bound, scope, policy: cfg, origin: prior.current, current: current.id }
+  const result = await compose(input)
+  expect(await readFile(path.join(result.view, "report.md"), "utf8")).toBe("failed current report")
+  expect(await readFile(path.join(result.view, "facts.md"), "utf8")).toBe("new facts")
+  expect(result.record.originReference).toEqual(cfg.origin)
+  expect(bound.plan.exploration!.origin).toEqual(cfg.origin)
+  expect(await compose(input)).toEqual(result)
+  await expect(compose({ ...input, origin: prior.origin })).rejects.toThrow("historical origin binding")
+  const bad = structuredClone(cfg)
+  if (bad.origin.kind !== "candidate") throw new Error("fixture origin")
+  bad.origin.scope.campaign = "wrong-history"
+  const changed = structuredClone(task)
+  changed.exploration = bad
+  const rebound = await bindPlan(bound.root, changed, [])
+  const wrong = { ...scope, plan: rebound.fingerprint, policy: explorationIdentity(bad, rebound.plan)! }
+  await expect(compose({ ...input, bound: rebound, policy: bad, scope: wrong })).rejects.toThrow("identity drift")
 })
 
 test("composition explicit recovery preserves completed bytes and fills missing local files", async () => {

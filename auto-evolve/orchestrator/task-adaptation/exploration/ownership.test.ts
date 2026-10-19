@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdtemp, mkdir, writeFile, readFile, lstat } from "node:fs/promises"
+import { mkdtemp, mkdir, writeFile, readFile, lstat, rename } from "node:fs/promises"
 import { once } from "node:events"
 import { spawn } from "node:child_process"
 import os from "node:os"
@@ -9,7 +9,10 @@ import { bindPlan } from "../binding"
 import { fingerprint } from "../../protocol-plugins/identity"
 import { plan, policy } from "./policy.test"
 import { openTaskCampaignControl, preserveExplorationRuntime } from "./ownership"
-import { healStaleRuntimeStates } from "../../long-task-campaign/runner"
+import { cleanupRuntimeScopeWithRetry, healStaleRuntimeStates } from "../../long-task-campaign/runner"
+import { freezeTaskOrigin } from "./origin"
+import { openTaskGeneration } from "./generation"
+import { saveCandidate } from "./archive"
 
 async function fixture() {
   const base = await mkdtemp(path.join(os.tmpdir(), "aev-host-control-"))
@@ -36,6 +39,124 @@ test("old task does not create a Host directory or acquire a new control lock", 
   const root = path.join(await mkdtemp(path.join(os.tmpdir(), "aev-no-host-")), "absent")
   expect(await openTaskCampaignControl({} as LongTaskSpec, { root, campaign: "old", baseSpecPath: root })).toBeUndefined()
   await expect(lstat(root)).rejects.toThrow()
+})
+
+test("initial origin freezes before authors and survives later current changes and closed controller", async () => {
+  const f = await fixture(), control = (await openTaskCampaignControl(f.spec, f.input))!
+  const current = path.join(f.root, "pending-expert-package/current")
+  await mkdir(current, { recursive: true })
+  await writeFile(path.join(current, "report.md"), "initial report")
+  await writeFile(path.join(current, "facts.md"), "initial facts")
+  try {
+    await expect(freezeTaskOrigin(f.spec, { root: f.root, control })).rejects.toThrow("origin missing")
+    const first = await freezeTaskOrigin(f.spec, { root: f.root, control, create: true })
+    expect(first.record.round).toBe(0)
+    expect(first.record.feedback).toBeNull()
+    await writeFile(path.join(current, "report.md"), "later author revision")
+    expect(await freezeTaskOrigin(f.spec, { root: f.root, control })).toEqual(first)
+    expect(await readFile(path.join(path.dirname(first.path), first.record.files[0].file), "utf8")).toBe("initial report")
+    control.close()
+    await expect(freezeTaskOrigin(f.spec, { root: f.root, control })).rejects.toThrow("Live Campaign control")
+    await expect(freezeTaskOrigin(f.spec, { root: f.root, control: { ...control } })).rejects.toThrow("Live Campaign control")
+    const next = (await openTaskCampaignControl(f.spec, f.input))!
+    try { expect(await freezeTaskOrigin(f.spec, { root: f.root, control: next })).toEqual(first) }
+    finally { next.close() }
+  } finally { control.close() }
+})
+
+test("initial origin interrupted completion recovers frozen blobs rather than rereading changed current", async () => {
+  const f = await fixture(), control = (await openTaskCampaignControl(f.spec, f.input))!
+  const current = path.join(f.root, "pending-expert-package/current")
+  await mkdir(current, { recursive: true })
+  await writeFile(path.join(current, "report.md"), "initial report")
+  await writeFile(path.join(current, "facts.md"), "initial facts")
+  try {
+    const first = await freezeTaskOrigin(f.spec, { root: f.root, control, create: true })
+    await rename(first.path, `${first.path}.saved`)
+    await writeFile(path.join(current, "report.md"), "subsequent current")
+    expect(await freezeTaskOrigin(f.spec, { root: f.root, control })).toEqual(first)
+    await rename(first.path, `${first.path}.saved2`)
+    await rename(path.join(path.dirname(first.path), "files/0.bin"), path.join(f.base, "lost.bin"))
+    await expect(freezeTaskOrigin(f.spec, { root: f.root, control })).rejects.toThrow("drift")
+    expect(await readFile(path.join(current, "report.md"), "utf8")).toBe("subsequent current")
+  } finally { control.close() }
+})
+
+test("Campaign round generation lease remains exclusive until round cleanup closes it", async () => {
+  const f = await fixture(), control = (await openTaskCampaignControl(f.spec, f.input))!
+  try {
+    const lease = await openTaskGeneration(f.spec, { root: f.root, control })
+    expect(lease.generation).toBe(0)
+    expect(lease.state).toBeUndefined()
+    await expect(openTaskGeneration(f.spec, { root: f.root, control })).rejects.toThrow("writer active")
+    lease.close()
+    const next = await openTaskGeneration(f.spec, { root: f.root, control })
+    next.close()
+  } finally { control.close() }
+})
+
+test("controlled round cleanup cannot advance while children remain or cleanup throws", async () => {
+  const residual = { scope: "round", cleanedCount: 0, remainingCount: 1 }
+  let calls = 0
+  const cleanup = async () => { calls++; return residual }
+  await expect(cleanupRuntimeScopeWithRetry("round", true, cleanup)).rejects.toThrow("cannot advance generation")
+  expect(calls).toBe(2)
+  await cleanupRuntimeScopeWithRetry("round", false, cleanup)
+  expect(calls).toBe(4)
+  const failure = new Error("cleanup unavailable")
+  await expect(cleanupRuntimeScopeWithRetry("round", true, async () => { throw failure })).rejects.toBe(failure)
+})
+
+test("event-only initial freeze resumes identical bytes and rejects a changed initial without replacing event", async () => {
+  const f = await fixture(), control = (await openTaskCampaignControl(f.spec, f.input))!
+  const current = path.join(f.root, "pending-expert-package/current")
+  await mkdir(current, { recursive: true })
+  await writeFile(path.join(current, "report.md"), "initial report")
+  await writeFile(path.join(current, "facts.md"), "initial facts")
+  try {
+    const first = await freezeTaskOrigin(f.spec, { root: f.root, control, create: true })
+    const root = path.dirname(path.dirname(first.path))
+    const event = path.join(root, `${fingerprint({ schema: "aev.exploration-archive-event.v1", scope: control.scope, round: 0 })}.event.json`)
+    const before = await readFile(event, "utf8")
+    await rename(path.dirname(first.path), path.join(f.base, "saved-origin"))
+    await rename(path.join(root, `${first.id}.intent.json`), path.join(f.base, "saved-intent.json"))
+    expect(await freezeTaskOrigin(f.spec, { root: f.root, control })).toEqual(first)
+    await rename(path.dirname(first.path), path.join(f.base, "saved-origin2"))
+    await rename(path.join(root, `${first.id}.intent.json`), path.join(f.base, "saved-intent2.json"))
+    await writeFile(path.join(current, "report.md"), "changed initial")
+    await expect(freezeTaskOrigin(f.spec, { root: f.root, control })).rejects.toThrow("event input drift")
+    expect(await readFile(event, "utf8")).toBe(before)
+  } finally { control.close() }
+})
+
+test("historical origin is checked against new deliverables at initialization, not only at activation", async () => {
+  const prior = await fixture(), owner = (await openTaskCampaignControl(prior.spec, prior.input))!
+  const current = path.join(prior.root, "pending-expert-package/current")
+  await mkdir(current, { recursive: true })
+  await writeFile(path.join(current, "report.md"), "initial report")
+  await writeFile(path.join(current, "facts.md"), "initial facts")
+  const first = await freezeTaskOrigin(prior.spec, { root: prior.root, control: owner, create: true })
+  owner.close()
+  for (const mode of ["full", "missing", "path"] as const) {
+    const source = path.join(prior.base, mode)
+    await mkdir(source)
+    await writeFile(path.join(source, "report.md"), "initial report")
+    await writeFile(path.join(source, mode === "path" ? "else.md" : "facts.md"), "initial facts")
+    const entries = first.record.files.filter(item => mode !== "missing" || item.id === "report")
+      .map(item => ({ ...item, path: mode === "path" && item.id === "facts" ? "else.md" : item.path }))
+    const archive = path.join(prior.base, `archive-${mode}`)
+    const saved = await saveCandidate({ ...first.record, root: archive, candidateRoot: source,
+      evidenceRoot: prior.root, entries, bounds: policy().bounds })
+    const f = await fixture(), task = structuredClone(f.spec.taskAdaptationContext!.plan)
+    task.exploration!.origin = { kind: "candidate", archive, scope: saved.record.scope, fingerprint: saved.id }
+    f.spec.taskAdaptationContext = await bindPlan(f.spec.taskAdaptation!.root, task, [])
+    const control = (await openTaskCampaignControl(f.spec, f.input))!
+    try {
+      const result = freezeTaskOrigin(f.spec, { root: f.root, control })
+      if (mode === "full") expect(await result).toEqual(saved)
+      else await expect(result).rejects.toThrow("entries differ")
+    } finally { control.close() }
+  }
 })
 
 test("Campaign control serializes recovery, rereads state and preserves original evidence", async () => {

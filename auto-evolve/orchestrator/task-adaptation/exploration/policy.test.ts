@@ -88,7 +88,7 @@ test("rejects extra actions, unbounded budgets, invalid partitions and unsafe re
   for (const modify of [
     (cfg: ExplorationPolicy) => Object.assign(cfg, { parallel: true }),
     (cfg: ExplorationPolicy) => {
-      cfg.origin = { kind: "candidate", fingerprint: "guessed" }
+      cfg.origin = { kind: "candidate", fingerprint: "guessed" } as never
     },
     (cfg: ExplorationPolicy) => {
       cfg.preserve = []
@@ -123,7 +123,9 @@ test("rejects extra actions, unbounded budgets, invalid partitions and unsafe re
 
 test("candidate origin identity must be a string rather than a coercible JSON array", () => {
   const cfg = policy()
-  cfg.origin = { kind: "candidate", fingerprint: "a".repeat(64) }
+  cfg.origin = { kind: "candidate", fingerprint: "a".repeat(64), archive: process.cwd().replaceAll("\\", "/"),
+    scope: { campaign: "prior", plan: "b".repeat(64), protocol: "c".repeat(64), policy: "d".repeat(64),
+      budget: { root: process.cwd().replaceAll("\\", "/"), scope: "prior" } } }
   expect(explorationPolicy(cfg, plan())!.origin.kind).toBe("candidate")
   cfg.origin.fingerprint = ["a".repeat(64)] as never
   expect(() => explorationPolicy(cfg, plan())).toThrow("origin")

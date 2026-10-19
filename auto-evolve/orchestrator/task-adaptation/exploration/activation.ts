@@ -99,6 +99,7 @@ export async function activate(input: ActivationInput) {
     !path.isAbsolute(input.root) ||
     overlaps(input.root, input.composition.root) ||
     overlaps(input.root, input.composition.archive) ||
+    (policy.origin.kind === "candidate" && overlaps(input.root, policy.origin.archive)) ||
     overlaps(input.root, input.composition.bound.root)
   )
     throw new Error("Separate absolute activation root required")

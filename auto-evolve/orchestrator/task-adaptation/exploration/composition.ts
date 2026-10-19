@@ -84,13 +84,16 @@ export async function compose(input: CompositionInput) {
   )
     throw new Error("Composition binding mismatch")
   await verifyBinding(input.bound)
-  const origin = await readCandidate(input.archive, input.origin, input.scope, cfg.bounds.archiveBytes)
+  const locator = cfg.origin.kind === "candidate" ? cfg.origin : undefined
+  if (locator && (input.origin !== locator.fingerprint || overlaps(input.root, locator.archive)))
+    throw new Error("Composition historical origin binding mismatch")
+  const origin = await readCandidate(locator?.archive ?? input.archive, input.origin, locator?.scope ?? input.scope, cfg.bounds.archiveBytes)
   const current = await readCandidate(input.archive, input.current, input.scope, cfg.bounds.archiveBytes)
   if (
     current.record.branch !== "original" ||
     current.record.round < 1 ||
     (cfg.origin.kind === "initial" ? origin.record.round !== 0 : input.origin !== cfg.origin.fingerprint) ||
-    origin.record.round > current.record.round
+    (!locator && origin.record.round > current.record.round)
   )
     throw new Error("Composition origin or current is not eligible")
   for (const saved of [origin, current]) {
@@ -146,6 +149,7 @@ export async function compose(input: CompositionInput) {
     scope: input.scope,
     origin: input.origin,
     current: input.current,
+    ...(locator ? { originReference: locator } : {}),
     files,
     dependencies,
   }
@@ -154,7 +158,7 @@ export async function compose(input: CompositionInput) {
   for (const item of entries) {
     const file =
       item.source.kind === "candidate"
-        ? await resolveResource(input.archive, `${item.source.id}/${item.source.file}`)
+        ? await resolveResource(locator && item.source.id === origin.id ? locator.archive : input.archive, `${item.source.id}/${item.source.file}`)
         : await resolveResource(input.bound.root, item.source.file)
     data.push(await content(file, item))
   }

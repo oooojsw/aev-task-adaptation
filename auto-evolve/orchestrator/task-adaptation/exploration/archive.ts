@@ -171,9 +171,13 @@ export async function saveCandidate(input: ArchiveInput) {
     throw new Error("Absolute archive roots required")
   await checkedPath(input.candidateRoot, "directory")
   await checkedPath(input.evidenceRoot, "directory")
-  const content = []
-  for (const item of record.files)
-    content.push(await bytes(await resolveResource(input.candidateRoot, item.path), item, input.bounds.candidateBytes))
+  const content: Buffer[] = []
+  for (const item of record.files) {
+    const stored = path.join(input.root, id, item.file)
+    // 中断恢复优先使用已冻结字节，缺失部分仍须精确匹配原输入。
+    const file = input.recover && await optional(stored) ? stored : await resolveResource(input.candidateRoot, item.path)
+    content.push(await bytes(file, item, input.bounds.candidateBytes))
+  }
   if (record.feedback)
     content.push(
       await bytes(

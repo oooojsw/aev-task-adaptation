@@ -10,6 +10,13 @@ import { verifyBinding } from "../binding"
 import { validateTaskBudgetPolicy } from "../budget-policy"
 import { explorationIdentity, explorationPolicy } from "./policy"
 
+const active = new WeakMap<object, string>()
+export type TaskCampaignControl = NonNullable<Awaited<ReturnType<typeof openTaskCampaignControl>>>
+
+export function assertTaskCampaignControl(control: TaskCampaignControl, root: string) {
+  if (active.get(control) !== path.resolve(root)) throw new Error("Live Campaign control required")
+}
+
 export async function preserveExplorationRuntime(root: string, kind: "campaign" | "run") {
   if (kind === "campaign") {
     try {
@@ -86,7 +93,12 @@ export async function openTaskCampaignControl(spec: LongTaskSpec, input: {
       }
       await writeJsonAtomic(target, binding)
     }
-    return { state: immutable(state), scope: immutable(scope), close: lease.rollback }
+    const control = { state: immutable(state), scope: immutable(scope), close: () => {
+      active.delete(control)
+      lease.rollback()
+    } }
+    active.set(control, path.resolve(input.root))
+    return control
   } catch (error) {
     lease.rollback()
     throw error

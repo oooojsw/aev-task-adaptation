@@ -5,6 +5,8 @@ import { loadTaskContext, taskInvocation, seedTaskCandidate, taskBudgetOptions }
 import { selectTaskVersion } from "../task-adaptation/selection"
 import { finalizeTaskRound } from "./round-control"
 import { openTaskCampaignControl, preserveExplorationRuntime } from "../task-adaptation/exploration/ownership"
+import { freezeTaskOrigin } from "../task-adaptation/exploration/origin"
+import { openTaskGeneration } from "../task-adaptation/exploration/generation"
 import { requestBudgetStop, isRequestBudgetStop } from "../task-adaptation/budget-stop"
 import { writeJsonAtomic } from "../atomic-write"
 import { join } from "../join"
@@ -224,11 +226,14 @@ function onceActivationCallback(callback?: OpencodeTaskInput["onSpawn"]) {
   }
 }
 
-async function cleanupRuntimeScopeWithRetry(scope: string | undefined) {
-  const first = await cleanupRuntimeProcessScope(scope)
+export async function cleanupRuntimeScopeWithRetry(scope: string | undefined, required = false,
+  cleanup: (scope: string | undefined) => Promise<{ remainingCount: number }> = cleanupRuntimeProcessScope) {
+  const first = await cleanup(scope)
   if (first.remainingCount <= 0) return
   await sleep(250)
-  await cleanupRuntimeProcessScope(scope)
+  const last = await cleanup(scope)
+  // 旧轮未收束时不能启动新轮；默认旧流程不改变。
+  if (required && last.remainingCount > 0) throw new Error("Campaign round processes remain; cannot advance generation")
 }
 
 async function retryWriteJson(file: string, value: unknown) {
@@ -5257,6 +5262,7 @@ export async function runLongTaskCampaign(input: {
     seedTarget: primaryExperienceWorkspaceSeedTarget(campaignSpec.seedTargets),
   })
   await seedTaskCandidate(baseSpec, campaignPaths.pendingCurrentRoot)
+  if (control) await freezeTaskOrigin(baseSpec, { root: campaignPaths.root, control, create: true })
 
   const history: LongTaskCampaignRoundRecord[] = []
   let lastRoundNumber = 0
@@ -5283,7 +5289,10 @@ export async function runLongTaskCampaign(input: {
       const pulseCampaignRound = async () => {
         await pulseCampaignState(campaignPaths)
       }
+      const generation = control ? await openTaskGeneration(baseSpec, { root: campaignPaths.root, control }) : undefined
       try {
+        if (control) for (let prior = Math.max(1, roundNumber - 1); prior <= roundNumber; prior++)
+          await cleanupRuntimeScopeWithRetry(campaignRoundRuntimeScope(campaignID, prior), true)
         await ensureDirectory(roundPaths.root)
         await ensureDirectory(roundPaths.harvestedRoot)
         await ensureDirectory(roundPaths.snapshotsRoot)
@@ -5994,7 +6003,8 @@ export async function runLongTaskCampaign(input: {
           })
         }
       } finally {
-        await cleanupRuntimeScopeWithRetry(roundRuntimeScope)
+        try { await cleanupRuntimeScopeWithRetry(roundRuntimeScope, Boolean(control)) }
+        finally { generation?.close() }
       }
     }
   } catch (error) {
@@ -6198,6 +6208,7 @@ export async function resumeLongTaskCampaign(input: {
     // 锁前可能仍在运行；锁内已完成时只能核验交付，不能再恢复一轮。
     const terminal = await completed(existingState)
     if (terminal) return terminal
+    await freezeTaskOrigin(baseSpec, { root: campaignPaths.root, control })
   }
   const recoveryPlan = await determineCampaignRecoveryDecision({
     cwd: input.cwd,
@@ -6279,7 +6290,10 @@ export async function resumeLongTaskCampaign(input: {
       const pulseCampaignRound = async () => {
         await pulseCampaignState(campaignPaths)
       }
+      const generation = control ? await openTaskGeneration(baseSpec, { root: campaignPaths.root, control }) : undefined
       try {
+        if (control) for (let prior = Math.max(1, roundNumber - 1); prior <= roundNumber; prior++)
+          await cleanupRuntimeScopeWithRetry(campaignRoundRuntimeScope(input.campaignID, prior), true)
         await ensureDirectory(roundPaths.root)
         await ensureDirectory(roundPaths.harvestedRoot)
         await ensureDirectory(roundPaths.snapshotsRoot)
@@ -6998,7 +7012,8 @@ export async function resumeLongTaskCampaign(input: {
           })
         }
       } finally {
-        await cleanupRuntimeScopeWithRetry(roundRuntimeScope)
+        try { await cleanupRuntimeScopeWithRetry(roundRuntimeScope, Boolean(control)) }
+        finally { generation?.close() }
       }
     }
   } catch (error) {

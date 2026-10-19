@@ -1,9 +1,11 @@
 import type { Plan } from "../plan"
+import path from "node:path"
+import type { ArchiveScope } from "./archive"
 import { fingerprint, immutable } from "../../protocol-plugins/identity"
 
 export interface ExplorationPolicy {
   schema: "aev.exploration-policy.v1"
-  origin: { kind: "initial" } | { kind: "candidate"; fingerprint: string }
+  origin: { kind: "initial" } | { kind: "candidate"; fingerprint: string; archive: string; scope: ArchiveScope }
   replace: string[]
   preserve: string[]
   dependencies: string[]
@@ -57,7 +59,7 @@ export function explorationPolicy(value: unknown, plan: Readonly<Plan>): Readonl
   )
   if (value.schema !== "aev.exploration-policy.v1") throw new Error("Unsupported exploration policy")
   const cfg = value as unknown as ExplorationPolicy
-  exact(cfg.origin, cfg.origin?.kind === "initial" ? ["kind"] : ["kind", "fingerprint"], "origin")
+  exact(cfg.origin, cfg.origin?.kind === "initial" ? ["kind"] : ["kind", "fingerprint", "archive", "scope"], "origin")
   if (
     cfg.origin.kind !== "initial" &&
     (cfg.origin.kind !== "candidate" ||
@@ -65,6 +67,19 @@ export function explorationPolicy(value: unknown, plan: Readonly<Plan>): Readonl
       !/^[a-f0-9]{64}$/.test(cfg.origin.fingerprint))
   ) {
     throw new Error("One explicit exploration origin required")
+  }
+  if (cfg.origin.kind === "candidate") {
+    // 历史身份独立于新任务，避免候选哈希依赖自身。
+    exact(cfg.origin.scope, ["campaign", "plan", "protocol", "policy", "budget"], "origin scope")
+    exact(cfg.origin.scope.budget, ["root", "scope"], "origin budget")
+    const source = cfg.origin.scope
+    if (typeof cfg.origin.archive !== "string" || !path.isAbsolute(cfg.origin.archive) ||
+      typeof source.campaign !== "string" || !source.campaign.trim() ||
+      ![source.plan, source.policy, source.protocol].every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)) ||
+      typeof source.budget.root !== "string" || !path.isAbsolute(source.budget.root) ||
+      typeof source.budget.scope !== "string" || !source.budget.scope.trim()) {
+      throw new Error("Frozen historical origin locator and scope required")
+    }
   }
   for (const ids of [cfg.replace, cfg.preserve, cfg.dependencies]) {
     if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string" || !id) || new Set(ids).size !== ids.length) {
