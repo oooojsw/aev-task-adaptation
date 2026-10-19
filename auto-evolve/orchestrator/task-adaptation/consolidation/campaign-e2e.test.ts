@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
+import { existsSync } from "node:fs"
 import { mkdir, readFile, writeFile, readdir } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { buildOfflineCampaign } from "../../protocol-plugins/offline-campaign-fixture"
 import { consolidationCatalogue } from "./profile"
 import { digest } from "./contract"
@@ -17,11 +19,17 @@ type Message = { role: string; content?: unknown }
 type Body = { model: string; stream?: boolean; messages: Message[]; tools?: Array<{ function?: { name?: string } }> }
 type Action = { name: string; args: Record<string, unknown> }
 
+const testEvidenceRoot = () =>
+  process.env.AEV_TEST_EVIDENCE_ROOT ||
+  (existsSync("E:/project/AEV-task-adaptation-20261016/test-evidence")
+    ? "E:/project/AEV-task-adaptation-20261016/test-evidence"
+    : path.join(tmpdir(), "aev-test-evidence"))
+
 // 只使用回环假服务，真实控制器、预算、判卷进程和受限工具不替换。
 for (const mode of ["original", "recovery", "exploration"] as const) test(`unified consolidation ${mode} runs real restricted tools and delivers best of three rounds`, async () => {
   const recovery = mode === "recovery", exploration = mode === "exploration"
   const cwd = path.resolve(import.meta.dir, "../../../..")
-  const root = path.join("E:/project/AEV-task-adaptation-20261016/test-evidence", `consolidation-${randomUUID()}`)
+  const root = path.join(testEvidenceRoot(), `consolidation-${randomUUID()}`)
   await mkdir(root, { recursive: true })
   const sources = path.join(root, "sources")
   const profile = path.join(root, "profile")
