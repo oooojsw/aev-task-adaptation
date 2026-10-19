@@ -29,12 +29,11 @@ export async function directoryBytes(root: string): Promise<number> {
   return total
 }
 
-export async function withFileTransaction<T>(
+export async function openFileTransaction(
   root: string,
   name: string,
-  fn: () => Promise<T>,
   capacity?: number,
-): Promise<T> {
+) {
   await checkedPath(root, "directory")
   if (capacity !== undefined && (!Number.isSafeInteger(capacity) || capacity < 1))
     throw new Error("Finite transaction storage capacity required")
@@ -66,15 +65,41 @@ export async function withFileTransaction<T>(
       throw new Error("Transaction writer active or mutex unavailable", { cause: error })
     }
     await checkedPath(file, "file")
-    const result = await fn()
-    db.exec("COMMIT")
-    active = false
-    return result
-  } finally {
+    let closed = false
+    const finish = (commit: boolean) => {
+      if (closed) return
+      try {
+        db.exec(commit ? "COMMIT" : "ROLLBACK")
+        active = false
+      } finally {
+        try { if (active) db.exec("ROLLBACK") }
+        finally { closed = true; db.close() }
+      }
+    }
+    // 显式租约由调用者finally释放，提前返回也不能越过屏障。
+    return { commit: () => finish(true), rollback: () => finish(false) }
+  } catch (error) {
     try {
       if (active) db.exec("ROLLBACK")
     } finally {
       db.close()
     }
+    throw error
+  }
+}
+
+export async function withFileTransaction<T>(
+  root: string,
+  name: string,
+  fn: () => Promise<T>,
+  capacity?: number,
+): Promise<T> {
+  const lease = await openFileTransaction(root, name, capacity)
+  try {
+    const result = await fn()
+    lease.commit()
+    return result
+  } finally {
+    lease.rollback()
   }
 }

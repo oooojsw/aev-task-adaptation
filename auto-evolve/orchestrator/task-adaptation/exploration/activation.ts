@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { readFile, mkdir, lstat, readdir } from "node:fs/promises"
 import path from "node:path"
 import { writeJsonAtomic } from "../../atomic-write"
-import { checkedPath, directoryBytes, withFileTransaction } from "../../file-transaction"
+import { checkedPath, directoryBytes, openFileTransaction, withFileTransaction } from "../../file-transaction"
 import { canonical, fingerprint, immutable } from "../../protocol-plugins/identity"
 import { readCandidate, type ArchiveScope } from "./archive"
 import { compose, type CompositionInput } from "./composition"
@@ -212,35 +212,39 @@ export async function activate(input: ActivationInput) {
   )
 }
 
-export async function withGeneration<T>(
-  input: {
-    root: string
-    scope: ArchiveScope
-    generation: 0 | 1
-    cap: number
-  },
-  fn: (state: Readonly<State> | undefined) => Promise<T>,
-): Promise<T> {
+interface GenerationInput {
+  root: string
+  scope: ArchiveScope
+  generation: 0 | 1
+  cap: number
+}
+
+export async function openGeneration(input: GenerationInput) {
   if (!path.isAbsolute(input.root) || ![0, 1].includes(input.generation)) throw new Error("Invalid generation lease")
   await mkdir(input.root, { recursive: true })
-  return withFileTransaction(
-    input.root,
-    "activation",
-    async () => {
-      await bind(input.root, input.scope, input.cap)
-      const intent = await saved(input.root, "activation.intent.json", input.cap)
-      const committed = await saved(input.root, "activation.json", input.cap)
-      // 未完成切换时所有入口阻断，先恢复，不能让旧调用继续写。
-      if (intent && !committed) throw new Error("Activation pending recovery")
-      if (committed) {
-        state(committed.record, input.scope, input.root)
-        if (!intent || canonical(intent) !== canonical(committed)) throw new Error("Activation intent mismatch")
-        await checkedPath(committed.record.view, "directory")
-      }
-      if ((committed?.record.generation ?? 0) !== input.generation) throw new Error("Stale exploration generation")
-      // 调用者须在返回前结束全部子任务；屏障不能撤销脱离回调的外部副作用。
-      return fn(committed ? immutable(committed.record) : undefined)
-    },
-    input.cap,
-  )
+  const lease = await openFileTransaction(input.root, "activation", input.cap)
+  try {
+    await bind(input.root, input.scope, input.cap)
+    const intent = await saved(input.root, "activation.intent.json", input.cap)
+    const committed = await saved(input.root, "activation.json", input.cap)
+    // 未完成切换时所有入口阻断，先恢复，不能让旧调用继续写。
+    if (intent && !committed) throw new Error("Activation pending recovery")
+    if (committed) {
+      state(committed.record, input.scope, input.root)
+      if (!intent || canonical(intent) !== canonical(committed)) throw new Error("Activation intent mismatch")
+      await checkedPath(committed.record.view, "directory")
+    }
+    if ((committed?.record.generation ?? 0) !== input.generation) throw new Error("Stale exploration generation")
+    // 必须先收束子任务再close；锁无法撤销已脱离调度的副作用。
+    return { state: committed ? immutable(committed.record) : undefined, close: lease.rollback }
+  } catch (error) {
+    lease.rollback()
+    throw error
+  }
+}
+
+export async function withGeneration<T>(input: GenerationInput, fn: (state: Readonly<State> | undefined) => Promise<T>): Promise<T> {
+  const lease = await openGeneration(input)
+  try { return await fn(lease.state) }
+  finally { lease.close() }
 }

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { readFile, rename, lstat, readdir, mkdir, copyFile } from "node:fs/promises"
 import path from "node:path"
 import { writeFileAtomic } from "../../atomic-write"
-import { activate, withGeneration } from "./activation"
+import { activate, openGeneration, withGeneration } from "./activation"
 import { fixture, interrupt } from "./composition.test"
 import { compose } from "./composition"
 import { overlaps } from "./materialize"
@@ -13,6 +13,29 @@ async function setup() {
   const composition = await fixture()
   return { root: path.join(path.dirname(composition.root), "activation"), composition }
 }
+
+test("explicit round lease fences activation through cleanup and releases on early return", async () => {
+  const input = await setup()
+  const options = { root: input.root, scope: input.composition.scope, generation: 0 as const, cap: 1000000 }
+  const round = async () => {
+    const lease = await openGeneration(options)
+    try {
+      expect(lease.state).toBeUndefined()
+      await expect(activate(input)).rejects.toThrow("writer active")
+      return "early return"
+    } finally {
+      await expect(activate(input)).rejects.toThrow("writer active")
+      lease.close()
+      lease.close()
+    }
+  }
+  expect(await round()).toBe("early return")
+  expect((await activate(input)).record.generation).toBe(1)
+  await expect(openGeneration(options)).rejects.toThrow("Stale")
+  const next = await openGeneration({ ...options, generation: 1 })
+  expect(next.state?.generation).toBe(1)
+  next.close()
+})
 
 test("activation commits one alternative pointer and rejects late old-generation work", async () => {
   const input = await setup()
