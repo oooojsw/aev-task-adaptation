@@ -4,6 +4,7 @@ import { freezeTraining, verifyTraining, trainingExecution, trainingRuntimeBudge
 import { loadTaskContext, taskInvocation, seedTaskCandidate, taskBudgetOptions } from "../task-adaptation/context"
 import { selectTaskVersion } from "../task-adaptation/selection"
 import { finalizeTaskRound } from "./round-control"
+import { openTaskCampaignControl, preserveExplorationRuntime } from "../task-adaptation/exploration/ownership"
 import { requestBudgetStop, isRequestBudgetStop } from "../task-adaptation/budget-stop"
 import { writeJsonAtomic } from "../atomic-write"
 import { join } from "../join"
@@ -350,7 +351,7 @@ function isBootstrappingWithoutOwnerStale(input: {
   return input.nowMs - referenceMs > STALE_BOOTSTRAP_GRACE_MS
 }
 
-async function healStaleRuntimeStates(cwd: string) {
+export async function healStaleRuntimeStates(cwd: string) {
   const now = nowISO()
   const nowMs = Date.now()
   const campaignsRoot = autoEvolvePath(cwd, "runtime-state", "long-task-campaigns")
@@ -361,6 +362,8 @@ async function healStaleRuntimeStates(cwd: string) {
       const campaignPaths = longTaskCampaignPaths(cwd, entry.name)
       const campaignStatePath = campaignPaths.campaignStatePath
       if (!(await pathExists(campaignStatePath))) continue
+      try { if (await preserveExplorationRuntime(campaignPaths.root, "campaign")) continue }
+      catch { continue }
       let state: LongTaskCampaignState
       try {
         state = await readJsonFile<LongTaskCampaignState>(campaignStatePath)
@@ -497,6 +500,8 @@ async function healStaleRuntimeStates(cwd: string) {
       if (!entry.isDirectory()) continue
       const progressPath = path.join(runsRoot, entry.name, "progress_state.json")
       if (!(await pathExists(progressPath))) continue
+      try { if (await preserveExplorationRuntime(path.join(runsRoot, entry.name), "run")) continue }
+      catch { continue }
       let progress: LongTaskProgressState
       try {
         progress = await readJsonFile<LongTaskProgressState>(progressPath)
@@ -5233,6 +5238,9 @@ export async function runLongTaskCampaign(input: {
   // 先登记归属再开展工作，中断后不得重复创建付费任务。
   await input.onCreated?.({ campaignID, campaignDir: campaignPaths.root })
   await prepareCampaignProtocol(campaignPaths.root, baseSpec, false, input.cwd)
+  const control = await openTaskCampaignControl(baseSpec, { root: campaignPaths.root,
+    campaign: campaignID, baseSpecPath: campaignSpec.baseSpecPath })
+  try {
   if (input.historyContext && input.taskID && input.attemptID) {
     await registerCampaignAttempt({
       outDir: input.historyContext.outDir,
@@ -6033,6 +6041,9 @@ export async function runLongTaskCampaign(input: {
     state: finalState,
     roundsCompleted: campaignSpec.maxRounds,
   })
+  } finally {
+    control?.close()
+  }
 }
 
 export async function resumeLongTaskCampaign(input: {
@@ -6071,37 +6082,41 @@ export async function resumeLongTaskCampaign(input: {
     )
   }
 
-  if (existingState.status === "verified_success" || existingState.status === "round_limit_reached") {
+  const completed = async (state: LongTaskCampaignState) => {
+    if (state.status !== "verified_success" && state.status !== "round_limit_reached") return undefined
     if (baseSpec.taskAdaptation) {
-      const budget = isRequestBudgetStop(existingState.taskStopReason) ? await requestBudgetStop(baseSpec) : undefined
-      if (isRequestBudgetStop(existingState.taskStopReason) && (!budget || budget.inspectionRequired || budget.reason !== existingState.taskStopReason)) {
+      const budget = isRequestBudgetStop(state.taskStopReason) ? await requestBudgetStop(baseSpec) : undefined
+      if (isRequestBudgetStop(state.taskStopReason) && (!budget || budget.inspectionRequired || budget.reason !== state.taskStopReason)) {
         throw new Error("Completed task request budget evidence drift")
       }
-      const selection = await selectTaskVersion(baseSpec, { root: campaignPaths.root, round: existingState.currentRound,
+      const selection = await selectTaskVersion(baseSpec, { root: campaignPaths.root, round: state.currentRound,
         maxRounds: campaignSpec.maxRounds, forcedReason: budget?.reason, readonly: Boolean(baseSpec.taskAdaptationContext?.plan.exploration) })
-      if (selection.selectedTaskVersionPath !== existingState.selectedTaskVersionPath ||
-        selection.taskStopReason !== existingState.taskStopReason || !selection.stop ||
-        (existingState.status === "verified_success") !== selection.passed) throw new Error("Completed task delivery selection drift")
+      if (selection.selectedTaskVersionPath !== state.selectedTaskVersionPath ||
+        selection.taskStopReason !== state.taskStopReason || !selection.stop ||
+        (state.status === "verified_success") !== selection.passed) throw new Error("Completed task delivery selection drift")
     }
-    if (baseSpec.protocolPlugins && existingState.status === "verified_success" &&
-      (!baseSpec.taskAdaptation || existingState.lastFinalAcceptancePassed && !isRequestBudgetStop(existingState.taskStopReason))) {
-      if (!existingState.lastFinalAcceptanceResultPath || !existingState.lastRunID) throw new Error("Completed Campaign acceptance identity missing")
+    if (baseSpec.protocolPlugins && state.status === "verified_success" &&
+      (!baseSpec.taskAdaptation || state.lastFinalAcceptancePassed && !isRequestBudgetStop(state.taskStopReason))) {
+      if (!state.lastFinalAcceptanceResultPath || !state.lastRunID) throw new Error("Completed Campaign acceptance identity missing")
       await verifyCompletedCampaignAcceptance({ campaignRoot: campaignPaths.root, cwd: input.cwd,
         budgets: await taskBudgetOptions(baseSpec),
-        campaignID: input.campaignID, roundNumber: existingState.currentRound, runID: existingState.lastRunID,
+        campaignID: input.campaignID, roundNumber: state.currentRound, runID: state.lastRunID,
         entry: baseSpec.protocolPlugins, candidateRoot: campaignPaths.pendingCurrentRoot,
-        resultPath: existingState.lastFinalAcceptanceResultPath })
+        resultPath: state.lastFinalAcceptanceResultPath })
     }
     return toCampaignRunResult({
       campaignID: input.campaignID,
       campaignPaths,
-      state: existingState,
+      state,
     })
   }
+  const terminal = await completed(existingState)
+  if (terminal) return terminal
 
   let history = await readJsonLinesIfExists<LongTaskCampaignRoundRecord>(campaignPaths.historyPath)
   const targetHealth = await readCampaignHealth(campaignPaths.root)
-  if (targetHealth?.suggestedAction === "takeover") {
+  // 新探索先取独占控制；旧接管分支不能提前清owner或改恢复状态。
+  if (targetHealth?.suggestedAction === "takeover" && !baseSpec.taskAdaptationContext?.plan.exploration) {
     const takeoverAt = nowISO()
     const ownerPID =
       typeof existingState.ownerPID === "number" && Number.isFinite(existingState.ownerPID) && existingState.ownerPID > 0
@@ -6174,6 +6189,16 @@ export async function resumeLongTaskCampaign(input: {
     })
   }
 
+  const control = await openTaskCampaignControl(baseSpec, { root: campaignPaths.root,
+    campaign: input.campaignID, baseSpecPath: campaignSpec.baseSpecPath })
+  try {
+  if (control) {
+    existingState = control.state
+    history = await readJsonLinesIfExists<LongTaskCampaignRoundRecord>(campaignPaths.historyPath)
+    // 锁前可能仍在运行；锁内已完成时只能核验交付，不能再恢复一轮。
+    const terminal = await completed(existingState)
+    if (terminal) return terminal
+  }
   const recoveryPlan = await determineCampaignRecoveryDecision({
     cwd: input.cwd,
     campaignPaths,
@@ -7020,4 +7045,7 @@ export async function resumeLongTaskCampaign(input: {
     state: finalState,
     roundsCompleted: campaignSpec.maxRounds,
   })
+  } finally {
+    control?.close()
+  }
 }
