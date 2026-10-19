@@ -16,6 +16,7 @@ import { validateEntry } from "../protocol-plugins/entry"
 import { validateTraining } from "../protocol-plugins/training"
 import { canonical } from "../protocol-plugins/identity"
 import { validateAdaptation, restoreTaskContext, checkTaskExploration } from "../task-adaptation/context"
+import { validateRequestGate } from "../task-adaptation/budget-transport"
 
 export interface LoadLongTaskSpecOptions {
   allowMissingInitialExpertContextPaths?: boolean
@@ -600,6 +601,7 @@ export async function loadLongTaskSpec(
   const protocolPlugins = raw.protocolPlugins === undefined ? undefined : validateEntry(raw.protocolPlugins)
   const protocolTraining = raw.protocolTraining === undefined ? undefined : validateTraining(raw.protocolTraining)
   const taskAdaptation = raw.taskAdaptation === undefined ? undefined : validateAdaptation(raw.taskAdaptation)
+  const taskAdaptationRequestGate = validateRequestGate(raw.taskAdaptationRequestGate, Boolean(taskAdaptation?.requestBudget))
   if (taskAdaptation && !protocolPlugins) throw new Error("Task adaptation requires protocol plugins")
   await checkTaskExploration(taskAdaptation)
   for (const key of ["taskAdaptationCampaignRoot", "taskAdaptationFeedbackPath"]) {
@@ -810,6 +812,7 @@ export async function loadLongTaskSpec(
     taskAdaptationCampaignRoot: raw.taskAdaptationCampaignRoot as string | undefined,
     taskAdaptationFeedbackPath: raw.taskAdaptationFeedbackPath as string | undefined,
     taskAdaptationRound: raw.taskAdaptationRound as number | undefined,
+    ...(taskAdaptationRequestGate === undefined ? {} : { taskAdaptationRequestGate }),
     blankEvalExecutor: blankEvalExecutor as LongTaskSpec["blankEvalExecutor"],
     validators,
     planning,

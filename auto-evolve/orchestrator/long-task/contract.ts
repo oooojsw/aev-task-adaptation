@@ -233,6 +233,7 @@ export interface LongTaskSpec {
   taskAdaptationCampaignRoot?: string
   taskAdaptationFeedbackPath?: string
   taskAdaptationRound?: number
+  taskAdaptationRequestGate?: string
   // 可选单次执行端；缺省保留原工具会话验收。
   blankEvalExecutor?: {
     kind: "single_turn_http"

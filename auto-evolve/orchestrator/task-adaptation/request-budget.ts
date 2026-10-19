@@ -216,9 +216,37 @@ export async function inspectIntakePrefix(config: RequestBudget): Promise<Intake
   })
 }
 
-export async function openRequestStage(config: RequestBudget, policy: Admission, previous: string | null, prefix?: IntakePrefix) {
-  const next = admission(policy)
+export async function openRequestStage(config: RequestBudget, policy: Admission, previous: string | null, prefix?: IntakePrefix,
+  protection?: Admission[]) {
+  admission(policy)
+  if (protection) {
+    const order = ["author", "acceptance", "delivery"]
+    for (const future of protection) {
+      admission(future)
+      if (future.policy !== policy.policy || future.round !== policy.round || future.generation !== policy.generation ||
+        future.pass !== policy.pass || order.indexOf(future.stage) <= order.indexOf(policy.stage)) {
+        throw new Error("Invalid future stage protection")
+      }
+    }
+    if (new Set(protection.map(item => item.stage)).size !== protection.length ||
+      protection.reduce((sum, item) => sum + item.calls, 0) !== policy.protectedCalls ||
+      protection.reduce((sum, item) => sum + item.tokens, 0) !== policy.protectedTokens) {
+      throw new Error("Future stage protection does not match declared allowance")
+    }
+  }
   return transaction(config, state => {
+    // 同锁扣除本轮已结算验收消耗，pass02不重复保护已花额度。
+    const remaining = protection?.map(item => {
+      const usage = group(state, item)
+      const calls = item.calls - usage.admittedAttempts
+      const tokens = item.tokens - usage.reportedTokens - usage.outstandingTokens
+      // 无调用或token余量的阶段不能再发送，不保留不可使用的配额。
+      return calls > 0 && tokens > 0 ? { calls, tokens } : { calls: 0, tokens: 0 }
+    })
+    const next = admission(remaining ? { ...policy,
+      protectedCalls: remaining.reduce((sum, item) => sum + item.calls, 0),
+      protectedTokens: remaining.reduce((sum, item) => sum + item.tokens, 0),
+    } : policy)
     const current = state.gates?.at(-1)
     if (current?.id === next.id) {
       const before = state.gates!.at(-2)?.id ?? null

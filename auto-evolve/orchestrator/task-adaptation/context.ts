@@ -37,13 +37,30 @@ export function validateAdaptation(value: unknown): Adaptation {
   return structuredClone(cfg)
 }
 
+export function taskRequestGate(spec: LongTaskSpec, gate?: string) {
+  const bounded = Boolean(spec.taskAdaptation?.requestBudget)
+  const inherited = validateRequestGate(spec.taskAdaptationRequestGate, bounded)
+  const explicit = validateRequestGate(gate, bounded)
+  // 已启动角色不能用新阶段授权替换自身携带的旧授权。
+  if (inherited !== undefined && explicit !== undefined && inherited !== explicit) throw new Error("Conflicting task request gate")
+  return explicit ?? inherited
+}
+
+export function withTaskRequestGate(spec: LongTaskSpec, gate: string): LongTaskSpec {
+  const selected = validateRequestGate(gate, Boolean(spec.taskAdaptation?.requestBudget))
+  if (selected === undefined) throw new Error("Explicit task request gate required")
+  // 每阶段创建独立spec，旧角色仍保留旧授权，不读取可变全局指针。
+  return { ...spec, taskAdaptationRequestGate: selected }
+}
+
 export async function taskBudgetOptions(spec: LongTaskSpec, requestGate?: string) {
-  if (!spec.taskAdaptation?.requestBudget) { validateRequestGate(requestGate, false); return {} }
+  const gate = taskRequestGate(spec, requestGate)
+  if (!spec.taskAdaptation?.requestBudget) return {}
   const cfg = validateAdaptation(spec.taskAdaptation)
   const plan = validatePlan(JSON.parse((await readFile(cfg.planPath, "utf8")).replace(/^\uFEFF/, "")))
   requireExplorationHost(plan)
   if (spec.taskAdaptationContext && canonical(spec.taskAdaptationContext.plan) !== canonical(plan)) throw new Error("Task budget plan drift")
-  return taskRuntimeBudgets(cfg.requestBudget, plan.stop, requestGate)
+  return taskRuntimeBudgets(cfg.requestBudget, plan.stop, gate)
 }
 
 export async function checkTaskExploration(value: Adaptation | undefined) {
@@ -145,8 +162,8 @@ export async function seedTaskCandidate(spec: LongTaskSpec, root: string) {
 import type { LogicalResource } from "../task-profile-access/unified-access"
 
 export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; feedbackPath?: string; feedbackResource?: LogicalResource; round?: number; passID?: string; requestGate?: string; advice?: Array<Omit<AdviceReference, "root">> } = {}): Invocation | undefined {
+  const gate = taskRequestGate(spec, input.requestGate)
   if (!spec.taskAdaptation) {
-    validateRequestGate(input.requestGate, false)
     return undefined
   }
   const bound = spec.taskAdaptationContext
@@ -167,7 +184,7 @@ export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidat
       ...(input.passID ? { passID: input.passID } : {}) } : {}),
     ...(input.worker ? { worker: input.worker } : {}), output: input.output ?? output, maxInlineBytes: 16000,
     ...(spec.taskAdaptation.requestBudget ? { requestBudget: spec.taskAdaptation.requestBudget } : {}),
-    ...(input.requestGate === undefined ? {} : { requestGate: input.requestGate }),
+    ...(gate === undefined ? {} : { requestGate: gate }),
     ...(input.advice?.length ? { advice: input.advice.map(item => ({ ...item, root: spec.taskAdaptationCampaignRoot! })) } : {}),
     ...(feedback ? { feedback: { root: spec.taskAdaptationCampaignRoot!, path: feedback,
       task: spec.protocolPlugins!.taskID, phase: spec.protocolPlugins!.phase } } : {}),
