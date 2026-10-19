@@ -15,7 +15,7 @@ import { assertNoBlankAgentAudience } from "../validation-engine/registry"
 import { validateEntry } from "../protocol-plugins/entry"
 import { validateTraining } from "../protocol-plugins/training"
 import { canonical } from "../protocol-plugins/identity"
-import { validateAdaptation, restoreTaskContext } from "../task-adaptation/context"
+import { validateAdaptation, restoreTaskContext, checkTaskExploration } from "../task-adaptation/context"
 
 export interface LoadLongTaskSpecOptions {
   allowMissingInitialExpertContextPaths?: boolean
@@ -601,6 +601,7 @@ export async function loadLongTaskSpec(
   const protocolTraining = raw.protocolTraining === undefined ? undefined : validateTraining(raw.protocolTraining)
   const taskAdaptation = raw.taskAdaptation === undefined ? undefined : validateAdaptation(raw.taskAdaptation)
   if (taskAdaptation && !protocolPlugins) throw new Error("Task adaptation requires protocol plugins")
+  await checkTaskExploration(taskAdaptation)
   for (const key of ["taskAdaptationCampaignRoot", "taskAdaptationFeedbackPath"]) {
     if (raw[key] !== undefined && (!taskAdaptation || typeof raw[key] !== "string" || !path.isAbsolute(raw[key] as string))) throw new Error("Invalid task runtime context path")
   }

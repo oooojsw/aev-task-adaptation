@@ -90,7 +90,7 @@ import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
 import { runProtocolTrainingTask } from "../protocol-plugins/training-invocation"
-import { taskInvocation } from "../task-adaptation/context"
+import { taskInvocation, checkTaskExploration } from "../task-adaptation/context"
 import { extractJsonObject } from "./json-extract"
 import { cleanupRuntimeProcessScope, longTaskRunRuntimeScope } from "../runtime-process-registry"
 import {
@@ -2436,6 +2436,7 @@ export async function resumeLongTask(input: {
 }) {
   const resolved = resolveExistingLongTaskRun(input.cwd, input.runID)
   const spec = await readLongTaskSpec(resolved.run)
+  await checkTaskExploration(spec.taskAdaptation)
   const runtimeScope = input.runtimeScope ?? longTaskRunRuntimeScope(input.runID)
   const currentProgress = await readLongTaskProgressState(resolved.run)
   await writeLongTaskProgressState(resolved.run, {

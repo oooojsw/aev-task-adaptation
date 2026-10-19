@@ -189,6 +189,10 @@ async function readTrustedJsonFile(file: string, maxBytes: number) {
   return { bytes, value: json(bytes) as unknown, path: actual.replaceAll("\\", "/") }
 }
 
+export async function readPresetPlan(file: string) {
+  return (await readTrustedJsonFile(file, MAX_PRESET_BYTES)).value
+}
+
 async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput) {
   if (![input.cwd, input.root, input.dir].every(file => typeof file === "string" && path.isAbsolute(file))) {
     throw new Error("Absolute manual task paths required")

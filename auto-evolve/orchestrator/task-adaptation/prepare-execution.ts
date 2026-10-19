@@ -11,6 +11,7 @@ import { validateTraining, type TrainingConfig } from "../protocol-plugins/train
 import { loadPack } from "../protocol-plugins/project-pack"
 import { bindPlan, verifyBinding, resolveResource } from "./binding"
 import { validatePlan, type Plan } from "./plan"
+import { requireExplorationHost } from "./exploration/entry"
 import { verifyProtocolScopes } from "./protocol-scopes"
 import { validateTaskBudgetPolicy, type TaskBudgetPolicy } from "./budget-policy"
 
@@ -34,6 +35,7 @@ const json = (bytes: Buffer) => JSON.parse(bytes.toString("utf8").replace(/^\uFE
 
 export async function prepareExecution(input: ExecutionPreparation, registry: Registry) {
   const plan = validatePlan(input.plan)
+  requireExplorationHost(plan)
   if (input.requestBudget) validateTaskBudgetPolicy(input.requestBudget)
   if (![input.root, input.dir].every(file => typeof file === "string" && path.isAbsolute(file)) ||
       !Number.isSafeInteger(input.maxBundleBytes) || input.maxBundleBytes < 1) throw new Error("Explicit bounded execution preparation required")

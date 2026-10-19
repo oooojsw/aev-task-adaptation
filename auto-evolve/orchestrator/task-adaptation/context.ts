@@ -12,6 +12,7 @@ import { loadPack } from "../protocol-plugins/project-pack"
 import type { AdviceReference } from "./advice"
 import { freezeTaskBudgetPolicy, validateTaskBudgetPolicy, taskRuntimeBudgets, taskRequestBudget, type TaskBudgetPolicy } from "./budget-policy"
 import { validateRequestGate } from "./budget-transport"
+import { requireExplorationHost } from "./exploration/entry"
 
 export interface Adaptation {
   schema: "aev.task-adaptation.v1"
@@ -40,8 +41,16 @@ export async function taskBudgetOptions(spec: LongTaskSpec, requestGate?: string
   if (!spec.taskAdaptation?.requestBudget) { validateRequestGate(requestGate, false); return {} }
   const cfg = validateAdaptation(spec.taskAdaptation)
   const plan = validatePlan(JSON.parse((await readFile(cfg.planPath, "utf8")).replace(/^\uFEFF/, "")))
+  requireExplorationHost(plan)
   if (spec.taskAdaptationContext && canonical(spec.taskAdaptationContext.plan) !== canonical(plan)) throw new Error("Task budget plan drift")
   return taskRuntimeBudgets(cfg.requestBudget, plan.stop, requestGate)
+}
+
+export async function checkTaskExploration(value: Adaptation | undefined) {
+  if (!value) return
+  const cfg = validateAdaptation(value)
+  const plan = validatePlan(JSON.parse((await readFile(cfg.planPath, "utf8")).replace(/^\uFEFF/, "")))
+  requireExplorationHost(plan)
 }
 
 export async function loadTaskContext(spec: LongTaskSpec, dir: string): Promise<BoundPlan | undefined> {
@@ -55,6 +64,7 @@ export async function loadTaskContext(spec: LongTaskSpec, dir: string): Promise<
   if (!spec.protocolPlugins || !spec.protocolAuthorContext) throw new Error("Task adaptation requires prepared protocol context")
   const cfg = validateAdaptation(spec.taskAdaptation)
   const plan = validatePlan(JSON.parse((await readFile(cfg.planPath, "utf8")).replace(/^\uFEFF/, "")))
+  requireExplorationHost(plan)
   const phase = spec.protocolAuthorContext
   const snapshot: Snapshot = JSON.parse((await readFile(path.join(dir, "..", "protocol-plugins", "protocol.snapshot.json"), "utf8")).replace(/^\uFEFF/, ""))
   const { fingerprint: savedFingerprint, ...body } = snapshot
@@ -90,6 +100,7 @@ export async function restoreTaskContext(spec: LongTaskSpec, value: unknown) {
   await verifyBinding(bound)
   const cfg = validateAdaptation(spec.taskAdaptation)
   const plan = validatePlan(JSON.parse((await readFile(cfg.planPath, "utf8")).replace(/^\uFEFF/, "")))
+  requireExplorationHost(plan)
   if (!spec.protocolPlugins) throw new Error("Restored task context requires protocol entry")
   const project = await loadPack(spec.protocolPlugins.projectManifestPath)
   if (canonical(cfg.entries) !== canonical(project.pack.skill.entries.map(({ id, path }) => ({ id, path })))) {
@@ -140,6 +151,7 @@ export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidat
   }
   const bound = spec.taskAdaptationContext
   if (!bound) throw new Error("Frozen task adaptation context missing")
+  requireExplorationHost(bound.plan)
   const output = role === "planner" ? 'Return JSON: {"planner_summary":"", "completion_validator_ids":[], "units":[{"id":"work", "operation":"author_work", "title":"", "goal":"", "inputs":[], "depends_on":[], "expected_artifacts":[], "claim":"", "check_plan":"", "validator_ids":[], "retry_budget":1}]}. Units must perform author work, not formal acceptance.'
     : role === "executor" ? 'Return JSON: {"claimed_success":true,"claim_statement":"","summary":"","blockers":[],"artifacts":[]} after completing the assigned work.'
     : role === "lead" ? 'Edit the declared candidate files. Return JSON: {"summary":"","updated_files":[],"package_highlights":[],"tree_highlights":[],"refs":[],"surface_precheck_passed":false,"surface_precheck_details":[]}.'
