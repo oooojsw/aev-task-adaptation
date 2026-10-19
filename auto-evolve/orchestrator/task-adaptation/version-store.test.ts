@@ -8,6 +8,7 @@ import { fingerprint } from "../protocol-plugins/identity"
 import { writeFileAtomic } from "../atomic-write"
 import type { Version } from "./selection"
 import { interrupt } from "./exploration/composition.test"
+import { recoverMaterialization } from "./exploration/materialize"
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "aev-formal-version-"))
@@ -73,6 +74,7 @@ test("formal snapshot hard kill and recovery hard kill reuse the original accept
   await expect(storeVersion(input)).rejects.toThrow("explicit recovery")
   await interrupt({ ...input, recover: true }, file, "version")
   const first = path.join(input.root, "task-adaptation/versions", input.record.receipt, "files/0.bin")
+  expect(await recoverMaterialization(path.join(input.root, "task-adaptation"), first, input.record.files[0])).toEqual(input.content[0])
   const before = await lstat(first)
   await storeVersion({ ...input, recover: true })
   expect((await lstat(first)).ino).toBe(before.ino)

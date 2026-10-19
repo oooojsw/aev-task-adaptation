@@ -8,6 +8,8 @@ import { writeFileAtomic, writeJsonAtomic } from "../atomic-write"
 import { resolveResource, verifyBinding } from "./binding"
 import { taskFeedback } from "./feedback"
 import { storeVersion } from "./version-store"
+import { checkedPath } from "../file-transaction"
+import { recoverMaterialization, readMaterialized } from "./exploration/materialize"
 
 export interface Version {
   schema: "aev.task-version.v1"
@@ -21,7 +23,7 @@ export interface Version {
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 const parse = async (file: string) => JSON.parse((await readFile(file, "utf8")).replace(/^\uFEFF/, ""))
 
-async function source(spec: LongTaskSpec, root: string, feedback: string) {
+export async function taskSelectionSource(spec: LongTaskSpec, root: string, feedback: string) {
   const bound = spec.taskAdaptationContext
   const entry = spec.protocolPlugins
   if (!bound || !entry) throw new Error("Frozen task selection context required")
@@ -68,7 +70,7 @@ export async function readTaskVersions(spec: LongTaskSpec, root: string) {
     if (record.schema !== "aev.task-version.v1" || fingerprint(record) !== savedHash || record.plan !== bound.fingerprint ||
       record.receipt !== name || canonical(record.files.map(item => ({ id: item.id, path: item.entry }))) !==
       canonical(spec.taskAdaptation.entries)) throw new Error("Saved task version identity drift")
-    const actual = await source(spec, root, record.feedback)
+    const actual = await taskSelectionSource(spec, root, record.feedback)
     if (actual.view.receiptFingerprint !== name || actual.view.round !== record.round || actual.metric !== record.metric) {
       throw new Error("Saved task version receipt drift")
     }
@@ -82,6 +84,49 @@ export async function readTaskVersions(spec: LongTaskSpec, root: string) {
     versions.push({ record, path: file.replaceAll("\\", "/") })
   }
   return versions.sort((a, b) => a.record.round - b.record.round || a.record.receipt.localeCompare(b.record.receipt))
+}
+
+export async function recoverTaskVersions(spec: LongTaskSpec, input: { root: string; candidateRoot: string; cap: number }) {
+  const bound = spec.taskAdaptationContext
+  if (!spec.taskAdaptation || !bound || !path.isAbsolute(input.root) || !path.isAbsolute(input.candidateRoot) ||
+    !Number.isSafeInteger(input.cap) || input.cap < 1) throw new Error("Explicit task version recovery context required")
+  await verifyBinding(bound)
+  if (canonical(spec.taskAdaptation.entries) !== canonical(bound.plan.deliverable.entries.map(id => ({ id,
+    path: bound.plan.resources.find(resource => resource.id === id)!.path }))))
+    throw new Error("Task version recovery entry mapping drift")
+  const root = path.join(input.root, "task-adaptation"), folder = path.join(root, "version-intents")
+  let names: string[]
+  try { await checkedPath(folder, "directory"); names = await readdir(folder) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    return readTaskVersions(spec, input.root)
+  }
+  for (const name of names.sort()) {
+    if (!/^[a-f0-9]{64}\.json$/.test(name)) throw new Error("Unexpected task version recovery intent")
+    const file = await resolveResource(root, `version-intents/${name}`)
+    if ((await checkedPath(file, "file")).size > input.cap) throw new Error("Task version recovery intent capacity exceeded")
+    const { fingerprint: saved, ...record } = await parse(file) as Version & { fingerprint: string }
+    if (record.schema !== "aev.task-version.v1" || record.plan !== bound.fingerprint || record.receipt !== name.slice(0, -5) ||
+      fingerprint(record) !== saved || !Array.isArray(record.files) ||
+      canonical(record.files.map(item => ({ id: item.id, path: item.entry }))) !== canonical(spec.taskAdaptation.entries) ||
+      !Number.isSafeInteger(record.round) || record.round < 1 || record.files.some((item, index) =>
+        item.file !== `files/${index}.bin` || !Number.isSafeInteger(item.bytes) || item.bytes < 0 ||
+        !/^[a-f0-9]{64}$/.test(item.sha256)) ||
+      record.files.reduce((sum, item) => sum + item.bytes, 0) > input.cap) throw new Error("Task version recovery intent drift")
+    const actual = await taskSelectionSource(spec, input.root, record.feedback)
+    if (actual.view.round !== record.round || actual.view.receiptFingerprint !== record.receipt || actual.metric !== record.metric ||
+      record.files.some(item => actual.view.candidate.find(candidate => candidate.id === item.id)?.sha256 !== item.sha256))
+      throw new Error("Task version recovery receipt drift")
+    const content: Buffer[] = []
+    for (const item of record.files) {
+      const bytes = await recoverMaterialization(root, path.join(root, "versions", record.receipt, item.file), item)
+        ?? await readMaterialized(await resolveResource(input.candidateRoot, item.entry), item)
+      if (bytes.length !== item.bytes || hash(bytes) !== item.sha256) throw new Error("Task version recovery source drift")
+      content.push(bytes)
+    }
+    // 先修已声明本地快照再枚举正式版本，绝不重发已完成验收。
+    await storeVersion({ root: input.root, record, content, cap: input.cap, recover: true })
+  }
+  return readTaskVersions(spec, input.root)
 }
 
 export function chooseTaskVersion(spec: LongTaskSpec, versions: Awaited<ReturnType<typeof readTaskVersions>>, round: number, maxRounds: number, forcedReason?: string) {
@@ -104,7 +149,7 @@ export async function recordTaskVersion(spec: LongTaskSpec, input: {
   if (!spec.taskAdaptation || !spec.taskAdaptationContext) return undefined
   if (input.snapshot && input.passed) {
     if (!input.feedback) throw new Error("Passed task selection requires actual acceptance feedback")
-    const actual = await source(spec, input.root, input.feedback)
+    const actual = await taskSelectionSource(spec, input.root, input.feedback)
     if (actual.view.round !== input.round) throw new Error("Selection round mismatch")
     let existing = false
     try {
@@ -127,7 +172,7 @@ export async function recordTaskVersion(spec: LongTaskSpec, input: {
   let versions = await readTaskVersions(spec, input.root)
   if (input.passed) {
     if (!input.feedback) throw new Error("Passed task selection requires actual acceptance feedback")
-    const actual = await source(spec, input.root, input.feedback)
+    const actual = await taskSelectionSource(spec, input.root, input.feedback)
     const name = actual.view.receiptFingerprint
     if (actual.view.round !== input.round) throw new Error("Selection round mismatch")
     if (!versions.some(version => version.record.receipt === name)) {
