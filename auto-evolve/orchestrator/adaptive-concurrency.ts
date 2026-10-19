@@ -120,6 +120,13 @@ async function resolveProfile(cwd: string, model: string) {
   return { name: profileName || "conservative", profile: profileFrom(raw) }
 }
 
+export function adaptiveFailureEvidence(errors: readonly string[], diagnostic: string): string | undefined {
+  const local = (text: string) => /^Request budget (?:exhausted|needs unresolved usage inspection)$/.test(text.trim())
+  if (!errors.some(local)) return undefined
+  // 预算拒绝只看真实错误，不让答卷参数处罚提供商。
+  return [...errors.filter(item => !local(item)), diagnostic].filter(Boolean).join("\n")
+}
+
 export function classifyAdaptiveFailure(text: string): AdaptiveFailureClass {
   const lower = text.toLowerCase()
   if (/\b429\b/.test(lower) || lower.includes("rate limit") || lower.includes("too many requests") || lower.includes("quota throttle")) {

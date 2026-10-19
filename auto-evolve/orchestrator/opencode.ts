@@ -21,7 +21,7 @@ import {
 } from "./fs"
 import { runManagedProcess } from "./managed-process"
 import { OpenCodeGate } from "./opencode-gate"
-import { recordAdaptiveModelOutcome } from "./adaptive-concurrency"
+import { adaptiveFailureEvidence, recordAdaptiveModelOutcome } from "./adaptive-concurrency"
 import { recordOpencodeResourceUsage } from "./resource-audit/recorder"
 import {
   resolveTaskArtifactKind,
@@ -47,6 +47,7 @@ export interface OpencodeEvent {
 }
 
 export interface OpencodeRunResult {
+  adaptiveFailureText?: string
   sessionID?: string
   exitCode: number
   finishReason?: string
@@ -1329,6 +1330,7 @@ async function runOpencodeTaskOnce(
 
   return {
     sessionID: events.find((event) => typeof event.sessionID === "string")?.sessionID,
+    adaptiveFailureText: adaptiveFailureEvidence(eventErrors, [...timeoutNotes, stderr].filter(Boolean).join("\n")),
     exitCode: normalizedExitCode,
     finishReason: undefined,
     stdout,
@@ -1456,7 +1458,7 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
         cwd: input.cwd,
         model: selectedModel,
         exitCode: result.exitCode,
-        text: [result.stderr, result.stdout, result.responseText].filter(Boolean).join("\n"),
+        text: result.adaptiveFailureText ?? [result.stderr, result.stdout, result.responseText].filter(Boolean).join("\n"),
         source: input.title,
       })
       if (adaptive) {
