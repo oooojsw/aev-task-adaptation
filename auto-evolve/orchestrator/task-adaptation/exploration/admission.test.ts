@@ -3,7 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fingerprint } from "../../protocol-plugins/identity"
-import { inspectBudget, openRequestStage, reserveRequest, settleRequest } from "../request-budget"
+import { inspectBudget, inspectIntakePrefix, openRequestStage, reserveRequest, settleRequest } from "../request-budget"
 import { budgetedProviderFetch } from "../budget-transport"
 import { admission, type Admission } from "./admission"
 import { writeJsonAtomic } from "../../atomic-write"
@@ -35,6 +35,63 @@ async function setup() {
   })
   return { budget, policy, gate, attempt }
 }
+
+test("settled intake prefix is explicitly adopted without resetting calls or tokens", async () => {
+  const f = await setup()
+  const budget = { ...f.budget, root: await mkdtemp(path.join(os.tmpdir(), "aev-intake-prefix-")) }
+  const request = { id: "intake", request: fingerprint("intake"), role: "intake", model: "fixture", reservationTokens: 10 }
+  await reserveRequest(budget, request)
+  await settleRequest(budget, request.id, 7)
+  const prefix = await inspectIntakePrefix(budget)
+  expect(prefix.count).toBe(1)
+  await expect(reserveRequest(budget, { ...request, id: "oversized-intake", reservationTokens: 100 })).rejects.toThrow("exhausted")
+  expect((await inspectBudget(budget)).denial?.reason).toBe("tokens")
+  await expect(openRequestStage(budget, f.policy, null)).rejects.toThrow("first author")
+  const policy = { ...f.policy, tokens: 60 }
+  const gate = await openRequestStage(budget, policy, null, prefix)
+  expect(gate.start).toBe(1)
+  expect(await openRequestStage(budget, policy, null, prefix)).toEqual(gate)
+  expect(await inspectBudget(budget)).toMatchObject({ admittedAttempts: 1, reportedTokens: 7, outstandingTokens: 0 })
+  expect((await inspectBudget(budget)).denial).toBeUndefined()
+  await reserveRequest(budget, { ...request, id: "author", request: fingerprint("author"), role: "lead", gate: gate.id })
+  await settleRequest(budget, "author", 5)
+  expect((await inspectBudget(budget)).reportedTokens).toBe(12)
+  await expect(reserveRequest(budget, { ...request, id: "late-intake" })).rejects.toThrow("gate mismatch")
+  const next = { ...policy, stage: "acceptance" as const, roles: ["checker"], calls: 2, tokens: 30, protectedCalls: 0, protectedTokens: 0 }
+  await expect(openRequestStage(budget, next, gate.id, prefix)).rejects.toThrow("twice")
+  const accepting = await openRequestStage(budget, next, gate.id)
+  expect((await inspectBudget(budget)).denial).toBeUndefined()
+  await reserveRequest(budget, { ...request, id: "checker", request: fingerprint("checker"), role: "checker", gate: accepting.id })
+  await settleRequest(budget, "checker", 4)
+  expect(await inspectBudget(budget)).toMatchObject({ admittedAttempts: 3, reportedTokens: 16 })
+  const file = path.join(budget.root, "budget.json")
+  const saved = JSON.parse(await readFile(file, "utf8"))
+  saved.attempts[0].usedTokens = 1
+  await writeJsonAtomic(file, saved)
+  await expect(inspectBudget(budget)).rejects.toThrow("prefix evidence drift")
+})
+
+test("intake adoption rejects in-flight, unknown, other-role, changed-prefix and insufficient-wallet states", async () => {
+  const f = await setup()
+  for (const mode of ["reserved", "unknown", "author", "changed", "insufficient"] as const) {
+    const budget = { ...f.budget, root: await mkdtemp(path.join(os.tmpdir(), "aev-intake-reject-")) }
+    await reserveRequest(budget, { id: "one", request: fingerprint("one"), role: mode === "author" ? "lead" : "intake", model: "fixture", reservationTokens: 20 })
+    if (mode !== "reserved") await settleRequest(budget, "one", mode === "unknown" ? undefined : 20)
+    if (["reserved", "unknown", "author"].includes(mode)) {
+      await expect(inspectIntakePrefix(budget)).rejects.toThrow("settled intake")
+      continue
+    }
+    const prefix = await inspectIntakePrefix(budget)
+    if (mode === "changed") {
+      await reserveRequest(budget, { id: "two", request: fingerprint("two"), role: "intake", model: "fixture", reservationTokens: 1 })
+      await settleRequest(budget, "two", 1)
+      await expect(openRequestStage(budget, f.policy, null, prefix)).rejects.toThrow("prefix changed")
+    } else {
+      await expect(openRequestStage(budget, f.policy, null, prefix)).rejects.toThrow("minimum resources")
+    }
+    expect((await inspectBudget(budget)).admittedAttempts).toBe(mode === "changed" ? 2 : 1)
+  }
+})
 
 test("stage admission has no virtual usage and idempotent opening cannot reset limits", async () => {
   const { budget, policy, gate, attempt } = await setup()

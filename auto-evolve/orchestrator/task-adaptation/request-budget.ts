@@ -23,11 +23,17 @@ interface Attempt {
   gate?: string
 }
 
+export interface IntakePrefix {
+  count: number
+  fingerprint: string
+}
+
 interface State {
   schema: "aev.request-budget.v1"
   binding: string
   attempts: Attempt[]
   gates?: Array<{ id: string; policy: Admission; start: number }>
+  intakePrefix?: IntakePrefix
   lastDenial?: {
     reason: "calls" | "tokens" | "unresolved"
     request: string
@@ -41,6 +47,13 @@ interface State {
 }
 
 const positive = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0
+
+function intakePrefix(attempts: Attempt[]): IntakePrefix {
+  if (attempts.some(item => item.role !== "intake" || item.gate !== undefined || item.status !== "settled")) {
+    throw new Error("Only settled intake requests can precede exploration stages")
+  }
+  return { count: attempts.length, fingerprint: fingerprint(attempts) }
+}
 
 function group(state: State, policy: Admission) {
   const gates = (state.gates ?? []).filter(item => item.policy.round === policy.round &&
@@ -88,9 +101,14 @@ async function transaction<T>(config: RequestBudget, apply: (state: State) => Pr
           state.lastDenial.gate !== undefined && !/^[a-f0-9]{64}$/.test(state.lastDenial.gate))) throw new Error("Request budget evidence or limits drift")
     if (state.gates !== undefined) {
       if (!Array.isArray(state.gates) || !state.gates.length) throw new Error("Request stage gate evidence drift")
+      const prefix = state.intakePrefix
+      if (prefix && (!Number.isSafeInteger(prefix.count) || prefix.count < 1 || prefix.count > state.attempts.length ||
+        canonical(prefix) !== canonical(intakePrefix(state.attempts.slice(0, prefix.count))))) {
+        throw new Error("Request intake prefix evidence drift")
+      }
       for (const [index, gate] of state.gates.entries()) {
         if (admission(gate.policy).id !== gate.id || !Number.isSafeInteger(gate.start) || gate.start < 0 ||
-          gate.start > state.attempts.length || (index === 0 ? gate.start !== 0 || gate.policy.round !== 1 || gate.policy.pass !== 1 ||
+          gate.start > state.attempts.length || (index === 0 ? gate.start !== (prefix?.count ?? 0) || gate.policy.round !== 1 || gate.policy.pass !== 1 ||
             gate.policy.generation !== 0 || gate.policy.stage !== "author" : gate.start < state.gates[index - 1].start))
           throw new Error("Request stage gate evidence drift")
         if (index) nextAdmission(state.gates[index - 1].policy, gate.policy)
@@ -103,9 +121,11 @@ async function transaction<T>(config: RequestBudget, apply: (state: State) => Pr
           index < state.gates.length - 1 && (local.unresolvedAttempts || local.overrunAttempts))
           throw new Error("Request stage settlement or local limits drift")
       }
-    } else if (state.attempts.some(item => item.gate !== undefined)) throw new Error("Request stage policy missing")
+    } else if (state.intakePrefix !== undefined || state.attempts.some(item => item.gate !== undefined)) throw new Error("Request stage policy missing")
     const marker = `${file}.stages.claim`
-    const expected = state.gates ? fingerprint({ binding, policy: state.gates[0].policy.policy }) : undefined
+    const stageBinding = () => fingerprint({ binding, policy: state.gates![0].policy.policy,
+      ...(state.intakePrefix ? { intakePrefix: state.intakePrefix } : {}) })
+    const expected = state.gates ? stageBinding() : undefined
     let marked = false
     try {
       const info = await lstat(marker)
@@ -134,7 +154,7 @@ async function transaction<T>(config: RequestBudget, apply: (state: State) => Pr
     if (canonical(state) !== before) await writeJsonAtomic(file, state)
     if (state.gates && !marked) {
       // 成功返回前留永久标记，空账本也不能恢复成无阶段保护模式。
-      await writeFileAtomic(marker, fingerprint({ binding, policy: state.gates[0].policy.policy }))
+      await writeFileAtomic(marker, stageBinding())
     }
     return result
   }, { staleMs: 600000, timeoutMs: 60000 })
@@ -189,31 +209,48 @@ export async function reserveRequest(config: RequestBudget, attempt: Omit<Attemp
   return result.totals
 }
 
-export async function openRequestStage(config: RequestBudget, policy: Admission, previous: string | null) {
+export async function inspectIntakePrefix(config: RequestBudget): Promise<IntakePrefix> {
+  return transaction(config, state => {
+    if (state.gates) throw new Error("Intake prefix must be inspected before stage installation")
+    return intakePrefix(state.attempts)
+  })
+}
+
+export async function openRequestStage(config: RequestBudget, policy: Admission, previous: string | null, prefix?: IntakePrefix) {
   const next = admission(policy)
   return transaction(config, state => {
     const current = state.gates?.at(-1)
     if (current?.id === next.id) {
       const before = state.gates!.at(-2)?.id ?? null
       if (previous !== before || canonical(current.policy) !== canonical(next.policy)) throw new Error("Request stage retry drift")
+      if (prefix && (state.gates!.length !== 1 || canonical(prefix) !== canonical(state.intakePrefix ?? intakePrefix([])))) {
+        throw new Error("Request intake prefix retry drift")
+      }
       return structuredClone(current)
     }
     if ((current?.id ?? null) !== previous) throw new Error("Request stage predecessor drift")
     const totals = budgetTotals(state.attempts)
     if (totals.unresolvedAttempts || totals.overrunAttempts) throw new Error("Request stage has unresolved usage")
-    if (current) nextAdmission(current.policy, next.policy)
-    else if (state.attempts.length || next.policy.round !== 1 || next.policy.pass !== 1 || next.policy.generation !== 0 || next.policy.stage !== "author")
-      throw new Error("Request stages must be installed before the first author request")
+    if (current) {
+      if (prefix) throw new Error("Intake prefix cannot be adopted twice")
+      nextAdmission(current.policy, next.policy)
+    } else {
+      if (next.policy.round !== 1 || next.policy.pass !== 1 || next.policy.generation !== 0 || next.policy.stage !== "author" ||
+        state.attempts.length && !prefix) throw new Error("Request stages must be installed before the first author request")
+      if (prefix && canonical(prefix) !== canonical(intakePrefix(state.attempts))) throw new Error("Request intake prefix changed before admission")
+    }
     const local = group(state, next.policy)
     const calls = next.policy.calls - local.admittedAttempts + next.policy.protectedCalls,
       tokens = next.policy.tokens - local.reportedTokens + next.policy.protectedTokens
     if (!Number.isSafeInteger(calls) || !Number.isSafeInteger(tokens) || totals.admittedAttempts + calls > config.calls ||
       totals.reportedTokens + tokens > config.tokens) throw new Error("Request stage minimum resources unavailable")
     const gate = { ...next, start: state.attempts.length }
+    // 原子封存已结算Intake前缀，既不清零费用也不扩大原预算。
+    if (!current && prefix?.count) state.intakePrefix = structuredClone(prefix)
     // 只冻结准入上限，不新增虚拟消费；所有计费仍来自原请求账本。
     state.gates ??= []
     state.gates.push(gate)
-    if (state.lastDenial?.gate) delete state.lastDenial
+    if (state.lastDenial?.gate || prefix) delete state.lastDenial
     return structuredClone(gate)
   })
 }
