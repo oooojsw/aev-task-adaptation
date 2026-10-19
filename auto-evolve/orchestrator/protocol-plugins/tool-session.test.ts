@@ -16,6 +16,26 @@ async function plugin(invoke: InvokeTool) {
   return toolSession({ evidenceRoot: root(), backendImplementation: "a".repeat(64), invoke })
 }
 
+test("tool session forwards dynamic gate privately without changing plugin identity", async () => {
+  const cfg = { schema: "aev.budget-transport.v1" as const, budget: { root: root(), scope: "task", calls: 2, tokens: 10000 },
+    role: "independent", dialect: "openai_chat" as const, expectedModels: ["fixture"], maxInputTokens: 1000, maxOutputTokens: 100 }
+  const options = { evidenceRoot: root(), backendImplementation: "a".repeat(64), requestBudgets: { fixture: cfg },
+    invoke: async (request: Parameters<InvokeTool>[0]) => {
+      expect(request.requestBudget).toEqual({ ...cfg, gate: "b".repeat(64) })
+      expect(request.prompt).not.toContain("b".repeat(64))
+      expect(request.readPaths).not.toContain(cfg.budget.root)
+      await writeFile(path.join(request.workDir, "workspace", "final.txt"), "Result")
+      return { completed: true, actualModel: "fixture" }
+    } }
+  const old = await toolSession({ ...options, requestGate: "a".repeat(64) })
+  const current = await toolSession({ ...options, requestGate: "b".repeat(64) })
+  expect(current.descriptor.implementation).toBe(old.descriptor.implementation)
+  expect((await current.execute(input())).status).toBe("completed")
+  expect(cfg).not.toHaveProperty("gate")
+  await expect(toolSession({ ...options, requestBudgets: undefined, requestGate: "b".repeat(64) })).rejects.toThrow("bounded transport")
+  await expect(toolSession({ ...options, requestBudgets: { fixture: { ...cfg, gate: "b".repeat(64) } } })).rejects.toThrow("invocation")
+})
+
 test("tool session stages bytes with safe names and explicit no-shell fresh workspace", async () => {
   const p = await plugin(async (request) => {
     expect(request.allowShell).toBe(false)

@@ -19,6 +19,13 @@ export interface BudgetTransportConfig {
 const positive = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0
 const nonnegative = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0
 
+export function validateRequestGate(value: unknown, bounded: boolean): string | undefined {
+  if (value === undefined) return undefined
+  if (!bounded || typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))
+    throw new Error("Request gate requires an explicit bounded transport")
+  return value
+}
+
 export function validateBudgetTransport(value: unknown): BudgetTransportConfig {
   const cfg = value as BudgetTransportConfig
   if (!cfg || typeof cfg !== "object" || Array.isArray(cfg) ||

@@ -13,6 +13,7 @@ interface Options {
   transport?: typeof fetch
   credential?: (name: string) => string | undefined
   budget?: HttpRequestBudget
+  requestGate?: string
 }
 
 function artifact(id: string, value: string): Artifact {
@@ -51,7 +52,8 @@ export async function modelJudge(options: Options): Promise<{ descriptor: Checke
     const payload = { task: input.task, phase: input.phase, check: input.check,
       candidate: decode(input.candidate), materials: decode(input.materials), privateInputs: decode(input.privateInputs) }
     const request = JSON.stringify(payload)
-    const key = fingerprint({ implementation, settings: input.settings, payload })
+    const key = fingerprint({ implementation, settings: input.settings, payload,
+      ...(options.requestGate ? { gate: options.requestGate } : {}) })
     // 判决使用独立HTTP后端；候选文本是不可信证据，不是裁判指令。
     const result = await http.execute({ task: input.task, phase: input.phase, skill: [], settings: cfg.http,
       materials: [artifact("rubric", [cfg.rubric,

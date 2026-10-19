@@ -14,6 +14,20 @@ async function fixture() {
   return { root, policy, plan }
 }
 
+test("stage gates are dynamic authorizations, not frozen backend mappings", async () => {
+  const f = await fixture()
+  const gate = "a".repeat(64)
+  const ordinary = taskRuntimeBudgets(f.policy, f.plan.stop)
+  const staged = taskRuntimeBudgets(f.policy, f.plan.stop, gate)
+  expect(staged.requestGate).toBe(gate)
+  expect(staged.httpBudgets).toEqual(ordinary.httpBudgets)
+  expect(staged.toolBudgets).toEqual(ordinary.toolBudgets)
+  expect(taskRequestBudget(f.policy, f.plan.stop, "lead", "fixture/model", gate).gate).toBe(gate)
+  expect(() => taskRuntimeBudgets(undefined, f.plan.stop, gate)).toThrow("bounded transport")
+  expect(() => taskRuntimeBudgets(f.policy, f.plan.stop, "invalid")).toThrow("bounded transport")
+  expect(taskRuntimeBudgets(undefined, f.plan.stop)).toEqual({})
+})
+
 test("all roles and models share task-plan total limits rather than per-role limits", async () => {
   const f = await fixture()
   f.policy.models.push({ ...f.policy.models[0], model: "fixture/other", expectedModels: ["other"] })

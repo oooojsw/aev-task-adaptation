@@ -6,7 +6,7 @@ import { writeFileAtomic, writeJsonAtomic } from "../atomic-write"
 import { fingerprint } from "./identity"
 import type { Settings, ExecutorPlugin } from "./contract"
 import type { Execute, PublicInputs } from "./runtime"
-import { validateBudgetTransport, type BudgetTransportConfig } from "../task-adaptation/budget-transport"
+import { validateBudgetTransport, validateRequestGate, type BudgetTransportConfig } from "../task-adaptation/budget-transport"
 
 export interface ToolRequest {
   requestBudget?: import("../task-adaptation/budget-transport").BudgetTransportConfig
@@ -55,12 +55,15 @@ function inside(root: string, target: string) {
 
 export async function toolSession(options: { evidenceRoot: string; backendImplementation: string; invoke: InvokeTool;
   requestBudgets?: Record<string, BudgetTransportConfig>;
+  requestGate?: string;
   purpose?: "checking" }) {
   if (!path.isAbsolute(options.evidenceRoot) || !/^[a-f0-9]{64}$/.test(options.backendImplementation) || typeof options.invoke !== "function") {
     throw new Error("Explicit tool backend implementation required")
   }
   const own = createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex")
   const budgets = options.requestBudgets && structuredClone(options.requestBudgets)
+  const gate = validateRequestGate(options.requestGate, Boolean(budgets && Object.keys(budgets).length))
+  if (Object.values(budgets ?? {}).some(item => item.gate !== undefined)) throw new Error("Tool gate belongs to invocation, not frozen model bindings")
   for (const cfg of Object.values(budgets ?? {})) validateBudgetTransport(cfg)
   const implementation = fingerprint({ own, backend: options.backendImplementation, ...(options.purpose ? { purpose: options.purpose } : {}),
     ...(budgets ? { requestBudgets: budgets } : {}) })
@@ -69,14 +72,15 @@ export async function toolSession(options: { evidenceRoot: string; backendImplem
     validate(settings) { config(settings) } }
   const execute: Execute = async (input) => {
     const cfg = config(input.settings)
-    const budget = budgets?.[cfg.model]
+    const binding = budgets?.[cfg.model]
+    const budget = binding && validateBudgetTransport({ ...binding, ...(gate ? { gate } : {}) })
     if (budgets && !budget) throw new Error("Tool model has no task budget binding")
     const publicInput: PublicInputs = { task: input.task, phase: input.phase, skill: input.skill, materials: input.materials }
     const total = [...input.skill, ...input.materials].reduce((sum, item) => sum + item.bytes.byteLength, 0)
     if (total + Buffer.byteLength(cfg.instruction) > cfg.maxInputBytes) throw new Error("Tool input byte budget exceeded")
     const describe = (entries: typeof input.skill) => entries.map((item) => ({ id: item.id, kind: item.kind,
       bytes: item.bytes.byteLength, hash: createHash("sha256").update(item.bytes).digest("hex") }))
-    const key = fingerprint({ implementation, settings: input.settings, task: input.task, phase: input.phase,
+    const key = fingerprint({ implementation, settings: input.settings, task: input.task, phase: input.phase, ...(gate ? { gate } : {}),
       inputs: { skill: describe(input.skill), materials: describe(input.materials) } })
     const dir = path.join(options.evidenceRoot, key)
     await mkdir(dir, { recursive: true })

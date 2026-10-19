@@ -9,6 +9,8 @@ import type { Plan } from "./plan"
 import type { OpencodeTaskInput, OpencodeTaskRun } from "../opencode"
 import { searchLocalFiles } from "./local-search"
 import { recompute } from "./recompute"
+import { taskInvocation } from "./context"
+import type { LongTaskSpec } from "../long-task/contract"
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "aev-task-invocation-"))
@@ -40,6 +42,14 @@ async function fixture() {
   return { root, plan, request, input, bind }
 }
 
+test("explicit stage authorization cannot silently fall back to the legacy path", () => {
+  const legacy = {} as LongTaskSpec
+  expect(taskInvocation(legacy, "lead")).toBeUndefined()
+  for (const requestGate of ["a".repeat(64), "invalid"]) {
+    expect(() => taskInvocation(legacy, "lead", { requestGate })).toThrow("bounded transport")
+  }
+})
+
 test("adaptation rebuilds actual backend context and file grants, not only prompt advice", async () => {
   const f = await fixture()
   const prepared = await authorizeInvocation(f.input, f.request)
@@ -67,9 +77,16 @@ test("adapted role derives private request budget from its own frozen task polic
   expect(ready.request.requestBudget).toMatchObject({ role: "lead", budget: { root: ledger, calls: 10, tokens: 10000 } })
   expect(ready.request.prompt).not.toContain(ledger)
   expect(ready.request.permissionReadPaths).not.toContain(ledger)
+  f.input.requestGate = "b".repeat(64)
+  const gated = await authorizeInvocation(f.input, f.request)
+  expect(gated.request.requestBudget?.gate).toBe("b".repeat(64))
+  expect(gated.request.prompt).not.toContain("b".repeat(64))
+  expect(gated.request.permissionReadPaths).toEqual(ready.request.permissionReadPaths)
   f.input.requestBudget.root = f.root
   await expect(authorizeInvocation(f.input, f.request)).rejects.toThrow("outside model materials")
   f.input.requestBudget = undefined
+  await expect(authorizeInvocation(f.input, f.request)).rejects.toThrow("bounded transport")
+  f.input.requestGate = undefined
   f.request.requestBudget = ready.request.requestBudget
   expect((await authorizeInvocation(f.input, f.request)).request.requestBudget).toBeUndefined()
 })

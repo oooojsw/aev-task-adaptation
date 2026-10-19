@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url"
 import type { CheckerPlugin, ExecutorPlugin, Settings } from "./contract"
 import type { Execute, Evaluate } from "./runtime"
 import type { HttpRequestBudget } from "./http-chat"
-import type { BudgetTransportConfig } from "../task-adaptation/budget-transport"
+import { validateRequestGate, type BudgetTransportConfig } from "../task-adaptation/budget-transport"
 import { fingerprint } from "./identity"
 import { readDirectChatDatasetBundle } from "../direct-chat/dataset-bundler"
 import { runDirectChatEvaluation } from "../direct-chat/runner"
@@ -186,8 +186,9 @@ export async function loadVerifiedConsolidationEvidence(root: string, product: R
   return { cases: rows, metrics }
 }
 
-export async function consolidationPlugins(root: string, options: { budget?: HttpRequestBudget } = {}) {
+export async function consolidationPlugins(root: string, options: { budget?: HttpRequestBudget; requestGate?: string } = {}) {
   if (!path.isAbsolute(root)) throw new Error("Consolidation evidence root must be absolute")
+  const gate = validateRequestGate(options.requestGate, Boolean(options.budget))
   await mkdir(root, { recursive: true })
   const baseImplementation = createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex")
   const implementation = options.budget ? fingerprint({ source: baseImplementation, budget: options.budget.config }) : baseImplementation
@@ -222,6 +223,7 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
       const wireModel = selectedModel?.model ?? s.modelID
       transportConfig = {
         schema: "aev.budget-transport.v1",
+        ...(gate ? { gate } : {}),
         budget: options.budget.config,
         role: options.budget.role || "independent",
         dialect: "openai_chat",

@@ -11,6 +11,7 @@ import type { Invocation } from "./invocation"
 import { loadPack } from "../protocol-plugins/project-pack"
 import type { AdviceReference } from "./advice"
 import { freezeTaskBudgetPolicy, validateTaskBudgetPolicy, taskRuntimeBudgets, taskRequestBudget, type TaskBudgetPolicy } from "./budget-policy"
+import { validateRequestGate } from "./budget-transport"
 
 export interface Adaptation {
   schema: "aev.task-adaptation.v1"
@@ -35,12 +36,12 @@ export function validateAdaptation(value: unknown): Adaptation {
   return structuredClone(cfg)
 }
 
-export async function taskBudgetOptions(spec: LongTaskSpec) {
-  if (!spec.taskAdaptation?.requestBudget) return {}
+export async function taskBudgetOptions(spec: LongTaskSpec, requestGate?: string) {
+  if (!spec.taskAdaptation?.requestBudget) { validateRequestGate(requestGate, false); return {} }
   const cfg = validateAdaptation(spec.taskAdaptation)
   const plan = validatePlan(JSON.parse((await readFile(cfg.planPath, "utf8")).replace(/^\uFEFF/, "")))
   if (spec.taskAdaptationContext && canonical(spec.taskAdaptationContext.plan) !== canonical(plan)) throw new Error("Task budget plan drift")
-  return taskRuntimeBudgets(cfg.requestBudget, plan.stop)
+  return taskRuntimeBudgets(cfg.requestBudget, plan.stop, requestGate)
 }
 
 export async function loadTaskContext(spec: LongTaskSpec, dir: string): Promise<BoundPlan | undefined> {
@@ -132,8 +133,11 @@ export async function seedTaskCandidate(spec: LongTaskSpec, root: string) {
 
 import type { LogicalResource } from "../task-profile-access/unified-access"
 
-export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; feedbackPath?: string; feedbackResource?: LogicalResource; round?: number; passID?: string; advice?: Array<Omit<AdviceReference, "root">> } = {}): Invocation | undefined {
-  if (!spec.taskAdaptation) return undefined
+export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; feedbackPath?: string; feedbackResource?: LogicalResource; round?: number; passID?: string; requestGate?: string; advice?: Array<Omit<AdviceReference, "root">> } = {}): Invocation | undefined {
+  if (!spec.taskAdaptation) {
+    validateRequestGate(input.requestGate, false)
+    return undefined
+  }
   const bound = spec.taskAdaptationContext
   if (!bound) throw new Error("Frozen task adaptation context missing")
   const output = role === "planner" ? 'Return JSON: {"planner_summary":"", "completion_validator_ids":[], "units":[{"id":"work", "operation":"author_work", "title":"", "goal":"", "inputs":[], "depends_on":[], "expected_artifacts":[], "claim":"", "check_plan":"", "validator_ids":[], "retry_budget":1}]}. Units must perform author work, not formal acceptance.'
@@ -151,6 +155,7 @@ export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidat
       ...(input.passID ? { passID: input.passID } : {}) } : {}),
     ...(input.worker ? { worker: input.worker } : {}), output: input.output ?? output, maxInlineBytes: 16000,
     ...(spec.taskAdaptation.requestBudget ? { requestBudget: spec.taskAdaptation.requestBudget } : {}),
+    ...(input.requestGate === undefined ? {} : { requestGate: input.requestGate }),
     ...(input.advice?.length ? { advice: input.advice.map(item => ({ ...item, root: spec.taskAdaptationCampaignRoot! })) } : {}),
     ...(feedback ? { feedback: { root: spec.taskAdaptationCampaignRoot!, path: feedback,
       task: spec.protocolPlugins!.taskID, phase: spec.protocolPlugins!.phase } } : {}),

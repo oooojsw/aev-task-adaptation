@@ -9,7 +9,7 @@ import { verifyScriptExecution } from "./script-executor"
 
 export async function selectedRuntime(root: string, cwd: string | undefined, entry: Entry,
   createDriver: typeof opencodeDriver = opencodeDriver,
-  budgets: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets"> = {}) {
+  budgets: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets" | "requestGate"> = {}) {
   validateEntry(entry)
   const selection = JSON.parse((await readFile(entry.selectionPath, "utf8")).replace(/^\uFEFF/, "")) as Selection
   const phases = selection?.protocol?.phases

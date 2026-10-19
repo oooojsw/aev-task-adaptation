@@ -18,7 +18,7 @@ import type { BuiltinOptions } from "./builtins"
 import { regular } from "../task-adaptation/consolidation/publication-evidence"
 
 export async function campaignAcceptance(input: {
-  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets">
+  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets" | "requestGate">
   campaignRoot: string
   cwd?: string
   campaignID: string
@@ -157,7 +157,7 @@ export async function campaignAcceptance(input: {
 }
 
 export async function verifyCompletedCampaignAcceptance(input: {
-  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets">
+  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets" | "requestGate">
   campaignRoot: string; cwd: string; campaignID: string; roundNumber: number;
   runID: string; entry: Entry; candidateRoot: string; resultPath: string;
 }) {
@@ -185,7 +185,7 @@ export async function verifyCompletedCampaignAcceptance(input: {
 }
 
 export async function readCompletedRejectedCampaignPass(input: {
-  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets">
+  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets" | "requestGate">
   campaignRoot: string; cwd: string; campaignID: string; roundNumber: number;
   runID: string; entry: Entry; resultPath: string;
 }) {

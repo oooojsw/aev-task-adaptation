@@ -17,6 +17,7 @@ import type { ResourceReaderGrant } from "./consolidation/scoped-reader"
 import { verifyPublication } from "./consolidation/publication-evidence"
 import { fingerprint } from "../protocol-plugins/identity"
 import { readerDeadline, resolveRuntimeBudget } from "../opencode-runtime-budget"
+import { validateRequestGate } from "./budget-transport"
 
 export interface Invocation {
   bound: BoundPlan
@@ -30,6 +31,7 @@ export interface Invocation {
   feedbackResource?: LogicalResource
   advice?: AdviceReference[]
   requestBudget?: TaskBudgetPolicy
+  requestGate?: string
   campaignID?: string
   round?: number
   passID?: string
@@ -39,7 +41,8 @@ export async function authorizeInvocation(input: Invocation, request: OpencodeTa
   if (!Number.isSafeInteger(input.maxInlineBytes) || input.maxInlineBytes < 0 || input.maxInlineBytes > 64000 ||
     typeof input.output !== "string" || !input.output.trim()) throw new Error("Explicit bounded role output contract required")
   const original = await boundWindow(input.bound, input.role, input.stage, input.worker)
-  const budget = input.requestBudget ? taskRequestBudget(input.requestBudget, input.bound.plan.stop, input.role, request.model ?? "") : undefined
+  const gate = validateRequestGate(input.requestGate, Boolean(input.requestBudget))
+  const budget = input.requestBudget ? taskRequestBudget(input.requestBudget, input.bound.plan.stop, input.role, request.model ?? "", gate) : undefined
   if (budget) {
     for (const root of [input.bound.root, input.candidate?.root].filter((value): value is string => Boolean(value))) {
       const relative = path.relative(root, budget.budget.root)
