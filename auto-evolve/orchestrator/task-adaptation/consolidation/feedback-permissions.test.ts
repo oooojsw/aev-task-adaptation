@@ -12,6 +12,7 @@ import {
   readResourceChunk,
   resourceReaderEnvironment,
   readResourceFromEnvironment,
+  validateResourceReaderAccess,
 } from "./scoped-reader"
 import {
   authorizeResourceAccess,
@@ -914,6 +915,161 @@ describe("AEV Unified Access & 50-Case Feedback Permissions (P0-P3 / R0-R4 Deep 
           missingRuntime,
         ),
       ).resolves.toMatchObject({ passed: true })
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test("U14: Old branch/round reader grant and cursor are rejected across branch activation in new round", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "aev-cross-branch-reader-"))
+    try {
+      const candidateDir = path.join(tempDir, "candidate")
+      await mkdir(candidateDir, { recursive: true })
+      const sampleSkillPath = path.join(candidateDir, "DIRECT_CHAT.md")
+      await writeFile(sampleSkillPath, "# Skill Implementation")
+
+      const rawCases = generateMockCases(50, 40)
+      rawCases[0].materials[0].content = "Multi-page case material content. ".repeat(200)
+      const round1Dir = path.join(tempDir, "round_1")
+      const r1 = await publishTrainingFeedbackResource({
+        targetDir: round1Dir,
+        campaignID: "camp_branch_iso",
+        round: 1,
+        cases: rawCases,
+      })
+
+      const plan: Plan = {
+        schema: "aev.task-plan.v1",
+        id: "direct_chat_consolidation",
+        objective: "Consolidate guidance based on 50 training feedback",
+        deliverable: { kind: "skill", entries: ["candidate"] },
+        capabilities: ["read"],
+        resources: [
+          { id: "candidate", path: "DIRECT_CHAT.md", audience: "public", mutable: true },
+        ],
+        windows: [
+          {
+            role: "lead",
+            stage: "revise",
+            reads: ["candidate"],
+            writes: ["candidate"],
+            actions: ["read", "edit"],
+            runtime: ["feedback"],
+            inline: [],
+          },
+          {
+            role: "checker",
+            stage: "accept",
+            reads: ["candidate"],
+            writes: [],
+            actions: ["read"],
+            inline: [],
+          },
+        ],
+        acceptance: {
+          execution: "none",
+          checks: [
+            {
+              id: "check_skill",
+              target: "candidate",
+              mechanism: "judge",
+              purpose: "Check skill",
+              required: true,
+              resources: ["candidate"],
+              feedback: "status_only",
+            },
+          ],
+        },
+        rejection: [{ check: "check_skill", actions: ["research"] }],
+        workers: [],
+        selection: { rule: "first_pass" },
+        stop: { rounds: 3, calls: 10, tokens: 10000, stagnant: 2 },
+      }
+      const bound = await bindPlan(candidateDir, plan, ["read"])
+
+      // 1. 在原分支 round 1 获得 Lead 角色的 resourceReaderGrant
+      const r1Lead = await authorizeInvocation(
+        {
+          bound,
+          role: "lead",
+          stage: "revise",
+          output: "Update skill in round 1",
+          maxInlineBytes: 10000,
+          feedbackResource: r1.logicalResource,
+          campaignID: "camp_branch_iso",
+          round: 1,
+        },
+        { model: "mock-model", config: { permissionConfig: { version: 1, mode: "restricted" } } },
+      )
+      const grant1 = r1Lead.request.resourceReaderGrant!
+      expect(grant1).toBeDefined()
+      expect(grant1.round).toBe(1)
+
+      // 在原分支读取第一页，获得有效 cursor
+      const binding1 = bindScopedReader(r1.logicalResource, r1.manifest, grant1.hmacSecret)
+      binding1.sessionID = grant1.sessionID
+      binding1.round = 1
+      binding1.role = grant1.role
+      binding1.principalID = grant1.principalID
+      binding1.planFingerprint = grant1.planFingerprint
+      binding1.policyFingerprint = grant1.policyFingerprint
+      binding1.stage = grant1.stage
+      binding1.expiresAt = grant1.expiresAt
+      const chunk1 = await readResourceChunk(binding1, { resourceID: binding1.resourceID, caseID: "dc_001", maxBytes: 1024 })
+      expect(chunk1.nextCursor).toBeDefined()
+
+      // 2. 模拟切换至备用路线分支（round 3，新发布 feedback）
+      const round3Dir = path.join(tempDir, "round_3")
+      const r3 = await publishTrainingFeedbackResource({
+        targetDir: round3Dir,
+        campaignID: "camp_branch_iso",
+        round: 3,
+        cases: rawCases,
+      })
+
+      // 断言 A：在 round 3 环境下试图拿原分支旧 grant1 执行 Host 级 validateResourceReaderAccess 必被拒绝
+      const evidenceDir = path.join(tempDir, "evidence")
+      await mkdir(evidenceDir, { recursive: true })
+      await expect(
+        validateResourceReaderAccess(
+          { ...grant1, manifestPath: r3.manifestPath, manifestSHA256: r3.manifest.manifestSHA256, casesDir: path.join(round3Dir, "cases") },
+          [r3.manifestPath],
+          [],
+          evidenceDir,
+        ),
+      ).rejects.toThrow("Resource reader publication binding mismatch")
+
+      // 断言 B：原分支旧 cursor 拿到 round 3 的 reader binding 跨分支重用，必须被 HMAC/round 校验严格拒绝
+      const r3Lead = await authorizeInvocation(
+        {
+          bound,
+          role: "lead",
+          stage: "revise",
+          output: "Update skill in round 3 alternative branch",
+          maxInlineBytes: 10000,
+          feedbackResource: r3.logicalResource,
+          campaignID: "camp_branch_iso",
+          round: 3,
+        },
+        { model: "mock-model", config: { permissionConfig: { version: 1, mode: "restricted" } } },
+      )
+      const grant3 = r3Lead.request.resourceReaderGrant!
+      expect(grant3.sessionID).not.toBe(grant1.sessionID)
+      expect(grant3.round).toBe(3)
+
+      const binding3 = bindScopedReader(r3.logicalResource, r3.manifest, grant3.hmacSecret)
+      binding3.sessionID = grant3.sessionID
+      binding3.round = 3
+      binding3.role = grant3.role
+      binding3.principalID = grant3.principalID
+      binding3.planFingerprint = grant3.planFingerprint
+      binding3.policyFingerprint = grant3.policyFingerprint
+      binding3.stage = grant3.stage
+      binding3.expiresAt = grant3.expiresAt
+
+      await expect(
+        readResourceChunk(binding3, { resourceID: binding3.resourceID, caseID: "dc_001", cursor: chunk1.nextCursor }),
+      ).rejects.toThrow("cursor")
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }

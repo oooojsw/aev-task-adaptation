@@ -58,16 +58,17 @@ async function fixture() {
   } as LongTaskSpec
   const baseSpecPath = path.join(cwd, "spec.json")
   await writeFile(path.join(root, "campaign.json"), JSON.stringify({ id: "campaign", baseSpecPath, status: "recovery_pending", currentRound: 1 }))
-  async function evaluate(round: number) {
+  async function evaluate(round: number, pass = 1) {
     const roundID = `round-${String(round).padStart(3, "0")}`
-    const attemptRoot = path.join(root, "rounds", roundID, "final-acceptance/pass-01")
+    const passID = `pass-${String(pass).padStart(2, "0")}`
+    const attemptRoot = path.join(root, "rounds", roundID, "final-acceptance", passID)
     const result = await campaignAcceptance({ cwd, campaignRoot: root, campaignID: "campaign", roundNumber: round,
-      runID: `author-${round}`, entry, candidateRoot: current, attemptRoot, resultPath: path.join(attemptRoot, "result.json"),
+      runID: `author-${round}-${pass}`, entry, candidateRoot: current, attemptRoot, resultPath: path.join(attemptRoot, "result.json"),
       taskBinding: { planFingerprint: bound.fingerprint, policyFingerprint: fingerprint({ windows: cfg.windows, workers: cfg.workers }) } }, runtime)
     const reference = { root, path: result.protocolTrainingResultPath, task: "report", phase: "source" as const }
     spec.protocolAuthorContext = { fingerprint: (await taskFeedback(bound, reference)).view.protocolFingerprint } as LongTaskSpec["protocolAuthorContext"]
     const record: LongTaskCampaignRoundRecord = { roundNumber: round, roundID, roundSpecPath: baseSpecPath,
-      sourceRunID: `author-${round}`, sourceRunDir: cwd, finalStatus: "failed", summary: "Formal local report rejection",
+      sourceRunID: `author-${round}-${pass}`, sourceRunDir: cwd, finalStatus: "failed", summary: `Formal local report rejection pass ${pass}`,
       failurePacketCount: 0, retryLessonCount: 0, learningUnitCount: 0, roundSummaryPath: path.join(attemptRoot, "summary.md"),
       snapshotPaths: [], createdAt: new Date().toISOString(), roundClosure: result.passed ? "closed_success" : "closed_repairable",
       finalAcceptanceSignal: { executed: true, passed: result.passed, failedValidatorIDs: [], feedbackPath: reference.path } }
@@ -217,5 +218,51 @@ test("shared round close repairs history-only boundary and reuses decisions afte
     const reused = await close(third, 1, false)
     expect(reused.state.selectedTaskVersionPath).toBe(final.state.selectedTaskVersionPath)
     expect(reused.state.taskStopReason).toBe("first_pass")
+  } finally { f.control.close() }
+}, 30000)
+
+test("round-002 pass-01 failure into pass-02 interruption and recovery reuses decision and preserves single restart opportunity", async () => {
+  const f = await fixture()
+  try {
+    const input = { cwd: f.cwd, root: f.root, control: f.control, pass: 1, generation: 0 as const, qualified: false }
+
+    // Round 1 fails and continues
+    const firstDecision = await closeTaskExplorationRound(f.spec, { ...input, round: f.first })
+    expect(firstDecision.action).toBe("continue")
+
+    // Round 2 pass-01 fails
+    await writeFile(path.join(f.current, "report.md"), "failed round 2 pass 1")
+    const round2Pass1 = await f.evaluate(2, 1)
+    expect(round2Pass1.finalAcceptanceSignal?.passed).toBe(false)
+
+    // Pass-02 in round 2: candidate is updated, closed, and stagnation trigger fires activation
+    await writeFile(path.join(f.current, "report.md"), "failed round 2 pass 2 candidate")
+    const round2Pass2 = await f.evaluate(2, 2)
+    const pass2Input = { ...input, pass: 2, round: round2Pass2 }
+    const decisionBeforeInterruption = await closeTaskExplorationRound(f.spec, pass2Input)
+    expect(decisionBeforeInterruption.action).toBe("activate")
+
+    // Interrupted recovery replay: re-calling closeTaskExplorationRound reuses exact persisted decision and observations
+    const decisionAfterRecovery = await closeTaskExplorationRound(f.spec, pass2Input)
+    expect(decisionAfterRecovery).toEqual(decisionBeforeInterruption)
+    expect(decisionAfterRecovery.identity).toBe(decisionBeforeInterruption.identity)
+    expect(decisionAfterRecovery.observations).toHaveLength(2)
+
+    // Verify persisted decision on disk matches exactly
+    const persisted = await readTaskExplorationDecision(f.spec, { root: f.root, round: 2 })
+    expect(persisted).toEqual(decisionBeforeInterruption)
+
+    // Activation switches to alternative branch exactly once
+    const activation = await activateTaskBranch(f.spec, f)
+    expect(activation?.nextRound).toBe(3)
+    expect(await taskBranchStart(f.spec, f.root)).toBe(3)
+
+    // Repeated activation replay after recovery is idempotent and never grants a second restart
+    const secondActivation = await activateTaskBranch(f.spec, f)
+    expect(secondActivation).toEqual(activation)
+    expect(await taskBranchStart(f.spec, f.root)).toBe(3)
+
+    // Candidate identity preserved across recovery
+    expect(await readFile(path.join(f.current, "report.md"), "utf8")).toBe("initial report")
   } finally { f.control.close() }
 }, 30000)
