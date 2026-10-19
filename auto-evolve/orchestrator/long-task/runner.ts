@@ -91,6 +91,7 @@ import { resolveModelSelection } from "../model-selection"
 import { writeTaskArtifacts } from "../task-artifacts"
 import { runProtocolTrainingTask } from "../protocol-plugins/training-invocation"
 import { taskInvocation, checkTaskExploration } from "../task-adaptation/context"
+import { assertTaskGeneration, type TaskGenerationLease } from "../task-adaptation/exploration/generation"
 import { extractJsonObject } from "./json-extract"
 import { cleanupRuntimeProcessScope, longTaskRunRuntimeScope } from "../runtime-process-registry"
 import {
@@ -2344,6 +2345,7 @@ async function continueLongTaskLoop(input: {
 export async function runLongTask(input: {
   cwd: string
   specPath: string
+  taskGeneration?: TaskGenerationLease
   runtimeScope?: string
   onRuntimeActivated?: OpencodeTaskInput["onSpawn"]
   onRuntimePulse?: OpencodeTaskInput["onPulse"]
@@ -2352,6 +2354,7 @@ export async function runLongTask(input: {
   try {
     await loadConfig(input.cwd)
     const { spec, specPath } = await loadLongTaskSpec(input.specPath)
+    assertTaskGeneration(spec, input.taskGeneration)
     const runID = createLongTaskRunID(spec.title)
     runtimeScope = runtimeScope ?? longTaskRunRuntimeScope(runID)
     const runtimeSpec = isolateLongTaskRuntimePaths({
@@ -2430,6 +2433,7 @@ export async function runLongTask(input: {
 export async function resumeLongTask(input: {
   cwd: string
   runID: string
+  taskGeneration?: TaskGenerationLease
   runtimeScope?: string
   onRuntimeActivated?: OpencodeTaskInput["onSpawn"]
   onRuntimePulse?: OpencodeTaskInput["onPulse"]
@@ -2437,6 +2441,7 @@ export async function resumeLongTask(input: {
   const resolved = resolveExistingLongTaskRun(input.cwd, input.runID)
   const spec = await readLongTaskSpec(resolved.run)
   await checkTaskExploration(spec.taskAdaptation)
+  assertTaskGeneration(spec, input.taskGeneration)
   const runtimeScope = input.runtimeScope ?? longTaskRunRuntimeScope(input.runID)
   const currentProgress = await readLongTaskProgressState(resolved.run)
   await writeLongTaskProgressState(resolved.run, {

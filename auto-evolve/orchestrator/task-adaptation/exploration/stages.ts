@@ -3,11 +3,42 @@ import type { LongTaskSpec } from "../../long-task/contract"
 import { canonical, fingerprint } from "../../protocol-plugins/identity"
 import { verifyBinding } from "../binding"
 import { validateTaskBudgetPolicy } from "../budget-policy"
-import { openRequestStage, type IntakePrefix } from "../request-budget"
+import { inspectRequestStage, openRequestStage, type IntakePrefix } from "../request-budget"
 import { withTaskRequestGate } from "../context"
 import { explorationPolicy, explorationIdentity } from "./policy"
 import type { ArchiveScope } from "./archive"
 import type { Admission } from "./admission"
+
+export async function startTaskRequestRound(spec: LongTaskSpec,
+  input: Omit<Parameters<typeof openTaskRequestStage>[1], "previous" | "prefix" | "pass" | "stage">) {
+  const bound = spec.taskAdaptationContext, cfg = spec.taskAdaptation?.requestBudget
+  if (!bound || !cfg) throw new Error("Frozen stage task and budget required")
+  const state = await inspectRequestStage({ root: cfg.root, scope: cfg.scope,
+    calls: bound.plan.stop.calls, tokens: bound.plan.stop.tokens })
+  if (state.current?.policy.round === input.round) {
+    if (state.current.policy.generation !== input.generation) throw new Error("Restored request generation mismatch")
+    // 恢复也走原身份核验，不能借同轮号跨协议复用授权。
+    return scheduleTaskRequestStage(spec, { ...input,
+      pass: state.current.policy.pass, stage: state.current.policy.stage })
+  }
+  return scheduleTaskRequestStage(spec, { ...input, pass: 1, stage: "author" })
+}
+
+export async function scheduleTaskRequestStage(spec: LongTaskSpec,
+  input: Omit<Parameters<typeof openTaskRequestStage>[1], "previous" | "prefix">) {
+  const bound = spec.taskAdaptationContext, cfg = spec.taskAdaptation?.requestBudget
+  if (!bound || !cfg) throw new Error("Frozen stage task and budget required")
+  const state = await inspectRequestStage({ root: cfg.root, scope: cfg.scope,
+    calls: bound.plan.stop.calls, tokens: bound.plan.stop.tokens })
+  const current = state.current?.policy
+  const same = current && current.round === input.round && current.pass === input.pass &&
+    current.generation === input.generation && current.stage === input.stage
+  // 恢复同一阶段复用原授权，不能把当前阶段当作自身前驱。
+  return openTaskRequestStage(spec, { ...input,
+    previous: same ? state.previous : state.current?.id ?? null,
+    ...(!state.current ? { prefix: state.prefix } : {}),
+  })
+}
 
 export async function openTaskRequestStage(spec: LongTaskSpec, input: {
   scope: ArchiveScope

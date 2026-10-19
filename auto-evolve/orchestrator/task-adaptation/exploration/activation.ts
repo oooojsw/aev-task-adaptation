@@ -12,6 +12,7 @@ import { explorationIdentity, explorationPolicy } from "./policy"
 interface ActivationInput {
   root: string
   composition: CompositionInput
+  candidateRoot?: string
   recover?: boolean
 }
 
@@ -101,6 +102,7 @@ export async function activate(input: ActivationInput) {
     overlaps(input.root, input.composition.archive) ||
     (policy.origin.kind === "candidate" && overlaps(input.root, policy.origin.archive)) ||
     overlaps(input.root, input.composition.bound.root)
+    || (input.candidateRoot !== undefined && (!path.isAbsolute(input.candidateRoot) || overlaps(input.root, input.candidateRoot)))
   )
     throw new Error("Separate absolute activation root required")
   await mkdir(input.root, { recursive: true })
@@ -144,7 +146,7 @@ export async function activate(input: ActivationInput) {
         cap,
       )
       for (const item of current.record.files) {
-        const file = path.join(input.composition.bound.root, item.path)
+        const file = path.join(input.candidateRoot ?? input.composition.bound.root, item.path)
         await checkedPath(file, "file")
         const bytes = await readFile(file)
         if (bytes.length !== item.bytes || createHash("sha256").update(bytes).digest("hex") !== item.sha256)

@@ -13,6 +13,7 @@ import type { AdviceReference } from "./advice"
 import { freezeTaskBudgetPolicy, validateTaskBudgetPolicy, taskRuntimeBudgets, taskRequestBudget, type TaskBudgetPolicy } from "./budget-policy"
 import { validateRequestGate } from "./budget-transport"
 import { requireExplorationHost } from "./exploration/entry"
+import { preflightExploration } from "./exploration/preflight"
 
 export interface Adaptation {
   schema: "aev.task-adaptation.v1"
@@ -99,6 +100,12 @@ export async function loadTaskContext(spec: LongTaskSpec, dir: string): Promise<
     !phase.skill.entries.some(entry => entry.id === id)) ||
     canonical(cfg.entries) !== canonical(phase.skill.entries.map(({ id, path }) => ({ id, path })))) throw new Error("Task deliverable does not match protocol entry files")
   await verifyProtocolScopes(plan, cfg.root, project, spec.protocolPlugins.taskID, actualPhase)
+  if (plan.exploration) {
+    if (!spec.protocolTraining) throw new Error("Exploration Host training configuration missing")
+    await preflightExploration(plan, { root: cfg.root, capabilities: cfg.capabilities, training: spec.protocolTraining,
+      requestBudget: cfg.requestBudget, executor: actualPhase.executor,
+      checkers: actualPhase.checks.map(check => ({ name: check.name, binding: check })) })
+  }
   if (cfg.requestBudget) {
     const models = [...Object.values(spec.protocolTraining?.roles ?? {}).map(item => item.model),
       actualPhase.executor?.settings.model, ...actualPhase.checks.map(item => item.settings.model ??

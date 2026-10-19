@@ -9,13 +9,17 @@ import { TRAINING_ROLES, type TrainingConfig } from "../../protocol-plugins/trai
 import { runOpencodeTask, type OpencodeTaskInput } from "../../opencode"
 import { DEFAULT_CONFIG } from "../../schema"
 import { inspectBudget } from "../request-budget"
+import { compileTask } from "../catalogue"
+import { fingerprint } from "../../protocol-plugins/identity"
+import { harvest } from "../../protocol-plugins/harvest"
 
 type Message = { role: string; content?: unknown }
 type Body = { model: string; stream?: boolean; messages: Message[]; tools?: Array<{ function?: { name?: string } }> }
 type Action = { name: string; args: Record<string, unknown> }
 
 // 只使用回环假服务，真实控制器、预算、判卷进程和受限工具不替换。
-for (const recovery of [false, true]) test(`unified task runs 50-case consolidation through real restricted tools${recovery ? " with audited recovery and pass-02" : ""} and delivers best of three rounds`, async () => {
+for (const mode of ["original", "recovery", "exploration"] as const) test(`unified consolidation ${mode} runs real restricted tools and delivers best of three rounds`, async () => {
+  const recovery = mode === "recovery", exploration = mode === "exploration"
   const cwd = path.resolve(import.meta.dir, "../../../..")
   const root = path.join("E:/project/AEV-task-adaptation-20261016/test-evidence", `consolidation-${randomUUID()}`)
   await mkdir(root, { recursive: true })
@@ -116,6 +120,9 @@ for (const recovery of [false, true]) test(`unified task runs 50-case consolidat
         throw new Error("Offline interruption before dispatch")
       }
       if (input.title.startsWith("Campaign Lead")) leads++
+      if (exploration && input.title.startsWith("Campaign Lead") && input.title.includes("round-003")) {
+        expect(await readFile(input.permissionEditPaths![0], "utf8")).toContain("ROUND_TARGET=1")
+      }
       await input.onSpawn?.()
       if (input.title.startsWith("Campaign Lead") || input.resourceReaderGrant) {
         const id = randomUUID()
@@ -156,7 +163,7 @@ for (const recovery of [false, true]) test(`unified task runs 50-case consolidat
     await writeFile(path.join(sources, "source-manifest.json"), JSON.stringify({ schema: "aev.consolidation-sources.v1", sources: rows }))
     await writeFile(path.join(sources, "DIRECT_CHAT.md"), "Initial reusable guidance. ROUND_TARGET=1")
     const catalogue = await consolidationCatalogue({ root: sources, manifest: "source-manifest.json", cases: ids,
-      id: "offline-consolidation", objective: "Consolidate frozen Skills into reusable guidance", stop: { rounds: 3, calls: 1000, tokens: 10000000, stagnant: 3 } })
+      id: "offline-consolidation", objective: "Consolidate frozen Skills into reusable guidance", stop: { rounds: 3, calls: 1000, tokens: exploration ? 50000000 : 10000000, stagnant: 3 } })
     const validator = path.join(root, "validator.mjs")
     await writeFile(validator, 'import {readFileSync} from "node:fs"; const file=process.argv[process.argv.indexOf("--candidate")+1]; console.log(JSON.stringify({passed:readFileSync(file,"utf8").trim()==="42"}));')
     const dataset = path.join(root, "cases.jsonl")
@@ -182,7 +189,21 @@ for (const recovery of [false, true]) test(`unified task runs 50-case consolidat
         requestBudget: { schema: "aev.task-budget-policy.v1", root: path.join(root, "budget"), scope: "offline-consolidation",
           models: [{ model: "fixture/actor", dialect: "openai_chat", expectedModels: ["actor"], maxInputTokens: 131072, maxOutputTokens: 4096 },
             { model: "consumer", dialect: "openai_chat", expectedModels: ["consumer"], maxInputTokens: 10000, maxOutputTokens: 128 }] }, maxBundleBytes: 1000000 } }
-    let result = await actual.runTask(input)
+    const compiled = compileTask(catalogue, input.intake.decision)
+    if (compiled.status !== "ready") throw new Error("Fixture Plan missing capabilities")
+    const preset = { ...structuredClone(compiled.plan), ...(exploration ? { exploration: {
+      schema: "aev.exploration-policy.v1", origin: { kind: "initial" }, replace: ["merged_skill"], preserve: [],
+      dependencies: catalogue.resources.filter(item => !item.mutable).map(item => item.id),
+      trigger: { kind: "attempts", observations: 2 }, allowance: { rounds: 1, minimumRounds: 1,
+        authorCalls: 200, authorTokens: 3000000, acceptanceCalls: 60, acceptanceTokens: 7000000,
+        deliveryCalls: 0, deliveryTokens: 0 }, bounds: { archiveBytes: 20000000, candidateBytes: 10000, dependencyBytes: 100000 },
+      safety: { reset: "declared_entries", effects: "sandbox_only" },
+    } } : {}) }
+    const planPath = path.join(root, "exploration-plan.json")
+    if (exploration) await writeFile(planPath, JSON.stringify(preset))
+    const launch = exploration ? { ...input, intake: { mode: "manual_plan", cwd, root: sources,
+      dir: input.intake.dir, catalogue: { ...catalogue, approvedPlans: [fingerprint(preset)] }, planPath } } : input
+    let result = await actual.runTask(launch)
     let preserved: { path: string; manifest: string; file: string; content: string } | undefined
     if (recovery) {
       await writeFile(path.join(root, "interrupted-result.json"), JSON.stringify(result, null, 2))
@@ -202,7 +223,7 @@ for (const recovery of [false, true]) test(`unified task runs 50-case consolidat
         ownerCommandHint: undefined, ownerCreationTick: undefined, heartbeatAt: undefined,
         recovery: { action: "harvest_round_run", roundNumber: 2, runID: state.lastRunID,
           reason: "Offline audited interruption before request", detectedAt: new Date().toISOString() } }))
-      result = await actual.runTask(input)
+      result = await actual.runTask(launch)
     }
     await writeFile(path.join(root, "outcome.json"), JSON.stringify(result, null, 2))
     expect(errors).toEqual([])
@@ -219,17 +240,27 @@ for (const recovery of [false, true]) test(`unified task runs 50-case consolidat
       expect(await readFile(preserved.path, "utf8")).toBe(preserved.manifest)
       expect(await readFile(preserved.file, "utf8")).toBe(preserved.content)
     }
-    expect(calls.filter(item => item.cases === 50)).toHaveLength(4)
+    expect(calls.filter(item => item.cases === 50)).toHaveLength(exploration ? 2 : 4)
     expect(calls.filter(item => item.title.startsWith("Campaign Lead") && item.round).every(item => item.pass === "pass-01")).toBe(true)
     const budget = { root: input.execution.requestBudget.root, scope: input.execution.requestBudget.scope,
       calls: catalogue.stop.calls, tokens: catalogue.stop.tokens }
     const before = await inspectBudget(budget)
-    const resumed = await actual.runTask(input)
+    const resumed = await actual.runTask(launch)
     const after = await inspectBudget(budget)
     expect(resumed.delivery).toEqual({ ...result.delivery, reused: true })
     expect(evaluations).toBe(150)
     expect(leads).toBe(recovery ? 4 : 3)
     expect(after).toEqual(before)
+    if (exploration) {
+      const saved = JSON.parse(await readFile(path.join(result.campaignDir, "task-adaptation/exploration/host/state.json"), "utf8"))
+      expect(saved.record.observations.map((item: { branch: string }) => item.branch)).toEqual(["original", "original", "alternative"])
+      expect(saved.record.decision.reason).toBe("global_limit")
+      const targetRoot = path.join(root, "harvested")
+      await harvest({ cwd, campaignRoot: result.campaignDir, taskID: compiled.plan.id, targetRoot })
+      expect(await readFile(path.join(targetRoot, "DIRECT_CHAT.md"), "utf8")).toContain("ROUND_TARGET=43")
+      await harvest({ cwd, campaignRoot: result.campaignDir, taskID: compiled.plan.id, targetRoot })
+      expect(evaluations).toBe(150)
+    }
     await writeFile(path.join(root, "summary.json"), JSON.stringify({ passed: true, externalModelCalls: 0, evaluations, calls, versions, errors }, null, 2))
     console.log(`Consolidation full chain evidence: ${root}`)
   } finally {

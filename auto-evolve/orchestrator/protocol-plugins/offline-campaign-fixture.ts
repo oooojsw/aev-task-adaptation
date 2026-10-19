@@ -9,6 +9,7 @@ export async function buildOfflineCampaign(root: string, key: string) {
   await writeFile(entry, [
     `export { runLongTaskCampaign, resumeLongTaskCampaign } from ${JSON.stringify(path.join(base, "long-task-campaign/runner.ts"))};`,
     `export { runTask } from ${JSON.stringify(path.join(base, "task-adaptation/run-task.ts"))};`,
+    `export { runLongTask, resumeLongTask } from ${JSON.stringify(path.join(base, "long-task/runner.ts"))};`,
   ].join("\n"))
   const seen = new Set<string>()
   const built = await Bun.build({ entrypoints: [entry], target: "bun", packages: "external", outdir: root,

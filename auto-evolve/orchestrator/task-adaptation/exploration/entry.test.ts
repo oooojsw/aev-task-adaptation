@@ -28,7 +28,7 @@ test("optional policy freezes in Plan identity without adding an absent default"
 
 test("validating a policy does not authorize execution or self-reported Host capabilities", () => {
   const value = validatePlan({ ...plan(), exploration: policy() })
-  expect(() => requireExplorationHost(value)).toThrow("Host lifecycle not connected")
+  expect(() => requireExplorationHost(value)).toThrow("Host role window missing")
   expect(() => validatePlan({ ...value, exploration: { ...policy(), fencedReaders: true } })).toThrow()
   expect(() => requireExplorationHost(validatePlan(plan()))).not.toThrow()
 })
@@ -41,22 +41,22 @@ test("preset preparation rejects exploration before backend creation or any inta
   let invoked = false
   const input = { intake: { mode: "manual_plan", planPath: file } } as TaskRunPreparation
   await expect(prepareTaskRun(input, { createRuntime: async () => { invoked = true; throw new Error("must not start") } }))
-    .rejects.toThrow("Host lifecycle not connected")
+    .rejects.toThrow("Host role window missing")
   expect(invoked).toBe(false)
   // 直接准备与直接加载都不能绕过同一能力门。
   await expect(prepareExecution({ plan: { ...plan(), exploration: policy() } } as ExecutionPreparation, {} as Registry))
-    .rejects.toThrow("Host lifecycle not connected")
+    .rejects.toThrow("Host role window missing")
   const adaptation: Adaptation = { schema: "aev.task-adaptation.v1", planPath: file, root, capabilities: [],
     entries: [{ id: "report", path: "report.md" }] }
-  await expect(checkTaskExploration(adaptation)).rejects.toThrow("Host lifecycle not connected")
+  await expect(checkTaskExploration(adaptation)).rejects.toThrow("Host role window missing")
   await writeFile(file, JSON.stringify(plan()))
   await expect(checkTaskExploration(adaptation)).resolves.toBeUndefined()
   await expect(checkTaskExploration(undefined)).resolves.toBeUndefined()
 })
 
-test("a constructed role context cannot bypass the incomplete Host gate", () => {
+test("a constructed role context cannot omit required Host windows", () => {
   const spec = { taskAdaptation: {}, taskAdaptationContext: { plan: { ...plan(), exploration: policy() } } } as LongTaskSpec
-  expect(() => taskInvocation(spec, "lead")).toThrow("Host lifecycle not connected")
+  expect(() => taskInvocation(spec, "lead")).toThrow("Host role window missing")
 })
 
 test("preset preflight keeps the original size and hardlink protection before backend creation", async () => {

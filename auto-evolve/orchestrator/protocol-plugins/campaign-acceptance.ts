@@ -184,6 +184,14 @@ export async function verifyCompletedCampaignAcceptance(input: {
   if (receipt.status !== "passed" || result.protocolClaim !== receipt.claim) throw new Error("Completed Campaign acceptance verdict drift")
 }
 
+export async function readCompletedCampaignPass(input: Parameters<typeof verifyCompletedCampaignAcceptance>[0]) {
+  const result = JSON.parse((await readFile(input.resultPath, "utf8")).replace(/^\uFEFF/, "")) as Awaited<ReturnType<typeof campaignAcceptance>>
+  // 成功仍核对实际候选，历史拒绝只能复用原反馈。
+  if (!result.passed) return readCompletedRejectedCampaignPass(input)
+  await verifyCompletedCampaignAcceptance(input)
+  return result
+}
+
 export async function readCompletedRejectedCampaignPass(input: {
   budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets" | "requestGate">
   campaignRoot: string; cwd: string; campaignID: string; roundNumber: number;

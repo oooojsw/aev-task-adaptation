@@ -216,6 +216,14 @@ export async function inspectIntakePrefix(config: RequestBudget): Promise<Intake
   })
 }
 
+export async function inspectRequestStage(config: RequestBudget) {
+  return transaction(config, state => ({
+    current: structuredClone(state.gates?.at(-1)),
+    previous: state.gates?.at(-2)?.id ?? null,
+    ...(!state.gates ? { prefix: intakePrefix(state.attempts) } : {}),
+  }))
+}
+
 export async function openRequestStage(config: RequestBudget, policy: Admission, previous: string | null, prefix?: IntakePrefix,
   protection?: Admission[]) {
   admission(policy)

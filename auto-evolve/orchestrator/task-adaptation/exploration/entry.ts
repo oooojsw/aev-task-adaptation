@@ -1,6 +1,17 @@
 import type { Plan } from "../plan"
+import { explorationPolicy } from "./policy"
 
 export function requireExplorationHost(plan: Readonly<Plan>) {
-  // 主流程屏障及选优交接未闭环，不能仅凭配置承诺已经可执行。
-  if (plan.exploration !== undefined) throw new Error("Exploration Host lifecycle not connected; execution unsupported")
+  const cfg = explorationPolicy(plan.exploration, plan)
+  if (!cfg) return
+  // 首版只开放已接线的受限文件任务，不承诺任意外部状态可重置。
+  for (const [role, stage] of [["planner", "explore"], ["executor", "explore"], ["worker", "explore"],
+    ["lead", "revise"], ["reviewer", "accept"], ["diagnostician", "revise"]]) {
+    if (!plan.windows.some(window => window.role === role && window.stage === stage))
+      throw new Error(`Exploration Host role window missing: ${role}/${stage}`)
+  }
+  if (plan.windows.some(window => window.actions.some(action => ["execute", "research", "verify_source"].includes(action))))
+    throw new Error("Exploration Host does not reset external effects")
+  if (cfg.allowance.deliveryCalls || cfg.allowance.deliveryTokens)
+    throw new Error("Exploration Host delivery is local export only")
 }

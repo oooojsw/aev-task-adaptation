@@ -9,7 +9,7 @@ import { inspectBudget, inspectIntakePrefix, openRequestStage, reserveRequest, s
 import { taskInvocation } from "../context"
 import { taskRequestBudget } from "../budget-policy"
 import { budgetedProviderFetch } from "../budget-transport"
-import { openTaskRequestStage } from "./stages"
+import { openTaskRequestStage, scheduleTaskRequestStage, startTaskRequestRound } from "./stages"
 import { explorationIdentity } from "./policy"
 import { plan, policy } from "./policy.test"
 
@@ -45,8 +45,8 @@ test("stage adapter derives fixed roles and protections without consuming virtua
   expect(f.spec.taskAdaptationRequestGate).toBeUndefined()
   expect((await inspectBudget(f.budget)).admittedAttempts).toBe(0)
   expect(await openTaskRequestStage(f.spec, f.input)).toEqual(first)
-  // 安装预算阶段不等于Host执行能力已具备。
-  expect(() => taskInvocation(first.spec, "lead")).toThrow("Host lifecycle not connected")
+  // 阶段授权不能替代完整角色窗口预检。
+  expect(() => taskInvocation(first.spec, "lead")).toThrow("Host role window missing")
 })
 
 test("all author roles share a finite round cap and next pass does not reset consumption", async () => {
@@ -72,6 +72,22 @@ test("all author roles share a finite round cap and next pass does not reset con
   expect(first.spec.taskAdaptationRequestGate).toBe(first.gate.id)
 })
 
+test("automatic stage scheduling restores acceptance and pass02 without rewinding or charging twice", async () => {
+  const f = await fixture()
+  const first = await startTaskRequestRound(f.spec, f.input)
+  expect(first.gate.policy.stage).toBe("author")
+  const accepted = await scheduleTaskRequestStage(first.spec, { ...f.input, stage: "acceptance" })
+  expect((await startTaskRequestRound(f.spec, f.input)).gate.id).toBe(accepted.gate.id)
+  expect((await scheduleTaskRequestStage(f.spec, { ...f.input, stage: "acceptance" })).gate.id).toBe(accepted.gate.id)
+  const next = await scheduleTaskRequestStage(accepted.spec, { ...f.input, pass: 2 })
+  expect((await startTaskRequestRound(f.spec, f.input)).gate.id).toBe(next.gate.id)
+  expect((await scheduleTaskRequestStage(f.spec, { ...f.input, pass: 2 })).gate.id).toBe(next.gate.id)
+  const verdict = await scheduleTaskRequestStage(next.spec, { ...f.input, pass: 2, stage: "acceptance" })
+  const round = await startTaskRequestRound(verdict.spec, { ...f.input, round: 2 })
+  expect(round.gate.policy).toMatchObject({ round: 2, pass: 1, stage: "author" })
+  expect(await inspectBudget(f.budget)).toMatchObject({ admittedAttempts: 0, reportedTokens: 0 })
+})
+
 test("explicit intake prefix adoption keeps the same wallet and settles before author entry", async () => {
   const f = await fixture()
   await reserveRequest(f.budget, { id: "intake", request: fingerprint("intake"), role: "intake", model: "fixture", reservationTokens: 10 })
@@ -81,6 +97,21 @@ test("explicit intake prefix adoption keeps the same wallet and settles before a
   expect(result.gate.start).toBe(1)
   expect(await inspectBudget(f.budget)).toMatchObject({ admittedAttempts: 1, reportedTokens: 4 })
   expect(result.spec.taskAdaptation?.requestBudget).toEqual(f.spec.taskAdaptation?.requestBudget)
+})
+
+test("same-round recovery revalidates frozen scope and never rewinds acceptance", async () => {
+  const f = await fixture()
+  const first = await startTaskRequestRound(f.spec, f.input)
+  const accepted = await scheduleTaskRequestStage(first.spec, { ...f.input, stage: "acceptance" })
+  const file = path.join(f.budget.root, "budget.json"), before = await readFile(file, "utf8")
+  for (const scope of [
+    { ...f.input.scope, campaign: "other" },
+    { ...f.input.scope, protocol: fingerprint("other-protocol") },
+    { ...f.input.scope, plan: fingerprint("other-plan") },
+    { ...f.input.scope, policy: fingerprint("other-policy") },
+  ]) await expect(startTaskRequestRound(f.spec, { ...f.input, scope })).rejects.toThrow("scope drift")
+  expect(await readFile(file, "utf8")).toBe(before)
+  expect((await startTaskRequestRound(f.spec, f.input)).gate.id).toBe(accepted.gate.id)
 })
 
 test("wrong Campaign, plan, protocol or wallet scope never receives a stage authorization", async () => {
