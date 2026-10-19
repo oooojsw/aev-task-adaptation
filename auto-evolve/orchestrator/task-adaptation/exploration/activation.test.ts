@@ -7,6 +7,7 @@ import { fixture, interrupt } from "./composition.test"
 import { compose } from "./composition"
 import { overlaps } from "./materialize"
 import { directoryBytes } from "../../file-transaction"
+import { join } from "../../join"
 
 async function setup() {
   const composition = await fixture()
@@ -102,6 +103,31 @@ test("generation lease fences competing activation for the entire callback", asy
     release()
   }
   expect(await lease).toBe("done")
+  expect((await activate(input)).record.generation).toBe(1)
+})
+
+test("a rejected worker cannot release generation while another worker still writes", async () => {
+  const input = await setup()
+  let release!: () => void, enter!: () => void, failed!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const failure = new Promise<void>(resolve => { failed = resolve })
+  const waiting = new Promise<void>(resolve => { release = resolve })
+  const error = new Error("worker failed")
+  const lease = withGeneration(
+    { root: input.root, scope: input.composition.scope, generation: 0, cap: 1000000 },
+    async () => join([
+      Promise.resolve().then(() => { failed(); throw error }),
+      (async () => { enter(); await waiting; return "writer exited" })(),
+    ]),
+  ).then(() => undefined, reason => reason)
+  await entered
+  await failure
+  try {
+    await expect(activate(input)).rejects.toThrow("writer active")
+  } finally {
+    release()
+  }
+  expect(await lease).toBe(error)
   expect((await activate(input)).record.generation).toBe(1)
 })
 

@@ -5,6 +5,7 @@ import { loadTaskContext, taskInvocation, seedTaskCandidate, taskBudgetOptions }
 import { recordTaskVersion, readTaskVersions, chooseTaskVersion } from "../task-adaptation/selection"
 import { requestBudgetStop, isRequestBudgetStop } from "../task-adaptation/budget-stop"
 import { writeJsonAtomic } from "../atomic-write"
+import { join } from "../join"
 import { fingerprint } from "../protocol-plugins/identity"
 import { randomUUID } from "node:crypto"
 import { cp, lstat, readdir, rm } from "node:fs/promises"
@@ -3887,7 +3888,7 @@ async function runCampaignWorkers(input: {
   carryoverFiles?: string[]
 }) {
   const workerRoles = defaultCampaignWorkerRoles(input.baseSpec)
-  const suggestions = await Promise.all(
+  const suggestions = await join(
     workerRoles.map(async (role) => {
       const stageDir = path.join(input.roundPaths.workersRoot, role)
       const suggestionPath = path.join(stageDir, "suggestion.json")
