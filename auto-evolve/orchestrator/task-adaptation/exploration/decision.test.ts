@@ -211,3 +211,35 @@ test("conflicting, nonfinite and backwards histories fail closed", () => {
     expect(() => decide(cfg)).toThrow()
   }
 })
+
+test("same-round repeated pass closure preserves stagnation count and rejects conflicting pass mutations", () => {
+  const cfg = input()
+  cfg.policy = {
+    ...cfg.policy,
+    trigger: { kind: "metric", name: "score", direction: "max", minimumDelta: 1, patience: 2, minimumObservations: 2 },
+  }
+  // round 1: metric 10, round 2: metric 10 (stagnant, patience consumed)
+  cfg.observations = [observation(1, "original", 10), observation(2, "original", 10)]
+  const decisionBefore = decide(cfg)
+  expect(decisionBefore.action).toBe("continue")
+
+  // pass-02 replay of identical observation within round 2: preserves exact stagnation and observation count
+  cfg.observation = structuredClone(cfg.observations[1])
+  const decisionReplay = decide(cfg)
+  expect(decisionReplay.observations).toHaveLength(2)
+  expect(decisionReplay.identity).toBe(decisionBefore.identity)
+  expect(decisionReplay.action).toBe("continue")
+
+  // pass-02 attempting to mutate round 2 candidate or closure fails closed with conflict
+  cfg.observation = { ...cfg.observations[1], candidate: hash(999) }
+  expect(() => decide(cfg)).toThrow("Exploration round closure conflict")
+
+  cfg.observation = { ...cfg.observations[1], metric: 20 }
+  expect(() => decide(cfg)).toThrow("Exploration round closure conflict")
+
+  // across-round reuse of previous round closure fails closed
+  const cfgCross = input()
+  cfgCross.observations = [observation(1, "original", 10)]
+  cfgCross.observation = { ...observation(2, "original", 10), closure: hash(1) }
+  expect(() => decide(cfgCross)).toThrow("Exploration closure reused across rounds")
+})
