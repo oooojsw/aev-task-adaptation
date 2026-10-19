@@ -42,6 +42,15 @@ interface State {
 
 const positive = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0
 
+function group(state: State, policy: Admission) {
+  const gates = (state.gates ?? []).filter(item => item.policy.round === policy.round &&
+    item.policy.generation === policy.generation && item.policy.stage === policy.stage)
+  if (gates.some(item => item.policy.calls !== policy.calls || item.policy.tokens !== policy.tokens ||
+    canonical(item.policy.roles) !== canonical(policy.roles))) throw new Error("Request round-stage allowance drift")
+  const ids = new Set(gates.map(item => item.id))
+  return budgetTotals(state.attempts.filter(item => item.gate && ids.has(item.gate)))
+}
+
 async function location(config: RequestBudget) {
   if (!config || !path.isAbsolute(config.root) || typeof config.scope !== "string" || !config.scope.trim() ||
       !positive(config.calls) || !positive(config.tokens)) throw new Error("Explicit finite request budget required")
@@ -81,7 +90,7 @@ async function transaction<T>(config: RequestBudget, apply: (state: State) => Pr
       if (!Array.isArray(state.gates) || !state.gates.length) throw new Error("Request stage gate evidence drift")
       for (const [index, gate] of state.gates.entries()) {
         if (admission(gate.policy).id !== gate.id || !Number.isSafeInteger(gate.start) || gate.start < 0 ||
-          gate.start > state.attempts.length || (index === 0 ? gate.start !== 0 || gate.policy.round !== 1 ||
+          gate.start > state.attempts.length || (index === 0 ? gate.start !== 0 || gate.policy.round !== 1 || gate.policy.pass !== 1 ||
             gate.policy.generation !== 0 || gate.policy.stage !== "author" : gate.start < state.gates[index - 1].start))
           throw new Error("Request stage gate evidence drift")
         if (index) nextAdmission(state.gates[index - 1].policy, gate.policy)
@@ -89,7 +98,8 @@ async function transaction<T>(config: RequestBudget, apply: (state: State) => Pr
         if (state.attempts.slice(gate.start, end).some(item => item.gate !== gate.id || !gate.policy.roles.includes(item.role)))
           throw new Error("Request stage ownership drift")
         const local = budgetTotals(state.attempts.slice(gate.start, end))
-        if (local.admittedAttempts > gate.policy.calls || local.reportedTokens + local.outstandingTokens > gate.policy.tokens && !local.overrunAttempts ||
+        const cumulative = group(state, gate.policy)
+        if (cumulative.admittedAttempts > gate.policy.calls || cumulative.reportedTokens + cumulative.outstandingTokens > gate.policy.tokens && !cumulative.overrunAttempts ||
           index < state.gates.length - 1 && (local.unresolvedAttempts || local.overrunAttempts))
           throw new Error("Request stage settlement or local limits drift")
       }
@@ -150,7 +160,7 @@ export async function reserveRequest(config: RequestBudget, attempt: Omit<Attemp
     if (gate ? attempt.gate !== gate.id || !gate.policy.roles.includes(attempt.role) : attempt.gate !== undefined)
       throw new Error("Request stage gate mismatch")
     const totals = budgetTotals(state.attempts)
-    const local = gate ? budgetTotals(state.attempts.slice(gate.start)) : undefined
+    const local = gate ? group(state, gate.policy) : undefined
     // 未知计费不释放预留，不能以失败或重试偷偷扩大预算。
     const reason = totals.unknownAttempts || totals.overrunAttempts ? "unresolved" as const
       : totals.admittedAttempts >= config.calls ? "calls" as const
@@ -192,9 +202,11 @@ export async function openRequestStage(config: RequestBudget, policy: Admission,
     const totals = budgetTotals(state.attempts)
     if (totals.unresolvedAttempts || totals.overrunAttempts) throw new Error("Request stage has unresolved usage")
     if (current) nextAdmission(current.policy, next.policy)
-    else if (state.attempts.length || next.policy.round !== 1 || next.policy.generation !== 0 || next.policy.stage !== "author")
+    else if (state.attempts.length || next.policy.round !== 1 || next.policy.pass !== 1 || next.policy.generation !== 0 || next.policy.stage !== "author")
       throw new Error("Request stages must be installed before the first author request")
-    const calls = next.policy.calls + next.policy.protectedCalls, tokens = next.policy.tokens + next.policy.protectedTokens
+    const local = group(state, next.policy)
+    const calls = next.policy.calls - local.admittedAttempts + next.policy.protectedCalls,
+      tokens = next.policy.tokens - local.reportedTokens + next.policy.protectedTokens
     if (!Number.isSafeInteger(calls) || !Number.isSafeInteger(tokens) || totals.admittedAttempts + calls > config.calls ||
       totals.reportedTokens + tokens > config.tokens) throw new Error("Request stage minimum resources unavailable")
     const gate = { ...next, start: state.attempts.length }

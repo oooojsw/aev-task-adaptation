@@ -47,6 +47,15 @@ test("active candidate edits cannot mutate frozen prepared view or invalidate co
   expect(await readFile(path.join(result.record.view, "report.md"), "utf8")).toBe("new branch work")
 })
 
+test("a lost committed workspace cannot be silently recreated by a generation callback", async () => {
+  const input = await setup(), result = await activate(input)
+  await rename(result.record.view, `${result.record.view}.lost`)
+  let invoked = false
+  await expect(withGeneration({ root: input.root, scope: input.composition.scope, generation: 1, cap: 1000000 }, async () => { invoked = true })).rejects.toThrow()
+  expect(invoked).toBe(false)
+  await expect(activate(input)).rejects.toThrow()
+})
+
 test("activation recovery fills missing files without a second generation or overwrites", async () => {
   const input = await setup(),
     result = await activate(input)

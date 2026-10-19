@@ -156,7 +156,7 @@ test("composition content quota and changed retry intent block rather than trunc
   await expect(compose({ ...second, recover: true })).rejects.toThrow("intent drift")
 })
 
-export async function interrupt(input: object, file: string, mode: "composition" | "activation") {
+export async function interrupt(input: object, file: string, mode: "composition" | "activation" | "version") {
   await writeJsonAtomic(file, input)
   const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/view-interruption.ts"), file, mode], {
     stdout: "pipe",

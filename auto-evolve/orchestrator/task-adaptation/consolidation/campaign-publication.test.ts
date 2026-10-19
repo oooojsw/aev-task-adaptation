@@ -15,6 +15,7 @@ import { DEFAULT_CONFIG } from "../../schema"
 import type { Plan } from "../plan"
 import { taskInvocation } from "../context"
 import { loadLongTaskSpec } from "../../long-task/spec"
+import { recordTaskVersion, readTaskVersions } from "../selection"
 
 test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 passes", async () => {
   for (const count of [0, 43, 50]) {
@@ -125,6 +126,36 @@ test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 pa
       taskAdaptationCampaignRoot: campaign, taskAdaptationRound: 2, taskAdaptationFeedbackPath: reference.path }))
     const spec = (await loadLongTaskSpec(specPath)).spec
     spec.taskAdaptationContext = bound
+    if (count === 43) {
+      const selected = await recordTaskVersion(spec, { root: campaign, candidateRoot: candidate,
+        feedback: result.protocolTrainingResultPath, passed: true, round: 1, maxRounds: 2,
+        snapshot: { recover: false, cap: 10000000 } })
+      expect(selected?.selectedTaskVersionPath).toBeDefined()
+      expect((await readTaskVersions(spec, campaign)).length).toBe(1)
+      const file = selected!.selectedTaskVersionPath!
+      const { rename } = await import("node:fs/promises")
+      await rename(file, `${file}.interrupted`)
+      await expect(recordTaskVersion(spec, { root: campaign, candidateRoot: candidate,
+        feedback: result.protocolTrainingResultPath, passed: true, round: 1, maxRounds: 2,
+        snapshot: { recover: false, cap: 10000000 } })).rejects.toThrow("explicit recovery")
+      const recovered = await recordTaskVersion(spec, { root: campaign, candidateRoot: candidate,
+        feedback: result.protocolTrainingResultPath, passed: true, round: 1, maxRounds: 2,
+        snapshot: { recover: true, cap: 10000000 } })
+      expect(recovered).toEqual(selected)
+      expect(executions).toBe(1)
+      const repeated = path.join(campaign, "rounds/round-002/final-acceptance")
+      await mkdir(repeated, { recursive: true })
+      for (const name of ["protocol.receipt.json", "protocol.completed.json"])
+        await writeFile(path.join(repeated, name), await readFile(path.join(attempt, name)))
+      const training = JSON.parse(await readFile(result.protocolTrainingResultPath, "utf8"))
+      const feedback = path.join(repeated, "result.json.training.json")
+      await writeFile(feedback, JSON.stringify({ ...training, roundNumber: 2,
+        protocolTrainingResultPath: feedback, protocolAuditResultPath: path.join(repeated, "result.json") }))
+      expect(await recordTaskVersion(spec, { root: campaign, candidateRoot: candidate,
+        feedback, passed: true, round: 2, maxRounds: 2, snapshot: { recover: false, cap: 10000000 } })).toEqual(selected)
+      expect((await readTaskVersions(spec, campaign))[0].record.round).toBe(1)
+      expect(executions).toBe(1)
+    }
     for (const role of ["planner", "executor", "reviewer", "diagnostician"] as const) {
       const invocation = taskInvocation(spec, role)!
       const authorized = await authorizeInvocation(invocation, request)

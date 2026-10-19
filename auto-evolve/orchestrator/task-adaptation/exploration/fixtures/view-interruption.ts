@@ -15,5 +15,8 @@ mock.module("node:fs/promises", () => ({
 }))
 const input = JSON.parse((await fs.readFile(process.argv[2], "utf8")).replace(/^\uFEFF/, ""))
 if (process.argv[3] === "composition") await (await import("../composition")).compose(input)
-else await (await import("../activation")).activate(input)
+else if (process.argv[3] === "version") {
+  input.content = input.content.map((item: { data: number[] }) => Buffer.from(item.data))
+  await (await import("../../version-store")).storeVersion(input)
+} else await (await import("../activation")).activate(input)
 clearInterval(timer)

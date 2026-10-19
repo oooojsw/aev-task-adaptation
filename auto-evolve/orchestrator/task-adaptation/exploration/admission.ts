@@ -4,6 +4,7 @@ export interface Admission {
   schema: "aev.exploration-admission.v1"
   policy: string
   round: number
+  pass: number
   generation: 0 | 1
   stage: "author" | "acceptance" | "delivery"
   roles: string[]
@@ -22,6 +23,7 @@ export function admission(value: Admission) {
         "schema",
         "policy",
         "round",
+        "pass",
         "generation",
         "stage",
         "roles",
@@ -36,6 +38,8 @@ export function admission(value: Admission) {
     !/^[a-f0-9]{64}$/.test(value.policy) ||
     !Number.isSafeInteger(value.round) ||
     value.round < 1 ||
+    !Number.isSafeInteger(value.pass) ||
+    value.pass < 1 ||
     ![0, 1].includes(value.generation) ||
     !["author", "acceptance", "delivery"].includes(value.stage) ||
     !Array.isArray(value.roles) ||
@@ -60,10 +64,16 @@ export function nextAdmission(previous: Admission, next: Admission) {
     next.generation < previous.generation ||
     next.generation > previous.generation + 1 ||
     (next.stage === "delivery"
-      ? next.generation !== previous.generation
+      ? next.generation !== previous.generation || next.round !== previous.round || next.pass !== previous.pass
       : previous.stage === "author"
-        ? next.stage !== "acceptance" || next.round !== previous.round || next.generation !== previous.generation
-        : next.stage !== "author" || next.round !== previous.round + 1)
+        ? next.stage !== "acceptance" ||
+          next.round !== previous.round ||
+          next.pass !== previous.pass ||
+          next.generation !== previous.generation
+        : next.stage !== "author" ||
+          (next.round === previous.round
+            ? next.pass !== previous.pass + 1 || next.generation !== previous.generation
+            : next.round !== previous.round + 1 || next.pass !== 1))
   )
     throw new Error("Invalid exploration admission transition")
 }

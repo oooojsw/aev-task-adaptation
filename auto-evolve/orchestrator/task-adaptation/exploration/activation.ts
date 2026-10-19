@@ -130,6 +130,7 @@ export async function activate(input: ActivationInput) {
       }
       if (committed) {
         if (!intent) throw new Error("Activation commit missing intent")
+        await checkedPath(committed.record.view, "directory")
         return immutable(encoded)
       }
       if (intent && !input.recover) throw new Error("Incomplete activation requires explicit recovery")
@@ -234,6 +235,7 @@ export async function withGeneration<T>(
       if (committed) {
         state(committed.record, input.scope, input.root)
         if (!intent || canonical(intent) !== canonical(committed)) throw new Error("Activation intent mismatch")
+        await checkedPath(committed.record.view, "directory")
       }
       if ((committed?.record.generation ?? 0) !== input.generation) throw new Error("Stale exploration generation")
       // 调用者须在返回前结束全部子任务；屏障不能撤销脱离回调的外部副作用。

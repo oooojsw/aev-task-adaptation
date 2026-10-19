@@ -15,6 +15,7 @@ async function setup() {
     schema: "aev.exploration-admission.v1",
     policy: fingerprint("frozen-policy"),
     round: 1,
+    pass: 1,
     generation: 0,
     stage: "author",
     roles: ["lead"],
@@ -148,8 +149,11 @@ test("local stage denial is not global exhaustion and disappears on acceptance t
   const denied = await inspectBudget(budget)
   expect(denied.denial).toBeUndefined()
   expect(denied.stageDenial?.layer).toBe("stage")
-  await openRequestStage(budget, { ...policy, stage: "acceptance", roles: ["checker"], calls: 2, tokens: 30,
-    protectedCalls: 0, protectedTokens: 0 }, gate.id)
+  await openRequestStage(
+    budget,
+    { ...policy, stage: "acceptance", roles: ["checker"], calls: 2, tokens: 30, protectedCalls: 0, protectedTokens: 0 },
+    gate.id,
+  )
   const next = await inspectBudget(budget)
   expect(next.denial).toBeUndefined()
   expect(next.stageDenial).toBeUndefined()
@@ -161,8 +165,11 @@ test("a large author request denial cannot stop a smaller affordable acceptance 
   await settleRequest(budget, "author", 40)
   await expect(reserveRequest(budget, attempt("too-large", 70))).rejects.toThrow("exhausted")
   expect((await inspectBudget(budget)).denial?.reason).toBe("tokens")
-  const next = await openRequestStage(budget, { ...policy, stage: "acceptance", roles: ["checker"], calls: 2, tokens: 30,
-    protectedCalls: 0, protectedTokens: 0 }, gate.id)
+  const next = await openRequestStage(
+    budget,
+    { ...policy, stage: "acceptance", roles: ["checker"], calls: 2, tokens: 30, protectedCalls: 0, protectedTokens: 0 },
+    gate.id,
+  )
   expect((await inspectBudget(budget)).denial).toBeUndefined()
   await reserveRequest(budget, { ...attempt("check", 30), role: "checker", gate: next.id })
   expect((await inspectBudget(budget)).outstandingTokens).toBe(30)
@@ -175,22 +182,108 @@ test("an empty protected ledger cannot be restored to unprotected legacy mode", 
   delete saved.gates
   await writeJsonAtomic(file, saved)
   await expect(inspectBudget(budget)).rejects.toThrow("initialization binding drift")
-  await expect(reserveRequest(budget, { ...attempt("bypass"), gate: undefined })).rejects.toThrow("initialization binding drift")
+  await expect(reserveRequest(budget, { ...attempt("bypass"), gate: undefined })).rejects.toThrow(
+    "initialization binding drift",
+  )
 })
 
 test("restored historical stages cannot contain unresolved calls", async () => {
   const { budget, policy, gate, attempt } = await setup()
   await reserveRequest(budget, attempt("one", 10))
   await settleRequest(budget, "one", 10)
-  const next = await openRequestStage(budget, { ...policy, stage: "acceptance", roles: ["checker"], calls: 2, tokens: 30,
-    protectedCalls: 0, protectedTokens: 0 }, gate.id)
-  const file = path.join(budget.root, "budget.json"), saved = JSON.parse(await readFile(file, "utf8"))
+  const next = await openRequestStage(
+    budget,
+    { ...policy, stage: "acceptance", roles: ["checker"], calls: 2, tokens: 30, protectedCalls: 0, protectedTokens: 0 },
+    gate.id,
+  )
+  const file = path.join(budget.root, "budget.json"),
+    saved = JSON.parse(await readFile(file, "utf8"))
   saved.attempts[0].status = "reserved"
   delete saved.attempts[0].usedTokens
   await writeJsonAtomic(file, saved)
   const before = await readFile(file, "utf8")
   await expect(inspectBudget(budget)).rejects.toThrow("settlement")
-  await expect(reserveRequest(budget, { ...attempt("check", 10), gate: next.id, role: "checker" })).rejects.toThrow("settlement")
+  await expect(reserveRequest(budget, { ...attempt("check", 10), gate: next.id, role: "checker" })).rejects.toThrow(
+    "settlement",
+  )
   await expect(openRequestStage(budget, { ...policy, round: 2 }, next.id)).rejects.toThrow("settlement")
   expect(await readFile(file, "utf8")).toBe(before)
+})
+
+test("pass02 stays in the same round without resetting author or acceptance allowance", async () => {
+  const { budget, policy, gate, attempt } = await setup()
+  for (const id of ["author-one", "author-two"]) {
+    await reserveRequest(budget, attempt(id, 1))
+    await settleRequest(budget, id, 1)
+  }
+  const checking: Admission = {
+    ...policy,
+    stage: "acceptance",
+    roles: ["checker"],
+    calls: 2,
+    tokens: 30,
+    protectedCalls: 0,
+    protectedTokens: 0,
+  }
+  const first = await openRequestStage(budget, checking, gate.id)
+  await reserveRequest(budget, { ...attempt("check-one", 1), gate: first.id, role: "checker" })
+  await settleRequest(budget, "check-one", 1)
+  const second = await openRequestStage(
+    budget,
+    { ...policy, pass: 2, protectedCalls: 1, protectedTokens: 20 },
+    first.id,
+  )
+  expect(second.policy.round).toBe(1)
+  expect(second.policy.pass).toBe(2)
+  await reserveRequest(budget, { ...attempt("author-three", 1), gate: second.id })
+  await settleRequest(budget, "author-three", 1)
+  await expect(reserveRequest(budget, { ...attempt("author-four", 1), gate: second.id })).rejects.toThrow("exhausted")
+  const last = await openRequestStage(budget, { ...checking, pass: 2 }, second.id)
+  await reserveRequest(budget, { ...attempt("check-two", 1), gate: last.id, role: "checker" })
+  await settleRequest(budget, "check-two", 1)
+  await expect(reserveRequest(budget, { ...attempt("check-three", 1), gate: last.id, role: "checker" })).rejects.toThrow("exhausted")
+  expect((await inspectBudget(budget)).reportedTokens).toBe(5)
+  expect((await inspectBudget(budget)).admittedAttempts).toBe(5)
+})
+
+test("pass changes cannot enlarge round allowance, skip passes or activate inside an open round", async () => {
+  const { budget, policy, gate } = await setup()
+  const checking = await openRequestStage(
+    budget,
+    { ...policy, stage: "acceptance", roles: ["checker"], calls: 2, tokens: 30, protectedCalls: 0, protectedTokens: 0 },
+    gate.id,
+  )
+  await expect(openRequestStage(budget, { ...policy, pass: 2, calls: 4 }, checking.id)).rejects.toThrow(
+    "allowance drift",
+  )
+  await expect(openRequestStage(budget, { ...policy, pass: 2, tokens: 71 }, checking.id)).rejects.toThrow("allowance drift")
+  await expect(openRequestStage(budget, { ...policy, pass: 2, roles: ["executor"] }, checking.id)).rejects.toThrow("allowance drift")
+  await expect(openRequestStage(budget, { ...policy, pass: 3 }, checking.id)).rejects.toThrow("transition")
+  await expect(openRequestStage(budget, { ...policy, pass: 2, generation: 1 }, checking.id)).rejects.toThrow(
+    "transition",
+  )
+  const second = await openRequestStage(budget, { ...policy, pass: 2 }, checking.id)
+  expect(second.policy.pass).toBe(2)
+})
+
+test("both author and acceptance cumulative token ceilings survive pass02 and ledger reload", async () => {
+  const { budget, policy, gate, attempt } = await setup()
+  await reserveRequest(budget, attempt("author-one", 60))
+  await settleRequest(budget, "author-one", 60)
+  const checking: Admission = { ...policy, stage: "acceptance", roles: ["checker"], calls: 2, tokens: 30,
+    protectedCalls: 0, protectedTokens: 0 }
+  const first = await openRequestStage(budget, checking, gate.id)
+  await reserveRequest(budget, { ...attempt("check-one", 20), gate: first.id, role: "checker" })
+  await settleRequest(budget, "check-one", 20)
+  const author = await openRequestStage(budget, { ...policy, pass: 2, protectedCalls: 1, protectedTokens: 10 }, first.id)
+  await expect(reserveRequest(budget, { ...attempt("author-over", 11), gate: author.id })).rejects.toThrow("exhausted")
+  expect((await inspectBudget(budget)).stageDenial?.layer).toBe("stage")
+  await reserveRequest(budget, { ...attempt("author-two", 10), gate: author.id })
+  await settleRequest(budget, "author-two", 10)
+  const accept = await openRequestStage(budget, { ...checking, pass: 2 }, author.id)
+  await expect(reserveRequest(budget, { ...attempt("check-over", 11), gate: accept.id, role: "checker" })).rejects.toThrow("exhausted")
+  await reserveRequest(budget, { ...attempt("check-two", 10), gate: accept.id, role: "checker" })
+  await settleRequest(budget, "check-two", 10)
+  expect((await inspectBudget(budget)).reportedTokens).toBe(100)
+  expect((await inspectBudget(budget)).admittedAttempts).toBe(4)
 })

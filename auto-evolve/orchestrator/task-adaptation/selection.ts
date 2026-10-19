@@ -7,8 +7,9 @@ import { productEvidenceName } from "../protocol-plugins/runtime"
 import { writeFileAtomic, writeJsonAtomic } from "../atomic-write"
 import { resolveResource, verifyBinding } from "./binding"
 import { taskFeedback } from "./feedback"
+import { storeVersion } from "./version-store"
 
-interface Version {
+export interface Version {
   schema: "aev.task-version.v1"
   plan: string
   receipt: string
@@ -98,8 +99,31 @@ export function chooseTaskVersion(spec: LongTaskSpec, versions: Awaited<ReturnTy
 
 export async function recordTaskVersion(spec: LongTaskSpec, input: {
   root: string; candidateRoot: string; feedback?: string; passed: boolean; round: number; maxRounds: number
+  snapshot?: { recover: boolean; cap: number }
 }) {
   if (!spec.taskAdaptation || !spec.taskAdaptationContext) return undefined
+  if (input.snapshot && input.passed) {
+    if (!input.feedback) throw new Error("Passed task selection requires actual acceptance feedback")
+    const actual = await source(spec, input.root, input.feedback)
+    if (actual.view.round !== input.round) throw new Error("Selection round mismatch")
+    let existing = false
+    try {
+      await resolveResource(input.root, `task-adaptation/versions/${actual.view.receiptFingerprint}/record.json`)
+      existing = (await readTaskVersions(spec, input.root)).some(version => version.record.receipt === actual.view.receiptFingerprint)
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
+    const files: Version["files"] = [], content: Buffer[] = []
+    for (const [index, item] of spec.taskAdaptation.entries.entries()) {
+      const bytes = await readFile(await resolveResource(input.candidateRoot, item.path)), sha256 = hash(bytes)
+      if (actual.view.candidate.find(candidate => candidate.id === item.id)?.sha256 !== sha256)
+        throw new Error("Candidate changed after acceptance")
+      files.push({ id: item.id, entry: item.path, file: `files/${index}.bin`, sha256, bytes: bytes.length })
+      content.push(bytes)
+    }
+    // 同一正式receipt保留首次合格轮次，不用后续复用反馈改写血统。
+    if (!existing) await storeVersion({ root: input.root, record: { schema: "aev.task-version.v1", plan: spec.taskAdaptationContext.fingerprint,
+      receipt: actual.view.receiptFingerprint, feedback: input.feedback, round: input.round, metric: actual.metric, files },
+      content, ...input.snapshot })
+  }
   let versions = await readTaskVersions(spec, input.root)
   if (input.passed) {
     if (!input.feedback) throw new Error("Passed task selection requires actual acceptance feedback")
