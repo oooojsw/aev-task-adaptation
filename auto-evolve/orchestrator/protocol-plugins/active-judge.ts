@@ -7,6 +7,7 @@ import type { Evaluate } from "./runtime"
 import { toolSession, type InvokeTool } from "./tool-session"
 
 export async function activeJudge(options: { evidenceRoot: string; backendImplementation: string; invoke: InvokeTool;
+  requestGate?: string;
   requestBudgets?: Parameters<typeof toolSession>[0]["requestBudgets"] }) {
   const tool = await toolSession({ ...options, purpose: "checking" })
   const own = createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex")

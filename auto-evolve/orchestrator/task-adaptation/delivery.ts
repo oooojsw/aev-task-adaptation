@@ -6,6 +6,8 @@ import { writeFileAtomic, writeJsonAtomic } from "../atomic-write"
 import { canonical, fingerprint } from "../protocol-plugins/identity"
 import { resolveResource } from "./binding"
 import { readTaskVersions } from "./selection"
+import { checkedPath, withFileTransaction } from "../file-transaction"
+import { materialize } from "./exploration/materialize"
 
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 
@@ -39,6 +41,40 @@ export async function exportTaskDelivery(spec: LongTaskSpec, input: {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
   }
   if (path.resolve(await realpath(input.dir)).toLowerCase() !== path.resolve(input.dir).toLowerCase()) throw new Error("Linked delivery directory rejected")
+  if (spec.taskAdaptationContext?.plan.exploration) return withFileTransaction(parent,
+    `delivery-${hash(Buffer.from(input.dir)).slice(0, 32)}`, async () => {
+      const read = async (file: string) => {
+        try { await checkedPath(file, "file"); return await readFile(file) }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error }
+      }
+      const marker = path.join(input.dir, "delivery.json"), intent = path.join(input.dir, "delivery.intent.json")
+      const completed = await read(marker), started = await read(intent)
+      const allowed = ["delivery.json", "delivery.intent.json", ...manifest.files.map(item => item.path)]
+      const actual = (await readdir(input.dir, { recursive: true, withFileTypes: true })).filter(item => !item.isDirectory())
+        .map(item => path.relative(input.dir, path.join(item.parentPath, item.name)).replaceAll("\\", "/"))
+      if (actual.some(file => !allowed.includes(file))) throw new Error("Unexpected delivery files")
+      for (const bytes of [completed, started].filter((item): item is Buffer => item !== undefined))
+        if (canonical(JSON.parse(bytes.toString("utf8").replace(/^\uFEFF/, ""))) !== canonical(identity))
+          throw new Error("Delivery manifest drift")
+      if (!started) {
+        if (actual.length) throw new Error("Delivery recovery intent missing")
+        await materialize(parent, intent, Buffer.from(JSON.stringify(identity, null, 2) + "\n"))
+      }
+      // 恢复只补缺失的本地文件，不覆盖冲突，不重做验收。
+      for (const [index, item] of files.entries()) {
+        const target = path.join(input.dir, manifest.files[index].path), saved = await read(target)
+        if (saved) {
+          if (hash(saved) !== item.sha256 || saved.length !== item.bytes) throw new Error("Delivered file drift")
+          continue
+        }
+        if (completed) throw new Error("Completed delivery file missing")
+        await mkdir(path.dirname(target), { recursive: true })
+        await checkedPath(path.dirname(target), "directory")
+        await materialize(parent, target, item.content)
+      }
+      if (!completed) await materialize(parent, marker, Buffer.from(JSON.stringify(identity, null, 2) + "\n"))
+      return { path: marker, fingerprint: identity.fingerprint, reused: Boolean(completed) }
+    })
   if (!fresh) {
     // 半完成导出不覆盖，避免把混合版本误报为已交付。
     const saved = JSON.parse((await readFile(await resolveResource(input.dir, "delivery.json"), "utf8")).replace(/^\uFEFF/, ""))

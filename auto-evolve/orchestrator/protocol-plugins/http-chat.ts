@@ -7,6 +7,7 @@ import { fingerprint } from "./identity"
 import type { ExecutorPlugin, Settings } from "./contract"
 import type { Artifact, Execute } from "./runtime"
 import { reserveRequest, settleRequest, type RequestBudget } from "../task-adaptation/request-budget"
+import { validateRequestGate } from "../task-adaptation/budget-transport"
 
 export interface HttpRequestBudget {
   config: RequestBudget
@@ -19,6 +20,7 @@ interface Options {
   transport?: typeof fetch
   credential?: (name: string) => string | undefined
   budget?: HttpRequestBudget
+  requestGate?: string
 }
 
 interface Config {
@@ -113,6 +115,7 @@ async function bounded(response: Response, limit: number) {
 
 export async function httpChat(options: Options): Promise<{ descriptor: ExecutorPlugin; execute: Execute }> {
   if (!path.isAbsolute(options.evidenceRoot)) throw new Error("Absolute HTTP evidence root required")
+  const gate = validateRequestGate(options.requestGate, Boolean(options.budget))
   const source = createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex")
   const implementation = options.budget ? fingerprint({ source, budget: options.budget,
     ledger: createHash("sha256").update(await readFile(fileURLToPath(new URL("../task-adaptation/request-budget.ts", import.meta.url)))).digest("hex") }) : source
@@ -144,7 +147,8 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
     if (Buffer.byteLength(wire, "utf8") > cfg.maxInputBytes) throw new Error("Input byte budget exceeded; no truncation")
     const secret = credential(cfg.credentialEnv)
     if (!secret) throw new Error("Missing explicitly selected credential")
-    const key = fingerprint({ implementation, url: cfg.url, credentialEnv: cfg.credentialEnv, request })
+    // 阶段授权绑定本次尝试，不随阶段变化重定义冻结插件。
+    const key = fingerprint({ implementation, url: cfg.url, credentialEnv: cfg.credentialEnv, request, ...(gate ? { gate } : {}) })
     const dir = path.join(options.evidenceRoot, key)
     await mkdir(dir, { recursive: true })
     const claim = await open(path.join(dir, "started.claim"), "wx")
@@ -175,7 +179,7 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
     try {
       if (options.budget) {
         await reserveRequest(options.budget.config, { id: key, request: key, model: cfg.model,
-          role: options.budget.role, reservationTokens: options.budget.tokenCeiling })
+          role: options.budget.role, reservationTokens: options.budget.tokenCeiling, ...(gate ? { gate } : {}) })
         reserved = true
       }
       // 禁默认空闲超时，长回答仍受协议总时限约束。

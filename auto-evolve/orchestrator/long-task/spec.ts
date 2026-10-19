@@ -15,7 +15,8 @@ import { assertNoBlankAgentAudience } from "../validation-engine/registry"
 import { validateEntry } from "../protocol-plugins/entry"
 import { validateTraining } from "../protocol-plugins/training"
 import { canonical } from "../protocol-plugins/identity"
-import { validateAdaptation, restoreTaskContext } from "../task-adaptation/context"
+import { validateAdaptation, restoreTaskContext, checkTaskExploration } from "../task-adaptation/context"
+import { validateRequestGate } from "../task-adaptation/budget-transport"
 
 export interface LoadLongTaskSpecOptions {
   allowMissingInitialExpertContextPaths?: boolean
@@ -600,10 +601,14 @@ export async function loadLongTaskSpec(
   const protocolPlugins = raw.protocolPlugins === undefined ? undefined : validateEntry(raw.protocolPlugins)
   const protocolTraining = raw.protocolTraining === undefined ? undefined : validateTraining(raw.protocolTraining)
   const taskAdaptation = raw.taskAdaptation === undefined ? undefined : validateAdaptation(raw.taskAdaptation)
+  const taskAdaptationRequestGate = validateRequestGate(raw.taskAdaptationRequestGate, Boolean(taskAdaptation?.requestBudget))
   if (taskAdaptation && !protocolPlugins) throw new Error("Task adaptation requires protocol plugins")
+  await checkTaskExploration(taskAdaptation)
   for (const key of ["taskAdaptationCampaignRoot", "taskAdaptationFeedbackPath"]) {
     if (raw[key] !== undefined && (!taskAdaptation || typeof raw[key] !== "string" || !path.isAbsolute(raw[key] as string))) throw new Error("Invalid task runtime context path")
   }
+  // 轮内子进程恢复时保留Host轮次，不从反馈自报身份。
+  if (raw.taskAdaptationRound !== undefined && (!taskAdaptation || !Number.isSafeInteger(raw.taskAdaptationRound) || Number(raw.taskAdaptationRound) < 1)) throw new Error("Invalid task runtime round")
   if (protocolTraining && !protocolPlugins) throw new Error("Explicit training config requires protocol plugins")
   if (protocolTraining && raw.budgets !== undefined && canonical(raw.budgets) !== canonical(protocolTraining.budgets)) throw new Error("Conflicting training work budgets")
   if (raw.protocolTrainingRoot !== undefined && (!protocolTraining || typeof raw.protocolTrainingRoot !== "string" || !path.isAbsolute(raw.protocolTrainingRoot))) throw new Error("Invalid frozen training root")
@@ -806,6 +811,8 @@ export async function loadLongTaskSpec(
     taskAdaptationContext: await restoreTaskContext({ taskAdaptation, protocolPlugins } as LongTaskSpec, raw.taskAdaptationContext),
     taskAdaptationCampaignRoot: raw.taskAdaptationCampaignRoot as string | undefined,
     taskAdaptationFeedbackPath: raw.taskAdaptationFeedbackPath as string | undefined,
+    taskAdaptationRound: raw.taskAdaptationRound as number | undefined,
+    ...(taskAdaptationRequestGate === undefined ? {} : { taskAdaptationRequestGate }),
     blankEvalExecutor: blankEvalExecutor as LongTaskSpec["blankEvalExecutor"],
     validators,
     planning,
@@ -858,7 +865,8 @@ export async function loadLongTaskSpec(
   if (spec.taskProfile && !spec.taskProfile.id) {
     throw new Error(`Long-task taskProfile.id must be non-empty: ${resolvedSpecPath}`)
   }
-  if (!spec.materials.length) {
+  // 自适应任务由冻结资源窗供料，不将训练专用Skill伪装成公开材料。
+  if (!spec.materials.length && !(taskAdaptation && protocolPlugins)) {
     throw new Error(`Long-task spec must include at least one material: ${resolvedSpecPath}`)
   }
   if (!spec.validators.length && !protocolPlugins) {

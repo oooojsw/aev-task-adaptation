@@ -13,15 +13,24 @@ export interface BudgetTransportConfig {
   expectedModels: string[]
   maxInputTokens: number
   maxOutputTokens: number
+  gate?: string
 }
 
 const positive = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0
 const nonnegative = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0
 
+export function validateRequestGate(value: unknown, bounded: boolean): string | undefined {
+  if (value === undefined) return undefined
+  if (!bounded || typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))
+    throw new Error("Request gate requires an explicit bounded transport")
+  return value
+}
+
 export function validateBudgetTransport(value: unknown): BudgetTransportConfig {
   const cfg = value as BudgetTransportConfig
   if (!cfg || typeof cfg !== "object" || Array.isArray(cfg) ||
-      Object.keys(cfg).some(key => !["schema", "budget", "role", "dialect", "expectedModels", "maxInputTokens", "maxOutputTokens"].includes(key)) ||
+      Object.keys(cfg).some(key => !["schema", "budget", "role", "dialect", "expectedModels", "maxInputTokens", "maxOutputTokens", "gate"].includes(key)) ||
+      cfg.gate !== undefined && (typeof cfg.gate !== "string" || !/^[a-f0-9]{64}$/.test(cfg.gate)) ||
       cfg.schema !== "aev.budget-transport.v1" || typeof cfg.role !== "string" || !cfg.role.trim() ||
       !["openai_chat", "openai_responses", "anthropic_messages"].includes(cfg.dialect) ||
       !positive(cfg.maxInputTokens) || !positive(cfg.maxOutputTokens) ||
@@ -145,7 +154,8 @@ export async function budgetedProviderFetch(input: RequestInfo | URL, init: Requ
   if (!positive(reservationTokens)) throw new Error("Provider reservation overflow")
   const id = stableRequestID ? `provider-${stableRequestID}` : `provider-${randomUUID()}`
   const request = fingerprint({ endpoint: String(input), body: init.body, role: cfg.role })
-  await reserveRequest(cfg.budget, { id, request, model: body.model, role: cfg.role, reservationTokens })
+  await reserveRequest(cfg.budget, { id, request, model: body.model, role: cfg.role, reservationTokens,
+    ...(cfg.gate ? { gate: cfg.gate } : {}) })
   let response: Response
   try { response = await transport(input, init) }
   catch (error) { await settleRequest(cfg.budget, id, undefined); throw error }

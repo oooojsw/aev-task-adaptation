@@ -1,4 +1,5 @@
 import { fingerprint, immutable } from "../protocol-plugins/identity"
+import { explorationPolicy, type ExplorationPolicy } from "./exploration/policy"
 
 export const roles = ["planner", "executor", "worker", "lead", "reviewer", "diagnostician", "checker", "independent"] as const
 export const stages = ["explore", "revise", "accept", "deliver"] as const
@@ -49,6 +50,7 @@ export interface Plan {
   rejection: Array<{ check: string; actions: Action[] }>
   selection: { rule: "first_pass" | "best_pass"; metric?: string; direction?: "min" | "max" }
   stop: { rounds: number; calls: number; tokens: number; stagnant: number }
+  exploration?: ExplorationPolicy
 }
 
 function object(value: unknown, keys: string[], label: string, optional: string[] = []): asserts value is Record<string, unknown> {
@@ -75,7 +77,7 @@ function items(value: unknown): asserts value is unknown[] {
 }
 
 export function validatePlan(value: unknown): Readonly<Plan> {
-  object(value, ["schema", "id", "objective", "deliverable", "resources", "capabilities", "windows", "workers", "acceptance", "rejection", "selection", "stop"], "task plan")
+  object(value, ["schema", "id", "objective", "deliverable", "resources", "capabilities", "windows", "workers", "acceptance", "rejection", "selection", "stop"], "task plan", ["exploration"])
   if (value.schema !== "aev.task-plan.v1") throw new Error("Unsupported task plan")
   text(value.id)
   text(value.objective)
@@ -190,6 +192,11 @@ export function validatePlan(value: unknown): Readonly<Plan> {
   if (rule === "best_pass") { text(selection.metric); member(selection.direction, ["min", "max"]) }
   object(value.stop, ["rounds", "calls", "tokens", "stagnant"], "stop")
   for (const number of Object.values(value.stop)) if (!Number.isSafeInteger(number) || (number as number) < 1) throw new Error("Positive finite stop budget required")
+  // 缺省不补字段，旧方案身份保持原样；策略仅冻结，不代表执行能力。
+  if (Object.hasOwn(value, "exploration")) {
+    if (value.exploration === undefined) throw new Error("Explicit exploration policy required")
+    explorationPolicy(value.exploration, value as unknown as Plan)
+  }
   return immutable(value as unknown as Plan)
 }
 

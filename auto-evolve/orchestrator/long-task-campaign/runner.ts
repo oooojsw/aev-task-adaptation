@@ -2,9 +2,16 @@
 import process from "node:process"
 import { freezeTraining, verifyTraining, trainingExecution, trainingRuntimeBudget, type TrainingRole } from "../protocol-plugins/training"
 import { loadTaskContext, taskInvocation, seedTaskCandidate, taskBudgetOptions } from "../task-adaptation/context"
-import { recordTaskVersion, readTaskVersions, chooseTaskVersion } from "../task-adaptation/selection"
+import { recoverTaskVersions, selectTaskVersion } from "../task-adaptation/selection"
+import { completeTaskRound } from "./round-control"
+import { openTaskCampaignControl, preserveExplorationRuntime } from "../task-adaptation/exploration/ownership"
+import { freezeTaskOrigin } from "../task-adaptation/exploration/origin"
+import { openTaskGeneration } from "../task-adaptation/exploration/generation"
+import { scheduleTaskRequestStage, startTaskRequestRound } from "../task-adaptation/exploration/stages"
+import { activateTaskBranch, findTaskExplorationDecision, readTaskExplorationDecision, taskBranchStart } from "../task-adaptation/exploration/lifecycle"
 import { requestBudgetStop, isRequestBudgetStop } from "../task-adaptation/budget-stop"
 import { writeJsonAtomic } from "../atomic-write"
+import { join } from "../join"
 import { fingerprint } from "../protocol-plugins/identity"
 import { randomUUID } from "node:crypto"
 import { cp, lstat, readdir, rm } from "node:fs/promises"
@@ -38,7 +45,7 @@ import { readOperationalContext, resolveExistingLongTaskRun } from "../long-task
 import { loadLongTaskSpec } from "../long-task/spec"
 import { hasConcreteAnswerLeakageSurface } from "../answer-surface"
 import { runBlankEval } from "../blank-eval/runner"
-import { campaignAcceptance, verifyCompletedCampaignAcceptance, readCompletedRejectedCampaignPass } from "../protocol-plugins/campaign-acceptance"
+import { campaignAcceptance, verifyCompletedCampaignAcceptance, readCompletedCampaignPass } from "../protocol-plugins/campaign-acceptance"
 import { prepareEntry } from "../protocol-plugins/entry"
 import { selectedRuntime } from "../protocol-plugins/selected-runtime"
 import { authorContext, protocolAuthorLines, publicMaterialSuffixes } from "../protocol-plugins/author-context"
@@ -221,11 +228,14 @@ function onceActivationCallback(callback?: OpencodeTaskInput["onSpawn"]) {
   }
 }
 
-async function cleanupRuntimeScopeWithRetry(scope: string | undefined) {
-  const first = await cleanupRuntimeProcessScope(scope)
+export async function cleanupRuntimeScopeWithRetry(scope: string | undefined, required = false,
+  cleanup: (scope: string | undefined) => Promise<{ remainingCount: number }> = cleanupRuntimeProcessScope) {
+  const first = await cleanup(scope)
   if (first.remainingCount <= 0) return
   await sleep(250)
-  await cleanupRuntimeProcessScope(scope)
+  const last = await cleanup(scope)
+  // 旧轮未收束时不能启动新轮；默认旧流程不改变。
+  if (required && last.remainingCount > 0) throw new Error("Campaign round processes remain; cannot advance generation")
 }
 
 async function retryWriteJson(file: string, value: unknown) {
@@ -348,7 +358,7 @@ function isBootstrappingWithoutOwnerStale(input: {
   return input.nowMs - referenceMs > STALE_BOOTSTRAP_GRACE_MS
 }
 
-async function healStaleRuntimeStates(cwd: string) {
+export async function healStaleRuntimeStates(cwd: string) {
   const now = nowISO()
   const nowMs = Date.now()
   const campaignsRoot = autoEvolvePath(cwd, "runtime-state", "long-task-campaigns")
@@ -359,6 +369,8 @@ async function healStaleRuntimeStates(cwd: string) {
       const campaignPaths = longTaskCampaignPaths(cwd, entry.name)
       const campaignStatePath = campaignPaths.campaignStatePath
       if (!(await pathExists(campaignStatePath))) continue
+      try { if (await preserveExplorationRuntime(campaignPaths.root, "campaign")) continue }
+      catch { continue }
       let state: LongTaskCampaignState
       try {
         state = await readJsonFile<LongTaskCampaignState>(campaignStatePath)
@@ -495,6 +507,8 @@ async function healStaleRuntimeStates(cwd: string) {
       if (!entry.isDirectory()) continue
       const progressPath = path.join(runsRoot, entry.name, "progress_state.json")
       if (!(await pathExists(progressPath))) continue
+      try { if (await preserveExplorationRuntime(path.join(runsRoot, entry.name), "run")) continue }
+      catch { continue }
       let progress: LongTaskProgressState
       try {
         progress = await readJsonFile<LongTaskProgressState>(progressPath)
@@ -944,8 +958,9 @@ async function finishTaskRequestBudget(input: {
   // 无当前准入拒绝证据时，不能把恰好到额度的其他故障改报为正常结束。
   if (input.faulted && !stop.inspectionRequired && !stop.evidence.denial) return undefined
   const current = await readLongTaskCampaignState(input.campaignPaths)
-  const selection = chooseTaskVersion(input.spec, await readTaskVersions(input.spec, input.campaignPaths.root),
-    current.currentRound, input.maxRounds, stop.reason)
+  const selection = await selectTaskVersion(input.spec, { root: input.campaignPaths.root,
+    round: current.currentRound, maxRounds: input.maxRounds, forcedReason: stop.reason,
+    readonly: Boolean(input.spec.taskAdaptationContext?.plan.exploration) })
   const body = { schema: "aev.task-request-budget-stop.v1", task: input.spec.taskAdaptationContext!.fingerprint,
     round: current.currentRound, ...stop, selectedTaskVersionPath: selection.selectedTaskVersionPath ?? null }
   const folder = path.join(input.campaignPaths.root, "task-adaptation/budget-stops")
@@ -3520,6 +3535,7 @@ export function buildGeneratedRoundSpec(input: {
   return {
     ...input.baseSpec,
     // 内层也必须知道验收执行模式，避免修复不存在的工具故障。
+    ...(input.baseSpec.taskAdaptation ? { taskAdaptationRound: input.roundNumber } : {}),
     goal: input.baseSpec.protocolAuthorContext
       ? [input.baseSpec.goal, ...protocolAuthorLines(input.baseSpec.protocolAuthorContext, false)].join("\n")
       : input.baseSpec.blankEvalExecutor?.kind === "single_turn_http"
@@ -3571,6 +3587,7 @@ async function runCampaignSuggestionTask(input: {
   taskWorker?: string
   taskCandidateRoot?: string
   taskFeedbackPath?: string
+  taskPassID?: string
   taskAdvice?: Array<{ kind: "analysis" | "review"; path: string }>
   cwd: string
   baseSpec: LongTaskSpec
@@ -3597,6 +3614,8 @@ async function runCampaignSuggestionTask(input: {
     role: input.trainingRole ?? input.phase,
     adaptation: input.trainingRole ? taskInvocation(input.baseSpec, input.trainingRole, {
       worker: input.taskWorker, candidateRoot: input.taskCandidateRoot, feedbackPath: input.taskFeedbackPath,
+      passID: input.taskPassID,
+      round: Number(path.relative(input.baseSpec.taskAdaptationCampaignRoot ?? input.stageDir, input.stageDir).replaceAll("\\", "/").match(/^rounds\/round-(\d+)\//)?.[1]) || undefined,
       advice: input.taskAdvice }) : undefined }, {
     cwd: input.cwd,
     config,
@@ -3788,7 +3807,7 @@ async function collectCarryoverContext(input: {
   return resolved
 }
 
-async function readLatestReviewerSuggestionPath(campaignPaths: ReturnType<typeof longTaskCampaignPaths>, adapted = false) {
+async function readLatestReviewerSuggestionPath(campaignPaths: ReturnType<typeof longTaskCampaignPaths>, adapted = false, minimumRound = 1) {
   if (!(await pathExists(campaignPaths.campaignReviewSuggestionsPath))) return undefined
   const raw = (await readTextFile(campaignPaths.campaignReviewSuggestionsPath)).trim()
   if (!raw) return undefined
@@ -3799,6 +3818,7 @@ async function readLatestReviewerSuggestionPath(campaignPaths: ReturnType<typeof
   if (!lines.length) return undefined
   try {
     const last = JSON.parse(lines[lines.length - 1]) as LongTaskCampaignReviewSuggestion
+    if (last.roundNumber < minimumRound) return undefined
     // 新任务只读取归一化建议，不把原始模型回复当作授权资料。
     return adapted && last.responsePath ? path.join(path.dirname(last.responsePath), "review-suggestion.json") : last.responsePath
   } catch {
@@ -3852,6 +3872,16 @@ async function seedRoundRoutingControlFromCurrent(input: {
   await writeJsonFile(input.roundPaths.routingControlDraftPath, currentRoutingControl)
 }
 
+async function readCampaignWorkerSuggestions(baseSpec: LongTaskSpec, roundPaths: ReturnType<typeof longTaskCampaignRoundPaths>, roundNumber: number) {
+  if (!shouldRunCampaignWorkers(roundNumber, baseSpec)) return []
+  return Promise.all(defaultCampaignWorkerRoles(baseSpec).map(async role => {
+    const file = path.join(roundPaths.workersRoot, role, "suggestion.json")
+    const suggestion = await readJsonFile<LongTaskCampaignWorkerSuggestion>(file)
+    if (suggestion.roundNumber !== roundNumber || suggestion.role !== role) throw new Error("Restored worker suggestion identity drift")
+    return suggestion
+  }))
+}
+
 async function runCampaignWorkers(input: {
   cwd: string
   campaignID: string
@@ -3883,7 +3913,7 @@ async function runCampaignWorkers(input: {
   carryoverFiles?: string[]
 }) {
   const workerRoles = defaultCampaignWorkerRoles(input.baseSpec)
-  const suggestions = await Promise.all(
+  const suggestions = await join(
     workerRoles.map(async (role) => {
       const stageDir = path.join(input.roundPaths.workersRoot, role)
       const suggestionPath = path.join(stageDir, "suggestion.json")
@@ -4134,6 +4164,45 @@ async function runBlankAgentAcceptanceDiagnosisWorker(input: {
   return suggestion
 }
 
+async function runPriorRoundDiagnosis(input: {
+  cwd: string
+  campaignSpec: LongTaskCampaignSpec
+  baseSpec: LongTaskSpec
+  campaignPaths: ReturnType<typeof longTaskCampaignPaths>
+  roundNumber: number
+  passID?: string
+  runtimeScope: string
+  onActivation?: OpencodeTaskInput["onSpawn"]
+  onPulse?: OpencodeTaskInput["onPulse"]
+}) {
+  if (!input.passID && input.roundNumber <= 1) return
+  const round = input.passID ? input.roundNumber : input.roundNumber - 1
+  const prior = longTaskCampaignRoundPaths(input.campaignPaths, round)
+  const receipt = input.passID ? path.join(prior.finalAcceptanceRoot, input.passID, "result.json") : prior.finalAcceptanceResultPath
+  if (!await pathExists(receipt)) return
+  const result = await readJsonFile<Record<string, unknown>>(receipt)
+  if (result.passed !== false || result.failureKind === "infrastructure_failure" || result.failureKind === "dataset_failure") return
+  const feedback = typeof result.protocolTrainingResultPath === "string" ? result.protocolTrainingResultPath : receipt
+  const passID = input.passID ?? feedback.replaceAll("\\", "/").match(/\/(pass-\d+)\//)?.[1] ?? "pass-02"
+  const destination = longTaskCampaignRoundPaths(input.campaignPaths, input.roundNumber)
+  const stageID = input.passID ?? `previous-${passID}`
+  if (await pathExists(path.join(destination.workersRoot, "blank_acceptance_diagnostician", stageID, "suggestion.json"))) return
+  // 末次失败的诊断在下一作者阶段执行，原验收答卷保持不变。
+  await runBlankAgentAcceptanceDiagnosisWorker({ ...input,
+    roundNumber: input.roundNumber, passID: stageID, roundPaths: destination,
+    runTracePath: prior.runTraceJsonPath, runTraceDigestPath: prior.runTraceDigestPath,
+    pendingPackageRoot: input.campaignPaths.pendingCurrentRoot,
+    explorationTreePath: input.campaignPaths.explorationTreePath,
+    workingMemoryPath: input.campaignPaths.campaignWorkingMemoryPath,
+    routingControlPath: input.campaignPaths.campaignRoutingControlPath,
+    dispatchTicketsPath: input.campaignPaths.dispatchTicketsPath,
+    blankAgentAcceptanceDiagnosisPath: input.campaignPaths.blankAgentAcceptanceDiagnosisPath,
+    acceptanceExperiencePath: input.campaignPaths.acceptanceExperiencePath,
+    acceptanceExperienceJsonlPath: input.campaignPaths.acceptanceExperienceJsonlPath,
+    finalAcceptanceFeedbackPath: feedback,
+  })
+}
+
 function buildRepairChecklistFromFinalAcceptance(
   result: Record<string, unknown>,
 ): string[] {
@@ -4221,6 +4290,7 @@ function validatorRepairHint(validatorID: string, details: string[]): string {
 }
 
 async function runCampaignLead(input: {
+  passID: string
   cwd: string
   campaignSpec: LongTaskCampaignSpec
   baseSpec: LongTaskSpec
@@ -4361,6 +4431,7 @@ async function runCampaignLead(input: {
     prompt,
     selectionPhase: "solve",
     trainingRole: "lead",
+    taskPassID: input.passID,
     taskCandidateRoot: input.nextPendingPackageRoot,
     taskFeedbackPath: input.finalAcceptanceFeedbackPath,
     taskAdvice: [
@@ -4655,6 +4726,10 @@ async function runCampaignFinalAcceptance(input: {
     return campaignAcceptance({ campaignRoot: input.campaignPaths.root, cwd: input.cwd, campaignID: input.campaignID,
       budgets: await taskBudgetOptions(input.baseSpec),
       roundNumber: input.roundNumber, runID: input.sourceRunID, entry: input.baseSpec.protocolPlugins,
+      ...(input.baseSpec.taskAdaptationContext ? { taskBinding: {
+        planFingerprint: input.baseSpec.taskAdaptationContext.fingerprint,
+        policyFingerprint: fingerprint({ windows: input.baseSpec.taskAdaptationContext.plan.windows, workers: input.baseSpec.taskAdaptationContext.plan.workers }),
+      } } : {}),
       candidateRoot: input.pendingPackageRoot, attemptRoot: acceptanceRoot, resultPath: acceptanceResultPath })
   }
   const validatorPartitions = partitionCampaignFinalAcceptanceValidators(input.baseSpec)
@@ -5150,7 +5225,7 @@ export async function runLongTaskCampaign(input: {
 }): Promise<LongTaskCampaignRunResult> {
   if (process.env.AUTO_EVOLVE_SKIP_STALE_HEAL !== "1") await healStaleRuntimeStates(input.cwd)
   const { spec: campaignSpec } = await loadLongTaskCampaignSpec(input.specPath)
-  const { spec: baseSpec } = await loadLongTaskSpec(campaignSpec.baseSpecPath)
+  let { spec: baseSpec } = await loadLongTaskSpec(campaignSpec.baseSpecPath)
   const expectedSpecHash = input.specHash ?? (await hashFileIfExists(campaignSpec.baseSpecPath))
   if (!input.forceNew) {
     const existingLiveCampaign = await findExistingLiveCampaign({
@@ -5220,6 +5295,9 @@ export async function runLongTaskCampaign(input: {
   // 先登记归属再开展工作，中断后不得重复创建付费任务。
   await input.onCreated?.({ campaignID, campaignDir: campaignPaths.root })
   await prepareCampaignProtocol(campaignPaths.root, baseSpec, false, input.cwd)
+  const control = await openTaskCampaignControl(baseSpec, { root: campaignPaths.root,
+    campaign: campaignID, baseSpecPath: campaignSpec.baseSpecPath })
+  try {
   if (input.historyContext && input.taskID && input.attemptID) {
     await registerCampaignAttempt({
       outDir: input.historyContext.outDir,
@@ -5236,6 +5314,7 @@ export async function runLongTaskCampaign(input: {
     seedTarget: primaryExperienceWorkspaceSeedTarget(campaignSpec.seedTargets),
   })
   await seedTaskCandidate(baseSpec, campaignPaths.pendingCurrentRoot)
+  if (control) await freezeTaskOrigin(baseSpec, { root: campaignPaths.root, control, create: true })
 
   const history: LongTaskCampaignRoundRecord[] = []
   let lastRoundNumber = 0
@@ -5262,7 +5341,22 @@ export async function runLongTaskCampaign(input: {
       const pulseCampaignRound = async () => {
         await pulseCampaignState(campaignPaths)
       }
+      const generation = control ? await openTaskGeneration(baseSpec, { root: campaignPaths.root, control }) : undefined
+      let restart = false
       try {
+        const branchStart = await taskBranchStart(baseSpec, campaignPaths.root)
+        if (branchStart > 1 && roundNumber === branchStart) baseSpec = { ...baseSpec, taskAdaptationFeedbackPath: undefined }
+        if (control) for (let prior = Math.max(1, roundNumber - 1); prior <= roundNumber; prior++)
+          await cleanupRuntimeScopeWithRetry(campaignRoundRuntimeScope(campaignID, prior), true)
+        if (control && generation) {
+          const stage = await startTaskRequestRound(baseSpec, {
+            scope: control.scope, round: roundNumber, generation: generation.generation,
+          })
+          baseSpec = stage.spec
+          if (roundNumber > branchStart && stage.gate.policy.stage === "author" && stage.gate.policy.pass === 1)
+            await runPriorRoundDiagnosis({ cwd: input.cwd, campaignSpec, baseSpec, campaignPaths, roundNumber,
+              runtimeScope: roundRuntimeScope, onActivation: activateCampaignRound, onPulse: pulseCampaignRound })
+        }
         await ensureDirectory(roundPaths.root)
         await ensureDirectory(roundPaths.harvestedRoot)
         await ensureDirectory(roundPaths.snapshotsRoot)
@@ -5304,7 +5398,7 @@ export async function runLongTaskCampaign(input: {
           dispatchTicketsPath: campaignPaths.dispatchTicketsPath,
           blankAgentAcceptanceDiagnosisPath: campaignPaths.blankAgentAcceptanceDiagnosisPath,
         })
-        if (baseSpec.taskAdaptation && baseSpec.protocolPlugins && roundNumber > 1) generatedSpec.taskAdaptationFeedbackPath =
+        if (baseSpec.taskAdaptation && baseSpec.protocolPlugins && roundNumber > branchStart) generatedSpec.taskAdaptationFeedbackPath =
           await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase)
         await writeJsonFile(roundPaths.generatedSpecPath, generatedSpec)
 
@@ -5319,6 +5413,7 @@ export async function runLongTaskCampaign(input: {
         })
 
         const runResult = await runLongTask({
+          taskGeneration: generation,
           cwd: input.cwd,
           specPath: roundPaths.generatedSpecPath,
           runtimeScope: roundRuntimeScope,
@@ -5361,7 +5456,8 @@ export async function runLongTaskCampaign(input: {
           })
         }
 
-        const loopDetection = detectRepeatedNoProgressLoop(history)
+        // 探索由正式整轮观察决定；旧执行摘要不能抢先判质量停滞。
+        const loopDetection = control ? undefined : detectRepeatedNoProgressLoop(history)
         if (loopDetection) {
           const nextState: LongTaskCampaignState = {
             ...initialState,
@@ -5509,9 +5605,9 @@ export async function runLongTaskCampaign(input: {
           }),
         )
 
-        const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths, Boolean(baseSpec.taskAdaptation))
+        const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths, Boolean(baseSpec.taskAdaptation), branchStart)
         // Step 10: workers need the latest blank-agent evidence from previous round's failure.
-        const priorProtocolFeedback = baseSpec.protocolPlugins
+        const priorProtocolFeedback = baseSpec.protocolPlugins && roundNumber > branchStart
           ? await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase) : undefined
         const latestBlankEvidence = baseSpec.protocolPlugins
           ? priorProtocolFeedback ? path.join(path.dirname(priorProtocolFeedback), "protocol.training-feedback.json") : undefined
@@ -5582,6 +5678,8 @@ export async function runLongTaskCampaign(input: {
               blankAgentAcceptanceDiagnosisPath: campaignPaths.blankAgentAcceptanceDiagnosisPath,
               acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
               acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
+              // 分析与修订共享上一轮正式反馈，不靠摘要路径猜测。
+              finalAcceptanceFeedbackPath: priorProtocolFeedback,
               reviewerSuggestionPath: latestReviewerSuggestionPath,
               blankAgentEvidenceBundlePath: latestBlankEvidence,
               blankAgentEvidenceReadPaths: latestBlankEvidenceReadPaths,
@@ -5677,7 +5775,11 @@ export async function runLongTaskCampaign(input: {
             draftRoot: roundPaths.pendingPackageSnapshotRoot,
             skill: baseSpec.protocolAuthorContext?.skill,
           })
+          if (control && generation && passIndex > 1) baseSpec = (await scheduleTaskRequestStage(baseSpec, {
+            scope: control.scope, round: roundNumber, pass: passIndex, generation: generation.generation, stage: "author",
+          })).spec
           const leadResult = await runCampaignLead({
+            passID,
             cwd: input.cwd,
             campaignSpec,
             baseSpec,
@@ -5757,6 +5859,9 @@ export async function runLongTaskCampaign(input: {
             allowReadmeOnly: baseSpec.blankEvalExecutor?.kind === "single_turn_http",
           })
 
+          if (control && generation) baseSpec = (await scheduleTaskRequestStage(baseSpec, {
+            scope: control.scope, round: roundNumber, pass: passIndex, generation: generation.generation, stage: "acceptance",
+          })).spec
           reviewerSuggestion = shouldRunCampaignReviewer(roundNumber)
             ? await runCampaignReviewer({
                 cwd: input.cwd,
@@ -5856,7 +5961,11 @@ export async function runLongTaskCampaign(input: {
           finalAcceptanceFeedbackPath = trainingFeedbackPath
           const acceptanceInfrastructureFailure = finalAcceptance.failureKind === "infrastructure_failure"
           const acceptanceDatasetFailure = finalAcceptance.failureKind === "dataset_failure"
-          if (!finalAcceptance.passed && !acceptanceInfrastructureFailure && !acceptanceDatasetFailure) {
+          if (!finalAcceptance.passed && !acceptanceInfrastructureFailure && !acceptanceDatasetFailure &&
+            (!control || passIndex < maxAcceptancePassesPerRound)) {
+            if (control && generation) baseSpec = (await scheduleTaskRequestStage(baseSpec, {
+              scope: control.scope, round: roundNumber, pass: passIndex + 1, generation: generation.generation, stage: "author",
+            })).spec
             await runBlankAgentAcceptanceDiagnosisWorker({
               cwd: input.cwd,
               campaignSpec,
@@ -5914,76 +6023,13 @@ export async function runLongTaskCampaign(input: {
           }),
         )
 
-        const acceptanceInfrastructureFailure = finalAcceptance?.failureKind === "infrastructure_failure"
-        const acceptanceDatasetFailure = finalAcceptance?.failureKind === "dataset_failure"
-        const taskSelection = await recordTaskVersion(baseSpec, {
-          root: campaignPaths.root, candidateRoot: campaignPaths.pendingCurrentRoot,
-          feedback: (finalAcceptance as Record<string, unknown> | undefined)?.protocolTrainingResultPath as string | undefined,
-          passed: finalAcceptance?.passed === true, round: roundNumber, maxRounds: campaignSpec.maxRounds,
+        const closed = await completeTaskRound(baseSpec, {
+          cwd: input.cwd, state: initialState, control, generation: generation?.generation,
+          root: campaignPaths.root, candidateRoot: campaignPaths.pendingCurrentRoot, round: roundNumber,
+          maxRounds: campaignSpec.maxRounds, record: finalizedRoundRecord, acceptance: finalAcceptance,
         })
-        const nextStatus =
-          acceptanceInfrastructureFailure || acceptanceDatasetFailure
-            ? "failed"
-            : taskSelection
-              ? taskSelection.stop ? taskSelection.passed ? "verified_success" : "round_limit_reached" : "running"
-            : finalAcceptance?.passed === true
-            ? "verified_success"
-            : roundNumber >= campaignSpec.maxRounds
-              ? "round_limit_reached"
-              : "running"
-        const lastRoundClosure =
-          acceptanceInfrastructureFailure
-            ? "closed_infra_failure"
-            : acceptanceDatasetFailure
-            ? "closed_dataset_failure"
-            : finalAcceptance?.passed === true
-            ? "closed_success"
-            : finalAcceptance
-              ? "closed_repairable"
-              : (finalizedRoundRecord.roundClosure ?? "closed_blocked")
-        const lastGateFailureKind =
-          acceptanceInfrastructureFailure
-            ? "infrastructure_failure"
-            : acceptanceDatasetFailure
-            ? "dataset_failure"
-            : finalAcceptance && !finalAcceptance.passed
-            ? "final_acceptance_failed"
-            : finalizedRoundRecord.gateFailureKind
-        const lastGateFailureSummary =
-          finalAcceptance && !finalAcceptance.passed
-            ? finalAcceptance.summary
-            : finalizedRoundRecord.gateFailureSummary
-        const lastRunHardVerified =
-          finalizedRoundRecord.runVerificationSignal?.completionGateMode === "required" &&
-          finalizedRoundRecord.runVerificationSignal?.completionGatePassed === true
-
-        const state: LongTaskCampaignState = {
-          ...initialState,
-          currentRound: roundNumber,
-          status: nextStatus,
-          updatedAt: nowISO(),
-          lastRunID: runResult.runID,
-          lastSummary: finalAcceptance?.summary ?? finalizedRoundRecord.summary,
-          lastRoundSummaryPath: finalizedRoundRecord.roundSummaryPath,
-          lastRunHardVerified,
-          lastFinalAcceptancePassed: finalAcceptance?.passed === true,
-          ...(taskSelection ? { selectedTaskVersionPath: taskSelection.selectedTaskVersionPath, taskStopReason: taskSelection.taskStopReason } : {}),
-          lastFinalAcceptanceResultPath: baseSpec.protocolPlugins && finalAcceptance
-            ? String((finalAcceptance as Record<string, unknown>).protocolAuditResultPath)
-            : finalAcceptanceFeedbackPath,
-          lastRoundClosure,
-          lastGateFailureKind,
-          lastGateFailureSummary,
-          recovery: acceptanceInfrastructureFailure
-            ? {
-                action: "harvest_round_run",
-                roundNumber,
-                runID: runResult.runID,
-                reason: `Round ${roundID(roundNumber)} stopped at final acceptance because validator infrastructure failed. Resume only after the platform fix; reuse the completed inner run instead of starting a new learning round.`,
-                detectedAt: nowISO(),
-              }
-            : undefined,
-        }
+        const { taskSelection, nextStatus, acceptanceInfrastructureFailure, acceptanceDatasetFailure, state } = closed
+        restart = closed.restart
         await writeLongTaskCampaignState(campaignPaths, state)
 
         const stopped = await finishTaskRequestBudget({ spec: baseSpec, campaignID, campaignPaths,
@@ -6007,8 +6053,10 @@ export async function runLongTaskCampaign(input: {
           })
         }
       } finally {
-        await cleanupRuntimeScopeWithRetry(roundRuntimeScope)
+        try { await cleanupRuntimeScopeWithRetry(roundRuntimeScope, Boolean(control)) }
+        finally { generation?.close() }
       }
+      if (restart && control) await activateTaskBranch(baseSpec, { root: campaignPaths.root, control })
     }
   } catch (error) {
     const stopped = await finishTaskRequestBudget({ spec: baseSpec, campaignID, campaignPaths,
@@ -6016,8 +6064,8 @@ export async function runLongTaskCampaign(input: {
     if (stopped) return stopped
     const message = error instanceof Error ? error.message : String(error)
     const saved = baseSpec.taskAdaptation ? await readLongTaskCampaignState(campaignPaths) : initialState
-    const qualified = baseSpec.taskAdaptation ? chooseTaskVersion(baseSpec, await readTaskVersions(baseSpec, campaignPaths.root),
-      lastRoundNumber, campaignSpec.maxRounds) : undefined
+    const qualified = baseSpec.taskAdaptation ? await selectTaskVersion(baseSpec, { root: campaignPaths.root,
+      round: lastRoundNumber, maxRounds: campaignSpec.maxRounds, readonly: Boolean(baseSpec.taskAdaptationContext?.plan.exploration) }) : undefined
     const failureState: LongTaskCampaignState = {
       ...saved,
       currentRound: lastRoundNumber,
@@ -6054,6 +6102,9 @@ export async function runLongTaskCampaign(input: {
     state: finalState,
     roundsCompleted: campaignSpec.maxRounds,
   })
+  } finally {
+    control?.close()
+  }
 }
 
 export async function resumeLongTaskCampaign(input: {
@@ -6065,7 +6116,7 @@ export async function resumeLongTaskCampaign(input: {
 }): Promise<LongTaskCampaignRunResult> {
   if (process.env.AUTO_EVOLVE_SKIP_STALE_HEAL !== "1") await healStaleRuntimeStates(input.cwd)
   const { spec: campaignSpec } = await loadLongTaskCampaignSpec(input.specPath)
-  const { spec: baseSpec } = await loadLongTaskSpec(campaignSpec.baseSpecPath)
+  let { spec: baseSpec } = await loadLongTaskSpec(campaignSpec.baseSpecPath)
   const campaignPaths = longTaskCampaignPaths(input.cwd, input.campaignID)
   if (!(await pathExists(campaignPaths.campaignStatePath))) {
     throw new Error(`Campaign not found: ${input.campaignID}`)
@@ -6092,36 +6143,46 @@ export async function resumeLongTaskCampaign(input: {
     )
   }
 
-  if (existingState.status === "verified_success" || existingState.status === "round_limit_reached") {
+  const completed = async (state: LongTaskCampaignState) => {
+    if (state.status !== "verified_success" && state.status !== "round_limit_reached") return undefined
     if (baseSpec.taskAdaptation) {
-      const budget = isRequestBudgetStop(existingState.taskStopReason) ? await requestBudgetStop(baseSpec) : undefined
-      if (isRequestBudgetStop(existingState.taskStopReason) && (!budget || budget.inspectionRequired || budget.reason !== existingState.taskStopReason)) {
+      const budget = isRequestBudgetStop(state.taskStopReason) ? await requestBudgetStop(baseSpec) : undefined
+      if (isRequestBudgetStop(state.taskStopReason) && (!budget || budget.inspectionRequired || budget.reason !== state.taskStopReason)) {
         throw new Error("Completed task request budget evidence drift")
       }
-      const selection = chooseTaskVersion(baseSpec, await readTaskVersions(baseSpec, campaignPaths.root), existingState.currentRound, campaignSpec.maxRounds, budget?.reason)
-      if (selection.selectedTaskVersionPath !== existingState.selectedTaskVersionPath ||
-        selection.taskStopReason !== existingState.taskStopReason || !selection.stop ||
-        (existingState.status === "verified_success") !== selection.passed) throw new Error("Completed task delivery selection drift")
+      const selection = await selectTaskVersion(baseSpec, { root: campaignPaths.root, round: state.currentRound,
+        maxRounds: campaignSpec.maxRounds, forcedReason: budget?.reason, readonly: Boolean(baseSpec.taskAdaptationContext?.plan.exploration) })
+      const decision = baseSpec.taskAdaptationContext?.plan.exploration && !budget
+        ? await readTaskExplorationDecision(baseSpec, { root: campaignPaths.root, round: state.currentRound }) : undefined
+      // 正式版本负责交付资格，探索决定负责停止原因，不互相代算。
+      const reason = decision?.reason ?? selection.taskStopReason
+      const stop = decision ? decision.action === "finish" : selection.stop
+      if (selection.selectedTaskVersionPath !== state.selectedTaskVersionPath ||
+        reason !== state.taskStopReason || !stop ||
+        (state.status === "verified_success") !== selection.passed) throw new Error("Completed task delivery selection drift")
     }
-    if (baseSpec.protocolPlugins && existingState.status === "verified_success" &&
-      (!baseSpec.taskAdaptation || existingState.lastFinalAcceptancePassed && !isRequestBudgetStop(existingState.taskStopReason))) {
-      if (!existingState.lastFinalAcceptanceResultPath || !existingState.lastRunID) throw new Error("Completed Campaign acceptance identity missing")
+    if (baseSpec.protocolPlugins && state.status === "verified_success" &&
+      (!baseSpec.taskAdaptation || state.lastFinalAcceptancePassed && !isRequestBudgetStop(state.taskStopReason))) {
+      if (!state.lastFinalAcceptanceResultPath || !state.lastRunID) throw new Error("Completed Campaign acceptance identity missing")
       await verifyCompletedCampaignAcceptance({ campaignRoot: campaignPaths.root, cwd: input.cwd,
         budgets: await taskBudgetOptions(baseSpec),
-        campaignID: input.campaignID, roundNumber: existingState.currentRound, runID: existingState.lastRunID,
+        campaignID: input.campaignID, roundNumber: state.currentRound, runID: state.lastRunID,
         entry: baseSpec.protocolPlugins, candidateRoot: campaignPaths.pendingCurrentRoot,
-        resultPath: existingState.lastFinalAcceptanceResultPath })
+        resultPath: state.lastFinalAcceptanceResultPath })
     }
     return toCampaignRunResult({
       campaignID: input.campaignID,
       campaignPaths,
-      state: existingState,
+      state,
     })
   }
+  const terminal = await completed(existingState)
+  if (terminal) return terminal
 
   let history = await readJsonLinesIfExists<LongTaskCampaignRoundRecord>(campaignPaths.historyPath)
   const targetHealth = await readCampaignHealth(campaignPaths.root)
-  if (targetHealth?.suggestedAction === "takeover") {
+  // 新探索先取独占控制；旧接管分支不能提前清owner或改恢复状态。
+  if (targetHealth?.suggestedAction === "takeover" && !baseSpec.taskAdaptationContext?.plan.exploration) {
     const takeoverAt = nowISO()
     const ownerPID =
       typeof existingState.ownerPID === "number" && Number.isFinite(existingState.ownerPID) && existingState.ownerPID > 0
@@ -6194,6 +6255,48 @@ export async function resumeLongTaskCampaign(input: {
     })
   }
 
+  const control = await openTaskCampaignControl(baseSpec, { root: campaignPaths.root,
+    campaign: input.campaignID, baseSpecPath: campaignSpec.baseSpecPath })
+  try {
+  if (control) {
+    existingState = control.state
+    history = await readJsonLinesIfExists<LongTaskCampaignRoundRecord>(campaignPaths.historyPath)
+    // 锁前可能仍在运行；锁内已完成时只能核验交付，不能再恢复一轮。
+    const terminal = await completed(existingState)
+    if (terminal) return terminal
+    await freezeTaskOrigin(baseSpec, { root: campaignPaths.root, control })
+    await recoverTaskVersions(baseSpec, { root: campaignPaths.root, candidateRoot: campaignPaths.pendingCurrentRoot,
+      cap: baseSpec.taskAdaptationContext!.plan.exploration!.bounds.archiveBytes })
+    const last = history.at(-1)
+    if (last && last.roundNumber >= existingState.currentRound && last.finalAcceptanceSignal?.executed &&
+        ["closed_success", "closed_repairable"].includes(last.roundClosure ?? "")) {
+      // history可能先于轮末档案落盘；先补本地关闭，再判断下一轮。
+      const saved = await findTaskExplorationDecision(baseSpec, { root: campaignPaths.root, round: last.roundNumber })
+      const feedback = last.finalAcceptanceSignal.feedbackPath
+      if (!feedback?.endsWith(".training.json") || !baseSpec.protocolPlugins) throw new Error("Closed exploration acceptance reference missing")
+      const resultPath = feedback.slice(0, -".training.json".length)
+      await cleanupRuntimeScopeWithRetry(campaignRoundRuntimeScope(input.campaignID, last.roundNumber), true)
+      const generation = saved ? undefined : await openTaskGeneration(baseSpec, { root: campaignPaths.root, control })
+      try {
+        const acceptance = saved
+          ? await readJsonFile<Awaited<ReturnType<typeof campaignAcceptance>>>(resultPath)
+          : await readCompletedCampaignPass({ campaignRoot: campaignPaths.root, cwd: input.cwd,
+            budgets: await taskBudgetOptions(baseSpec), campaignID: input.campaignID, roundNumber: last.roundNumber,
+            runID: last.sourceRunID, entry: baseSpec.protocolPlugins, candidateRoot: campaignPaths.pendingCurrentRoot, resultPath })
+        if (acceptance.passed !== last.finalAcceptanceSignal.passed || acceptance.runID !== last.sourceRunID ||
+            acceptance.roundNumber !== last.roundNumber || acceptance.protocolTrainingResultPath !== feedback ||
+            acceptance.protocolAuditResultPath !== resultPath) throw new Error("Closed exploration acceptance identity drift")
+        const closed = await completeTaskRound(baseSpec, { cwd: input.cwd, root: campaignPaths.root,
+          candidateRoot: campaignPaths.pendingCurrentRoot, round: last.roundNumber, maxRounds: campaignSpec.maxRounds,
+          record: last, acceptance, state: existingState, control, generation: generation?.generation })
+        existingState = closed.state
+        await writeLongTaskCampaignState(campaignPaths, existingState)
+      } finally { generation?.close() }
+      const terminal = await completed(existingState)
+      if (terminal) return terminal
+    }
+    await activateTaskBranch(baseSpec, { root: campaignPaths.root, control })
+  }
   const recoveryPlan = await determineCampaignRecoveryDecision({
     cwd: input.cwd,
     campaignPaths,
@@ -6261,6 +6364,7 @@ export async function resumeLongTaskCampaign(input: {
       if (stopped) return stopped
       lastRoundNumber = roundNumber
       const activeRecoveryPlan = recoveryPlan && recoveryPlan.roundNumber === roundNumber ? recoveryPlan : undefined
+      let restored: Awaited<ReturnType<typeof startTaskRequestRound>>["gate"]["policy"] | undefined
       const roundRuntimeScope = campaignRoundRuntimeScope(input.campaignID, roundNumber)
       const roundPaths = longTaskCampaignRoundPaths(campaignPaths, roundNumber)
       const activateCampaignRound = onceActivationCallback(async () => {
@@ -6274,7 +6378,23 @@ export async function resumeLongTaskCampaign(input: {
       const pulseCampaignRound = async () => {
         await pulseCampaignState(campaignPaths)
       }
+      const generation = control ? await openTaskGeneration(baseSpec, { root: campaignPaths.root, control }) : undefined
+      let restart = false
       try {
+        const branchStart = await taskBranchStart(baseSpec, campaignPaths.root)
+        if (branchStart > 1 && roundNumber === branchStart) baseSpec = { ...baseSpec, taskAdaptationFeedbackPath: undefined }
+        if (control) for (let prior = Math.max(1, roundNumber - 1); prior <= roundNumber; prior++)
+          await cleanupRuntimeScopeWithRetry(campaignRoundRuntimeScope(input.campaignID, prior), true)
+        if (control && generation) {
+          const stage = await startTaskRequestRound(baseSpec, {
+            scope: control.scope, round: roundNumber, generation: generation.generation,
+          })
+          baseSpec = stage.spec
+          restored = stage.gate.policy
+          if (roundNumber > branchStart && stage.gate.policy.stage === "author" && stage.gate.policy.pass === 1)
+            await runPriorRoundDiagnosis({ cwd: input.cwd, campaignSpec, baseSpec, campaignPaths, roundNumber,
+              runtimeScope: roundRuntimeScope, onActivation: activateCampaignRound, onPulse: pulseCampaignRound })
+        }
         await ensureDirectory(roundPaths.root)
         await ensureDirectory(roundPaths.harvestedRoot)
         await ensureDirectory(roundPaths.snapshotsRoot)
@@ -6284,6 +6404,7 @@ export async function resumeLongTaskCampaign(input: {
         enforceCampaignTruthPaths({ campaignPaths, roundPaths })
         await ensureBlankAgentAcceptanceDiagnosis(campaignPaths, roundNumber)
 
+        if (!restored || (restored.stage === "author" && restored.pass === 1)) {
         await prepareCampaignRoundState({
           baseSpec,
           campaignSpec,
@@ -6303,6 +6424,7 @@ export async function resumeLongTaskCampaign(input: {
           campaignPaths,
           roundPaths,
         })
+        }
         let dispatchTickets = await readDispatchTicketDocument(campaignPaths, roundNumber)
 
         const generatedSpec = buildGeneratedRoundSpec({
@@ -6316,7 +6438,7 @@ export async function resumeLongTaskCampaign(input: {
           dispatchTicketsPath: campaignPaths.dispatchTicketsPath,
           blankAgentAcceptanceDiagnosisPath: campaignPaths.blankAgentAcceptanceDiagnosisPath,
         })
-        if (baseSpec.taskAdaptation && baseSpec.protocolPlugins && roundNumber > 1) generatedSpec.taskAdaptationFeedbackPath =
+        if (baseSpec.taskAdaptation && baseSpec.protocolPlugins && roundNumber > branchStart) generatedSpec.taskAdaptationFeedbackPath =
           await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase)
         await writeJsonFile(roundPaths.generatedSpecPath, generatedSpec)
 
@@ -6330,9 +6452,16 @@ export async function resumeLongTaskCampaign(input: {
           lastRoundSummaryPath: history[history.length - 1]?.roundSummaryPath,
         })
 
-        const runResult =
-          activeRecoveryPlan?.action === "resume_round_run" && activeRecoveryPlan.runID
+        const completedRun = restored && (restored.stage !== "author" || restored.pass > 1)
+          ? activeRecoveryPlan?.runID ?? history.find(record => record.roundNumber === roundNumber)?.sourceRunID : undefined
+        if (restored && (restored.stage !== "author" || restored.pass > 1) && !completedRun)
+          throw new Error("Restored refinement stage missing completed round run")
+        // 已进入修订或验收的轮内执行只读复用，不重发前序请求。
+        const runResult = completedRun
+          ? await rehydrateExistingLongTaskRunResult({ cwd: input.cwd, runID: completedRun })
+          : activeRecoveryPlan?.action === "resume_round_run" && activeRecoveryPlan.runID
             ? await resumeLongTask({
+                taskGeneration: generation,
                 cwd: input.cwd,
                 runID: activeRecoveryPlan.runID,
                 runtimeScope: roundRuntimeScope,
@@ -6345,6 +6474,7 @@ export async function resumeLongTaskCampaign(input: {
                   runID: activeRecoveryPlan.runID,
                 })
                 : await runLongTask({
+                    taskGeneration: generation,
                     cwd: input.cwd,
                     specPath: roundPaths.generatedSpecPath,
                     runtimeScope: roundRuntimeScope,
@@ -6394,7 +6524,8 @@ export async function resumeLongTaskCampaign(input: {
           })
         }
 
-        const loopDetection = detectRepeatedNoProgressLoop(history)
+        // 探索由正式整轮观察决定；旧执行摘要不能抢先判质量停滞。
+        const loopDetection = control ? undefined : detectRepeatedNoProgressLoop(history)
         if (loopDetection) {
           const nextState: LongTaskCampaignState = {
             ...initialState,
@@ -6542,8 +6673,8 @@ export async function resumeLongTaskCampaign(input: {
           }),
         )
 
-        const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths, Boolean(baseSpec.taskAdaptation))
-        const priorProtocolFeedback = baseSpec.protocolPlugins
+        const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths, Boolean(baseSpec.taskAdaptation), branchStart)
+        const priorProtocolFeedback = baseSpec.protocolPlugins && roundNumber > branchStart
           ? await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase) : undefined
         const latestBlankEvidence = baseSpec.protocolPlugins
           ? priorProtocolFeedback ? path.join(path.dirname(priorProtocolFeedback), "protocol.training-feedback.json") : undefined
@@ -6596,7 +6727,9 @@ export async function resumeLongTaskCampaign(input: {
           campaignPaths,
           history,
         })
-        const workerSuggestions = shouldRunCampaignWorkers(roundNumber, baseSpec)
+        const workerSuggestions = restored && (restored.stage !== "author" || restored.pass > 1)
+          ? await readCampaignWorkerSuggestions(baseSpec, roundPaths, roundNumber)
+          : shouldRunCampaignWorkers(roundNumber, baseSpec)
           ? await runCampaignWorkers({
               cwd: input.cwd,
               campaignID: input.campaignID,
@@ -6613,6 +6746,8 @@ export async function resumeLongTaskCampaign(input: {
               blankAgentAcceptanceDiagnosisPath: campaignPaths.blankAgentAcceptanceDiagnosisPath,
               acceptanceExperiencePath: campaignPaths.acceptanceExperiencePath,
               acceptanceExperienceJsonlPath: campaignPaths.acceptanceExperienceJsonlPath,
+              // 恢复入口同样传递已核验反馈，避免分析角色断链。
+              finalAcceptanceFeedbackPath: priorProtocolFeedback,
               reviewerSuggestionPath: latestReviewerSuggestionPath,
               blankAgentEvidenceBundlePath: latestBlankEvidence,
               blankAgentEvidenceReadPaths: latestBlankEvidenceReadPaths,
@@ -6640,20 +6775,33 @@ export async function resumeLongTaskCampaign(input: {
           const acceptancePassRoot = path.join(roundPaths.finalAcceptanceRoot, passID)
           const acceptancePassResultPath = path.join(acceptancePassRoot, "result.json")
 
-          // 已完成拒绝只复用反馈；不得重做作者或覆盖旧验收。
+          // 已完成验收只核验证据，不重做作者或重复判卷。
           if (baseSpec.protocolPlugins && await pathExists(acceptancePassResultPath)) {
-            const saved = await readCompletedRejectedCampaignPass({ campaignRoot: campaignPaths.root,
+            const saved = await readCompletedCampaignPass({ campaignRoot: campaignPaths.root,
               budgets: await taskBudgetOptions(baseSpec),
               cwd: input.cwd, campaignID: input.campaignID, roundNumber, runID: runResult.runID,
-              entry: baseSpec.protocolPlugins, resultPath: acceptancePassResultPath })
+              entry: baseSpec.protocolPlugins, candidateRoot: campaignPaths.pendingCurrentRoot,
+              resultPath: acceptancePassResultPath })
             finalAcceptance = saved
             finalAcceptanceFeedbackPath = saved.protocolTrainingResultPath
             if (await pathExists(reviewerPassSuggestionPath)) {
               reviewerSuggestion = await readJsonFile<LongTaskCampaignReviewSuggestion>(reviewerPassSuggestionPath)
               reviewerInputPath = reviewerPassSuggestionPath
             }
+            if (saved.passed) break
+            if (control && generation && passIndex < maxAcceptancePassesPerRound &&
+              (!restored || restored.pass <= passIndex || restored.stage === "author")) {
+              baseSpec = (await scheduleTaskRequestStage(baseSpec, {
+                scope: control.scope, round: roundNumber, pass: passIndex + 1,
+                generation: generation.generation, stage: "author",
+              })).spec
+              // 判卷已落盘但诊断中断时，只补缺失诊断，不覆盖旧答卷。
+              await runPriorRoundDiagnosis({ cwd: input.cwd, campaignSpec, baseSpec, campaignPaths, roundNumber, passID,
+                runtimeScope: roundRuntimeScope, onActivation: activateCampaignRound, onPulse: pulseCampaignRound })
+            }
             continue
           }
+          if (restored && restored.pass > passIndex) throw new Error("Restored stage missing prior acceptance receipt")
 
           // Dynamically resolve the current pass's evidence bundle.
           // IMPORTANT:
@@ -6717,13 +6865,19 @@ export async function resumeLongTaskCampaign(input: {
             }
           }
 
+          const authorDone = restored?.stage === "acceptance" && restored.pass === passIndex
+          if (!authorDone) {
           await synchronizeProtocolLeadCandidate({
             enabled: Boolean(baseSpec.protocolPlugins),
             currentRoot: campaignPaths.pendingCurrentRoot,
             draftRoot: roundPaths.pendingPackageSnapshotRoot,
             skill: baseSpec.protocolAuthorContext?.skill,
           })
+          if (control && generation && passIndex > 1) baseSpec = (await scheduleTaskRequestStage(baseSpec, {
+            scope: control.scope, round: roundNumber, pass: passIndex, generation: generation.generation, stage: "author",
+          })).spec
           await runCampaignLead({
+            passID,
             cwd: input.cwd,
             campaignSpec,
             baseSpec,
@@ -6776,7 +6930,11 @@ export async function resumeLongTaskCampaign(input: {
             declaredSkill: baseSpec.protocolAuthorContext?.skill,
             allowReadmeOnly: baseSpec.blankEvalExecutor?.kind === "single_turn_http",
           })
+          }
 
+          if (control && generation) baseSpec = (await scheduleTaskRequestStage(baseSpec, {
+            scope: control.scope, round: roundNumber, pass: passIndex, generation: generation.generation, stage: "acceptance",
+          })).spec
           reviewerSuggestion = shouldRunCampaignReviewer(roundNumber)
             ? await runCampaignReviewer({
                 cwd: input.cwd,
@@ -6876,7 +7034,11 @@ export async function resumeLongTaskCampaign(input: {
           finalAcceptanceFeedbackPath = trainingFeedbackPath
           const acceptanceInfrastructureFailure = finalAcceptance.failureKind === "infrastructure_failure"
           const acceptanceDatasetFailure = finalAcceptance.failureKind === "dataset_failure"
-          if (!finalAcceptance.passed && !acceptanceInfrastructureFailure && !acceptanceDatasetFailure) {
+          if (!finalAcceptance.passed && !acceptanceInfrastructureFailure && !acceptanceDatasetFailure &&
+            (!control || passIndex < maxAcceptancePassesPerRound)) {
+            if (control && generation) baseSpec = (await scheduleTaskRequestStage(baseSpec, {
+              scope: control.scope, round: roundNumber, pass: passIndex + 1, generation: generation.generation, stage: "author",
+            })).spec
             await runBlankAgentAcceptanceDiagnosisWorker({
               cwd: input.cwd,
               campaignSpec,
@@ -6934,76 +7096,13 @@ export async function resumeLongTaskCampaign(input: {
           }),
         )
 
-        const acceptanceInfrastructureFailure = finalAcceptance?.failureKind === "infrastructure_failure"
-        const acceptanceDatasetFailure = finalAcceptance?.failureKind === "dataset_failure"
-        const taskSelection = await recordTaskVersion(baseSpec, {
-          root: campaignPaths.root, candidateRoot: campaignPaths.pendingCurrentRoot,
-          feedback: (finalAcceptance as Record<string, unknown> | undefined)?.protocolTrainingResultPath as string | undefined,
-          passed: finalAcceptance?.passed === true, round: roundNumber, maxRounds: campaignSpec.maxRounds,
+        const closed = await completeTaskRound(baseSpec, {
+          cwd: input.cwd, state: initialState, control, generation: generation?.generation,
+          root: campaignPaths.root, candidateRoot: campaignPaths.pendingCurrentRoot, round: roundNumber,
+          maxRounds: campaignSpec.maxRounds, record: finalizedRoundRecord, acceptance: finalAcceptance,
         })
-        const nextStatus =
-          acceptanceInfrastructureFailure || acceptanceDatasetFailure
-            ? "failed"
-            : taskSelection
-              ? taskSelection.stop ? taskSelection.passed ? "verified_success" : "round_limit_reached" : "running"
-            : finalAcceptance?.passed === true
-            ? "verified_success"
-            : roundNumber >= campaignSpec.maxRounds
-              ? "round_limit_reached"
-              : "running"
-        const lastRoundClosure =
-          acceptanceInfrastructureFailure
-            ? "closed_infra_failure"
-            : acceptanceDatasetFailure
-            ? "closed_dataset_failure"
-            : finalAcceptance?.passed === true
-            ? "closed_success"
-            : finalAcceptance
-              ? "closed_repairable"
-              : (finalizedRoundRecord.roundClosure ?? "closed_blocked")
-        const lastGateFailureKind =
-          acceptanceInfrastructureFailure
-            ? "infrastructure_failure"
-            : acceptanceDatasetFailure
-            ? "dataset_failure"
-            : finalAcceptance && !finalAcceptance.passed
-            ? "final_acceptance_failed"
-            : finalizedRoundRecord.gateFailureKind
-        const lastGateFailureSummary =
-          finalAcceptance && !finalAcceptance.passed
-            ? finalAcceptance.summary
-            : finalizedRoundRecord.gateFailureSummary
-        const lastRunHardVerified =
-          finalizedRoundRecord.runVerificationSignal?.completionGateMode === "required" &&
-          finalizedRoundRecord.runVerificationSignal?.completionGatePassed === true
-
-        const state: LongTaskCampaignState = {
-          ...initialState,
-          currentRound: roundNumber,
-          status: nextStatus,
-          updatedAt: nowISO(),
-          lastRunID: runResult.runID,
-          lastSummary: finalAcceptance?.summary ?? finalizedRoundRecord.summary,
-          lastRoundSummaryPath: finalizedRoundRecord.roundSummaryPath,
-          lastRunHardVerified,
-          lastFinalAcceptancePassed: finalAcceptance?.passed === true,
-          ...(taskSelection ? { selectedTaskVersionPath: taskSelection.selectedTaskVersionPath, taskStopReason: taskSelection.taskStopReason } : {}),
-          lastFinalAcceptanceResultPath: baseSpec.protocolPlugins && finalAcceptance
-            ? String((finalAcceptance as Record<string, unknown>).protocolAuditResultPath)
-            : finalAcceptanceFeedbackPath,
-          lastRoundClosure,
-          lastGateFailureKind,
-          lastGateFailureSummary,
-          recovery: acceptanceInfrastructureFailure
-            ? {
-                action: "harvest_round_run",
-                roundNumber,
-                runID: runResult.runID,
-                reason: `Round ${roundID(roundNumber)} stopped at final acceptance because validator infrastructure failed. Resume only after the platform fix; reuse the completed inner run instead of starting a new learning round.`,
-                detectedAt: nowISO(),
-              }
-            : undefined,
-        }
+        const { taskSelection, nextStatus, acceptanceInfrastructureFailure, acceptanceDatasetFailure, state } = closed
+        restart = closed.restart
         await writeLongTaskCampaignState(campaignPaths, state)
 
         const stopped = await finishTaskRequestBudget({ spec: baseSpec, campaignID: input.campaignID, campaignPaths,
@@ -7027,8 +7126,10 @@ export async function resumeLongTaskCampaign(input: {
           })
         }
       } finally {
-        await cleanupRuntimeScopeWithRetry(roundRuntimeScope)
+        try { await cleanupRuntimeScopeWithRetry(roundRuntimeScope, Boolean(control)) }
+        finally { generation?.close() }
       }
+      if (restart && control) await activateTaskBranch(baseSpec, { root: campaignPaths.root, control })
     }
   } catch (error) {
     const stopped = await finishTaskRequestBudget({ spec: baseSpec, campaignID: input.campaignID, campaignPaths,
@@ -7036,8 +7137,8 @@ export async function resumeLongTaskCampaign(input: {
     if (stopped) return stopped
     const message = error instanceof Error ? error.message : String(error)
     const saved = baseSpec.taskAdaptation ? await readLongTaskCampaignState(campaignPaths) : initialState
-    const qualified = baseSpec.taskAdaptation ? chooseTaskVersion(baseSpec, await readTaskVersions(baseSpec, campaignPaths.root),
-      lastRoundNumber, campaignSpec.maxRounds) : undefined
+    const qualified = baseSpec.taskAdaptation ? await selectTaskVersion(baseSpec, { root: campaignPaths.root,
+      round: lastRoundNumber, maxRounds: campaignSpec.maxRounds, readonly: Boolean(baseSpec.taskAdaptationContext?.plan.exploration) }) : undefined
     const failureState: LongTaskCampaignState = {
       ...saved,
       currentRound: lastRoundNumber,
@@ -7074,4 +7175,7 @@ export async function resumeLongTaskCampaign(input: {
     state: finalState,
     roundsCompleted: campaignSpec.maxRounds,
   })
+  } finally {
+    control?.close()
+  }
 }

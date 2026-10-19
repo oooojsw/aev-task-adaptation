@@ -58,6 +58,8 @@ test("script execution uses its own window and rejects wrong backend or private 
   await item.run()
   item.protocol.executor!.id = "http-text-chat"
   await expect(item.run()).rejects.toThrow("backend mismatch")
+  item.protocol.executor!.id = "consolidation-direct-chat"
+  await expect(item.run()).rejects.toThrow("backend mismatch")
   item.protocol.executor!.id = "script-json-executor"
   item.plan.windows.find(window => window.role === "independent")!.reads.push("rubric")
   await expect(item.run()).rejects.toThrow("execution input scope mismatch")

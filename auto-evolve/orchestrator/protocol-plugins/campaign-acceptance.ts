@@ -15,9 +15,10 @@ import { protocolRepairDirective } from "./failure-routing"
 import { taskFromPack } from "./project-pack"
 import { attemptAccounting } from "./attempt-accounting"
 import type { BuiltinOptions } from "./builtins"
+import { regular } from "../task-adaptation/consolidation/publication-evidence"
 
 export async function campaignAcceptance(input: {
-  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets">
+  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets" | "requestGate">
   campaignRoot: string
   cwd?: string
   campaignID: string
@@ -27,19 +28,28 @@ export async function campaignAcceptance(input: {
   candidateRoot: string
   attemptRoot: string
   resultPath: string
+  taskBinding?: { planFingerprint: string; policyFingerprint: string }
+  recoverPublication?: boolean
+  publicationCapacityBytes?: number
 }, runtime?: Runtime) {
   // 先阻断历史结果覆盖，避免发出请求后才发现证据路径冲突。
   if (await pathExists(input.resultPath)) throw new Error("Campaign acceptance result already exists; inspect original evidence")
   await mkdir(path.dirname(input.resultPath), { recursive: true })
   // 永久占位防并发覆盖；中断后必须核查，不自动重发。
-  try { await mkdir(`${input.resultPath}.claim`) }
+  if (input.recoverPublication) {
+    // 出版恢复只使用已完成回执，缺任一证据绝不进入执行器。
+    for (const name of ["protocol.receipt.json", "protocol.completed.json", "publication_error.json"]) await regular(path.join(input.attemptRoot, name))
+    const failure = JSON.parse((await readFile(path.join(input.attemptRoot, "publication_error.json"), "utf8")).replace(/^\uFEFF/, ""))
+    const receipt = JSON.parse((await readFile(path.join(input.attemptRoot, "protocol.receipt.json"), "utf8")).replace(/^\uFEFF/, ""))
+    if (failure.receipt !== fingerprint(receipt)) throw new Error("Publication recovery receipt drift")
+  } else try { await mkdir(`${input.resultPath}.claim`) }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("Campaign acceptance result already claimed; inspect interrupted evidence")
     throw error
   }
   if (await pathExists(input.resultPath)) throw new Error("Campaign acceptance result already exists; inspect original evidence")
   const engine = runtime ?? await selectedRuntime(path.join(input.campaignRoot, "protocol-backends"), input.cwd, input.entry, undefined, input.budgets)
-  const receipt = await runEntry(input.campaignRoot, input.entry, input.candidateRoot, input.attemptRoot, engine)
+  const receipt = await runEntry(input.campaignRoot, input.entry, input.candidateRoot, input.attemptRoot, engine, { reuseCompleted: input.recoverPublication })
   const prepared = await prepareEntry(input.campaignRoot, input.entry, engine)
   if (!prepared) throw new Error("Frozen feedback protocol required")
   const receiptPath = path.join(input.attemptRoot, "protocol.receipt.json")
@@ -58,72 +68,40 @@ export async function campaignAcceptance(input: {
     passedCases: number
   } | undefined
 
-  if (productPath && await pathExists(productPath)) {
+  const selected = prepared.protocol.selection.protocol.phases[input.entry.phase]
+  const consolidation = selected?.executor?.id === "consolidation-direct-chat"
+  if (consolidation && productPath && receipt.product) {
     try {
-      const prodJson = JSON.parse((await readFile(productPath, "utf8")).replace(/^\uFEFF/, ""))
-      if (prodJson.schema === "aev.consolidation-eval.v1" && prodJson.runID) {
-        const directChatDir = path.join(input.campaignRoot, "protocol-backends", prodJson.runID, "direct-chat")
-        const summaryFile = path.join(directChatDir, "summary.json")
-        const snapshotFile = path.join(directChatDir, "config.snapshot.json")
-        if (await pathExists(summaryFile) && await pathExists(snapshotFile)) {
-          const summary = JSON.parse((await readFile(summaryFile, "utf8")).replace(/^\uFEFF/, ""))
-          const snapshot = JSON.parse((await readFile(snapshotFile, "utf8")).replace(/^\uFEFF/, ""))
-          const resultsMap = new Map((summary.results || []).map((r: any) => [r.caseID, r]))
-
-          let rawCases: any[] = []
-          if (snapshot.datasetBundlePath && await pathExists(snapshot.datasetBundlePath)) {
-            const { readDirectChatDatasetBundle } = await import("../direct-chat/dataset-bundler")
-            const datasetCases = await readDirectChatDatasetBundle(snapshot.datasetBundlePath)
-            rawCases = datasetCases.map(dc => {
-              const res = resultsMap.get(dc.caseID) as any
-              return {
-                caseID: dc.caseID,
-                prompt: dc.question?.text ?? "",
-                materials: (dc.materials || []).map((m: any) => ({
-                  id: m.id,
-                  name: m.title ?? m.id,
-                  content: m.content ?? "",
-                })),
-                modelResponse: res?.modelResponse ?? "",
-                score: res?.score ?? 0,
-                passed: Boolean(res?.passed),
-                diagnostics: res?.errorCategory ? [res.errorCategory] : [],
-                oracleAnswer: dc.privateOracle?.expectedAnswer,
-                validatorScript: dc.privateOracle?.scriptPath,
-              }
-            })
-          } else if (Array.isArray(summary.results)) {
-            rawCases = summary.results.map((r: any) => ({
-              caseID: r.caseID,
-              prompt: `Case ${r.caseID}`,
-              materials: [],
-              modelResponse: "",
-              score: r.score ?? 0,
-              passed: Boolean(r.passed),
-              diagnostics: r.errorCategory ? [r.errorCategory] : [],
-            }))
-          }
-
-          if (rawCases.length > 0) {
-            const { publishTrainingFeedbackResource } = await import("../task-adaptation/consolidation/feedback-publisher")
-            const published = await publishTrainingFeedbackResource({
-              targetDir: path.join(input.attemptRoot, "training-feedback"),
-              campaignID: input.campaignID,
-              round: input.roundNumber,
-              cases: rawCases,
-            })
-            caseFeedbackMeta = {
-              resourceID: published.logicalResource.resourceID,
-              manifestPath: published.manifestPath,
-              manifestSHA256: published.manifest.manifestSHA256,
-              totalCases: published.manifest.totalCases,
-              passedCases: published.manifest.passedCases,
-            }
-          }
-        }
+      const bytes = await readFile(productPath)
+      if (bytes.length !== receipt.product.length || createHash("sha256").update(bytes).digest("hex") !== receipt.product.sha256) {
+        throw new Error("Formal product digest mismatch")
       }
-    } catch {
-      // 容错保护：非 Direct Chat 任务或解析异常不阻断主 Acceptance 流程
+      const product = JSON.parse(bytes.toString("utf8"))
+      if (!receipt.checks.some(check => check.target === "product" && check.required && check.status === "passed") ||
+          receipt.checks.some(check => check.required && check.status !== "passed") ||
+          receipt.evidence.skill.length !== 1 || receipt.evidence.skill[0].sha256 !== product.candidate_sha256) {
+        throw new Error("Formal consolidation Checker did not verify this candidate")
+      }
+      const { loadVerifiedConsolidationEvidence } = await import("./consolidation")
+      const evidence = await loadVerifiedConsolidationEvidence(path.join(input.campaignRoot, "protocol-backends", "consolidation"),
+        product, selected!.executor!.settings)
+      const { publishTrainingFeedbackResource } = await import("../task-adaptation/consolidation/feedback-publisher")
+      const published = await publishTrainingFeedbackResource({ targetDir: path.join(input.attemptRoot, "training-feedback"),
+        campaignID: input.campaignID, round: input.roundNumber, cases: evidence.cases,
+        ...(input.publicationCapacityBytes !== undefined ? { maxTotalBytes: input.publicationCapacityBytes } : {}),
+        ...(input.recoverPublication && await pathExists(path.join(input.attemptRoot, "training-feedback", "publication.intent.json")) ? { recoverIncomplete: true } : {}),
+        expectedCaseIDs: evidence.cases.map(item => item.caseID), binding: { task: receipt.task, phase: receipt.phase,
+          protocolFingerprint: receipt.protocolFingerprint, receiptFingerprint: fingerprint(receipt),
+          candidateSHA256: product.candidate_sha256, datasetSHA256: product.dataset_sha256, modelID: product.model_id,
+          runID: product.runID, passID: path.basename(input.attemptRoot), ...input.taskBinding } })
+      caseFeedbackMeta = { resourceID: published.logicalResource.resourceID, manifestPath: published.manifestPath,
+        manifestSHA256: published.manifest.manifestSHA256, totalCases: published.manifest.totalCases, passedCases: published.manifest.passedCases }
+    } catch (error) {
+      // 发布故障保留正式回执，不伪造反馈或重新发送评测。
+      await writeJsonAtomic(path.join(input.attemptRoot, "publication_error.json"), {
+        schema: "aev.publication-error.v1", receipt: fingerprint(receipt),
+        message: error instanceof Error ? error.message : String(error) })
+      throw new Error(`publication_error: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -165,7 +143,6 @@ export async function campaignAcceptance(input: {
     blankAgentEvidenceReadPaths: [
       trainingPath,
       ...(productPath ? [productPath] : []),
-      ...(caseFeedbackMeta ? [caseFeedbackMeta.manifestPath] : []),
     ],
     blankAgentReadPaths: [] as string[],
     validatorPartitions: { surfaceValidatorIDs: receipt.checks.filter((item) =>
@@ -180,7 +157,7 @@ export async function campaignAcceptance(input: {
 }
 
 export async function verifyCompletedCampaignAcceptance(input: {
-  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets">
+  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets" | "requestGate">
   campaignRoot: string; cwd: string; campaignID: string; roundNumber: number;
   runID: string; entry: Entry; candidateRoot: string; resultPath: string;
 }) {
@@ -207,8 +184,16 @@ export async function verifyCompletedCampaignAcceptance(input: {
   if (receipt.status !== "passed" || result.protocolClaim !== receipt.claim) throw new Error("Completed Campaign acceptance verdict drift")
 }
 
+export async function readCompletedCampaignPass(input: Parameters<typeof verifyCompletedCampaignAcceptance>[0]) {
+  const result = JSON.parse((await readFile(input.resultPath, "utf8")).replace(/^\uFEFF/, "")) as Awaited<ReturnType<typeof campaignAcceptance>>
+  // 成功仍核对实际候选，历史拒绝只能复用原反馈。
+  if (!result.passed) return readCompletedRejectedCampaignPass(input)
+  await verifyCompletedCampaignAcceptance(input)
+  return result
+}
+
 export async function readCompletedRejectedCampaignPass(input: {
-  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets">
+  budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets" | "requestGate">
   campaignRoot: string; cwd: string; campaignID: string; roundNumber: number;
   runID: string; entry: Entry; resultPath: string;
 }) {

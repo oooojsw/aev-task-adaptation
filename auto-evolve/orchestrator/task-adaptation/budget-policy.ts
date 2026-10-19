@@ -2,7 +2,7 @@ import path from "node:path"
 import { mkdir, open, readFile } from "node:fs/promises"
 import { writeJsonAtomic } from "../atomic-write"
 import { canonical, fingerprint } from "../protocol-plugins/identity"
-import { validateBudgetTransport, type BudgetTransportConfig } from "./budget-transport"
+import { validateBudgetTransport, validateRequestGate, type BudgetTransportConfig } from "./budget-transport"
 import type { Plan } from "./plan"
 import type { BuiltinOptions } from "../protocol-plugins/builtins"
 
@@ -33,17 +33,19 @@ export function validateTaskBudgetPolicy(value: unknown): TaskBudgetPolicy {
   return structuredClone(cfg)
 }
 
-export function taskRequestBudget(value: TaskBudgetPolicy, stop: Plan["stop"], role: string, model: string): BudgetTransportConfig {
+export function taskRequestBudget(value: TaskBudgetPolicy, stop: Plan["stop"], role: string, model: string, requestGate?: string): BudgetTransportConfig {
   const cfg = validateTaskBudgetPolicy(value)
   const item = cfg.models.find(item => item.model === model)
   if (!item) throw new Error("Task model has no frozen request budget binding")
   const { model: _, ...wire } = item
   // 角色仅改变请求绑定，所有角色共用方案中的同一总额。
-  return validateBudgetTransport({ ...wire, schema: "aev.budget-transport.v1", role,
+  const gate = validateRequestGate(requestGate, true)
+  return validateBudgetTransport({ ...wire, schema: "aev.budget-transport.v1", role, ...(gate ? { gate } : {}),
     budget: { root: cfg.root, scope: cfg.scope, calls: stop.calls, tokens: stop.tokens } })
 }
 
-export function taskRuntimeBudgets(policy: TaskBudgetPolicy | undefined, stop: Plan["stop"]): Pick<BuiltinOptions, "httpBudgets" | "toolBudgets"> {
+export function taskRuntimeBudgets(policy: TaskBudgetPolicy | undefined, stop: Plan["stop"], requestGate?: string): Pick<BuiltinOptions, "httpBudgets" | "toolBudgets" | "requestGate"> {
+  const gate = validateRequestGate(requestGate, Boolean(policy))
   if (!policy) return {}
   const cfg = validateTaskBudgetPolicy(policy)
   const entries = (role: string) => Object.fromEntries(cfg.models.map(item => [item.model, taskRequestBudget(cfg, stop, role, item.model)]))
@@ -51,7 +53,7 @@ export function taskRuntimeBudgets(policy: TaskBudgetPolicy | undefined, stop: P
   const judging = entries("checker")
   const ceiling = Math.max(...cfg.models.map(item => item.maxInputTokens + item.maxOutputTokens))
   if (!Number.isSafeInteger(ceiling)) throw new Error("Task token ceiling overflow")
-  return { toolBudgets: { execution, judging }, httpBudgets: {
+  return { ...(gate ? { requestGate: gate } : {}), toolBudgets: { execution, judging }, httpBudgets: {
     execution: { config: Object.values(execution)[0].budget, tokenCeiling: ceiling, role: "independent" },
     judging: { config: Object.values(judging)[0].budget, tokenCeiling: ceiling, role: "checker" },
   } }

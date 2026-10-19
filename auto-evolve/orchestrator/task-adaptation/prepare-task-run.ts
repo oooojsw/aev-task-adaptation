@@ -1,5 +1,7 @@
 import path from "node:path"
-import { prepareTask, type IntakeInput } from "./intake"
+import { validatePlan } from "./plan"
+import { requireExplorationHost } from "./exploration/entry"
+import { prepareTask, readPresetPlan, type IntakeInput } from "./intake"
 import { prepareExecution, type ExecutionPreparation } from "./prepare-execution"
 import { builtins } from "../protocol-plugins/builtins"
 import { opencodeDriver } from "../protocol-plugins/opencode-driver"
@@ -30,6 +32,10 @@ export async function prepareTaskRun(input: TaskRunPreparation, dependencies?: {
   intake?: Parameters<typeof prepareTask>[1]
   createRuntime?: (input: TaskRunPreparation) => Promise<Runtime>
 }) {
+  // 受信预设先检查，不能等创建后端或付费理解任务之后才拒绝。
+  if (input.intake.mode === "manual_plan") {
+    requireExplorationHost(validatePlan(await readPresetPlan(input.intake.planPath)))
+  }
   // 本地必需条件先检查，避免已知缺依赖仍付费理解任务。
   const runtime = await (dependencies?.createRuntime ?? preparationRuntime)(input)
   // 手动轨道绝不生成 Intake 模型请求预算，也绝不调用 Intake 模型。

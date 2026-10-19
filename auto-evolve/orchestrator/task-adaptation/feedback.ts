@@ -7,10 +7,14 @@ import type { BoundPlan } from "./binding"
 import { resolveResource, verifyBinding } from "./binding"
 import { writeJsonAtomic } from "../atomic-write"
 import type { LogicalResource } from "../task-profile-access/unified-access"
+import { verifyPublication } from "./consolidation/publication-evidence"
+import { publicationResource } from "./consolidation/feedback-publisher"
+import { createHash } from "node:crypto"
+import { productEvidenceName } from "../protocol-plugins/runtime"
 
 export interface FeedbackReference { root: string; path: string; task: string; phase: Phase }
 
-export async function taskFeedback(bound: BoundPlan, input: FeedbackReference) {
+export async function taskFeedback(bound: BoundPlan, input: FeedbackReference, options?: { readonly?: boolean }) {
   await verifyBinding(bound)
   if (![input.root, input.path].every(file => typeof file === "string" && path.isAbsolute(file))) throw new Error("Absolute feedback identity required")
   const root = await realpath(input.root)
@@ -57,6 +61,8 @@ export async function taskFeedback(bound: BoundPlan, input: FeedbackReference) {
     if (canonical(saved) !== canonical(view)) throw new Error("Published task feedback drift")
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    // 只读核验不能借缺文件取得恢复写权限。
+    if (options?.readonly) throw new Error("Published task feedback missing during readonly verification")
     await writeJsonAtomic(target, view)
   }
 
@@ -66,29 +72,24 @@ export async function taskFeedback(bound: BoundPlan, input: FeedbackReference) {
     const trainingContent = JSON.parse((await readFile(trainingFile, "utf8")).replace(/^\uFEFF/, ""))
     if (trainingContent.caseFeedback?.manifestPath) {
       const manifestPath = path.resolve(trainingContent.caseFeedback.manifestPath)
-      const manifest = JSON.parse((await readFile(manifestPath, "utf8")).replace(/^\uFEFF/, ""))
-      const baseDir = path.dirname(manifestPath)
-      const casePaths = manifest.cases.map((c: any) => path.resolve(baseDir, c.path).replaceAll("\\", "/"))
-      feedbackResource = {
-        resourceID: manifest.resourceID,
-        kind: "training_feedback",
-        version: manifest.version,
-        sha256: manifest.manifestSHA256,
-        sensitivity: "training",
-        access: "read_only",
-        boundaryRoots: [baseDir.replaceAll("\\", "/")],
-        paths: [path.resolve(manifestPath).replaceAll("\\", "/"), ...casePaths],
-        metadata: {
-          campaignID: manifest.campaignID,
-          round: manifest.round,
-          totalCases: manifest.totalCases,
-          passedCases: manifest.passedCases,
-          manifestPath: path.resolve(manifestPath).replaceAll("\\", "/"),
-        },
-      }
+      if (path.resolve(manifestPath) !== path.join(dir, "training-feedback", "manifest.json")) throw new Error("Feedback publication location drift")
+      const manifest = await verifyPublication(manifestPath, trainingContent.caseFeedback.manifestSHA256)
+      if (manifest.campaignID !== result.campaignID || manifest.round !== result.roundNumber ||
+          manifest.binding?.task !== receipt.task || manifest.binding?.phase !== receipt.phase ||
+          manifest.binding?.receiptFingerprint !== fingerprint(receipt) || manifest.binding?.protocolFingerprint !== hash ||
+          manifest.binding?.candidateSHA256 !== receipt.evidence.skill[0]?.sha256) throw new Error("Feedback publication receipt drift")
+      if (manifest.binding.planFingerprint && manifest.binding.planFingerprint !== bound.fingerprint) throw new Error("Feedback task plan drift")
+      if (!receipt.product) throw new Error("Feedback source product missing")
+      const bytes = await readFile(await resolveResource(root, path.relative(root, path.join(dir, productEvidenceName(receipt.product.kind))).replaceAll("\\", "/")))
+      const product = JSON.parse(bytes.toString("utf8").replace(/^\uFEFF/, ""))
+      if (manifest.binding.datasetSHA256 !== product.dataset_sha256 || manifest.binding.modelID !== product.model_id ||
+          manifest.binding.runID !== product.runID || manifest.binding.passID !== path.basename(dir) ||
+          createHash("sha256").update(bytes).digest("hex") !== receipt.product.sha256) throw new Error("Feedback source evaluation drift")
+      feedbackResource = publicationResource(manifestPath, manifest)
     }
-  } catch {
-    // 容错处理
+  } catch (error) {
+    // 旧任务可无报告；已声明报告损坏不能静默降级。
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || await access(path.join(dir, "protocol.training-feedback.json")).then(() => true, () => false)) throw error
   }
 
   return { path: target.replaceAll("\\", "/"), sha256: fingerprint(view), view, feedbackResource }

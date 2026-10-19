@@ -8,6 +8,12 @@ import { writeJsonAtomic } from "../atomic-write"
 import type { Runtime } from "./runtime"
 import type { CoordinatorState } from "../multi-instance/contract"
 import type { ProtocolMergeConfig } from "./merge-stage"
+import { loadLongTaskSpec } from "../long-task/spec"
+import { restoreTaskContext, taskBudgetOptions } from "../task-adaptation/context"
+import { readTaskVersions, selectTaskVersion } from "../task-adaptation/selection"
+import { exportTaskDelivery } from "../task-adaptation/delivery"
+import { readTaskExplorationDecision } from "../task-adaptation/exploration/lifecycle"
+import { authorContext } from "./author-context"
 
 async function read(file: string) { return JSON.parse((await readFile(file, "utf8")).replace(/^\uFEFF/, "")) }
 
@@ -26,16 +32,41 @@ export async function harvest(input: { cwd: string; campaignRoot: string; taskID
   const snapshot = await read(path.join(root, "protocol-plugins", "entry.snapshot.json"))
   const entry = validateEntry(snapshot.entry)
   if (entry.taskID !== input.taskID || entry.phase !== "source") throw new Error("Source harvest entry mismatch")
-  const runtime = injected ?? await selectedRuntime(path.join(root, "protocol-backends"), input.cwd, entry)
+  const state = await read(path.join(root, "campaign.json"))
+  let selected: { result: string; candidate: string; round: number } | undefined
+  const saved = await read(path.join(root, "task-adaptation/task-plan.snapshot.json")).catch(error => {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    return undefined
+  })
+  // 收集也沿用原预算身份，否则后端指纹会与正式receipt不一致。
+  const budgets = saved?.plan?.exploration ? await taskBudgetOptions((await loadLongTaskSpec(state.baseSpecPath)).spec) : {}
+  const runtime = injected ?? await selectedRuntime(path.join(root, "protocol-backends"), input.cwd, entry, undefined, budgets)
   const prepared = await prepareEntry(root, entry, runtime)
   if (!prepared) throw new Error("Frozen source entry required")
-  const state = await read(path.join(root, "campaign.json"))
-  if (state.status !== "verified_success" || state.lastFinalAcceptancePassed !== true) throw new Error("Source campaign not accepted")
-  const resultPath = await inside(state.lastFinalAcceptanceResultPath)
+  if (saved?.plan?.exploration) {
+    if (state.status !== "verified_success" || !state.selectedTaskVersionPath) throw new Error("Selected source delivery missing")
+    const spec = (await loadLongTaskSpec(state.baseSpecPath)).spec
+    spec.taskAdaptationContext = await restoreTaskContext(spec, saved)
+    // 停止决定绑定原协议，磁盘spec不包含运行时作者上下文。
+    spec.protocolAuthorContext = authorContext(entry, prepared.protocol, prepared.project)
+    const choice = await selectTaskVersion(spec, { root, round: state.currentRound, maxRounds: state.maxRounds, readonly: true })
+    const decision = await readTaskExplorationDecision(spec, { root, round: state.currentRound })
+    if (!choice.passed || choice.selectedTaskVersionPath !== state.selectedTaskVersionPath ||
+        decision.action !== "finish" || decision.reason !== state.taskStopReason) throw new Error("Selected source state drift")
+    const version = (await readTaskVersions(spec, root)).find(item => item.path === state.selectedTaskVersionPath)
+    if (!version || !version.record.feedback.endsWith(".training.json")) throw new Error("Selected source version missing")
+    const dir = `${input.targetRoot}.verified-delivery`
+    await exportTaskDelivery(spec, { root, selectedTaskVersionPath: version.path, dir })
+    // 下游只读选定合格版本，末轮拒绝不能让它退回current。
+    selected = { result: version.record.feedback.slice(0, -".training.json".length),
+      candidate: path.join(dir, "files"), round: version.record.round }
+  }
+  if (state.status !== "verified_success" || !selected && state.lastFinalAcceptancePassed !== true) throw new Error("Source campaign not accepted")
+  const resultPath = await inside(selected?.result ?? state.lastFinalAcceptanceResultPath)
   const result = await read(resultPath)
   if (result.passed !== true || result.acceptanceMode !== "protocol_plugins" || result.campaignID !== state.id ||
-      result.roundNumber !== state.currentRound || result.runID !== state.lastRunID) throw new Error("Actual protocol acceptance identity required")
-  const candidateRoot = await inside(result.validationPackageRoot)
+      result.roundNumber !== (selected?.round ?? state.currentRound) || !selected && result.runID !== state.lastRunID) throw new Error("Actual protocol acceptance identity required")
+  const candidateRoot = selected?.candidate ?? await inside(result.validationPackageRoot)
   const receiptPath = await inside(result.protocolReceiptPath)
   const receipt = await read(receiptPath)
   const candidate = await readCandidate(candidateRoot, prepared.project.pack.skill)

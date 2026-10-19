@@ -5,6 +5,8 @@
 
 ## 先读顺序
 
+首先阅读 [当前系统定位与总体流程](README-SYSTEM.md)和[系统架构探索树](进度报告/系统架构探索树.md)，了解总体定位、设计决策、实现证据和待办。50题合并属于其中一种任务适配。随后按需要阅读：
+
 1. `README-OPERATIONS.md`：继续训练、停止、断点续传、持续监控、看板与排错。
 2. `README-BLANK-EVAL.md`：空白 agent 闭卷验收、沙盒、private answers、产品验证器。
 3. `README-ARCHITECTURE.md`：系统架构、角色分工、验证层次与核心哲学。

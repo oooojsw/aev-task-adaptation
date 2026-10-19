@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, writeFile, stat } from "node:fs/promises"
 import { randomUUID, createHash } from "node:crypto"
 import path from "node:path"
 import { cachedExecution, cachedScoring } from "./cache"
@@ -25,6 +25,92 @@ async function directory() {
 }
 const answer: Awaited<ReturnType<Execute>> = { status: "completed", product: { kind: "text", bytes: Buffer.from("answer") },
   usage: { inputTokens: 10, outputTokens: 2 } }
+
+test("stage-specific failed claims do not poison later stages; completed content remains reusable", async () => {
+  const root = await directory()
+  let sent = 0
+  const old = cachedExecution(root, descriptor, async () => ({ status: "execution_error", message: "stale gate" }), undefined, "a".repeat(64))
+  const next = cachedExecution(root, descriptor, async () => { sent++; return answer }, undefined, "b".repeat(64))
+  expect((await old(request())).status).toBe("execution_error")
+  await expect(old(request())).rejects.toThrow("pending/incomplete")
+  expect((await next(request())).status).toBe("completed")
+  const last = cachedExecution(root, descriptor, async () => { throw new Error("completed content must not resend") }, undefined, "c".repeat(64))
+  expect((await last(request())).reused).toBe(true)
+  expect(sent).toBe(1)
+
+  const rejected = cachedScoring(root, descriptor, async () => ({ status: "scoring_error", message: "stale gate" }), undefined, "a".repeat(64))
+  const scoringNext = cachedScoring(root, descriptor, async () => { sent++; return { status: "rejected", message: "normal product rejection" } }, undefined, "b".repeat(64))
+  expect((await rejected(scoring())).status).toBe("scoring_error")
+  await expect(rejected(scoring())).rejects.toThrow("pending/incomplete")
+  expect((await scoringNext(scoring())).status).toBe("rejected")
+  const scoringLast = cachedScoring(root, descriptor, async () => { throw new Error("must reuse") }, undefined, "c".repeat(64))
+  expect((await scoringLast(scoring())).reused).toBe(true)
+  expect(sent).toBe(2)
+})
+
+test("late cross-stage success cannot overwrite first published answer or verdict", async () => {
+  for (const kind of ["execution", "scoring"] as const) {
+    const root = await directory()
+    let entered!: () => void, release!: () => void, enteredThird!: () => void, releaseThird!: () => void
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const held = new Promise<void>(resolve => { release = resolve })
+    const thirdStarted = new Promise<void>(resolve => { enteredThird = resolve })
+    const thirdHeld = new Promise<void>(resolve => { releaseThird = resolve })
+    const pending = kind === "execution"
+      ? cachedExecution(root, descriptor, async () => { entered(); await held; return answer }, undefined, "a".repeat(64))(request())
+      : cachedScoring(root, descriptor, async () => { entered(); await held; return { status: "rejected", message: "late rejection" } }, undefined, "a".repeat(64))(scoring())
+    await started
+    const third = kind === "execution"
+      ? cachedExecution(root, descriptor, async () => { enteredThird(); await thirdHeld; return { status: "completed", product: { kind: "text", bytes: Buffer.from("new answer") } } }, undefined, "c".repeat(64))(request())
+      : cachedScoring(root, descriptor, async () => { enteredThird(); await thirdHeld; return { status: "passed", message: "first acceptance" } }, undefined, "c".repeat(64))(scoring())
+    await thirdStarted
+    if (kind === "execution") {
+      await cachedExecution(root, descriptor, async () => ({ status: "completed", product: { kind: "text", bytes: Buffer.from("new answer") } }), undefined, "b".repeat(64))(request())
+    } else {
+      await cachedScoring(root, descriptor, async () => ({ status: "passed", message: "first acceptance" }), undefined, "b".repeat(64))(scoring())
+    }
+    const contentRoot = path.join(root, kind, (await readdir(path.join(root, kind)))[0])
+    const file = path.join(contentRoot, "completed.json")
+    const bytes = await readFile(file), before = await stat(file)
+    release()
+    await expect(pending).rejects.toThrow("Conflicting plugin cache completion")
+    releaseThird()
+    await expect(third).rejects.toThrow("Conflicting plugin cache completion")
+    expect(await readFile(file)).toEqual(bytes)
+    expect((await stat(file)).mtimeMs).toBe(before.mtimeMs)
+    expect(JSON.parse(bytes.toString()).attempt).toBe("b".repeat(64))
+    for (const gate of ["a", "b"]) {
+      expect(JSON.parse(await readFile(path.join(contentRoot, "attempts", gate.repeat(64), "completed.json"), "utf8")).attempt).toBe(gate.repeat(64))
+    }
+    for (const gate of ["a", "b", "c"]) {
+      const retry = kind === "execution"
+        ? cachedExecution(root, descriptor, async () => { throw new Error("must not resend") }, undefined, gate.repeat(64))(request())
+        : cachedScoring(root, descriptor, async () => { throw new Error("must not rescore") }, undefined, gate.repeat(64))(scoring())
+      await expect(retry).rejects.toThrow("Conflicting plugin cache completion")
+    }
+    expect(await readFile(file)).toEqual(bytes)
+    expect((await stat(file)).mtimeMs).toBe(before.mtimeMs)
+  }
+})
+
+test("unpublished conflicting attempt completion blocks every gate after interrupted publication", async () => {
+  const root = await directory()
+  await cachedExecution(root, descriptor, async () => answer, undefined, "b".repeat(64))(request())
+  const content = path.join(root, "execution", (await readdir(path.join(root, "execution")))[0])
+  const sharedFile = path.join(content, "completed.json")
+  const bytes = await readFile(sharedFile)
+  const original = JSON.parse(bytes.toString())
+  const draft = path.join(content, "attempts", "a".repeat(64))
+  await mkdir(draft)
+  await writeFile(path.join(draft, "started.claim"), "")
+  const body = { status: "completed", kind: "text", base64: Buffer.from("conflicting answer").toString("base64") }
+  const { fingerprint } = await import("./identity")
+  await writeFile(path.join(draft, "completed.json"), JSON.stringify({ ...original, attempt: "a".repeat(64), body, bodyFingerprint: fingerprint(body) }))
+  for (const gate of ["a", "b", "c"]) {
+    await expect(cachedExecution(root, descriptor, async () => { throw new Error("must not resend") }, undefined, gate.repeat(64))(request())).rejects.toThrow("Conflicting plugin cache completion")
+  }
+  expect(await readFile(sharedFile)).toEqual(bytes)
+})
 
 test("same execution reuses actual answer and marks reuse", async () => {
   let calls = 0

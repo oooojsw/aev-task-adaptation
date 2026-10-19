@@ -22,11 +22,13 @@ export const AevReadResourceTool = Tool.define("aev_read_resource", {
     const { readResourceFromEnvironment } = await import(
       "../../../../auto-evolve/orchestrator/task-adaptation/consolidation/scoped-reader"
     )
-    const result = await readResourceFromEnvironment(input, process.env)
+    const result = await readResourceFromEnvironment(input, process.env, ctx.abort)
     return {
       title: `Declared resource chunk [${input.caseID}]`,
       output: JSON.stringify(result),
       metadata: {
+        // 工具自行有界分页，禁止框架再次截断并丢失cursor。
+        truncated: false,
         caseID: result.caseID,
         offset: result.offset,
         returnedBytes: result.returnedBytes,

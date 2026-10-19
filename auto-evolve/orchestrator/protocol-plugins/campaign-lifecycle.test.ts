@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdir, readFile, writeFile, readdir, rename, rm } from "node:fs/promises"
+import { mkdir, readFile, writeFile, readdir, rename, rm, cp } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -512,6 +512,18 @@ test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` :
       if (budget === "qualified") {
         expect(result.delivery).toBeDefined()
         expect(resumed.delivery.reused).toBe(true)
+        // 旧布局可复用，但损坏旧交付不能被新目录掩盖。
+        const legacy = path.join(unifiedInput.execution.dir, "task-run/delivery")
+        await cp(path.dirname(result.delivery.path), legacy, { recursive: true })
+        const compatible = await actual.runTask(unifiedInput, unifiedDependencies)
+        expect(compatible.delivery.path).toBe(path.join(legacy, "delivery.json"))
+        expect(compatible.delivery.reused).toBe(true)
+        expect(calls).toHaveLength(10)
+        const manifest = await readFile(path.join(legacy, "delivery.json"), "utf8")
+        await writeFile(path.join(legacy, "delivery.json"), "null")
+        await expect(actual.runTask(unifiedInput, unifiedDependencies)).rejects.toThrow()
+        expect(calls).toHaveLength(10)
+        await writeFile(path.join(legacy, "delivery.json"), manifest)
         const saved = JSON.parse(await readFile(result.selectedTaskVersionPath, "utf8"))
         const file = path.join(path.dirname(result.selectedTaskVersionPath), saved.files[0].file)
         await writeFile(file, "tampered delivery")

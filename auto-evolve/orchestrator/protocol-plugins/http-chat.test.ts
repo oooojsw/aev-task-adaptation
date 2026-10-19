@@ -5,7 +5,8 @@ import { httpChat } from "./http-chat"
 import type { Settings } from "./contract"
 import type { Artifact, PublicInputs } from "./runtime"
 import { summarizeResources } from "./resource-summary"
-import { inspectBudget } from "../task-adaptation/request-budget"
+import { inspectBudget, openRequestStage } from "../task-adaptation/request-budget"
+import type { Admission } from "../task-adaptation/exploration/admission"
 
 function settings(): Settings {
   return { dialect: "openai_chat", url: "http://127.0.0.1:1/v1/chat/completions", allowedOrigins: ["http://127.0.0.1:1"],
@@ -22,6 +23,34 @@ function request(): PublicInputs & { settings: Settings } {
 const root = () => path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
 const reply = () => ({ model: "fixture-model", choices: [{ finish_reason: "stop", message: { content: "42" } }],
   usage: { prompt_tokens: 10, completion_tokens: 2 } })
+
+test("dynamic gates preserve frozen HTTP identity and block stale dispatch", async () => {
+  const config = { root: root(), scope: "staged-task", calls: 8, tokens: 4000 }
+  const policy: Admission = { schema: "aev.exploration-admission.v1", policy: "a".repeat(64),
+    round: 1, pass: 1, generation: 0, stage: "author", roles: ["independent"],
+    calls: 2, tokens: 1000, protectedCalls: 2, protectedTokens: 1000 }
+  const author = await openRequestStage(config, policy, null)
+  let sent = 0
+  const common = { evidenceRoot: root(), budget: { config, role: "independent", tokenCeiling: 300 },
+    credential: () => "synthetic-fixture", transport: async () => { sent++; return Response.json(reply()) } }
+  const old = await httpChat({ ...common, requestGate: author.id })
+  expect((await old.execute(request())).status).toBe("completed")
+  const acceptance = await openRequestStage(config, { ...policy, stage: "acceptance", protectedCalls: 0,
+    protectedTokens: 0 }, author.id)
+  const next = await httpChat({ ...common, requestGate: acceptance.id })
+  expect(next.descriptor.implementation).toBe(old.descriptor.implementation)
+  const changed = request()
+  changed.materials[1] = artifact("user", "New public task")
+  expect((await old.execute(changed)).status).toBe("execution_error")
+  expect(sent).toBe(1)
+  expect((await next.execute(request())).status).toBe("completed")
+  expect(sent).toBe(2)
+  expect(await inspectBudget(config)).toMatchObject({ admittedAttempts: 2, reportedTokens: 24 })
+})
+
+test("a gate without a bounded HTTP transport is rejected", async () => {
+  await expect(httpChat({ evidenceRoot: root(), requestGate: "a".repeat(64) })).rejects.toThrow("bounded transport")
+})
 
 test("HTTP adapter sends one request without NBA/OpenCode assumptions", async () => {
   let calls = 0

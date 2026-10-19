@@ -54,7 +54,13 @@ export async function verifyProtocolScopes(plan: Readonly<Plan>, root: string, p
     const expected = await split(window.reads)
     if (expected.private.length || !same(protocol.executionInputs?.skill ?? entries, expected.skill) ||
         !same(protocol.executionInputs?.materials ?? materials, expected.materials)) throw new Error("Task execution input scope mismatch")
-    const script = protocol.executor?.id === "script-json-executor"
+    // 合并后端有固定表面检查与产物判分，不冒充任意脚本执行器。
+    const consolidation = protocol.executor?.id === "consolidation-direct-chat" && plan.deliverable.kind === "skill" &&
+      entries.length === 1 && protocol.checks.length === 2 &&
+      ["skill", "product"].every(target => protocol.checks.some(check => check.id === "consolidation-checker" &&
+        check.target === target && check.required && check.mechanism === "script"))
+    if (protocol.executor?.id === "consolidation-direct-chat" && !consolidation) throw new Error("Task consolidation backend mismatch")
+    const script = protocol.executor?.id === "script-json-executor" || consolidation
     if (script !== (plan.acceptance.execution === "script")) throw new Error("Task execution backend mismatch")
   }
 }

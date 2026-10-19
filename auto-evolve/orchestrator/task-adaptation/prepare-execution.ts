@@ -11,6 +11,8 @@ import { validateTraining, type TrainingConfig } from "../protocol-plugins/train
 import { loadPack } from "../protocol-plugins/project-pack"
 import { bindPlan, verifyBinding, resolveResource } from "./binding"
 import { validatePlan, type Plan } from "./plan"
+import { requireExplorationHost } from "./exploration/entry"
+import { preflightExploration } from "./exploration/preflight"
 import { verifyProtocolScopes } from "./protocol-scopes"
 import { validateTaskBudgetPolicy, type TaskBudgetPolicy } from "./budget-policy"
 
@@ -34,6 +36,7 @@ const json = (bytes: Buffer) => JSON.parse(bytes.toString("utf8").replace(/^\uFE
 
 export async function prepareExecution(input: ExecutionPreparation, registry: Registry) {
   const plan = validatePlan(input.plan)
+  requireExplorationHost(plan)
   if (input.requestBudget) validateTaskBudgetPolicy(input.requestBudget)
   if (![input.root, input.dir].every(file => typeof file === "string" && path.isAbsolute(file)) ||
       !Number.isSafeInteger(input.maxBundleBytes) || input.maxBundleBytes < 1) throw new Error("Explicit bounded execution preparation required")
@@ -48,6 +51,7 @@ export async function prepareExecution(input: ExecutionPreparation, registry: Re
       input.checkers.some(item => !plan.acceptance.checks.some(check => check.id === item.name))) throw new Error("Unexpected or duplicate checker binding")
   if (plan.acceptance.execution === "none" && input.executor) throw new Error("Content-only task cannot add execution")
   const training = validateTraining(input.training)
+  await preflightExploration(plan, { ...input, training })
   for (const check of plan.acceptance.checks) {
     if (check.mechanism === "active_judge" && input.checkers.find(item => item.name === check.id)!.binding.id !== "active-tool-judge") {
       throw new Error("Active source check requires active-tool-judge")

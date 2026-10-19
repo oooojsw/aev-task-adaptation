@@ -24,6 +24,7 @@ test("actual Campaign request builder routes worker/lead/reviewer/diagnostician 
     expect(begin).toBeGreaterThan(-1)
     expect(end).toBeGreaterThan(begin)
     const rewritten = `
+      import path from "node:path";
       import { trainingExecution, trainingRuntimeBudget } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dir, "training.ts")).href)};
       import { runProtocolTrainingTask } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dir, "training-invocation.ts")).href)};
       import { taskInvocation } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dir, "../task-adaptation/context.ts")).href)};

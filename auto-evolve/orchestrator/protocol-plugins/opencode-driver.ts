@@ -66,7 +66,7 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     const localSearch = await readFile(fileURLToPath(new URL("../task-adaptation/local-search.ts", import.meta.url)))
     const recompute = await readFile(fileURLToPath(new URL("../task-adaptation/recompute.ts", import.meta.url)))
     // 进程桥接也会改变实际执行，须纳入恢复身份，不能只冻模型源码。
-    const processHelpers = await Promise.all(["../managed-process.ts", "../windows-no-console-process.ts", "../windows-no-console-wrapper.py"].map(async file => ({
+    const processHelpers = await Promise.all(["../managed-process.ts", "../opencode-runtime-budget.ts", "../windows-no-console-process.ts", "../windows-no-console-wrapper.py"].map(async file => ({
       file, sha256: createHash("sha256").update(await readFile(fileURLToPath(new URL(file, import.meta.url)))).digest("hex"),
     })))
     const key = fingerprint({ cwd, profile, files: files.sort((a, b) => a.path.localeCompare(b.path)),

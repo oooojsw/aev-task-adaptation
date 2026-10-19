@@ -5,6 +5,9 @@ import { modelJudge } from "./model-judge"
 import { cachedScoring } from "./cache"
 import { builtins } from "./builtins"
 import type { Artifact, Evaluate } from "./runtime"
+import { readdir, readFile, stat } from "node:fs/promises"
+import { openRequestStage } from "../task-adaptation/request-budget"
+import type { Admission } from "../task-adaptation/exploration/admission"
 
 const root = () => path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
 function artifact(id: string, text: string): Artifact {
@@ -23,6 +26,29 @@ function input(): Parameters<Evaluate>[0] {
 }
 const response = (content: string, finish = "stop") => new Response(JSON.stringify({ model: "independent-judge",
   choices: [{ finish_reason: finish, message: { content } }], usage: { prompt_tokens: 10, completion_tokens: 2 } }))
+
+test("judge verdict evidence is distinct per dynamic gate and preserves prior bytes", async () => {
+  const config = { root: root(), scope: "judge-stages", calls: 4, tokens: 2000 }
+  const policy: Admission = { schema: "aev.exploration-admission.v1", policy: "a".repeat(64),
+    round: 1, pass: 1, generation: 0, stage: "author", roles: ["checker"], calls: 1, tokens: 500,
+    protectedCalls: 1, protectedTokens: 500 }
+  const gate = await openRequestStage(config, policy, null)
+  const evidenceRoot = root()
+  const options = { evidenceRoot, budget: { config, role: "checker", tokenCeiling: 300 },
+    credential: () => "fixture", transport: async () => response('{"passed":true,"summary":"ok"}') }
+  const first = await modelJudge({ ...options, requestGate: gate.id })
+  expect((await first.evaluate(input())).status).toBe("passed")
+  const dir = path.join(evidenceRoot, "verdicts")
+  const file = path.join(dir, (await readdir(dir))[0])
+  const bytes = await readFile(file), before = await stat(file)
+  const nextGate = await openRequestStage(config, { ...policy, stage: "acceptance", protectedCalls: 0, protectedTokens: 0 }, gate.id)
+  const second = await modelJudge({ ...options, requestGate: nextGate.id })
+  expect(second.descriptor.implementation).toBe(first.descriptor.implementation)
+  expect((await second.evaluate(input())).status).toBe("passed")
+  expect(await readdir(dir)).toHaveLength(2)
+  expect(await readFile(file)).toEqual(bytes)
+  expect((await stat(file)).mtimeMs).toBe(before.mtimeMs)
+})
 
 test("actual built-in descriptors assemble without serializing validation functions", async () => {
   const runtime = await builtins(root())

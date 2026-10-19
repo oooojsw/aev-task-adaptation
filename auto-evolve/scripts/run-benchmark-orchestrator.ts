@@ -16,6 +16,7 @@ import {
 import { runCoordinatorPhase3Validate } from "../orchestrator/multi-instance/validator"
 import { loadPipeline, freezePipeline, type PipelineConfig } from "../orchestrator/protocol-plugins/pipeline-config"
 import { harvest } from "../orchestrator/protocol-plugins/harvest"
+import { requireBenchmarkCampaignExploration } from "../orchestrator/task-adaptation/exploration/benchmark-entry"
 import {
   mergeAcceptanceRunsReplay,
   mergeAcceptanceUsesStrictGate,
@@ -2822,11 +2823,12 @@ export async function runTaskPackBenchmark(config: BenchmarkConfig) {
   if (config.protocolRun && config.repairAttempts > 0 && !config.protocolRun.repairAuthor) {
     throw new Error("Explicit protocol repair author required, or disable repair attempts")
   }
-  await freezePipeline(config.outDir, config.protocolRun)
   const trainIDsAll = config.taskIDs ?? (await readIDs(config.trainSplit))
   const testIDsAll = config.testTaskIDs ?? (config.testSplit && existsSync(config.testSplit) ? await readIDs(config.testSplit) : [])
   const trainIDs = config.trainLimit ? trainIDsAll.slice(0, config.trainLimit) : trainIDsAll
   const testIDs = config.testLimit ? testIDsAll.slice(0, config.testLimit) : testIDsAll
+  for (const id of trainIDs) await requireBenchmarkCampaignExploration(campaignSpecPath(config.taskPackRoot, id), baseSpecPath(config.taskPackRoot, id), Boolean(config.protocolRun))
+  await freezePipeline(config.outDir, config.protocolRun)
 
   const stateFile = path.join(config.outDir, "orchestrator-state.json")
   const scorecardFile = path.join(config.outDir, "scorecard.md")

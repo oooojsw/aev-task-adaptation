@@ -1,4 +1,4 @@
-﻿import path from "node:path"
+import path from "node:path"
 import process from "node:process"
 import os from "node:os"
 import { randomUUID } from "node:crypto"
@@ -30,72 +30,10 @@ import {
   type TaskArtifactStatus,
 } from "./task-artifacts"
 import { createTaskDescriptor } from "./task-model"
+import { activeCallbacks, readerRuntimeBudget } from "./opencode-runtime-budget"
+import type { OpencodeRuntimeBudget } from "./opencode-runtime-budget"
+export type { OpencodeRuntimeBudget, OpencodeRuntimeBudgetProfile } from "./opencode-runtime-budget"
 
-export type OpencodeRuntimeBudgetProfile = "short" | "medium" | "long" | "unbounded-with-watchdog"
-
-export type OpencodeRuntimeBudget = {
-  profile?: OpencodeRuntimeBudgetProfile
-  softDeadlineMs?: number
-  hardTimeoutMs?: number
-  silentTimeoutMs?: number
-  silentTimeoutAfterActivityMs?: number
-}
-
-const RUNTIME_BUDGET_PROFILES: Record<OpencodeRuntimeBudgetProfile, Required<OpencodeRuntimeBudget>> = {
-  short: {
-    profile: "short",
-    softDeadlineMs: 30 * 60 * 1000,
-    hardTimeoutMs: 60 * 60 * 1000,
-    silentTimeoutMs: 15 * 60 * 1000,
-    silentTimeoutAfterActivityMs: 60 * 60 * 1000,
-  },
-  medium: {
-    profile: "medium",
-    softDeadlineMs: 90 * 60 * 1000,
-    hardTimeoutMs: 2 * 60 * 60 * 1000,
-    silentTimeoutMs: 20 * 60 * 1000,
-    silentTimeoutAfterActivityMs: 75 * 60 * 1000,
-  },
-  long: {
-    profile: "long",
-    softDeadlineMs: 2 * 60 * 60 * 1000,
-    hardTimeoutMs: 3 * 60 * 60 * 1000,
-    silentTimeoutMs: 30 * 60 * 1000,
-    silentTimeoutAfterActivityMs: 90 * 60 * 1000,
-  },
-  "unbounded-with-watchdog": {
-    profile: "unbounded-with-watchdog",
-    softDeadlineMs: 2 * 60 * 60 * 1000,
-    hardTimeoutMs: 12 * 60 * 60 * 1000,
-    silentTimeoutMs: 30 * 60 * 1000,
-    silentTimeoutAfterActivityMs: 2 * 60 * 60 * 1000,
-  },
-}
-
-function numberEnv(name: string, fallback: number) {
-  const value = Number.parseInt(process.env[name] ?? "", 10)
-  return Number.isFinite(value) && value > 0 ? value : fallback
-}
-
-function defaultRuntimeBudgetProfile(): OpencodeRuntimeBudgetProfile {
-  const raw = process.env.AUTO_EVOLVE_OPENCODE_RUNTIME_PROFILE
-  if (raw === "short" || raw === "medium" || raw === "long" || raw === "unbounded-with-watchdog") return raw
-  return "long"
-}
-
-function resolveRuntimeBudget(input?: OpencodeRuntimeBudget): Required<OpencodeRuntimeBudget> {
-  const profile = input?.profile ?? defaultRuntimeBudgetProfile()
-  const base = RUNTIME_BUDGET_PROFILES[profile]
-  return {
-    profile,
-    softDeadlineMs: input?.softDeadlineMs ?? numberEnv("AUTO_EVOLVE_OPENCODE_SOFT_DEADLINE_MS", base.softDeadlineMs),
-    hardTimeoutMs: input?.hardTimeoutMs ?? numberEnv("AUTO_EVOLVE_OPENCODE_HARD_TIMEOUT_MS", base.hardTimeoutMs),
-    silentTimeoutMs: input?.silentTimeoutMs ?? numberEnv("AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_MS", base.silentTimeoutMs),
-    silentTimeoutAfterActivityMs:
-      input?.silentTimeoutAfterActivityMs ??
-      numberEnv("AUTO_EVOLVE_OPENCODE_SILENT_TIMEOUT_AFTER_ACTIVITY_MS", base.silentTimeoutAfterActivityMs),
-  }
-}
 const OPENCODE_PROMPT_INLINE_TEXT_FILE_MAX_BYTES = 256 * 1024
 const OPENCODE_PROMPT_INLINE_TEXT_EXTENSIONS = new Set([".md", ".txt", ".json", ".jsonl", ".yaml", ".yml"])
 const OPENCODE_PROMPT_STDIN_THRESHOLD_CHARS = 500
@@ -152,6 +90,8 @@ export interface OpencodeTaskInput {
   localSearchEvidenceRoot?: string
   recompute?: import("./task-adaptation/recompute").RecomputeScope
   recomputeEvidenceRoot?: string
+  resourceReaderGrant?: import("./task-adaptation/consolidation/scoped-reader").ResourceReaderGrant
+  resourceReaderEvidenceRoot?: string
   requestBudget?: BudgetTransportConfig
   infrastructureAttempts?: number
   /** Repository root used to find dependencies, runtime config, and local OpenCode binary. */
@@ -182,8 +122,8 @@ export interface OpencodeTaskInput {
   isolateHostRuntime?: boolean
   /** Disable only for the dedicated concurrency probe, which writes its own authoritative state. */
   recordAdaptiveConcurrency?: boolean
-  onSpawn?: () => Promise<void> | void
-  onPulse?: () => Promise<void> | void
+  onSpawn?: (signal?: AbortSignal) => Promise<void> | void
+  onPulse?: (signal?: AbortSignal) => Promise<void> | void
   onRuntimeProcessExit?: () => Promise<void> | void
   live?: TaskArtifactInput & {
     stageDir: string
@@ -365,7 +305,15 @@ export async function buildEditPermissionRules(cwd: string, paths: string[]) {
 
 async function makeOverridePermissions(
   cwd: string,
-  input: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[]; localSearch?: boolean; recompute?: boolean },
+  input: {
+    readPaths: string[]
+    editPaths: string[]
+    allowShell?: boolean
+    externalPaths?: string[]
+    localSearch?: boolean
+    recompute?: boolean
+    resourceReader?: boolean
+  },
 ) {
   return {
     "*": "deny",
@@ -387,6 +335,7 @@ async function makeOverridePermissions(
     skill: "deny",
     ...(input.localSearch ? { aev_local_search: "allow" } : {}),
     ...(input.recompute ? { aev_recompute: "allow" } : {}),
+    ...(input.resourceReader ? { aev_read_resource: "allow" } : {}),
     lsp: "deny",
   } as const
 }
@@ -711,7 +660,15 @@ async function ensureOverrideConfig(
   cwd: string,
   model: string | undefined,
   permissionConfig: LoadedPermissionConfig,
-  permissions: { readPaths: string[]; editPaths: string[]; allowShell?: boolean; externalPaths?: string[]; localSearch?: boolean; recompute?: boolean },
+  permissions: {
+    readPaths: string[]
+    editPaths: string[]
+    allowShell?: boolean
+    externalPaths?: string[]
+    localSearch?: boolean
+    recompute?: boolean
+    resourceReader?: boolean
+  },
   runLabel: string,
   injectPlatformSafetyRules = true,
   isolateHostRuntime = false,
@@ -797,6 +754,7 @@ async function ensureOverrideConfig(
             allowShell: permissions.allowShell ?? (permissions.readPaths.length > 0 || isolateHostRuntime),
             localSearch: permissions.localSearch,
             recompute: permissions.recompute,
+            resourceReader: permissions.resourceReader,
           }),
   }
   await ensureDirectory(dir)
@@ -1118,6 +1076,14 @@ async function runOpencodeTaskOnce(
     const { validateRecomputeAccess } = await import("./task-adaptation/recompute")
     validateRecomputeAccess(input.recompute, permissionReadPaths, permissionEditPaths, input.recomputeEvidenceRoot)
   }
+  if (input.resourceReaderGrant) {
+    // 反馈读取仅通过本次私有配置授权，绝不放宽文件或Shell权限。
+    if (!input.sourceHost || input.allowShell !== false || input.config.permissionConfig.mode !== "restricted" || !input.resourceReaderEvidenceRoot) {
+      throw new Error("Resource reader requires restricted source host and durable evidence")
+    }
+    const { validateResourceReaderAccess } = await import("./task-adaptation/consolidation/scoped-reader")
+    await validateResourceReaderAccess(input.resourceReaderGrant, permissionReadPaths, permissionEditPaths, input.resourceReaderEvidenceRoot)
+  }
   const isolateHostRuntime = shouldIsolateHostRuntime(input)
   const overrideConfigDir = await ensureOverrideConfig(
     input.cwd,
@@ -1130,6 +1096,7 @@ async function runOpencodeTaskOnce(
       allowShell: input.allowShell,
       localSearch: Boolean(input.localSearch),
       recompute: Boolean(input.recompute),
+      resourceReader: Boolean(input.resourceReaderGrant),
     },
     runLabel,
     input.injectPlatformSafetyRules !== false,
@@ -1147,6 +1114,9 @@ async function runOpencodeTaskOnce(
   const { recomputeEnvironment } = await import("./task-adaptation/recompute")
   const recomputeEnv = await recomputeEnvironment(input.recompute
     ? { ...input.recompute, evidenceRoot: input.recomputeEvidenceRoot! } : undefined, overrideConfigDir)
+  const { resourceReaderEnvironment } = await import("./task-adaptation/consolidation/scoped-reader")
+  const resourceReaderEnv = await resourceReaderEnvironment(input.resourceReaderGrant
+    ? { ...input.resourceReaderGrant, evidenceRoot: input.resourceReaderEvidenceRoot! } : undefined, overrideConfigDir)
 
   const opencodeCmd = input.sourceHost ? process.execPath : await resolveOpencodeCommand(input.cwd)
   const sourceEntry = path.join(input.cwd, "packages", "opencode", "src", "index.ts")
@@ -1178,7 +1148,7 @@ async function runOpencodeTaskOnce(
   }
 
   const runStart = new Date()
-  const runtimeBudget = resolveRuntimeBudget(input.runtimeBudget)
+  const runtimeBudget = readerRuntimeBudget(input.runtimeBudget, input.resourceReaderGrant?.expiresAt, runStart.getTime())
   const startedAt = runStart.toISOString()
   const runtimePrompt = withRuntimeBudgetPrompt({ prompt: input.prompt, runStart, budget: runtimeBudget })
   const promptStdinText =
@@ -1273,6 +1243,7 @@ async function runOpencodeTaskOnce(
         ...requestBudgetEnv,
         ...localSearchEnv,
         ...recomputeEnv,
+        ...resourceReaderEnv,
         ...(input.sourceHost ? { OPENCODE_AEV_ABSOLUTE_PERMISSIONS: "1" } : {}),
         OPENCODE_CONFIG_DIR: overrideConfigDir,
         ...(typeof input.config.modelConfig.limits.requestsPerMinute === "number"
@@ -1284,13 +1255,10 @@ async function runOpencodeTaskOnce(
       stdinText: promptStdinText,
       runtimeScope: input.runtimeScope,
       timeoutMs: runtimeBudget.hardTimeoutMs,
+      deadlineAt: input.resourceReaderGrant?.expiresAt,
       silentTimeoutMs: runtimeBudget.silentTimeoutMs,
       silentTimeoutAfterActivityMs: runtimeBudget.silentTimeoutAfterActivityMs,
-      onSpawn: async () => {
-        await input.onSpawn?.()
-        await input.onPulse?.()
-        await flush()
-      },
+      onSpawn: signal => activeCallbacks(signal, [() => input.onSpawn?.(signal), () => input.onPulse?.(signal), () => flush()]),
       onPulse: input.onPulse,
       onStdoutChunk: (chunk) => {
         stdoutData += chunk.toString()
@@ -1419,10 +1387,7 @@ export async function runOpencodeTask(input: OpencodeTaskInput): Promise<Opencod
   })
   const gatedInput: OpencodeTaskInput = {
     ...effectiveInput,
-    onPulse: async () => {
-      await effectiveInput.onPulse?.()
-      await permit.touch()
-    },
+    onPulse: signal => activeCallbacks(signal, [() => effectiveInput.onPulse?.(signal), () => permit.touch()]),
     onRuntimeProcessExit: async () => {
       await effectiveInput.onRuntimeProcessExit?.()
       await permit.release()

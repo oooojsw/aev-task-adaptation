@@ -11,6 +11,9 @@ import type { Invocation } from "./invocation"
 import { loadPack } from "../protocol-plugins/project-pack"
 import type { AdviceReference } from "./advice"
 import { freezeTaskBudgetPolicy, validateTaskBudgetPolicy, taskRuntimeBudgets, taskRequestBudget, type TaskBudgetPolicy } from "./budget-policy"
+import { validateRequestGate } from "./budget-transport"
+import { requireExplorationHost } from "./exploration/entry"
+import { preflightExploration } from "./exploration/preflight"
 
 export interface Adaptation {
   schema: "aev.task-adaptation.v1"
@@ -35,12 +38,37 @@ export function validateAdaptation(value: unknown): Adaptation {
   return structuredClone(cfg)
 }
 
-export async function taskBudgetOptions(spec: LongTaskSpec) {
+export function taskRequestGate(spec: LongTaskSpec, gate?: string) {
+  const bounded = Boolean(spec.taskAdaptation?.requestBudget)
+  const inherited = validateRequestGate(spec.taskAdaptationRequestGate, bounded)
+  const explicit = validateRequestGate(gate, bounded)
+  // 已启动角色不能用新阶段授权替换自身携带的旧授权。
+  if (inherited !== undefined && explicit !== undefined && inherited !== explicit) throw new Error("Conflicting task request gate")
+  return explicit ?? inherited
+}
+
+export function withTaskRequestGate(spec: LongTaskSpec, gate: string): LongTaskSpec {
+  const selected = validateRequestGate(gate, Boolean(spec.taskAdaptation?.requestBudget))
+  if (selected === undefined) throw new Error("Explicit task request gate required")
+  // 每阶段创建独立spec，旧角色仍保留旧授权，不读取可变全局指针。
+  return { ...spec, taskAdaptationRequestGate: selected }
+}
+
+export async function taskBudgetOptions(spec: LongTaskSpec, requestGate?: string) {
+  const gate = taskRequestGate(spec, requestGate)
   if (!spec.taskAdaptation?.requestBudget) return {}
   const cfg = validateAdaptation(spec.taskAdaptation)
   const plan = validatePlan(JSON.parse((await readFile(cfg.planPath, "utf8")).replace(/^\uFEFF/, "")))
+  requireExplorationHost(plan)
   if (spec.taskAdaptationContext && canonical(spec.taskAdaptationContext.plan) !== canonical(plan)) throw new Error("Task budget plan drift")
-  return taskRuntimeBudgets(cfg.requestBudget, plan.stop)
+  return taskRuntimeBudgets(cfg.requestBudget, plan.stop, gate)
+}
+
+export async function checkTaskExploration(value: Adaptation | undefined) {
+  if (!value) return
+  const cfg = validateAdaptation(value)
+  const plan = validatePlan(JSON.parse((await readFile(cfg.planPath, "utf8")).replace(/^\uFEFF/, "")))
+  requireExplorationHost(plan)
 }
 
 export async function loadTaskContext(spec: LongTaskSpec, dir: string): Promise<BoundPlan | undefined> {
@@ -54,6 +82,7 @@ export async function loadTaskContext(spec: LongTaskSpec, dir: string): Promise<
   if (!spec.protocolPlugins || !spec.protocolAuthorContext) throw new Error("Task adaptation requires prepared protocol context")
   const cfg = validateAdaptation(spec.taskAdaptation)
   const plan = validatePlan(JSON.parse((await readFile(cfg.planPath, "utf8")).replace(/^\uFEFF/, "")))
+  requireExplorationHost(plan)
   const phase = spec.protocolAuthorContext
   const snapshot: Snapshot = JSON.parse((await readFile(path.join(dir, "..", "protocol-plugins", "protocol.snapshot.json"), "utf8")).replace(/^\uFEFF/, ""))
   const { fingerprint: savedFingerprint, ...body } = snapshot
@@ -71,6 +100,12 @@ export async function loadTaskContext(spec: LongTaskSpec, dir: string): Promise<
     !phase.skill.entries.some(entry => entry.id === id)) ||
     canonical(cfg.entries) !== canonical(phase.skill.entries.map(({ id, path }) => ({ id, path })))) throw new Error("Task deliverable does not match protocol entry files")
   await verifyProtocolScopes(plan, cfg.root, project, spec.protocolPlugins.taskID, actualPhase)
+  if (plan.exploration) {
+    if (!spec.protocolTraining) throw new Error("Exploration Host training configuration missing")
+    await preflightExploration(plan, { root: cfg.root, capabilities: cfg.capabilities, training: spec.protocolTraining,
+      requestBudget: cfg.requestBudget, executor: actualPhase.executor,
+      checkers: actualPhase.checks.map(check => ({ name: check.name, binding: check })) })
+  }
   if (cfg.requestBudget) {
     const models = [...Object.values(spec.protocolTraining?.roles ?? {}).map(item => item.model),
       actualPhase.executor?.settings.model, ...actualPhase.checks.map(item => item.settings.model ??
@@ -89,6 +124,7 @@ export async function restoreTaskContext(spec: LongTaskSpec, value: unknown) {
   await verifyBinding(bound)
   const cfg = validateAdaptation(spec.taskAdaptation)
   const plan = validatePlan(JSON.parse((await readFile(cfg.planPath, "utf8")).replace(/^\uFEFF/, "")))
+  requireExplorationHost(plan)
   if (!spec.protocolPlugins) throw new Error("Restored task context requires protocol entry")
   const project = await loadPack(spec.protocolPlugins.projectManifestPath)
   if (canonical(cfg.entries) !== canonical(project.pack.skill.entries.map(({ id, path }) => ({ id, path })))) {
@@ -132,10 +168,14 @@ export async function seedTaskCandidate(spec: LongTaskSpec, root: string) {
 
 import type { LogicalResource } from "../task-profile-access/unified-access"
 
-export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; feedbackPath?: string; feedbackResource?: LogicalResource; advice?: Array<Omit<AdviceReference, "root">> } = {}): Invocation | undefined {
-  if (!spec.taskAdaptation) return undefined
+export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; feedbackPath?: string; feedbackResource?: LogicalResource; round?: number; passID?: string; requestGate?: string; advice?: Array<Omit<AdviceReference, "root">> } = {}): Invocation | undefined {
+  const gate = taskRequestGate(spec, input.requestGate)
+  if (!spec.taskAdaptation) {
+    return undefined
+  }
   const bound = spec.taskAdaptationContext
   if (!bound) throw new Error("Frozen task adaptation context missing")
+  requireExplorationHost(bound.plan)
   const output = role === "planner" ? 'Return JSON: {"planner_summary":"", "completion_validator_ids":[], "units":[{"id":"work", "operation":"author_work", "title":"", "goal":"", "inputs":[], "depends_on":[], "expected_artifacts":[], "claim":"", "check_plan":"", "validator_ids":[], "retry_budget":1}]}. Units must perform author work, not formal acceptance.'
     : role === "executor" ? 'Return JSON: {"claimed_success":true,"claim_statement":"","summary":"","blockers":[],"artifacts":[]} after completing the assigned work.'
     : role === "lead" ? 'Edit the declared candidate files. Return JSON: {"summary":"","updated_files":[],"package_highlights":[],"tree_highlights":[],"refs":[],"surface_precheck_passed":false,"surface_precheck_details":[]}.'
@@ -147,8 +187,11 @@ export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidat
   if (feedback && (!spec.taskAdaptationCampaignRoot || !spec.protocolPlugins)) throw new Error("Task feedback campaign identity missing")
   if (input.advice?.length && !spec.taskAdaptationCampaignRoot) throw new Error("Task advice campaign identity missing")
   return { bound, role, stage: role === "lead" || role === "diagnostician" ? "revise" : role === "reviewer" || role === "checker" || role === "independent" ? "accept" : "explore",
+    ...(spec.taskAdaptationCampaignRoot ? { campaignID: path.basename(spec.taskAdaptationCampaignRoot), round: input.round ?? spec.taskAdaptationRound,
+      ...(input.passID ? { passID: input.passID } : {}) } : {}),
     ...(input.worker ? { worker: input.worker } : {}), output: input.output ?? output, maxInlineBytes: 16000,
     ...(spec.taskAdaptation.requestBudget ? { requestBudget: spec.taskAdaptation.requestBudget } : {}),
+    ...(gate === undefined ? {} : { requestGate: gate }),
     ...(input.advice?.length ? { advice: input.advice.map(item => ({ ...item, root: spec.taskAdaptationCampaignRoot! })) } : {}),
     ...(feedback ? { feedback: { root: spec.taskAdaptationCampaignRoot!, path: feedback,
       task: spec.protocolPlugins!.taskID, phase: spec.protocolPlugins!.phase } } : {}),

@@ -9,7 +9,7 @@ import { verifyScriptExecution } from "./script-executor"
 
 export async function selectedRuntime(root: string, cwd: string | undefined, entry: Entry,
   createDriver: typeof opencodeDriver = opencodeDriver,
-  budgets: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets"> = {}) {
+  budgets: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets" | "requestGate"> = {}) {
   validateEntry(entry)
   const selection = JSON.parse((await readFile(entry.selectionPath, "utf8")).replace(/^\uFEFF/, "")) as Selection
   const phases = selection?.protocol?.phases
@@ -18,7 +18,10 @@ export async function selectedRuntime(root: string, cwd: string | undefined, ent
       phase?.checks?.some(check => check.id === "active-tool-judge"))
   const requiresScript = phases && typeof phases === "object" && Object.values(phases).some(
     (phase) => phase?.executor?.id === "script-json-executor")
-  let options: BuiltinOptions = { scriptExecution: Boolean(requiresScript), ...budgets }
+  const requiresConsolidation = phases && typeof phases === "object" && Object.values(phases).some(
+    phase => phase?.executor?.id === "consolidation-direct-chat")
+  // 仅冻结协议显式选择时注册合并后端，旧任务不扩权。
+  let options: BuiltinOptions = { scriptExecution: Boolean(requiresScript), consolidation: Boolean(requiresConsolidation), ...budgets }
   if (requiresTool) {
     // 先校验完整协议，再读取宿主配置；探测驱动绝不能执行。
     const probe = await builtins(root, { ...options, tool: { implementation: "0".repeat(64),
