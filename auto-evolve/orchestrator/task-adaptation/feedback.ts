@@ -14,7 +14,7 @@ import { productEvidenceName } from "../protocol-plugins/runtime"
 
 export interface FeedbackReference { root: string; path: string; task: string; phase: Phase }
 
-export async function taskFeedback(bound: BoundPlan, input: FeedbackReference) {
+export async function taskFeedback(bound: BoundPlan, input: FeedbackReference, options?: { readonly?: boolean }) {
   await verifyBinding(bound)
   if (![input.root, input.path].every(file => typeof file === "string" && path.isAbsolute(file))) throw new Error("Absolute feedback identity required")
   const root = await realpath(input.root)
@@ -61,6 +61,8 @@ export async function taskFeedback(bound: BoundPlan, input: FeedbackReference) {
     if (canonical(saved) !== canonical(view)) throw new Error("Published task feedback drift")
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    // 只读核验不能借缺文件取得恢复写权限。
+    if (options?.readonly) throw new Error("Published task feedback missing during readonly verification")
     await writeJsonAtomic(target, view)
   }
 

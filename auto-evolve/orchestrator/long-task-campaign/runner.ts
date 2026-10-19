@@ -2,7 +2,8 @@
 import process from "node:process"
 import { freezeTraining, verifyTraining, trainingExecution, trainingRuntimeBudget, type TrainingRole } from "../protocol-plugins/training"
 import { loadTaskContext, taskInvocation, seedTaskCandidate, taskBudgetOptions } from "../task-adaptation/context"
-import { recordTaskVersion, readTaskVersions, chooseTaskVersion } from "../task-adaptation/selection"
+import { selectTaskVersion } from "../task-adaptation/selection"
+import { finalizeTaskRound } from "./round-control"
 import { requestBudgetStop, isRequestBudgetStop } from "../task-adaptation/budget-stop"
 import { writeJsonAtomic } from "../atomic-write"
 import { join } from "../join"
@@ -945,8 +946,9 @@ async function finishTaskRequestBudget(input: {
   // 无当前准入拒绝证据时，不能把恰好到额度的其他故障改报为正常结束。
   if (input.faulted && !stop.inspectionRequired && !stop.evidence.denial) return undefined
   const current = await readLongTaskCampaignState(input.campaignPaths)
-  const selection = chooseTaskVersion(input.spec, await readTaskVersions(input.spec, input.campaignPaths.root),
-    current.currentRound, input.maxRounds, stop.reason)
+  const selection = await selectTaskVersion(input.spec, { root: input.campaignPaths.root,
+    round: current.currentRound, maxRounds: input.maxRounds, forcedReason: stop.reason,
+    readonly: Boolean(input.spec.taskAdaptationContext?.plan.exploration) })
   const body = { schema: "aev.task-request-budget-stop.v1", task: input.spec.taskAdaptationContext!.fingerprint,
     round: current.currentRound, ...stop, selectedTaskVersionPath: selection.selectedTaskVersionPath ?? null }
   const folder = path.join(input.campaignPaths.root, "task-adaptation/budget-stops")
@@ -5928,48 +5930,11 @@ export async function runLongTaskCampaign(input: {
           }),
         )
 
-        const acceptanceInfrastructureFailure = finalAcceptance?.failureKind === "infrastructure_failure"
-        const acceptanceDatasetFailure = finalAcceptance?.failureKind === "dataset_failure"
-        const taskSelection = await recordTaskVersion(baseSpec, {
-          root: campaignPaths.root, candidateRoot: campaignPaths.pendingCurrentRoot,
-          feedback: (finalAcceptance as Record<string, unknown> | undefined)?.protocolTrainingResultPath as string | undefined,
-          passed: finalAcceptance?.passed === true, round: roundNumber, maxRounds: campaignSpec.maxRounds,
+        const { taskSelection, nextStatus, acceptanceInfrastructureFailure, acceptanceDatasetFailure,
+          lastRoundClosure, lastGateFailureKind, lastGateFailureSummary, lastRunHardVerified } = await finalizeTaskRound(baseSpec, {
+          root: campaignPaths.root, candidateRoot: campaignPaths.pendingCurrentRoot, round: roundNumber,
+          maxRounds: campaignSpec.maxRounds, record: finalizedRoundRecord, acceptance: finalAcceptance,
         })
-        const nextStatus =
-          acceptanceInfrastructureFailure || acceptanceDatasetFailure
-            ? "failed"
-            : taskSelection
-              ? taskSelection.stop ? taskSelection.passed ? "verified_success" : "round_limit_reached" : "running"
-            : finalAcceptance?.passed === true
-            ? "verified_success"
-            : roundNumber >= campaignSpec.maxRounds
-              ? "round_limit_reached"
-              : "running"
-        const lastRoundClosure =
-          acceptanceInfrastructureFailure
-            ? "closed_infra_failure"
-            : acceptanceDatasetFailure
-            ? "closed_dataset_failure"
-            : finalAcceptance?.passed === true
-            ? "closed_success"
-            : finalAcceptance
-              ? "closed_repairable"
-              : (finalizedRoundRecord.roundClosure ?? "closed_blocked")
-        const lastGateFailureKind =
-          acceptanceInfrastructureFailure
-            ? "infrastructure_failure"
-            : acceptanceDatasetFailure
-            ? "dataset_failure"
-            : finalAcceptance && !finalAcceptance.passed
-            ? "final_acceptance_failed"
-            : finalizedRoundRecord.gateFailureKind
-        const lastGateFailureSummary =
-          finalAcceptance && !finalAcceptance.passed
-            ? finalAcceptance.summary
-            : finalizedRoundRecord.gateFailureSummary
-        const lastRunHardVerified =
-          finalizedRoundRecord.runVerificationSignal?.completionGateMode === "required" &&
-          finalizedRoundRecord.runVerificationSignal?.completionGatePassed === true
 
         const state: LongTaskCampaignState = {
           ...initialState,
@@ -6030,8 +5995,8 @@ export async function runLongTaskCampaign(input: {
     if (stopped) return stopped
     const message = error instanceof Error ? error.message : String(error)
     const saved = baseSpec.taskAdaptation ? await readLongTaskCampaignState(campaignPaths) : initialState
-    const qualified = baseSpec.taskAdaptation ? chooseTaskVersion(baseSpec, await readTaskVersions(baseSpec, campaignPaths.root),
-      lastRoundNumber, campaignSpec.maxRounds) : undefined
+    const qualified = baseSpec.taskAdaptation ? await selectTaskVersion(baseSpec, { root: campaignPaths.root,
+      round: lastRoundNumber, maxRounds: campaignSpec.maxRounds, readonly: Boolean(baseSpec.taskAdaptationContext?.plan.exploration) }) : undefined
     const failureState: LongTaskCampaignState = {
       ...saved,
       currentRound: lastRoundNumber,
@@ -6112,7 +6077,8 @@ export async function resumeLongTaskCampaign(input: {
       if (isRequestBudgetStop(existingState.taskStopReason) && (!budget || budget.inspectionRequired || budget.reason !== existingState.taskStopReason)) {
         throw new Error("Completed task request budget evidence drift")
       }
-      const selection = chooseTaskVersion(baseSpec, await readTaskVersions(baseSpec, campaignPaths.root), existingState.currentRound, campaignSpec.maxRounds, budget?.reason)
+      const selection = await selectTaskVersion(baseSpec, { root: campaignPaths.root, round: existingState.currentRound,
+        maxRounds: campaignSpec.maxRounds, forcedReason: budget?.reason, readonly: Boolean(baseSpec.taskAdaptationContext?.plan.exploration) })
       if (selection.selectedTaskVersionPath !== existingState.selectedTaskVersionPath ||
         selection.taskStopReason !== existingState.taskStopReason || !selection.stop ||
         (existingState.status === "verified_success") !== selection.passed) throw new Error("Completed task delivery selection drift")
@@ -6951,48 +6917,11 @@ export async function resumeLongTaskCampaign(input: {
           }),
         )
 
-        const acceptanceInfrastructureFailure = finalAcceptance?.failureKind === "infrastructure_failure"
-        const acceptanceDatasetFailure = finalAcceptance?.failureKind === "dataset_failure"
-        const taskSelection = await recordTaskVersion(baseSpec, {
-          root: campaignPaths.root, candidateRoot: campaignPaths.pendingCurrentRoot,
-          feedback: (finalAcceptance as Record<string, unknown> | undefined)?.protocolTrainingResultPath as string | undefined,
-          passed: finalAcceptance?.passed === true, round: roundNumber, maxRounds: campaignSpec.maxRounds,
+        const { taskSelection, nextStatus, acceptanceInfrastructureFailure, acceptanceDatasetFailure,
+          lastRoundClosure, lastGateFailureKind, lastGateFailureSummary, lastRunHardVerified } = await finalizeTaskRound(baseSpec, {
+          root: campaignPaths.root, candidateRoot: campaignPaths.pendingCurrentRoot, round: roundNumber,
+          maxRounds: campaignSpec.maxRounds, record: finalizedRoundRecord, acceptance: finalAcceptance,
         })
-        const nextStatus =
-          acceptanceInfrastructureFailure || acceptanceDatasetFailure
-            ? "failed"
-            : taskSelection
-              ? taskSelection.stop ? taskSelection.passed ? "verified_success" : "round_limit_reached" : "running"
-            : finalAcceptance?.passed === true
-            ? "verified_success"
-            : roundNumber >= campaignSpec.maxRounds
-              ? "round_limit_reached"
-              : "running"
-        const lastRoundClosure =
-          acceptanceInfrastructureFailure
-            ? "closed_infra_failure"
-            : acceptanceDatasetFailure
-            ? "closed_dataset_failure"
-            : finalAcceptance?.passed === true
-            ? "closed_success"
-            : finalAcceptance
-              ? "closed_repairable"
-              : (finalizedRoundRecord.roundClosure ?? "closed_blocked")
-        const lastGateFailureKind =
-          acceptanceInfrastructureFailure
-            ? "infrastructure_failure"
-            : acceptanceDatasetFailure
-            ? "dataset_failure"
-            : finalAcceptance && !finalAcceptance.passed
-            ? "final_acceptance_failed"
-            : finalizedRoundRecord.gateFailureKind
-        const lastGateFailureSummary =
-          finalAcceptance && !finalAcceptance.passed
-            ? finalAcceptance.summary
-            : finalizedRoundRecord.gateFailureSummary
-        const lastRunHardVerified =
-          finalizedRoundRecord.runVerificationSignal?.completionGateMode === "required" &&
-          finalizedRoundRecord.runVerificationSignal?.completionGatePassed === true
 
         const state: LongTaskCampaignState = {
           ...initialState,
@@ -7053,8 +6982,8 @@ export async function resumeLongTaskCampaign(input: {
     if (stopped) return stopped
     const message = error instanceof Error ? error.message : String(error)
     const saved = baseSpec.taskAdaptation ? await readLongTaskCampaignState(campaignPaths) : initialState
-    const qualified = baseSpec.taskAdaptation ? chooseTaskVersion(baseSpec, await readTaskVersions(baseSpec, campaignPaths.root),
-      lastRoundNumber, campaignSpec.maxRounds) : undefined
+    const qualified = baseSpec.taskAdaptation ? await selectTaskVersion(baseSpec, { root: campaignPaths.root,
+      round: lastRoundNumber, maxRounds: campaignSpec.maxRounds, readonly: Boolean(baseSpec.taskAdaptationContext?.plan.exploration) }) : undefined
     const failureState: LongTaskCampaignState = {
       ...saved,
       currentRound: lastRoundNumber,

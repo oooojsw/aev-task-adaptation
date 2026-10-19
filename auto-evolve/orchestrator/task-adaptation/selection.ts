@@ -23,11 +23,11 @@ export interface Version {
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 const parse = async (file: string) => JSON.parse((await readFile(file, "utf8")).replace(/^\uFEFF/, ""))
 
-export async function taskSelectionSource(spec: LongTaskSpec, root: string, feedback: string) {
+export async function taskSelectionSource(spec: LongTaskSpec, root: string, feedback: string, options?: { readonly?: boolean }) {
   const bound = spec.taskAdaptationContext
   const entry = spec.protocolPlugins
   if (!bound || !entry) throw new Error("Frozen task selection context required")
-  const view = await taskFeedback(bound, { root, path: feedback, task: entry.taskID, phase: entry.phase }).catch(error => {
+  const view = await taskFeedback(bound, { root, path: feedback, task: entry.taskID, phase: entry.phase }, options).catch(error => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("Task selection evidence missing")
     throw error
   })
@@ -51,7 +51,7 @@ export async function taskSelectionSource(spec: LongTaskSpec, root: string, feed
   return { view: view.view, metric }
 }
 
-export async function readTaskVersions(spec: LongTaskSpec, root: string) {
+export async function readTaskVersions(spec: LongTaskSpec, root: string, options?: { readonly?: boolean }) {
   const bound = spec.taskAdaptationContext
   if (!spec.taskAdaptation || !bound) return []
   await verifyBinding(bound)
@@ -70,7 +70,7 @@ export async function readTaskVersions(spec: LongTaskSpec, root: string) {
     if (record.schema !== "aev.task-version.v1" || fingerprint(record) !== savedHash || record.plan !== bound.fingerprint ||
       record.receipt !== name || canonical(record.files.map(item => ({ id: item.id, path: item.entry }))) !==
       canonical(spec.taskAdaptation.entries)) throw new Error("Saved task version identity drift")
-    const actual = await taskSelectionSource(spec, root, record.feedback)
+    const actual = await taskSelectionSource(spec, root, record.feedback, options)
     if (actual.view.receiptFingerprint !== name || actual.view.round !== record.round || actual.metric !== record.metric) {
       throw new Error("Saved task version receipt drift")
     }
@@ -140,6 +140,13 @@ export function chooseTaskVersion(spec: LongTaskSpec, versions: Awaited<ReturnTy
     : round >= Math.min(maxRounds, plan.stop.rounds) ? "round_budget"
     : best && round - best.record.round >= plan.stop.stagnant ? "stagnant" : undefined)
   return { selectedTaskVersionPath: best?.path, taskStopReason: reason, stop: Boolean(reason), passed: Boolean(best) }
+}
+
+export async function selectTaskVersion(spec: LongTaskSpec, input: {
+  root: string; round: number; maxRounds: number; forcedReason?: string; readonly?: boolean
+}) {
+  // 默认严格只读；旧入口须显式选择原反馈兼容行为，仍不恢复版本。
+  return chooseTaskVersion(spec, await readTaskVersions(spec, input.root, { readonly: input.readonly ?? true }), input.round, input.maxRounds, input.forcedReason)
 }
 
 export async function recordTaskVersion(spec: LongTaskSpec, input: {

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 import os from "node:os"
-import { mkdtemp, mkdir, readFile, writeFile, readdir } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, writeFile, readdir, rename, lstat } from "node:fs/promises"
 import { selectedRuntime } from "../../protocol-plugins/selected-runtime"
 import { consolidationPlugins } from "../../protocol-plugins/consolidation"
 import { campaignAcceptance } from "../../protocol-plugins/campaign-acceptance"
@@ -15,7 +15,8 @@ import { DEFAULT_CONFIG } from "../../schema"
 import type { Plan } from "../plan"
 import { taskInvocation } from "../context"
 import { loadLongTaskSpec } from "../../long-task/spec"
-import { recordTaskVersion, readTaskVersions, recoverTaskVersions } from "../selection"
+import { recordTaskVersion, readTaskVersions, recoverTaskVersions, selectTaskVersion } from "../selection"
+import { finalizeTaskRound } from "../../long-task-campaign/round-control"
 import { archiveRound } from "../exploration/evaluation"
 import { explorationIdentity, type ExplorationPolicy } from "../exploration/policy"
 import type { LongTaskCampaignRoundRecord } from "../../long-task-campaign/contract"
@@ -172,10 +173,43 @@ test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 pa
         snapshot: { recover: false, cap: 10000000 } })
       expect(selected?.selectedTaskVersionPath).toBeDefined()
       expect((await readTaskVersions(spec, campaign)).length).toBe(1)
+      const finalized = await finalizeTaskRound(spec, { root: campaign, candidateRoot: candidate,
+        acceptance: result, round: 1, maxRounds: 2, record: round })
+      expect(finalized.taskSelection).toEqual(selected)
+      expect(finalized.nextStatus).toBe("running")
+      const published = path.join(attempt, "task.feedback.json")
+      await rename(published, `${published}.readonly-held`)
+      await expect(selectTaskVersion(spec, { root: campaign, round: 1, maxRounds: 2 })).rejects.toThrow("readonly verification")
+      await expect(readFile(published)).rejects.toThrow()
+      // 旧默认仍可发布缺失视图；严格只读路径不借此恢复文件。
+      expect((await readTaskVersions(spec, campaign)).length).toBe(1)
+      expect(await readFile(published)).toEqual(await readFile(`${published}.readonly-held`))
+      expect(await selectTaskVersion(spec, { root: campaign, round: 1, maxRounds: 2 })).toEqual(selected)
+
+      const alternate = path.join(root, "internal-finalizer")
+      const frozen = await bindPlan(candidate, { ...plan, exploration: policy }, ["read"])
+      const phase = path.join(alternate, "rounds/round-001/final-acceptance/pass-01")
+      const local = await selectedRuntime(path.join(alternate, "protocol-backends"), root, options.entry)
+      const accepted = await campaignAcceptance({ ...options, campaignRoot: alternate, campaignID: "internal-finalizer",
+        attemptRoot: phase, resultPath: path.join(phase, "result.json"), taskBinding: {
+          planFingerprint: frozen.fingerprint, policyFingerprint } }, local)
+      const internal = { ...spec, taskAdaptationContext: frozen, taskAdaptationCampaignRoot: alternate }
+      const close = { root: alternate, candidateRoot: candidate, acceptance: accepted, round: 1, maxRounds: 2, record: round }
+      // 直接调用共同finalizer检验影子分支，不解除真实Host运行门禁。
+      const created = await finalizeTaskRound(internal, close)
+      const saved = created.taskSelection!.selectedTaskVersionPath!
+      const stamp = await lstat(saved)
+      expect((await readdir(path.join(alternate, "task-adaptation/version-intents"))).length).toBe(1)
+      expect(await finalizeTaskRound(internal, close)).toEqual(created)
+      expect((await lstat(saved)).mtimeMs).toBe(stamp.mtimeMs)
+      await rename(saved, `${saved}.incomplete-held`)
+      await expect(finalizeTaskRound(internal, close)).rejects.toThrow("explicit recovery")
+      await expect(readFile(saved)).rejects.toThrow()
+      await recoverTaskVersions(internal, { root: alternate, candidateRoot: candidate, cap: policy.bounds.archiveBytes })
+      expect(await finalizeTaskRound(internal, close)).toEqual(created)
       const file = selected!.selectedTaskVersionPath!
       await expect(recoverTaskVersions({ ...spec, taskAdaptation: { ...spec.taskAdaptation!, entries: [] } },
         { root: campaign, candidateRoot: candidate, cap: 10000000 })).rejects.toThrow("entry mapping drift")
-      const { rename } = await import("node:fs/promises")
       await rename(file, `${file}.interrupted`)
       await expect(recordTaskVersion(spec, { root: campaign, candidateRoot: candidate,
         feedback: result.protocolTrainingResultPath, passed: true, round: 1, maxRounds: 2,
