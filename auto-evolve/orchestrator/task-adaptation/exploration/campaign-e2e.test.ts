@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import path from "node:path"
 import { randomUUID, createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile, readdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { buildOfflineCampaign } from "../../protocol-plugins/offline-campaign-fixture"
@@ -14,6 +14,7 @@ import { compileTask } from "../catalogue"
 import { fingerprint } from "../../protocol-plugins/identity"
 import { inspectBudget } from "../request-budget"
 import { FIXTURE_REPORT_EXPLORATION_TEMPLATE } from "./templates"
+import { explorationIdentityAny } from "./policy-reader"
 
 const hash = async (file: string) => createHash("sha256").update(await readFile(file)).digest("hex")
 
@@ -309,6 +310,10 @@ test("report exploration with V2 window policy completes offline Campaign", asyn
   const holder = globalThis as Record<string, unknown>
   const calls: string[] = []
   let leads = 0
+  let round2State: any = null
+  let round2Composition: any = null
+  let round2Activation: any = null
+  let round2Projection: any = null
   try {
     const profile = path.join(root, "profile")
     await mkdir(profile)
@@ -332,7 +337,24 @@ test("report exploration with V2 window policy completes offline Campaign", asyn
           const round = Number(input.title.match(/round-(\d+)/)?.[1])
           const file = input.permissionEditPaths?.[0]
           if (!file) throw new Error("Lead edit grant missing")
-          if (round === 3) expect(await readFile(file, "utf8")).toBe("initial argument")
+          if (round === 3) {
+            if (!round2State) {
+              const m = file.match(/^(.*long-task-campaigns[\\/][^\\/]+)/)
+              if (m) {
+                const cDir = m[1]
+                const hostDir = path.join(cDir, "task-adaptation/exploration/host")
+                const compDir = path.join(cDir, "task-adaptation/exploration/composition")
+                const actDir = path.join(cDir, "task-adaptation/exploration/activation")
+                try {
+                  round2State = JSON.parse(await readFile(path.join(hostDir, "state.json"), "utf8"))
+                  round2Composition = JSON.parse(await readFile(path.join(compDir, "composition.json"), "utf8"))
+                  round2Activation = JSON.parse(await readFile(path.join(actDir, "activation.json"), "utf8"))
+                  round2Projection = JSON.parse(await readFile(path.join(hostDir, "projection.json"), "utf8"))
+                } catch {}
+              }
+            }
+            expect(await readFile(file, "utf8")).toBe("initial argument")
+          }
           await writeFile(file, round === 3 ? "accepted argument" : `rejected argument ${round}`)
         }
         const responseText = JSON.stringify(input.title.startsWith("Long Task Graph") ? {
@@ -424,7 +446,25 @@ test("report exploration with V2 window policy completes offline Campaign", asyn
     const result = await actual.runTask(input)
     expect(result.status).toBe("verified_success")
 
-    // 验证 state.json 是原生 V2 schema 且记录包含 original, original, alternative
+    // 1. 验证 task-plan.json 与 host/scope.json
+    const planFile = path.join(root, "execution/task-plan.json")
+    const planJson = JSON.parse(await readFile(planFile, "utf8"))
+    expect(planJson.exploration.schema).toBe("aev.exploration-policy.v2")
+    expect(planJson.exploration.trigger.kind).toBe("window")
+    const scopeFile = path.join(result.campaignDir, "task-adaptation/exploration/host/scope.json")
+    const scopeJson = JSON.parse(await readFile(scopeFile, "utf8"))
+    expect(scopeJson.scope.policy).toBe(explorationIdentityAny(plan.exploration, plan))
+
+    // 2. 验证第 2 轮完成、进入第 3 轮前捕获到的 activate 决策与物理重建文件
+    expect(round2State).toBeDefined()
+    expect(round2State.record.decision.action).toBe("activate")
+    expect(round2State.record.decision.reason).toBe("window_exhausted")
+    expect(round2Composition).toBeDefined()
+    expect(round2Activation).toBeDefined()
+    expect(round2Projection).toBeDefined()
+    expect(round2Projection.record.nextRound).toBe(3)
+
+    // 3. 验证 state.json 是原生 V2 schema 且每个 round 包含合法 receipt 与 closure
     const stateFile = path.join(result.campaignDir, "task-adaptation/exploration/host/state.json")
     const stateJson = JSON.parse(await readFile(stateFile, "utf8"))
     expect(stateJson.record.schema).toBe("aev.exploration-campaign.v2")
@@ -432,19 +472,233 @@ test("report exploration with V2 window policy completes offline Campaign", asyn
     expect(stateJson.record.rounds[0].verdict).toBe("rejected")
     expect(stateJson.record.rounds[1].verdict).toBe("rejected")
     expect(stateJson.record.rounds[2].verdict).toBe("passed")
+    for (const r of stateJson.record.rounds) {
+      expect(typeof r.receipt).toBe("string")
+      expect(r.receipt.length).toBeGreaterThan(0)
+      expect(r.closure).toBeDefined()
+    }
     expect(stateJson.record.decision.reason).toBe("first_pass")
 
-    // 验证交付成果来自备用路线新写入的 accepted argument
+    // 4. 验证交付成果来自备用路线新写入的 accepted argument
     const delivery = JSON.parse(await readFile(result.delivery.path, "utf8"))
     expect(await readFile(path.join(path.dirname(result.delivery.path), delivery.files[0].path), "utf8")).toBe("accepted argument")
 
-    // 验证恢复重试完全复用，调用数零新增
+    // 5. 验证预算与恢复重试完全复用，调用数与预算零新增，交付文件 SHA256 不变
+    const budget = { root: input.execution.requestBudget.root, scope: "report", calls: cfg.stop.calls, tokens: cfg.stop.tokens }
+    const beforeBudget = await inspectBudget(budget)
     const count = calls.length
+    const deliveryShaBefore = await hash(result.delivery.path)
     const resumed = await actual.runTask(input)
     expect(resumed.delivery).toEqual({ ...result.delivery, reused: true })
     expect(calls).toHaveLength(count)
+    const deliveryShaAfter = await hash(resumed.delivery.path)
+    expect(deliveryShaAfter).toBe(deliveryShaBefore)
+    const afterBudget = await inspectBudget(budget)
+    expect(afterBudget).toEqual(beforeBudget)
 
     console.log(`Report V2 window exploration E2E evidence: ${root}`)
+  } finally {
+    delete holder[key]
+    for (const name of Object.keys(process.env)) if (!(name in saved)) delete process.env[name]
+    Object.assign(process.env, saved)
+  }
+}, 300000)
+
+test("report exploration with V2 window policy recovers from interruption and completes Campaign", async () => {
+  const cwd = path.resolve(import.meta.dir, "../../../..")
+  const root = path.join(testEvidenceRoot(), `report-v2recover-${randomUUID()}`)
+  const source = path.join(root, "sources")
+  await mkdir(source, { recursive: true })
+  await writeFile(path.join(source, "candidate.txt"), "initial argument")
+  await writeFile(path.join(source, "source.txt"), "Public evidence supports result 42")
+  await writeFile(path.join(source, "rubric.txt"), "PRIVATE_FIXTURE_ORACLE")
+  const saved = { ...process.env }, key = `__exploration_${randomUUID().replaceAll("-", "")}`
+  const holder = globalThis as Record<string, unknown>
+  const calls: string[] = []
+  let leads = 0
+  let interrupted = false
+  try {
+    const profile = path.join(root, "profile")
+    await mkdir(profile)
+    await writeFile(path.join(profile, "opencode.json"), "{}")
+    Object.assign(process.env, {
+      AUTO_EVOLVE_RUNTIME_ROOT: path.join(root, "runtime"),
+      AUTO_EVOLVE_SKIP_STALE_HEAL: "1",
+      AUTO_EVOLVE_OPENCODE_PRIVATE_PROFILE_ROOT: profile,
+    })
+    const actual = await buildOfflineCampaign(root, key)
+    const config = structuredClone(DEFAULT_CONFIG)
+    config.monitorConfig.enabled = false
+    config.monitorConfig.autoStart = false
+    holder[key] = {
+      async loadConfig() { return config },
+      async runOpencodeTask(input: OpencodeTaskInput) {
+        if (!interrupted && input.title === "Campaign Worker task-sources round-003") {
+          interrupted = true
+          throw new Error("Offline V2 new-generation interruption before dispatch")
+        }
+        calls.push(input.title)
+        await input.onSpawn?.()
+        if (input.title.startsWith("Campaign Lead")) {
+          leads++
+          const round = Number(input.title.match(/round-(\d+)/)?.[1])
+          const file = input.permissionEditPaths?.[0]
+          if (!file) throw new Error("Lead edit grant missing")
+          if (round === 3) expect(await readFile(file, "utf8")).toBe("initial argument")
+          await writeFile(file, round === 3 ? "accepted argument" : `rejected argument ${round}`)
+        }
+        const responseText = JSON.stringify(input.title.startsWith("Long Task Graph") ? {
+          planner_summary: "Inspect frozen sources", completion_validator_ids: [], units: [{ id: "inspect", operation: "author_work",
+            title: "Inspect sources", goal: "Inspect source evidence", inputs: [], depends_on: [], expected_artifacts: [],
+            claim: "Inspected", check_plan: "Formal acceptance follows", validator_ids: [], retry_budget: 1 }],
+        } : { claimed_success: true, claim_statement: "Source inspected", summary: "Offline actor", blockers: [], updated_files: [],
+          ready_for_final_acceptance: true, reasons: [], next_attention_areas: [], findings: [], memory_advice: [], package_advice: [],
+          exploration_advice: [], refs: [], package_highlights: [], tree_highlights: [], surface_precheck_passed: true, surface_precheck_details: [] })
+        return {
+          title: input.title, prompt: input.prompt, selectedModel: input.model, referencedPaths: input.referencePaths ?? [],
+          attachedFiles: [], promptInlineFiles: [], permissionReadPaths: input.permissionReadPaths ?? [], permissionEditPaths: input.permissionEditPaths ?? [],
+          result: { exitCode: 0, stdout: responseText, stderr: "", events: [], responseText, toolFailures: [] },
+        }
+      },
+    }
+    const cfg = catalogue(), choice = decision("report")
+    cfg.request = "Produce verified report with V2 window and interruption recovery"
+    cfg.stop = { rounds: 4, calls: 500, tokens: 20000000, stagnant: 4 }
+    cfg.resources = [
+      { id: "candidate", path: "candidate.txt", mutable: true, audience: "public" },
+      { id: "source", path: "source.txt", mutable: false, audience: "public" },
+      { id: "rubric", path: "rubric.txt", mutable: false, audience: "private" },
+    ]
+    cfg.entries = ["candidate"]
+    cfg.profiles = [{
+      id: "report", description: "Frozen local correctness", kinds: ["report"], requires: ["files"],
+      acceptance: { execution: "none", checks: [{ id: "quality", target: "candidate",
+        mechanism: "script", purpose: "Verify actual result", required: true, resources: ["candidate", "rubric"], feedback: "status_only" }] },
+      rejection: [{ check: "quality", actions: ["repair"] }], selection: { rule: "first_pass" },
+    }]
+    choice.profiles = ["report"]
+    choice.workers = [{ id: "sources", purpose: "Read source evidence", resources: ["source"], actions: ["read"] }]
+    const compiled = compileTask(cfg, choice)
+    if (compiled.status !== "ready") throw new Error("Missing fixture capabilities")
+
+    const v2Policy = {
+      schema: "aev.exploration-policy.v2" as const,
+      origin: { kind: "initial" as const },
+      replace: ["candidate"],
+      preserve: [],
+      dependencies: ["source"],
+      window: { minimumRounds: 2, maximumRounds: 2 },
+      trigger: { kind: "window" as const },
+      allowance: {
+        rounds: 2,
+        minimumRounds: 2,
+        authorCalls: 200,
+        authorTokens: 3000000,
+        acceptanceCalls: 5,
+        acceptanceTokens: 300000,
+        deliveryCalls: 0,
+        deliveryTokens: 0,
+      },
+      budget: { mode: "best_effort" as const },
+      bounds: { archiveBytes: 20000000, candidateBytes: 10000, dependencyBytes: 100000 },
+      safety: { reset: "declared_entries" as const, effects: "sandbox_only" as const },
+    }
+
+    const plan = { ...compiled.plan, exploration: v2Policy }
+    const planPath = path.join(root, "plan.json"), script = path.join(root, "check.mjs")
+    await writeFile(planPath, JSON.stringify(plan))
+    await writeFile(script, 'import {readFileSync} from "node:fs"; const p=JSON.parse(readFileSync(process.argv[2],"utf8")); const t=readFileSync(p.candidate[0].path,"utf8"); const ok=t==="accepted argument"; console.log(JSON.stringify({status:ok?"passed":"rejected",message:ok?"Accepted":"Revise candidate"}));')
+
+    const input = {
+      intake: {
+        mode: "manual_plan" as const,
+        cwd,
+        root: source,
+        dir: path.join(root, "intake"),
+        catalogue: { ...cfg, approvedPlans: [fingerprint(plan)] },
+        planPath,
+      },
+      execution: {
+        dir: path.join(root, "execution"),
+        skillFormat: "text" as const,
+        productKind: "json" as const,
+        resourceKinds: Object.fromEntries(cfg.resources.map(item => [item.id, "text" as const])),
+        checkers: [{ name: "quality", binding: { id: "script-json-checker", version: "1", settings: { command: process.execPath,
+          commandSHA256: await hash(process.execPath), script, scriptSHA256: await hash(script), timeoutMs: 10000, maxOutputBytes: 4096 } } }],
+        training: { schema: "aev.protocol-training.v1", roles: Object.fromEntries(TRAINING_ROLES.map(role => [role, { model: "fixture/actor", timeoutMs: 10000 }])) as TrainingConfig["roles"],
+          budgets: { maxAttemptsPerUnit: 1, maxTotalUnitAttempts: 4, maxGraphReplans: 1, maxValidatorCalls: 4, maxNoProgressCycles: 2, maxUnitsPerGraph: 4 } },
+        requestBudget: { schema: "aev.task-budget-policy.v1", root: path.join(root, "budget"), scope: "report",
+          models: [{ model: "fixture/actor", dialect: "openai_chat", expectedModels: ["actor"], maxInputTokens: 20000, maxOutputTokens: 4096 }] },
+        maxBundleBytes: 1000000,
+      },
+    }
+
+    // 第一次调用：在第 3 轮 dispatch 前被中断
+    let result = await actual.runTask(input)
+    expect(interrupted).toBe(true)
+    expect(result.status).toBe("failed")
+    await writeFile(path.join(root, "interrupted-outcome.json"), JSON.stringify(result, null, 2))
+
+    // 检查中断现场：已存在 2 条原路线关闭记录，且处于 activate/window_exhausted
+    const hostDir = path.join(result.campaignDir, "task-adaptation/exploration/host")
+    const beforeState = JSON.parse(await readFile(path.join(hostDir, "state.json"), "utf8"))
+    expect(beforeState.record.rounds.map((r: { branch: string }) => r.branch)).toEqual(["original", "original"])
+    expect(beforeState.record.decision.action).toBe("activate")
+    expect(beforeState.record.decision.reason).toBe("window_exhausted")
+
+    // 检查 composition, activation, projection 存在且 nextRound === 3
+    const compDir = path.join(result.campaignDir, "task-adaptation/exploration/composition")
+    const actDir = path.join(result.campaignDir, "task-adaptation/exploration/activation")
+    expect(JSON.parse(await readFile(path.join(compDir, "composition.json"), "utf8"))).toBeDefined()
+    const actJson = JSON.parse(await readFile(path.join(actDir, "activation.json"), "utf8"))
+    expect(actJson.record.generation).toBe(1)
+    const projJson = JSON.parse(await readFile(path.join(hostDir, "projection.json"), "utf8"))
+    expect(projJson.record.nextRound).toBe(3)
+
+    // 记录中断时的 budget
+    const budget = { root: input.execution.requestBudget.root, scope: "report", calls: cfg.stop.calls, tokens: cfg.stop.tokens }
+    const interruptedBudget = await inspectBudget(budget)
+
+    // 模拟人工确认接管，置为 recovery_pending，由相同 Campaign ID 恢复
+    const file = path.join(result.campaignDir, "campaign.json")
+    const state = JSON.parse(await readFile(file, "utf8"))
+    await writeFile(file, JSON.stringify({
+      ...state,
+      status: "recovery_pending",
+      ownerPID: undefined,
+      ownerCreationTick: undefined,
+      ownerCommandHint: undefined,
+      heartbeatAt: undefined,
+    }))
+
+    // 第二次调用：同 Campaign 恢复并成功完成
+    result = await actual.runTask(input)
+    expect(result.status).toBe("verified_success")
+    expect(result.campaignID).toBe(state.id)
+
+    // 检查恢复完成后的状态：3 条完整 closed rounds，最终 first_pass
+    const afterState = JSON.parse(await readFile(path.join(hostDir, "state.json"), "utf8"))
+    expect(afterState.record.rounds.map((r: { branch: string }) => r.branch)).toEqual(["original", "original", "alternative"])
+    expect(afterState.record.rounds[2].verdict).toBe("passed")
+    expect(afterState.record.decision.reason).toBe("first_pass")
+
+    // 验证交付成果
+    const delivery = JSON.parse(await readFile(result.delivery.path, "utf8"))
+    expect(await readFile(path.join(path.dirname(result.delivery.path), delivery.files[0].path), "utf8")).toBe("accepted argument")
+
+    // 第三次调用：幂等验证，零新增调用，budget 快照不变，交付 SHA256 不变
+    const beforeResumedBudget = await inspectBudget(budget)
+    const count = calls.length
+    const deliveryShaBefore = await hash(result.delivery.path)
+    const resumed = await actual.runTask(input)
+    expect(resumed.delivery).toEqual({ ...result.delivery, reused: true })
+    expect(calls).toHaveLength(count)
+    const deliveryShaAfter = await hash(resumed.delivery.path)
+    expect(deliveryShaAfter).toBe(deliveryShaBefore)
+    const afterResumedBudget = await inspectBudget(budget)
+    expect(afterResumedBudget).toEqual(beforeResumedBudget)
+
+    console.log(`Report V2 window interruption recovery E2E evidence: ${root}`)
   } finally {
     delete holder[key]
     for (const name of Object.keys(process.env)) if (!(name in saved)) delete process.env[name]

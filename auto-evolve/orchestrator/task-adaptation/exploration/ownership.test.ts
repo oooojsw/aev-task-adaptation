@@ -1,9 +1,10 @@
-import { expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, writeFile, readFile, lstat, rename } from "node:fs/promises"
 import { once } from "node:events"
 import { spawn } from "node:child_process"
 import os from "node:os"
 import path from "node:path"
+import { validateExplorationPolicyV2, type ExplorationPolicyV2 } from "./policy-v2"
 import type { LongTaskSpec } from "../../long-task/contract"
 import { bindPlan } from "../binding"
 import { fingerprint } from "../../protocol-plugins/identity"
@@ -242,4 +243,140 @@ test("ordinary runtime metadata remains eligible for the original healer", async
   expect(await preserveExplorationRuntime(f.root, "campaign")).toBe(false)
   await writeFile(path.join(f.root, "task.json"), JSON.stringify({ title: "legacy" }))
   expect(await preserveExplorationRuntime(f.root, "run")).toBe(false)
+})
+
+describe("Task Card B: V2 effective Campaign round window before round 1", () => {
+  async function fixtureV2(opts: {
+    planN: number
+    campaignMaxRounds?: number
+    f: number
+    h: number
+    m: number
+    b: number
+  }) {
+    const base = await mkdtemp(path.join(os.tmpdir(), "aev-host-v2-"))
+    const candidate = path.join(base, "candidate"),
+      root = path.join(base, "auto-evolve/runtime-state/long-task-campaigns/campaign")
+    await mkdir(candidate)
+    await mkdir(root, { recursive: true })
+    const cfg = plan()
+    cfg.stop = { rounds: opts.planN, calls: 200, tokens: 2000000, stagnant: 5 }
+    const v1p = policy()
+    const v2p: ExplorationPolicyV2 = {
+      schema: "aev.exploration-policy.v2",
+      origin: structuredClone(v1p.origin),
+      replace: structuredClone(v1p.replace),
+      preserve: structuredClone(v1p.preserve),
+      dependencies: structuredClone(v1p.dependencies),
+      window: { minimumRounds: opts.f, maximumRounds: opts.h },
+      trigger: { kind: "window" },
+      allowance: {
+        ...structuredClone(v1p.allowance),
+        minimumRounds: opts.m,
+        rounds: opts.b,
+      },
+      budget: { mode: "best_effort" },
+      bounds: structuredClone(v1p.bounds),
+      safety: structuredClone(v1p.safety),
+    }
+    cfg.exploration = validateExplorationPolicyV2(v2p, cfg)
+    for (const resource of cfg.resources) await writeFile(path.join(candidate, resource.path), resource.id)
+    const bound = await bindPlan(candidate, cfg, [])
+    const state: Record<string, unknown> = {
+      id: "campaign",
+      baseSpecPath: path.join(base, "spec.json"),
+      status: "recovery_pending",
+      currentRound: 1,
+    }
+    if (opts.campaignMaxRounds !== undefined) {
+      state.maxRounds = opts.campaignMaxRounds
+    }
+    await writeFile(path.join(root, "campaign.json"), JSON.stringify(state))
+    const spec = {
+      taskAdaptationContext: bound,
+      taskAdaptationCampaignRoot: root,
+      protocolAuthorContext: { fingerprint: fingerprint("protocol fixture") },
+      taskAdaptation: {
+        schema: "aev.task-adaptation.v1",
+        root: candidate,
+        planPath: path.join(base, "plan.json"),
+        capabilities: [],
+        entries: [
+          { id: "report", path: "report.md" },
+          { id: "facts", path: "facts.md" },
+        ],
+        requestBudget: {
+          schema: "aev.task-budget-policy.v1",
+          root: path.join(base, "budget"),
+          scope: "task",
+          models: [
+            {
+              model: "fixture",
+              dialect: "openai_chat",
+              expectedModels: ["fixture"],
+              maxInputTokens: 100,
+              maxOutputTokens: 100,
+            },
+          ],
+        },
+      },
+    } as LongTaskSpec
+    return { base, root, spec, input: { root, campaign: "campaign", baseSpecPath: state.baseSpecPath as string } }
+  }
+
+  test("B01: Plan N=9, Campaign maxRounds=9, f/h=7/7, m/b=2/2 -> 准入", async () => {
+    const f = await fixtureV2({ planN: 9, campaignMaxRounds: 9, f: 7, h: 7, m: 2, b: 2 })
+    const control = await openTaskCampaignControl(f.spec, f.input)
+    expect(control).toBeDefined()
+    control!.close()
+  })
+
+  test("B02: Plan N=9, Campaign maxRounds=7, f/h=7/7, m/b=2/2 -> 首轮前拒绝 (h+m > N)", async () => {
+    const f = await fixtureV2({ planN: 9, campaignMaxRounds: 7, f: 7, h: 7, m: 2, b: 2 })
+    await expect(openTaskCampaignControl(f.spec, f.input)).rejects.toThrow(
+      /V2 effective Campaign round window incompatible: window maximum \(7\) \+ allowance minimum \(2\) exceeds effective rounds \(7\)/
+    )
+  })
+
+  test("B03: Plan N=9, Campaign maxRounds=7, f/h=5/5, m/b=2/2 -> 准入", async () => {
+    const f = await fixtureV2({ planN: 9, campaignMaxRounds: 7, f: 5, h: 5, m: 2, b: 2 })
+    const control = await openTaskCampaignControl(f.spec, f.input)
+    expect(control).toBeDefined()
+    control!.close()
+  })
+
+  test("B04: Plan N=9, Campaign maxRounds=7, f/h=4/5, m/b=2/3 -> 准入 (5+2<=7, 3<=7-4=3)", async () => {
+    const f = await fixtureV2({ planN: 9, campaignMaxRounds: 7, f: 4, h: 5, m: 2, b: 3 })
+    const control = await openTaskCampaignControl(f.spec, f.input)
+    expect(control).toBeDefined()
+    control!.close()
+  })
+
+  test("B05: Plan N=9, Campaign maxRounds=7, f/h=4/5, m/b=2/4 -> 首轮前拒绝 (b > N-f)", async () => {
+    // 4 > 7 - 4 = 3
+    // 注意：Plan N=9 时，4 <= 9-4=5 合法，但实际 Campaign 紧缩至 7，使得有效 N=7，b=4 超出 N-f=3
+    const f = await fixtureV2({ planN: 9, campaignMaxRounds: 7, f: 4, h: 5, m: 2, b: 4 })
+    await expect(openTaskCampaignControl(f.spec, f.input)).rejects.toThrow(
+      /V2 effective Campaign round window incompatible: allowance rounds \(4\) exceeds remaining effective rounds \(3\)/
+    )
+  })
+
+  test("B06: Plan N=4, Campaign maxRounds=4, f/h=2/2, m/b=2/2 -> 现有标准 V2 E2E 准入", async () => {
+    const f = await fixtureV2({ planN: 4, campaignMaxRounds: 4, f: 2, h: 2, m: 2, b: 2 })
+    const control = await openTaskCampaignControl(f.spec, f.input)
+    expect(control).toBeDefined()
+    control!.close()
+  })
+
+  test("B07: V1 合法，Campaign 原配置 -> 准入，不引入 V2 专属拒绝", async () => {
+    const f = await fixture()
+    const control = await openTaskCampaignControl(f.spec, f.input)
+    expect(control).toBeDefined()
+    control!.close()
+  })
+
+  test("B08: 无探索旧配置 -> openTaskCampaignControl 返回 undefined", async () => {
+    const root = path.join(await mkdtemp(path.join(os.tmpdir(), "aev-no-exp-")), "absent")
+    expect(await openTaskCampaignControl({} as LongTaskSpec, { root, campaign: "old", baseSpecPath: root })).toBeUndefined()
+  })
 })

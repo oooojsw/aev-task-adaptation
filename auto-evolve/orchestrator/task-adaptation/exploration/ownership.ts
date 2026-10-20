@@ -78,6 +78,30 @@ export async function openTaskCampaignControl(spec: LongTaskSpec, input: {
         throw new Error("Campaign owner still active or unresolved; recovery not authorized")
       }
     }
+    if (policy.schema === "aev.exploration-policy.v2") {
+      const maxRounds = (state as { maxRounds?: unknown }).maxRounds
+      const effectiveCampaignRounds =
+        maxRounds !== undefined
+          ? typeof maxRounds === "number" && Number.isSafeInteger(maxRounds) && maxRounds >= 1
+            ? maxRounds
+            : (() => {
+                throw new Error("Invalid campaign maxRounds: positive safe integer required")
+              })()
+          : bound.plan.stop.rounds
+      const N = Math.min(bound.plan.stop.rounds, effectiveCampaignRounds)
+      const { minimumRounds: f, maximumRounds: h } = policy.window
+      const { minimumRounds: m, rounds: b } = policy.allowance
+      if (h + m > N) {
+        throw new Error(
+          `V2 effective Campaign round window incompatible: window maximum (${h}) + allowance minimum (${m}) exceeds effective rounds (${N})`
+        )
+      }
+      if (b > N - f) {
+        throw new Error(
+          `V2 effective Campaign round window incompatible: allowance rounds (${b}) exceeds remaining effective rounds (${N - f})`
+        )
+      }
+    }
     const binding = { schema: "aev.exploration-host-scope.v1", root: path.resolve(input.root).replaceAll("\\", "/"),
       baseSpecPath: path.resolve(input.baseSpecPath).replaceAll("\\", "/"), scope }
     const target = path.join(root, "scope.json")

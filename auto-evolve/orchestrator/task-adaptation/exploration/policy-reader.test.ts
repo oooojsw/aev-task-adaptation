@@ -198,4 +198,41 @@ describe("Exploration Policy Reader", () => {
       readExplorationPolicy({ schema: "aev.exploration-policy.v999" }, plan)
     ).toThrow(/Unsupported exploration policy schema/)
   })
+
+  test("A01: 合法原 fixturePlan() 不含探索字段；validatePlan + Reader 仍合法且 Reader undefined", () => {
+    const raw = fixturePlan()
+    delete (raw as any).exploration
+    const validated = validatePlan(raw)
+    expect(validated.exploration).toBeUndefined()
+    expect(readExplorationPolicy(validated.exploration, validated)).toBeUndefined()
+    expect(explorationIdentityAny(validated.exploration, validated)).toBeUndefined()
+  })
+
+  test("A02: validatePlan({...fixturePlan(), exploration:null}) 抛错而非合法普通任务", () => {
+    const raw = { ...fixturePlan(), exploration: null }
+    expect(() => validatePlan(raw)).toThrow(/Invalid exploration policy: explicit null not allowed/)
+  })
+
+  test("A03: readExplorationPolicy(null,fixturePlan()) 与 explorationIdentityAny(null,fixturePlan()) 均拒绝", () => {
+    const plan = fixturePlan()
+    expect(() => readExplorationPolicy(null, plan)).toThrow(/Invalid exploration policy: explicit null not allowed/)
+    expect(() => explorationIdentityAny(null, plan)).toThrow(/Invalid exploration policy: explicit null not allowed/)
+  })
+
+  test("A04: 正确 V1 fixture 和已批准 V2 window fixture 都仍合法；V1/V2 指纹与基线完全一致", () => {
+    const plan = fixturePlan()
+    const v1 = fixtureV1()
+    const v2 = fixtureV2Window()
+    const validatedV1 = readExplorationPolicy(v1, plan)
+    const validatedV2 = readExplorationPolicy(v2, plan)
+    expect(validatedV1).toBeDefined()
+    expect(validatedV2).toBeDefined()
+    expect(explorationIdentityAny(v1, plan)).toBe(explorationIdentity(v1, plan))
+    expect(explorationIdentityAny(v2, plan)).toBeDefined()
+  })
+
+  test("A05: exploration:undefined 显式写在 Plan 里仍由 validatePlan 拒绝，不变成 off", () => {
+    const raw = { ...fixturePlan(), exploration: undefined }
+    expect(() => validatePlan(raw)).toThrow(/Explicit exploration policy required/)
+  })
 })

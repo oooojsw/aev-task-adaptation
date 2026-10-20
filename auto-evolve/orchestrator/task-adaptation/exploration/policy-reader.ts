@@ -9,7 +9,10 @@ export function readExplorationPolicy(
   value: unknown,
   plan: Readonly<Plan>,
 ): Readonly<AnyExplorationPolicy> | undefined {
-  if (value === undefined || value === null) return undefined
+  if (value === undefined) return undefined
+  if (value === null) {
+    throw new Error("Invalid exploration policy: explicit null not allowed")
+  }
   if (typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Invalid exploration policy: expected object")
   }
@@ -24,7 +27,7 @@ export function readExplorationPolicy(
 }
 
 export function explorationIdentityAny(value: unknown, plan: Readonly<Plan>): string | undefined {
-  if (value === undefined || value === null) return undefined
+  if (value === undefined) return undefined
   const policy = readExplorationPolicy(value, plan)
   if (!policy) return undefined
   if (policy.schema === "aev.exploration-policy.v1") {
