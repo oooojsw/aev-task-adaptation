@@ -1,18 +1,20 @@
 import path from "node:path"
-import { readFile, mkdir, open, realpath, access, lstat } from "node:fs/promises"
+import { access, lstat, mkdir, open, readFile, realpath } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
-import { writeJsonAtomic, writeFileAtomic } from "../atomic-write"
-import { opencodeDriver } from "../protocol-plugins/opencode-driver"
-import type { InvokeTool } from "../protocol-plugins/tool-session"
 import { canonical, fingerprint } from "../protocol-plugins/identity"
-import { compileTask, interpretationPrompt, validateCatalogue, type TaskCatalogue, type Decision } from "./catalogue"
+import { opencodeDriver } from "../protocol-plugins/opencode-driver"
+import { writeFileAtomic, writeJsonAtomic } from "../atomic-write"
+import { interpretationPrompt, validateCatalogue, type Decision, type TaskCatalogue, compileTask } from "./catalogue"
+import { validatePlan } from "./plan"
 import { resolveResource } from "./binding"
 import { approvePresetPlan } from "./approved-plan"
+
 import { resolveExploration, type ExplorationSupport } from "./exploration/resolve"
 import { BUILTIN_EXPLORATION_TEMPLATES, type ExplorationRequest, type HostExplorationTemplate } from "./exploration/templates"
 
-interface Driver { implementation: string; preflight(): Promise<void>; invoke: InvokeTool }
+type Driver = Awaited<ReturnType<typeof opencodeDriver>>
+
 export interface IntakeCommon {
   cwd: string
   root: string
@@ -20,7 +22,11 @@ export interface IntakeCommon {
   catalogue: TaskCatalogue
   explorationRequest?: ExplorationRequest
   explorationSupport?: ExplorationSupport
-  explorationTemplates?: readonly HostExplorationTemplate[]
+}
+
+export interface IntakeDependencies {
+  createDriver?: (options: { cwd: string; evidenceRoot: string }) => Promise<Driver>
+  templates?: readonly HostExplorationTemplate[]
 }
 
 // auto 延续原来的必填协议，兼容现有任务配置和模型调用回执。
@@ -60,12 +66,27 @@ export type IntakeInput = AutoIntakeInput | ManualDecisionInput | ManualPlanInpu
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 const json = (bytes: Buffer) => JSON.parse(bytes.toString("utf8").replace(/^\uFEFF/, ""))
 
-async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: { createDriver: (options: { cwd: string; evidenceRoot: string }) => Promise<Driver> }) {
+async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: IntakeDependencies) {
   if (![input.cwd, input.root, input.dir].every(file => typeof file === "string" && path.isAbsolute(file)) ||
     ![input.model, input.expectedModel].every(text => typeof text === "string" && text.trim()) ||
     ![input.timeoutMs, input.maxInputBytes, input.maxDecisionBytes].every(number => Number.isSafeInteger(number) && number > 0) ||
     input.timeoutMs > 43200000 || input.maxDecisionBytes > 1048576 ||
     input.maxDecisionRepairs !== undefined && (!Number.isSafeInteger(input.maxDecisionRepairs) || input.maxDecisionRepairs < 0 || input.maxDecisionRepairs > 2)) throw new Error("Explicit bounded task intake required")
+  const templates = dependencies?.templates ?? BUILTIN_EXPLORATION_TEMPLATES
+  const cleanSupport = input.explorationSupport ? JSON.parse(JSON.stringify(input.explorationSupport)) : undefined
+
+  // 已知不支持且不依赖模型选 Profile 的检查先于模型调用执行
+  if (input.explorationRequest) {
+    if (input.explorationRequest.mode === "observations") {
+      if (!templates.length) {
+        throw new Error("No matching approved exploration template for explicit exploration request")
+      }
+      if (!Number.isSafeInteger(input.explorationRequest.after) || input.explorationRequest.after < 1) {
+        throw new Error("Exploration after observations must be a positive integer")
+      }
+    }
+  }
+
   const catalogue = validateCatalogue(input.catalogue)
   const root = await realpath(input.root)
   if (root.toLowerCase() !== path.resolve(input.root).toLowerCase()) throw new Error("Linked intake material root rejected")
@@ -97,7 +118,7 @@ async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: { createDr
     ...(input.maxDecisionRepairs !== undefined ? { maxDecisionRepairs: input.maxDecisionRepairs } : {}),
     ...(input.requestBudget ? { requestBudget: input.requestBudget } : {}),
     ...(input.explorationRequest ? { explorationRequest: input.explorationRequest } : {}),
-    ...(input.explorationSupport ? { explorationSupport: fingerprint(JSON.parse(JSON.stringify(input.explorationSupport))) } : {}) })
+    ...(cleanSupport ? { explorationSupport: fingerprint(cleanSupport) } : {}) })
   const snapshot = path.join(dir, "intake.snapshot.json")
   const completed = path.join(dir, "intake.completed.json")
   const result = path.join(dir, "intake.result.json")
@@ -122,9 +143,13 @@ async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: { createDr
     try { await access(resolutionFile); resolutionExists = true } catch {}
     if (resolutionExists) {
       const resData = json(await readFile(await resolveResource(dir, "exploration-resolution.json")))
-      if (resData.schema !== "aev.exploration-resolution.v1" || !resData.policy) throw new Error("Invalid exploration resolution evidence")
+      if (resData.schema !== "aev.exploration-resolution.v1") throw new Error("Invalid exploration resolution evidence")
       if (saved.resolutionSHA256 !== hash(await readFile(resolutionFile))) throw new Error("Completed exploration resolution evidence drift")
-      if (value.status === "ready") value = { ...value, plan: { ...value.plan, exploration: resData.policy } }
+      if (resData.supportFingerprint !== fingerprint(cleanSupport ?? {})) throw new Error("Completed exploration resolution support drift")
+      if (resData.enabled) {
+        if (!resData.policy) throw new Error("Invalid exploration resolution evidence")
+        if (value.status === "ready") value = { ...value, plan: { ...value.plan, exploration: resData.policy } }
+      }
     } else if (saved.resolutionSHA256) {
       throw new Error("Missing expected exploration resolution evidence")
     }
@@ -172,26 +197,41 @@ async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: { createDr
         continue
       }
       let resolutionSHA256: string | undefined
-      if (value.status === "ready") {
+      if (value.status === "ready" && input.explorationRequest && input.explorationRequest.mode !== "off") {
         const resolution = resolveExploration(
           value.plan,
           input.explorationRequest,
-          input.explorationTemplates ?? BUILTIN_EXPLORATION_TEMPLATES,
-          input.explorationSupport,
+          templates,
+          cleanSupport,
+          value.profiles,
         )
         if (resolution.enabled && resolution.policy) {
           value = { ...value, plan: { ...value.plan, exploration: resolution.policy } }
           const resolutionData = {
             schema: "aev.exploration-resolution.v1" as const,
+            enabled: true,
             request: input.explorationRequest,
             template: resolution.template,
-            supportFingerprint: fingerprint(input.explorationSupport ?? {}),
+            supportFingerprint: fingerprint(cleanSupport ?? {}),
             planFingerprint: fingerprint(value.plan),
             policy: resolution.policy,
           }
           await writeJsonAtomic(resolutionFile, resolutionData)
           resolutionSHA256 = hash(await readFile(resolutionFile))
+        } else {
+          const resolutionData = {
+            schema: "aev.exploration-resolution.v1" as const,
+            enabled: false,
+            reason: resolution.reason,
+            request: input.explorationRequest,
+            supportFingerprint: fingerprint(cleanSupport ?? {}),
+            planFingerprint: fingerprint(value.plan),
+          }
+          await writeJsonAtomic(resolutionFile, resolutionData)
+          resolutionSHA256 = hash(await readFile(resolutionFile))
         }
+      }
+      if (value.status === "ready") {
         await writeJsonAtomic(plan, value.plan)
       }
       await writeJsonAtomic(result, value)
@@ -208,12 +248,13 @@ async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: { createDr
 }
 
 // 原始 auto 分支保持单独的执行与恢复语义；手动分支不得构造伪造的 backend-result。
-export async function prepareTask(input: IntakeInput, dependencies?: {
-  createDriver: (options: { cwd: string; evidenceRoot: string }) => Promise<Driver>
-}) {
+export async function prepareTask(input: IntakeInput, dependencies?: IntakeDependencies) {
+  if ((input as Record<string, unknown>).explorationTemplates !== undefined) {
+    throw new Error("Task intake rejects inline explorationTemplates; templates are host-managed")
+  }
   if (input.mode === undefined || input.mode === "auto") return prepareTaskAuto(input, dependencies)
   if (input.mode !== "manual_decision" && input.mode !== "manual_plan") throw new Error("Unknown task intake mode")
-  return prepareTaskManual(input)
+  return prepareTaskManual(input, dependencies)
 }
 
 const MAX_PRESET_BYTES = 1024 * 1024
@@ -231,97 +272,74 @@ async function readTrustedJsonFile(file: string, maxBytes: number) {
 }
 
 export async function readPresetPlan(file: string) {
-  return (await readTrustedJsonFile(file, MAX_PRESET_BYTES)).value
+  const result = await readTrustedJsonFile(file, MAX_PRESET_BYTES)
+  return validatePlan(result.value)
 }
 
-async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput) {
+async function readManualSource(input: ManualDecisionInput | ManualPlanInput, maxBytes: number) {
+  if (input.mode === "manual_decision") {
+    const hasInline = input.decision !== undefined
+    const hasPath = typeof input.decisionPath === "string"
+    if (hasInline === hasPath) throw new Error("Manual decision requires exactly one source: decision or decisionPath")
+    if (hasInline) {
+      if (!input.decision || typeof input.decision !== "object" || Array.isArray(input.decision)) {
+        throw new Error("Invalid manual decision payload")
+      }
+      const canonicalBytes = Buffer.from(canonical(input.decision), "utf8")
+      if (canonicalBytes.length > maxBytes) throw new Error("Manual decision byte budget exceeded")
+      return { bytes: canonicalBytes, value: input.decision, path: null }
+    }
+    return readTrustedJsonFile(input.decisionPath!, maxBytes)
+  }
+  if (typeof input.planPath !== "string") throw new Error("Manual preset plan requires planPath")
+  return readTrustedJsonFile(input.planPath, maxBytes)
+}
+
+async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput, dependencies?: IntakeDependencies) {
+  const templates = dependencies?.templates ?? BUILTIN_EXPLORATION_TEMPLATES
+  const cleanSupport = input.explorationSupport ? JSON.parse(JSON.stringify(input.explorationSupport)) : undefined
   if (![input.cwd, input.root, input.dir].every(file => typeof file === "string" && path.isAbsolute(file))) {
-    throw new Error("Absolute manual task paths required")
-  }
-  // 手动轨道绝不接受误传的模型请求预算或 LLM 相关参数。
-  if ((input as { requestBudget?: unknown }).requestBudget !== undefined ||
-    ["model", "expectedModel", "timeoutMs", "maxInputBytes", "maxDecisionRepairs"].some(
-      key => Object.prototype.hasOwnProperty.call(input, key))) throw new Error("Manual intake cannot use automatic model fields")
-  if (input.mode === "manual_plan") {
-    if (["maxDecisionBytes", "decision", "decisionPath"].some(
-      key => Object.prototype.hasOwnProperty.call(input, key))) {
-      throw new Error("Manual Plan contains incompatible decision fields")
-    }
-    if (input.explorationRequest && input.explorationRequest.mode !== "off") {
-      throw new Error("Manual Plan cannot accept active exploration request; approve full Plan instead")
-    }
-  }
-  if (input.mode === "manual_decision" && Object.prototype.hasOwnProperty.call(input, "planPath")) {
-    throw new Error("Manual Decision cannot specify Plan path")
+    throw new Error("Explicit bounded task manual intake required")
   }
   const catalogue = validateCatalogue(input.catalogue)
   const root = await realpath(input.root)
-  if (root.toLowerCase() !== path.resolve(input.root).toLowerCase()) throw new Error("Linked intake material root rejected")
-  const relation = path.relative(root, input.dir)
-  if (!relation || (!path.isAbsolute(relation) && relation !== ".." && !relation.startsWith(`..${path.sep}`))) {
-    throw new Error("Intake output must be outside task materials")
+  if (root.toLowerCase() !== path.resolve(input.root).toLowerCase()) throw new Error("Linked manual material root rejected")
+  const relative = path.relative(root, input.dir)
+  if (!relative || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) {
+    throw new Error("Manual intake output must be outside task materials")
   }
-  const resources = async () => {
-    const items = await Promise.all(catalogue.resources.map(async item => {
-      const file = await resolveResource(root, item.path)
-      const bytes = await readFile(file)
-      return { id: item.id, path: file.replaceAll("\\", "/"), bytes: bytes.length, sha256: hash(bytes) }
-    }))
-    if (items.reduce((total, item) => total + item.bytes, 0) > MAX_MANUAL_MATERIAL_BYTES) {
-      throw new Error("Manual intake material byte budget exceeded")
-    }
-    return items
-  }
+  const resources = async () => Promise.all(catalogue.resources.map(async item => {
+    const file = await resolveResource(root, item.path)
+    const bytes = await readFile(file)
+    return { id: item.id, path: file.replaceAll("\\", "/"), bytes: bytes.length, sha256: hash(bytes) }
+  }))
   const files = await resources()
-  const sourceLimit = input.mode === "manual_decision" ? input.maxDecisionBytes ?? MAX_PRESET_BYTES : MAX_PRESET_BYTES
-  if (!Number.isSafeInteger(sourceLimit) || sourceLimit <= 0 || sourceLimit > MAX_PRESET_BYTES) {
-    throw new Error("Invalid manual source byte limit")
-  }
-  let source: { bytes: Buffer; value: unknown; path: string | null }
-  if (input.mode === "manual_decision") {
-    if ((input.decision === undefined) === (input.decisionPath === undefined)) {
-      throw new Error("Specify exactly one manual decision source")
-    }
-    if (input.decisionPath !== undefined) {
-      source = await readTrustedJsonFile(input.decisionPath, sourceLimit)
-    } else {
-      const bytes = Buffer.from(canonical(input.decision))
-      if (bytes.length > sourceLimit) throw new Error("Manual decision byte budget exceeded")
-      source = { bytes, value: json(bytes), path: null }
-    }
-  } else {
-    if (typeof input.planPath !== "string") throw new Error("Manual Plan path required")
-    source = await readTrustedJsonFile(input.planPath, sourceLimit)
-  }
+  const sourceLimit = input.mode === "manual_decision"
+    ? (input.maxDecisionBytes ?? 1048576)
+    : MAX_PRESET_BYTES
+  const source = await readManualSource(input, sourceLimit)
   // 验证在认领前完成；无效配置不得生成可被误认为已启动的 claim。
   const value = input.mode === "manual_decision"
     ? compileTask(catalogue, source.value as Decision)
     : approvePresetPlan(source.value, catalogue)
-  let finalValue = value
-  let resolutionData: Record<string, unknown> | undefined
-  if (input.mode === "manual_decision" && finalValue.status === "ready") {
-    const resolution = resolveExploration(
-      finalValue.plan,
-      input.explorationRequest,
-      input.explorationTemplates ?? BUILTIN_EXPLORATION_TEMPLATES,
-      input.explorationSupport,
-    )
-    if (resolution.enabled && resolution.policy) {
-      finalValue = { ...finalValue, plan: { ...finalValue.plan, exploration: resolution.policy } }
-      resolutionData = {
-        schema: "aev.exploration-resolution.v1" as const,
-        request: input.explorationRequest,
-        template: resolution.template,
-        supportFingerprint: fingerprint(input.explorationSupport ?? {}),
-        planFingerprint: fingerprint(finalValue.plan),
-        policy: resolution.policy,
-      }
+
+  if (input.mode === "manual_plan" && value.status === "ready") {
+    if (input.explorationRequest && input.explorationRequest.mode !== "off") {
+      throw new Error("Manual Plan mode does not support active exploration requests")
     }
-  } else if (input.mode === "manual_plan" && finalValue.status === "ready") {
-    if (input.explorationRequest?.mode === "off" && finalValue.plan.exploration) {
+    if (input.explorationRequest?.mode === "off" && value.plan.exploration) {
       throw new Error("Manual Plan exploration conflicts with explicit off request")
     }
   }
+
+  const sourceFiles = ["./intake.ts", "./catalogue.ts", "./plan.ts", "./binding.ts", "./approved-plan.ts"]
+  const implementation = await Promise.all(sourceFiles.map(async file =>
+    hash(await readFile(fileURLToPath(new URL(file, import.meta.url))))))
+  const sourceEvidence = { mode: input.mode, path: source.path, sha256: hash(source.bytes), bytes: source.bytes.length }
+  const binding = fingerprint({ catalogue, root, files, cwd: input.cwd, source: implementation, sourceEvidence,
+    ...(input.explorationRequest ? { explorationRequest: input.explorationRequest } : {}),
+    ...(cleanSupport ? { explorationSupport: fingerprint(cleanSupport) } : {}) })
+
   await mkdir(input.dir, { recursive: true })
   const dir = await realpath(input.dir)
   if (dir.toLowerCase() !== path.resolve(input.dir).toLowerCase()) throw new Error("Linked intake output root rejected")
@@ -340,16 +358,10 @@ async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput) {
   const savedRelative = `workspace/${evidenceName}`
   const planPath = path.join(dir, "task-plan.json")
   const resolutionFile = path.join(dir, "exploration-resolution.json")
-  const sourceFiles = ["./intake.ts", "./catalogue.ts", "./plan.ts", "./binding.ts", "./approved-plan.ts"]
-  const implementation = await Promise.all(sourceFiles.map(async file =>
-    hash(await readFile(fileURLToPath(new URL(file, import.meta.url))))))
-  const sourceEvidence = { mode: input.mode, path: source.path, sha256: hash(source.bytes), bytes: source.bytes.length }
-  const binding = fingerprint({ catalogue, root, files, cwd: input.cwd, source: implementation, sourceEvidence,
-    ...(input.explorationRequest ? { explorationRequest: input.explorationRequest } : {}),
-    ...(input.explorationSupport ? { explorationSupport: fingerprint(JSON.parse(JSON.stringify(input.explorationSupport))) } : {}) })
   const snapshot = path.join(dir, "intake.snapshot.json")
   const completed = path.join(dir, "intake.completed.json")
   const resultPath = path.join(dir, "intake.result.json")
+
   let fresh = true
   try { const claim = await open(path.join(dir, "intake.started.claim"), "wx"); await claim.close() }
   catch (error) {
@@ -360,6 +372,8 @@ async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput) {
       throw new Error("Task manual intake identity drift")
     }
   }
+
+  // 恢复分支：完全以保存的冻结模板和 policy 为准，不按当前 Host 重新挑选，恢复不得新发模型请求
   if (!fresh) {
     try { await access(path.join(dir, "intake.failure.json")); throw new Error("Task intake failed; inspect before recovery") }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
@@ -373,25 +387,31 @@ async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput) {
     try { await access(resolutionFile); resolutionExists = true } catch {}
     if (resolutionExists) {
       const resData = json(await readFile(await resolveResource(dir, "exploration-resolution.json")))
-      if (resData.schema !== "aev.exploration-resolution.v1" || !resData.policy) throw new Error("Invalid exploration resolution evidence")
+      if (resData.schema !== "aev.exploration-resolution.v1") throw new Error("Invalid exploration resolution evidence")
       if (receipt.resolutionSHA256 !== hash(await readFile(resolutionFile))) throw new Error("Completed exploration resolution evidence drift")
-      if (savedValue.status === "ready") savedValue = { ...savedValue, plan: { ...savedValue.plan, exploration: resData.policy } }
+      if (resData.supportFingerprint !== fingerprint(cleanSupport ?? {})) throw new Error("Completed exploration resolution support drift")
+      if (resData.enabled) {
+        if (!resData.policy) throw new Error("Invalid exploration resolution evidence")
+        if (savedValue.status === "ready") savedValue = { ...savedValue, plan: { ...savedValue.plan, exploration: resData.policy } }
+      }
     } else if (receipt.resolutionSHA256) {
       throw new Error("Missing expected exploration resolution evidence")
     }
     if (receipt.schema !== "aev.task-intake-completed.v1" || receipt.mode !== input.mode ||
       receipt.binding !== binding || receipt.sourceSHA256 !== hash(source.bytes) ||
       receipt.evidenceSHA256 !== hash(evidence) ||
-      receipt.result !== fingerprint(finalValue) || canonical(savedValue) !== canonical(finalValue) ||
-      canonical(savedResult) !== canonical(finalValue) ||
-      (finalValue.status === "ready" && receipt.planSHA256 !== hash(await readFile(await resolveResource(dir, "task-plan.json"))))) {
+      receipt.result !== fingerprint(savedValue) ||
+      canonical(savedResult) !== canonical(savedValue) ||
+      (savedValue.status === "ready" && receipt.planSHA256 !== hash(await readFile(await resolveResource(dir, "task-plan.json"))))) {
       throw new Error("Completed manual intake evidence drift")
     }
-    if (finalValue.status === "ready" && canonical(json(await readFile(await resolveResource(dir, "task-plan.json")))) !== canonical(finalValue.plan)) {
+    if (savedValue.status === "ready" && canonical(json(await readFile(await resolveResource(dir, "task-plan.json")))) !== canonical(savedValue.plan)) {
       throw new Error("Completed manual Plan differs from approved result")
     }
-    return { ...finalValue, dir, ...(finalValue.status === "ready" ? { planPath } : {}), reused: true }
+    return { ...savedValue, dir, ...(savedValue.status === "ready" ? { planPath } : {}), reused: true }
   }
+
+  // 新任务分支：首次认领成功，执行解析与冻结写入
   for (const file of [snapshot, completed, resultPath, planPath, evidencePath,
     path.join(dir, "intake.backend-result.json"), path.join(dir, "intake.failure.json")]) {
     try { await access(file); throw new Error("Unclaimed task intake evidence exists") }
@@ -400,19 +420,52 @@ async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput) {
   await writeJsonAtomic(snapshot, { schema: "aev.task-intake-snapshot.v1", mode: input.mode,
     binding, source: sourceEvidence })
   try {
-    // 留存原始文件内容，不能捏造后端调用成功回执。
     await writeFileAtomic(evidencePath, source.bytes)
     if (source.path && hash((await readTrustedJsonFile(source.path, sourceLimit)).bytes) !== sourceEvidence.sha256) {
       throw new Error("Manual source changed during intake")
     }
     if (canonical(await resources()) !== canonical(files)) throw new Error("Manual intake materials drifted")
+
+    let finalValue = value
+    let resolutionSHA256: string | undefined
+
+    if (input.mode === "manual_decision" && finalValue.status === "ready" && input.explorationRequest && input.explorationRequest.mode !== "off") {
+      const resolution = resolveExploration(
+        finalValue.plan,
+        input.explorationRequest,
+        templates,
+        cleanSupport,
+        finalValue.profiles,
+      )
+      if (resolution.enabled && resolution.policy) {
+        finalValue = { ...finalValue, plan: { ...finalValue.plan, exploration: resolution.policy } }
+        const resolutionData = {
+          schema: "aev.exploration-resolution.v1" as const,
+          enabled: true,
+          request: input.explorationRequest,
+          template: resolution.template,
+          supportFingerprint: fingerprint(cleanSupport ?? {}),
+          planFingerprint: fingerprint(finalValue.plan),
+          policy: resolution.policy,
+        }
+        await writeJsonAtomic(resolutionFile, resolutionData)
+        resolutionSHA256 = hash(await readFile(resolutionFile))
+      } else {
+        const resolutionData = {
+          schema: "aev.exploration-resolution.v1" as const,
+          enabled: false,
+          reason: resolution.reason,
+          request: input.explorationRequest,
+          supportFingerprint: fingerprint(cleanSupport ?? {}),
+          planFingerprint: fingerprint(finalValue.plan),
+        }
+        await writeJsonAtomic(resolutionFile, resolutionData)
+        resolutionSHA256 = hash(await readFile(resolutionFile))
+      }
+    }
+
     await writeJsonAtomic(resultPath, finalValue)
     if (finalValue.status === "ready") await writeJsonAtomic(planPath, finalValue.plan)
-    let resolutionSHA256: string | undefined
-    if (resolutionData) {
-      await writeJsonAtomic(resolutionFile, resolutionData)
-      resolutionSHA256 = hash(await readFile(resolutionFile))
-    }
     await writeJsonAtomic(completed, { schema: "aev.task-intake-completed.v1", mode: input.mode,
       binding, sourceSHA256: sourceEvidence.sha256,
       evidenceSHA256: hash(await readFile(evidencePath)), result: fingerprint(finalValue),

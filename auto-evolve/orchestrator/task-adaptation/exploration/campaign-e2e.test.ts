@@ -13,6 +13,7 @@ import { catalogue, decision } from "../intake-fixture"
 import { compileTask } from "../catalogue"
 import { fingerprint } from "../../protocol-plugins/identity"
 import { inspectBudget } from "../request-budget"
+import { FIXTURE_REPORT_EXPLORATION_TEMPLATE } from "./templates"
 
 const hash = async (file: string) => createHash("sha256").update(await readFile(file)).digest("hex")
 
@@ -255,7 +256,13 @@ test("report exploration with low-config manual_decision expands V1 and complete
       },
     }
 
-    const result = await actual.runTask(input)
+    const runDeps = { templates: [FIXTURE_REPORT_EXPLORATION_TEMPLATE] }
+
+    // 验证顶层输入伪造模板被明确拒绝
+    await expect(actual.runTask({ ...input, explorationTemplates: [FIXTURE_REPORT_EXPLORATION_TEMPLATE] } as any, runDeps))
+      .rejects.toThrow("Task run preparation rejects inline explorationTemplates")
+
+    const result = await actual.runTask(input, runDeps)
     expect(result.status).toBe("verified_success")
 
     // 验证生成的 task-plan.json 包含由 resolveExploration 自动展开的 V1 策略
@@ -279,7 +286,7 @@ test("report exploration with low-config manual_decision expands V1 and complete
 
     // 验证同目录恢复完全复用，零新增调用
     const count = calls.length
-    const resumed = await actual.runTask(input)
+    const resumed = await actual.runTask(input, runDeps)
     expect(resumed.delivery).toEqual({ ...result.delivery, reused: true })
     expect(calls).toHaveLength(count)
     console.log(`Report low-config exploration E2E evidence: ${root}`)

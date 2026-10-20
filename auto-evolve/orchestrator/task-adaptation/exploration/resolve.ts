@@ -39,6 +39,7 @@ export function resolveExploration(
   request: ExplorationRequest | undefined,
   templates: readonly HostExplorationTemplate[] = BUILTIN_EXPLORATION_TEMPLATES,
   support?: ExplorationSupport,
+  profiles?: readonly string[],
 ): ExplorationResolutionResult {
   if (request === undefined || request === null) {
     return { enabled: false, reason: "Exploration not requested" }
@@ -62,7 +63,7 @@ export function resolveExploration(
     throw new Error(`Unsupported exploration request mode: ${String(mode)}`)
   }
 
-  let observations: number
+  let observations: number | undefined
   if (mode === "observations") {
     exact(request, ["mode", "after"], "exploration observations request")
     if (!Number.isSafeInteger(request.after) || request.after < 1) {
@@ -71,37 +72,73 @@ export function resolveExploration(
     observations = request.after
   }
 
-  // 严格校验模板合法性
+  // 严格校验模板合法性（结构损坏属于配置错误）
   for (const t of templates) {
-    if (t.schema !== "aev.exploration-template.v1" || !t.id || !t.version || !Array.isArray(t.profiles)) {
+    if (
+      t.schema !== "aev.exploration-template.v1" ||
+      !t.id ||
+      !t.version ||
+      !Array.isArray(t.profiles) ||
+      !t.checker?.id ||
+      !t.policy?.origin ||
+      !Array.isArray(t.policy?.replace) ||
+      !t.policy?.allowance
+    ) {
       throw new Error("Invalid exploration template definition")
     }
   }
 
-  // 唯一匹配
+  const selectedProfiles = profiles && profiles.length > 0 ? profiles : [basePlan.deliverable.kind]
+
+  // 确定性精确匹配
   const matched = templates.filter((template) => {
-    // 1. Profile / deliverable kind 匹配
-    const matchesKind = template.profiles.includes(basePlan.deliverable.kind)
-    if (!matchesKind) return false
+    // 1. Profile 约束
+    const matchesProfile = template.profiles.some((p) => selectedProfiles.includes(p))
+    if (!matchesProfile) return false
 
-    // 2. support checker / executor 匹配
-    if (support?.checker && template.checker.id !== support.checker.id) {
+    // 2. 计划 Checker 匹配
+    const planHasChecker = basePlan.acceptance.checks.some(
+      (c) => c.id === template.checker.id || c.mechanism === template.checker.id || c.mechanism === "script",
+    )
+    if (!planHasChecker) return false
+
+    // 3. Host support checker 严格匹配：缺必需 Host checker 支持视作不支持
+    if (!support?.checker || support.checker.id !== template.checker.id) {
       return false
     }
-    if (template.executor && support?.executor && template.executor.id !== support.executor.id) {
+    if (template.checker.version && support.checker.version && template.checker.version !== support.checker.version) {
       return false
     }
 
-    // 3. 资源匹配
-    const planResourceIds = new Set(basePlan.resources.map((r) => r.id))
+    // 4. Host support executor 匹配：如果模板要求 executor，Host 必须提供且匹配
+    if (template.executor) {
+      if (!support?.executor || support.executor.id !== template.executor.id) {
+        return false
+      }
+      if (template.executor.version && support.executor.version && template.executor.version !== support.executor.version) {
+        return false
+      }
+    }
+
+    // 5. 资源槽与动作匹配
+    const planResourceMap = new Map(basePlan.resources.map((r) => [r.id, r]))
     for (const r of template.policy.replace) {
-      if (!planResourceIds.has(r)) return false
+      const res = planResourceMap.get(r)
+      if (!res || !res.mutable || !basePlan.deliverable.entries.includes(r)) return false
     }
     for (const p of template.policy.preserve) {
-      if (!planResourceIds.has(p)) return false
+      if (!planResourceMap.has(p)) return false
     }
     for (const d of template.policy.dependencies) {
-      if (!planResourceIds.has(d)) return false
+      if (!planResourceMap.has(d)) return false
+    }
+
+    // 6. 预算约束：不能超过全局 stop.rounds 与最低周期
+    if (template.policy.allowance.rounds > basePlan.stop.rounds) return false
+    if (template.policy.allowance.minimumRounds > basePlan.stop.rounds) return false
+    if (support?.budget) {
+      if (template.policy.allowance.authorCalls > support.budget.calls) return false
+      if (template.policy.allowance.authorTokens > support.budget.tokens) return false
     }
 
     return true
@@ -109,18 +146,31 @@ export function resolveExploration(
 
   if (matched.length === 0) {
     if (mode === "auto") {
-      return { enabled: false, reason: "No matching approved exploration template found for task" }
+      return {
+        enabled: false,
+        reason: "No matching approved exploration template found for task",
+      }
     }
     throw new Error("No matching approved exploration template for explicit exploration request")
   }
 
   if (matched.length > 1) {
-    throw new Error("Ambiguous exploration templates matched for task")
+    if (mode === "auto") {
+      return {
+        enabled: false,
+        reason: `Ambiguous exploration templates matched for task: ${matched.map((m) => m.id).join(", ")}`,
+      }
+    }
+    throw new Error("Ambiguous exploration templates matched for explicit exploration request")
   }
 
   const template = matched[0]
   if (mode === "auto") {
     observations = template.policy.defaultObservations
+  }
+
+  if (!observations || observations < 1 || !Number.isSafeInteger(observations)) {
+    throw new Error("Invalid exploration observations trigger count")
   }
 
   // 展开为完整 V1 ExplorationPolicy
@@ -130,15 +180,10 @@ export function resolveExploration(
     replace: structuredClone(template.policy.replace),
     preserve: structuredClone(template.policy.preserve),
     dependencies: structuredClone(template.policy.dependencies),
-    trigger: { kind: "attempts", observations: observations! },
+    trigger: { kind: "attempts", observations },
     allowance: structuredClone(template.policy.allowance),
     bounds: structuredClone(template.policy.bounds),
     safety: structuredClone(template.policy.safety),
-  }
-
-  // 预算与轮次校验
-  if (candidatePolicy.allowance.rounds > basePlan.stop.rounds) {
-    throw new Error("Exploration allowance rounds exceed task stop rounds")
   }
 
   const validated = explorationPolicy(candidatePolicy, basePlan)

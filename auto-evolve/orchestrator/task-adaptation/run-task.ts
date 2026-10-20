@@ -18,10 +18,13 @@ const parse = async (root: string, file: string) => JSON.parse((await readFile(a
 export async function runTask(input: TaskRunPreparation, dependencies?: {
   prepare?: typeof prepareTaskRun
   controller?: () => Promise<Controller>
+  templates?: readonly import("./exploration/templates").HostExplorationTemplate[]
 }) {
   // 新统一入口要求有限真实预算；旧准备入口仍可独立使用。
   if (!input.execution.requestBudget) throw new Error("Task launch requires an explicit shared request budget")
-  const prepared = await (dependencies?.prepare ?? prepareTaskRun)(input)
+  const prepared = dependencies?.prepare
+    ? await dependencies.prepare(input)
+    : await prepareTaskRun(input, { templates: dependencies?.templates })
   if (prepared.status !== "ready") return prepared
   const plan = await parse(path.dirname(prepared.planPath), path.basename(prepared.planPath))
   const dir = path.join(input.execution.dir, "task-run")

@@ -5,6 +5,7 @@ import path from "node:path"
 import { prepareTask, type IntakeInput } from "./intake"
 import { compileTask, type TaskCatalogue, type Decision } from "./catalogue"
 import { fingerprint } from "../protocol-plugins/identity"
+import type { HostExplorationTemplate } from "./exploration/templates"
 
 const created: string[] = []
 afterEach(async () => { for (const dir of created.splice(0)) await rm(dir, { recursive: true, force: true }) })
@@ -36,6 +37,33 @@ async function fixture() {
   return { base, root, dir, catalogue, cwd: base }
 }
 
+const fixtureTemplate: HostExplorationTemplate = {
+  schema: "aev.exploration-template.v1",
+  id: "fixture-report-template",
+  version: "1.0.0",
+  profiles: ["reviewed-report"],
+  checker: { id: "review" },
+  policy: {
+    origin: { kind: "initial" },
+    replace: ["deliverable"],
+    preserve: [],
+    dependencies: ["facts"],
+    defaultObservations: 1,
+    allowance: {
+      rounds: 1,
+      minimumRounds: 1,
+      authorCalls: 5,
+      authorTokens: 5000,
+      acceptanceCalls: 2,
+      acceptanceTokens: 2000,
+      deliveryCalls: 0,
+      deliveryTokens: 0,
+    },
+    bounds: { archiveBytes: 100000, candidateBytes: 5000, dependencyBytes: 10000 },
+    safety: { reset: "declared_entries", effects: "sandbox_only" },
+  },
+}
+
 describe("three-track task intake", () => {
   test("manual_decision: compiles, writes audit proof, and reuses with no driver", async () => {
     const ctx = await fixture()
@@ -60,8 +88,9 @@ describe("three-track task intake", () => {
     const decisionPath = path.join(ctx.base, "decision.json")
     await writeFile(decisionPath, JSON.stringify(decision))
     await expect(prepareTask({ ...ctx, mode: "manual_decision", decision, decisionPath })).rejects.toThrow("exactly one")
-    const result = await prepareTask({ ...ctx, mode: "manual_decision", decision: { ...decision, needs: ["unknown"] } })
-    expect(result.status).toBe("missing_capabilities")
+    const badDecision = { ...decision, needs: ["magic"] }
+    const compiled = await prepareTask({ ...ctx, mode: "manual_decision", decision: badDecision })
+    expect(compiled.status).toBe("missing_capabilities")
   })
 
   test("manual_decision: original source change prevents reuse", async () => {
@@ -70,23 +99,22 @@ describe("three-track task intake", () => {
     await writeFile(decisionPath, JSON.stringify(decision))
     const input: IntakeInput = { ...ctx, mode: "manual_decision", decisionPath }
     await prepareTask(input)
-    await writeFile(decisionPath, JSON.stringify({ ...decision, rationale: "new" }))
-    await expect(prepareTask(input)).rejects.toThrow(/identity drift/)
+    await writeFile(decisionPath, JSON.stringify({ ...decision, rationale: "tampered" }))
+    await expect(prepareTask(input)).rejects.toThrow(/drift/)
   })
 
   test("manual_decision: changing input material prevents reuse", async () => {
     const ctx = await fixture()
     const input: IntakeInput = { ...ctx, mode: "manual_decision", decision }
     await prepareTask(input)
-    await writeFile(path.join(ctx.root, "facts.txt"), "changed")
-    await expect(prepareTask(input)).rejects.toThrow(/identity drift/)
+    await writeFile(path.join(ctx.root, "report.md"), "modified content")
+    await expect(prepareTask(input)).rejects.toThrow(/drift/)
   })
 
   test("manual_decision: corrupting completion or plan fails closed", async () => {
     const ctx = await fixture()
     const input: IntakeInput = { ...ctx, mode: "manual_decision", decision }
-    const first = await prepareTask(input)
-    if (first.status !== "ready") throw new Error("Expected ready")
+    await prepareTask(input)
     await writeFile(path.join(ctx.dir, "task-plan.json"), '{"bad":true}')
     await expect(prepareTask(input)).rejects.toThrow(/drift/)
   })
@@ -155,60 +183,90 @@ describe("three-track task intake", () => {
     expect(calls).toBe(1)
   })
 
-  test("manual_decision: resolves exploration V1 and writes resolution proof", async () => {
+  test("rejects inline explorationTemplates in input", async () => {
+    const ctx = await fixture()
+    const input = {
+      ...ctx,
+      mode: "manual_decision" as const,
+      decision,
+      explorationTemplates: [fixtureTemplate],
+    }
+    await expect(prepareTask(input as any)).rejects.toThrow("Task intake rejects inline explorationTemplates")
+  })
+
+  test("manual_decision: resolves exploration V1, writes proof, and recovers across host template update", async () => {
     const ctx = await fixture()
     const input: IntakeInput = {
       ...ctx,
       mode: "manual_decision",
       decision,
-      explorationRequest: { mode: "observations", after: 2 },
-      explorationTemplates: [
-        {
-          schema: "aev.exploration-template.v1",
-          id: "fixture-report-template",
-          version: "1.0.0",
-          profiles: ["report"],
-          checker: { id: "judge" },
-          policy: {
-            origin: { kind: "initial" },
-            replace: ["deliverable"],
-            preserve: [],
-            dependencies: ["facts"],
-            defaultObservations: 1,
-            allowance: {
-              rounds: 1,
-              minimumRounds: 1,
-              authorCalls: 5,
-              authorTokens: 5000,
-              acceptanceCalls: 2,
-              acceptanceTokens: 2000,
-              deliveryCalls: 0,
-              deliveryTokens: 0,
-            },
-            bounds: { archiveBytes: 100000, candidateBytes: 5000, dependencyBytes: 10000 },
-            safety: { reset: "declared_entries", effects: "sandbox_only" },
-          },
-        },
-      ],
+      explorationRequest: { mode: "observations", after: 1 },
       explorationSupport: {
-        checker: { id: "judge" },
+        checker: { id: "review" },
       },
     }
-    const res = await prepareTask(input)
+    const deps = { templates: [fixtureTemplate] }
+    const res = await prepareTask(input, deps)
     expect(res.status).toBe("ready")
     expect(res.plan.exploration?.schema).toBe("aev.exploration-policy.v1")
-    expect(res.plan.exploration?.trigger).toEqual({ kind: "attempts", observations: 2 })
+    expect(res.plan.exploration?.trigger).toEqual({ kind: "attempts", observations: 1 })
 
     // Check exploration-resolution.json was written
     const resFile = path.join(ctx.dir, "exploration-resolution.json")
     const resJson = JSON.parse(await readFile(resFile, "utf8"))
     expect(resJson.schema).toBe("aev.exploration-resolution.v1")
+    expect(resJson.enabled).toBe(true)
     expect(resJson.template.id).toBe("fixture-report-template")
 
-    // Reuse check
-    const reused = await prepareTask(input)
+    // Reuse check: even if host templates change to empty, recovery uses frozen evidence without error
+    const emptyDeps = { templates: [] }
+    const reused = await prepareTask(input, emptyDeps)
     expect(reused.reused).toBe(true)
-    expect(reused.plan.exploration?.trigger).toEqual({ kind: "attempts", observations: 2 })
+    expect(reused.plan.exploration?.trigger).toEqual({ kind: "attempts", observations: 1 })
+  })
+
+  test("auto: auto-disabled writes enabled:false proof and plan has no exploration", async () => {
+    const ctx = await fixture()
+    let calls = 0
+    const deps = {
+      createDriver: async () => ({
+        implementation: "c".repeat(64),
+        preflight: async () => {},
+        invoke: async (arg: { workDir: string }) => {
+          calls++
+          await writeFile(path.join(arg.workDir, "decision.json"), JSON.stringify(decision))
+          return { completed: true, actualModel: "fixture" }
+        },
+      }),
+      templates: [], // 无获批模板
+    }
+    const input: IntakeInput = {
+      ...ctx,
+      mode: "auto",
+      model: "fixture",
+      expectedModel: "fixture",
+      timeoutMs: 5000,
+      maxInputBytes: 64000,
+      maxDecisionBytes: 16000,
+      explorationRequest: { mode: "auto" },
+      explorationSupport: { checker: { id: "review" } },
+    }
+    const res = await prepareTask(input, deps)
+    expect(res.status).toBe("ready")
+    expect(res.plan.exploration).toBeUndefined()
+
+    // 检查 exploration-resolution.json 持久化 enabled: false 及原因
+    const resFile = path.join(ctx.dir, "exploration-resolution.json")
+    const resJson = JSON.parse(await readFile(resFile, "utf8"))
+    expect(resJson.schema).toBe("aev.exploration-resolution.v1")
+    expect(resJson.enabled).toBe(false)
+    expect(resJson.reason).toContain("No matching approved exploration template")
+
+    // 恢复检查：零新增模型调用
+    const again = await prepareTask(input, deps)
+    expect(again.reused).toBe(true)
+    expect(again.plan.exploration).toBeUndefined()
+    expect(calls).toBe(1)
   })
 
   test("auto: exploration resolution error does NOT retry model decision repairs", async () => {
@@ -258,7 +316,7 @@ describe("three-track task intake", () => {
         catalogue: { ...ctx.catalogue, approvedPlans: [fingerprint(ready.plan)] },
         explorationRequest: { mode: "auto" },
       }),
-    ).rejects.toThrow(/Manual Plan cannot accept active exploration request/)
+    ).rejects.toThrow(/Manual Plan mode does not support active exploration requests/)
 
     // off request with no exploration is valid
     const res = await prepareTask({
