@@ -10,7 +10,7 @@ export interface HostExplorationTemplate {
   id: string
   version: string
   profiles: string[]
-  checker: { id: string; version?: string }
+  checker: { name: string; id: string; version?: string }
   executor?: { id: string; version?: string }
   policy: {
     origin: { kind: "initial" }
@@ -33,7 +33,7 @@ export const FIXTURE_REPORT_EXPLORATION_TEMPLATE: HostExplorationTemplate = {
   id: "report-default-exploration",
   version: "1.0.0",
   profiles: ["report"],
-  checker: { id: "script-json-checker" },
+  checker: { name: "quality", id: "script-json-checker" },
   policy: {
     origin: { kind: "initial" },
     replace: ["candidate"],

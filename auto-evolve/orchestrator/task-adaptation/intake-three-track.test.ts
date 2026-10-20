@@ -42,7 +42,7 @@ const fixtureTemplate: HostExplorationTemplate = {
   id: "fixture-report-template",
   version: "1.0.0",
   profiles: ["reviewed-report"],
-  checker: { id: "review" },
+  checker: { name: "review", id: "review" },
   policy: {
     origin: { kind: "initial" },
     replace: ["deliverable"],
@@ -196,13 +196,18 @@ describe("three-track task intake", () => {
 
   test("manual_decision: resolves exploration V1, writes proof, and recovers across host template update", async () => {
     const ctx = await fixture()
+    const catalogueWith2Rounds = {
+      ...ctx.catalogue,
+      stop: { ...ctx.catalogue.stop, rounds: 2 },
+    }
     const input: IntakeInput = {
       ...ctx,
+      catalogue: catalogueWith2Rounds,
       mode: "manual_decision",
       decision,
       explorationRequest: { mode: "observations", after: 1 },
       explorationSupport: {
-        checker: { id: "review" },
+        checkers: [{ name: "review", id: "review" }],
       },
     }
     const deps = { templates: [fixtureTemplate] }
@@ -249,7 +254,7 @@ describe("three-track task intake", () => {
       maxInputBytes: 64000,
       maxDecisionBytes: 16000,
       explorationRequest: { mode: "auto" },
-      explorationSupport: { checker: { id: "review" } },
+      explorationSupport: { checkers: [{ name: "review", id: "review" }] },
     }
     const res = await prepareTask(input, deps)
     expect(res.status).toBe("ready")

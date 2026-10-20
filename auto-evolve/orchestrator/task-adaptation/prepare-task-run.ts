@@ -48,7 +48,11 @@ export async function prepareTaskRun(input: TaskRunPreparation, dependencies?: {
   // 本地必需条件先检查，避免已知缺依赖仍付费理解任务。
   const runtime = await (dependencies?.createRuntime ?? preparationRuntime)(input)
   const support: ExplorationSupport = {
-    ...(input.execution.checkers[0]?.binding ? { checker: input.execution.checkers[0].binding } : {}),
+    checkers: input.execution.checkers.map((item) => ({
+      name: item.name,
+      id: item.binding.id,
+      ...(item.binding.version !== undefined ? { version: item.binding.version } : {}),
+    })),
     ...(input.execution.executor ? { executor: input.execution.executor } : {}),
     capabilities: input.intake.catalogue.capabilities.filter(item => item.available).map(item => item.id),
     budget: {

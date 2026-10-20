@@ -7,7 +7,7 @@ import {
 } from "./templates"
 
 export interface ExplorationSupport {
-  checker?: { id: string; version?: string }
+  checkers?: ReadonlyArray<{ name: string; id: string; version?: string }>
   executor?: { id: string; version?: string }
   resources?: Array<{ id: string; path: string; mutable: boolean; audience: string }>
   capabilities?: string[]
@@ -19,6 +19,25 @@ export interface ExplorationResolutionResult {
   template?: HostExplorationTemplate
   policy?: ExplorationPolicy
   reason?: string
+}
+
+function sameSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  const setA = new Set(a)
+  return b.every((item) => setA.has(item))
+}
+
+function validateObservationWindow(n: number, m: number, t: number): boolean {
+  return (
+    Number.isSafeInteger(n) &&
+    n >= 1 &&
+    Number.isSafeInteger(m) &&
+    m >= 1 &&
+    Number.isSafeInteger(t) &&
+    t >= 1 &&
+    Number.isSafeInteger(n + m) &&
+    n + m <= t
+  )
 }
 
 function exact(value: unknown, keys: string[], label: string): asserts value is Record<string, unknown> {
@@ -79,6 +98,7 @@ export function resolveExploration(
       !t.id ||
       !t.version ||
       !Array.isArray(t.profiles) ||
+      !t.checker?.name ||
       !t.checker?.id ||
       !t.policy?.origin ||
       !Array.isArray(t.policy?.replace) ||
@@ -88,39 +108,65 @@ export function resolveExploration(
     }
   }
 
-  const selectedProfiles = profiles && profiles.length > 0 ? profiles : [basePlan.deliverable.kind]
+  if (!profiles || profiles.length === 0) {
+    if (mode === "auto") {
+      return {
+        enabled: false,
+        reason: "No trusted profiles provided for task exploration resolution",
+      }
+    }
+    throw new Error("No trusted profiles provided for explicit exploration request")
+  }
+  const selectedProfiles = profiles
 
   // 确定性精确匹配
   const matched = templates.filter((template) => {
-    // 1. Profile 约束
-    const matchesProfile = template.profiles.some((p) => selectedProfiles.includes(p))
-    if (!matchesProfile) return false
+    // 1. Profile 严格集合相同
+    if (!sameSet(template.profiles, selectedProfiles)) return false
 
-    // 2. 计划 Checker 匹配
+    // 2. 检查 Plan 所有 required 检查项是否在 Host support.checkers 中有唯一同名绑定
+    const hostCheckers = support?.checkers ?? []
+    const hostCheckerNames = hostCheckers.map((c) => c.name)
+    if (new Set(hostCheckerNames).size !== hostCheckerNames.length) {
+      return false
+    }
+
+    const requiredChecks = basePlan.acceptance.checks.filter((c) => c.required)
+    for (const req of requiredChecks) {
+      const matches = hostCheckers.filter((hc) => hc.name === req.id)
+      if (matches.length !== 1) return false
+    }
+
+    // 3. Plan Checker 精确名称匹配
     const planHasChecker = basePlan.acceptance.checks.some(
-      (c) => c.id === template.checker.id || c.mechanism === template.checker.id || c.mechanism === "script",
+      (c) => c.id === template.checker.name,
     )
     if (!planHasChecker) return false
 
-    // 3. Host support checker 严格匹配：缺必需 Host checker 支持视作不支持
-    if (!support?.checker || support.checker.id !== template.checker.id) {
-      return false
-    }
-    if (template.checker.version && support.checker.version && template.checker.version !== support.checker.version) {
-      return false
+    // 4. Host support.checkers 精确匹配模板指定的 checker.name 与 checker.id
+    const hostMatches = hostCheckers.filter((hc) => hc.name === template.checker.name)
+    if (hostMatches.length !== 1) return false
+    const hostChecker = hostMatches[0]
+    if (hostChecker.id !== template.checker.id) return false
+    if (template.checker.version !== undefined) {
+      if (hostChecker.version === undefined || hostChecker.version !== template.checker.version) {
+        return false
+      }
     }
 
-    // 4. Host support executor 匹配：如果模板要求 executor，Host 必须提供且匹配
+    // 5. Host support executor 匹配：如果模板要求 executor，Host 必须提供且匹配
     if (template.executor) {
       if (!support?.executor || support.executor.id !== template.executor.id) {
         return false
       }
-      if (template.executor.version && support.executor.version && template.executor.version !== support.executor.version) {
-        return false
+      if (template.executor.version !== undefined) {
+        if (support.executor.version === undefined || support.executor.version !== template.executor.version) {
+          return false
+        }
       }
     }
 
-    // 5. 资源槽与动作匹配
+    // 6. 资源槽与动作匹配
     const planResourceMap = new Map(basePlan.resources.map((r) => [r.id, r]))
     for (const r of template.policy.replace) {
       const res = planResourceMap.get(r)
@@ -133,7 +179,7 @@ export function resolveExploration(
       if (!planResourceMap.has(d)) return false
     }
 
-    // 6. 预算约束：不能超过全局 stop.rounds 与最低周期
+    // 7. 预算约束：不能超过全局 stop.rounds 与最低周期
     if (template.policy.allowance.rounds > basePlan.stop.rounds) return false
     if (template.policy.allowance.minimumRounds > basePlan.stop.rounds) return false
     if (support?.budget) {
@@ -171,6 +217,20 @@ export function resolveExploration(
 
   if (!observations || observations < 1 || !Number.isSafeInteger(observations)) {
     throw new Error("Invalid exploration observations trigger count")
+  }
+
+  // 校验原路线观察窗口与备用路线最低轮数相容性
+  const n = observations
+  const m = template.policy.allowance.minimumRounds
+  const t = basePlan.stop.rounds
+  if (!validateObservationWindow(n, m, t)) {
+    if (mode === "auto") {
+      return {
+        enabled: false,
+        reason: `Exploration observation window leaves fewer than minimum alternative rounds: observations=${n}, minimumRounds=${m}, stopRounds=${t}`,
+      }
+    }
+    throw new Error(`Exploration observation window leaves fewer than minimum alternative rounds: observations=${n}, minimumRounds=${m}, stopRounds=${t}`)
   }
 
   // 展开为完整 V1 ExplorationPolicy
