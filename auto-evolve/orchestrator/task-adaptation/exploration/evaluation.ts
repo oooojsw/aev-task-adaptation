@@ -14,7 +14,7 @@ import { taskFeedback } from "../feedback"
 import { taskSelectionSource } from "../selection"
 import { taskRuntimeBudgets, validateTaskBudgetPolicy } from "../budget-policy"
 import { saveCandidate, type ArchiveScope } from "./archive"
-import { explorationIdentity, explorationPolicy, type ExplorationPolicy } from "./policy"
+import { explorationIdentityAny, readExplorationPolicy, type AnyExplorationPolicy } from "./policy-reader"
 import type { Observation } from "./decision"
 
 const hash = (value: Uint8Array) => createHash("sha256").update(value).digest("hex")
@@ -28,7 +28,7 @@ export async function archiveRound(
     archive: string
     candidateRoot: string
     scope: ArchiveScope
-    policy: Readonly<ExplorationPolicy>
+    policy: Readonly<AnyExplorationPolicy>
     round: LongTaskCampaignRoundRecord
     pass: number
     branch: "original" | "alternative"
@@ -40,7 +40,7 @@ export async function archiveRound(
     entry = spec.protocolPlugins
   if (!bound || !entry || !spec.taskAdaptation?.requestBudget)
     throw new Error("Frozen exploration evaluation context required")
-  const policy = explorationPolicy(input.policy, bound.plan)!
+  const policy = readExplorationPolicy(input.policy, bound.plan)!
   const budget = validateTaskBudgetPolicy(spec.taskAdaptation.requestBudget)
   const declared = bound.plan.deliverable.entries.map((id) => ({
     id,
@@ -55,7 +55,7 @@ export async function archiveRound(
     !path.isAbsolute(input.cwd) ||
     input.scope.campaign !== path.basename(input.root) ||
     input.scope.plan !== bound.fingerprint ||
-    input.scope.policy !== explorationIdentity(policy, bound.plan) ||
+    input.scope.policy !== explorationIdentityAny(policy, bound.plan) ||
     canonical(input.scope.budget) !== canonical({ root: budget.root, scope: budget.scope }) ||
     !Number.isSafeInteger(round.roundNumber) ||
     round.roundNumber < 1 ||
@@ -178,5 +178,5 @@ export async function archiveRound(
     verdict: actual.view.status as "passed" | "rejected",
     ...(metric === undefined ? {} : { metric }),
   }
-  return immutable({ candidate, observation })
+  return immutable({ candidate, observation, receipt: actual.view.receiptFingerprint })
 }

@@ -5,7 +5,7 @@ import { verifyBinding } from "../binding"
 import { validateTaskBudgetPolicy } from "../budget-policy"
 import { inspectRequestStage, openRequestStage, type IntakePrefix } from "../request-budget"
 import { withTaskRequestGate } from "../context"
-import { explorationPolicy, explorationIdentity } from "./policy"
+import { explorationIdentityAny, readExplorationPolicy } from "./policy-reader"
 import type { ArchiveScope } from "./archive"
 import type { Admission } from "./admission"
 
@@ -51,7 +51,7 @@ export async function openTaskRequestStage(spec: LongTaskSpec, input: {
 }) {
   const bound = spec.taskAdaptationContext, cfg = spec.taskAdaptation
   if (!bound || !cfg?.requestBudget) throw new Error("Frozen stage task and budget required")
-  const policy = explorationPolicy(bound.plan.exploration, bound.plan)
+  const policy = readExplorationPolicy(bound.plan.exploration, bound.plan)
   if (!policy) throw new Error("Frozen exploration policy required for stage scheduling")
   await verifyBinding(bound)
   // 阶段授权不能替调用者扩大原任务的全局轮数。
@@ -60,7 +60,7 @@ export async function openTaskRequestStage(spec: LongTaskSpec, input: {
   }
   const budget = validateTaskBudgetPolicy(cfg.requestBudget), scope = input.scope
   if (!spec.taskAdaptationCampaignRoot || path.basename(spec.taskAdaptationCampaignRoot) !== scope.campaign ||
-    scope.plan !== bound.fingerprint || scope.policy !== explorationIdentity(policy, bound.plan) ||
+    scope.plan !== bound.fingerprint || scope.policy !== explorationIdentityAny(policy, bound.plan) ||
     scope.protocol !== spec.protocolAuthorContext?.fingerprint ||
     canonical(scope.budget) !== canonical({ root: budget.root, scope: budget.scope })) {
     throw new Error("Stage task scope drift")

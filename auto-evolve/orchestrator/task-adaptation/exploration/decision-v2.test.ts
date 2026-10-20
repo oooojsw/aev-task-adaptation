@@ -573,7 +573,7 @@ describe("Exploration Decision V2 Pure Function", () => {
       stop: { rounds: 10, calls: 100, tokens: 100000, stagnant: 2 },
       exploration: v2Policy(),
     }
-    expect(() => validatePlan(plan as any)).toThrow("Invalid exploration policy")
+    expect(() => validatePlan(plan as any)).toThrow("Unsupported exploration policy schema: v2")
   })
 
   test("D227: 纯函数运行全程 -> 不生成文件、不请求模型、不新建 Campaign 钱包", () => {

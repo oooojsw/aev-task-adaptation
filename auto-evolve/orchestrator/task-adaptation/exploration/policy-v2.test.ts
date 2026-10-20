@@ -336,11 +336,12 @@ test("V218: 旧 explorationPolicy(V1)、validatePlan(V1)、explorationIdentity(V
   expect(id1).toBe(id2)
 })
 
-test("V219: 将 V2 直接塞入当前 validatePlan 仍拒绝，证明未偷开生产入口", () => {
+test("V219: 将 V2 塞入当前 validatePlan 校验通过并保留 V2 身份", () => {
   const { plan, policy } = v2WindowFixture(7)
   const v2 = validateExplorationPolicyV2(policy, plan)
   const planWithV2 = { ...plan, exploration: v2 }
-  expect(() => validatePlan(planWithV2 as any)).toThrow()
+  const valid = validatePlan(planWithV2 as any)
+  expect(valid.exploration?.schema).toBe("aev.exploration-policy.v2")
 })
 
 test("V220: window 合法但没有实际关闭轮事件，validator 只证明静态合法性", () => {

@@ -6,7 +6,7 @@ import { checkedPath, directoryBytes, withFileTransaction } from "../../file-tra
 import { canonical, fingerprint, immutable } from "../../protocol-plugins/identity"
 import { resolveResource, verifyBinding, type BoundPlan } from "../binding"
 import { readCandidate, type ArchiveScope } from "./archive"
-import { explorationIdentity, explorationPolicy, type ExplorationPolicy } from "./policy"
+import { explorationIdentityAny, readExplorationPolicy, type AnyExplorationPolicy } from "./policy-reader"
 import { materialize, materialization, overlaps } from "./materialize"
 
 export interface CompositionInput {
@@ -14,7 +14,7 @@ export interface CompositionInput {
   archive: string
   scope: ArchiveScope
   bound: BoundPlan
-  policy: Readonly<ExplorationPolicy>
+  policy: Readonly<AnyExplorationPolicy>
   origin: string
   current: string
   recover?: boolean
@@ -74,13 +74,13 @@ async function view(root: string, expected: string[], partial: boolean) {
 }
 
 export async function compose(input: CompositionInput) {
-  const cfg = explorationPolicy(input.policy, input.bound.plan)!
+  const cfg = readExplorationPolicy(input.policy, input.bound.plan)!
   if (
     ![input.root, input.archive].every(path.isAbsolute) ||
     overlaps(input.root, input.archive) ||
     overlaps(input.root, input.bound.root) ||
     input.scope.plan !== input.bound.fingerprint ||
-    input.scope.policy !== explorationIdentity(cfg, input.bound.plan)
+    input.scope.policy !== explorationIdentityAny(cfg, input.bound.plan)
   )
     throw new Error("Composition binding mismatch")
   await verifyBinding(input.bound)

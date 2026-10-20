@@ -7,7 +7,7 @@ import { canonical, fingerprint } from "../../protocol-plugins/identity"
 import { resolveResource } from "../binding"
 import { readCandidate, saveCandidate, type ArchiveInput } from "./archive"
 import { assertTaskCampaignControl, type TaskCampaignControl } from "./ownership"
-import { explorationPolicy } from "./policy"
+import { readExplorationPolicy } from "./policy-reader"
 
 async function json(file: string, cap: number) {
   if ((await checkedPath(file, "file")).size > cap) throw new Error("Origin metadata exceeds capacity")
@@ -22,7 +22,7 @@ export async function freezeTaskOrigin(spec: LongTaskSpec, input: {
   assertTaskCampaignControl(input.control, input.root)
   const bound = spec.taskAdaptationContext
   if (!bound || bound.fingerprint !== input.control.scope.plan) throw new Error("Origin task binding mismatch")
-  const cfg = explorationPolicy(bound.plan.exploration, bound.plan)!
+  const cfg = readExplorationPolicy(bound.plan.exploration, bound.plan)!
   if (cfg.origin.kind === "candidate") {
     // 读取真实历史身份，不赋予新任务的验收通过资格。
     const saved = await readCandidate(cfg.origin.archive, cfg.origin.fingerprint, cfg.origin.scope, cfg.bounds.archiveBytes)

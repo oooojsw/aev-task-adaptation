@@ -7,7 +7,7 @@ import { canonical, fingerprint, immutable } from "../../protocol-plugins/identi
 import { readCandidate, type ArchiveScope } from "./archive"
 import { compose, type CompositionInput } from "./composition"
 import { materialize, materialization, overlaps } from "./materialize"
-import { explorationIdentity, explorationPolicy } from "./policy"
+import { explorationIdentityAny, readExplorationPolicy } from "./policy-reader"
 
 interface ActivationInput {
   root: string
@@ -90,10 +90,10 @@ async function bind(root: string, scope: ArchiveScope, cap: number) {
 }
 
 export async function activate(input: ActivationInput) {
-  const policy = explorationPolicy(input.composition.policy, input.composition.bound.plan)!
+  const policy = readExplorationPolicy(input.composition.policy, input.composition.bound.plan)!
   if (
     input.composition.scope.plan !== input.composition.bound.fingerprint ||
-    input.composition.scope.policy !== explorationIdentity(policy, input.composition.bound.plan)
+    input.composition.scope.policy !== explorationIdentityAny(policy, input.composition.bound.plan)
   )
     throw new Error("Activation composition binding mismatch")
   if (

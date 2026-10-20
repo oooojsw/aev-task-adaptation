@@ -1,5 +1,6 @@
 import { fingerprint, immutable } from "../protocol-plugins/identity"
-import { explorationPolicy, type ExplorationPolicy } from "./exploration/policy"
+import type { ExplorationPolicy } from "./exploration/policy"
+import { readExplorationPolicy, type AnyExplorationPolicy } from "./exploration/policy-reader"
 
 export const roles = ["planner", "executor", "worker", "lead", "reviewer", "diagnostician", "checker", "independent"] as const
 export const stages = ["explore", "revise", "accept", "deliver"] as const
@@ -50,7 +51,7 @@ export interface Plan {
   rejection: Array<{ check: string; actions: Action[] }>
   selection: { rule: "first_pass" | "best_pass"; metric?: string; direction?: "min" | "max" }
   stop: { rounds: number; calls: number; tokens: number; stagnant: number }
-  exploration?: ExplorationPolicy
+  exploration?: AnyExplorationPolicy
 }
 
 function object(value: unknown, keys: string[], label: string, optional: string[] = []): asserts value is Record<string, unknown> {
@@ -195,7 +196,7 @@ export function validatePlan(value: unknown): Readonly<Plan> {
   // 缺省不补字段，旧方案身份保持原样；策略仅冻结，不代表执行能力。
   if (Object.hasOwn(value, "exploration")) {
     if (value.exploration === undefined) throw new Error("Explicit exploration policy required")
-    explorationPolicy(value.exploration, value as unknown as Plan)
+    readExplorationPolicy(value.exploration, value as unknown as Plan)
   }
   return immutable(value as unknown as Plan)
 }

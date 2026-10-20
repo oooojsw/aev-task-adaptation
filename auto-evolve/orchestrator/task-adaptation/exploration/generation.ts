@@ -4,7 +4,7 @@ import type { LongTaskSpec } from "../../long-task/contract"
 import { checkedPath } from "../../file-transaction"
 import { openGeneration } from "./activation"
 import { assertTaskCampaignControl, type TaskCampaignControl } from "./ownership"
-import { explorationPolicy } from "./policy"
+import { readExplorationPolicy } from "./policy-reader"
 
 const active = new WeakMap<object, { root: string; control: TaskCampaignControl }>()
 export type TaskGenerationLease = Awaited<ReturnType<typeof openTaskGeneration>>
@@ -25,7 +25,7 @@ export async function openTaskGeneration(spec: LongTaskSpec, input: {
   assertTaskCampaignControl(input.control, input.root)
   const bound = spec.taskAdaptationContext
   if (!bound || bound.fingerprint !== input.control.scope.plan) throw new Error("Generation task binding mismatch")
-  const cfg = explorationPolicy(bound.plan.exploration, bound.plan)!
+  const cfg = readExplorationPolicy(bound.plan.exploration, bound.plan)!
   const root = path.join(input.root, "task-adaptation/exploration/activation")
   let generation: 0 | 1 = 0
   try {

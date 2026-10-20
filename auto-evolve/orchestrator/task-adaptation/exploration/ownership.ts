@@ -8,7 +8,7 @@ import { canonical, immutable } from "../../protocol-plugins/identity"
 import { writeJsonAtomic } from "../../atomic-write"
 import { verifyBinding } from "../binding"
 import { validateTaskBudgetPolicy } from "../budget-policy"
-import { explorationIdentity, explorationPolicy } from "./policy"
+import { explorationIdentityAny, readExplorationPolicy } from "./policy-reader"
 
 const active = new WeakMap<object, string>()
 export type TaskCampaignControl = NonNullable<Awaited<ReturnType<typeof openTaskCampaignControl>>>
@@ -47,10 +47,10 @@ export async function openTaskCampaignControl(spec: LongTaskSpec, input: {
     throw new Error("Frozen exploration Campaign control context required")
   }
   await verifyBinding(bound)
-  const policy = explorationPolicy(bound.plan.exploration, bound.plan)!
+  const policy = readExplorationPolicy(bound.plan.exploration, bound.plan)!
   const budget = validateTaskBudgetPolicy(cfg.requestBudget)
   const scope = { campaign: input.campaign, plan: bound.fingerprint,
-    policy: explorationIdentity(policy, bound.plan)!, protocol: spec.protocolAuthorContext!.fingerprint,
+    policy: explorationIdentityAny(policy, bound.plan)!, protocol: spec.protocolAuthorContext!.fingerprint,
     budget: { root: budget.root, scope: budget.scope } }
   await checkedPath(input.root, "directory")
   let root = input.root

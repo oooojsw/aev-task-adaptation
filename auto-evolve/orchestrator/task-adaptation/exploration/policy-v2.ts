@@ -56,12 +56,13 @@ export function validateExplorationPolicyV2(value: unknown, plan: Readonly<Plan>
 
   // 步骤 A2：校验窗口 window
   exact(value.window, ["minimumRounds", "maximumRounds"], "window")
-  const f = value.window.minimumRounds
-  const h = value.window.maximumRounds
-  if (!Number.isSafeInteger(f) || f < 1) {
+  const rawWindow = value.window as Record<string, unknown>
+  const f = rawWindow.minimumRounds
+  const h = rawWindow.maximumRounds
+  if (typeof f !== "number" || !Number.isSafeInteger(f) || f < 1) {
     throw new Error("Invalid exploration window minimumRounds: positive safe integer required")
   }
-  if (!Number.isSafeInteger(h) || h < 1) {
+  if (typeof h !== "number" || !Number.isSafeInteger(h) || h < 1) {
     throw new Error("Invalid exploration window maximumRounds: positive safe integer required")
   }
   if (f > h) {
@@ -86,10 +87,12 @@ export function validateExplorationPolicyV2(value: unknown, plan: Readonly<Plan>
     if (typeof rawTrigger.minimumDelta !== "number" || !Number.isFinite(rawTrigger.minimumDelta) || rawTrigger.minimumDelta < 0) {
       throw new Error("Invalid metric trigger minimumDelta: non-negative finite number required")
     }
-    if (!Number.isSafeInteger(rawTrigger.minimumObservations) || rawTrigger.minimumObservations < 1) {
+    const minObs = rawTrigger.minimumObservations
+    if (typeof minObs !== "number" || !Number.isSafeInteger(minObs) || minObs < 1) {
       throw new Error("Invalid metric trigger minimumObservations: positive safe integer required")
     }
-    if (!Number.isSafeInteger(rawTrigger.patience) || rawTrigger.patience < 1) {
+    const pat = rawTrigger.patience
+    if (typeof pat !== "number" || !Number.isSafeInteger(pat) || pat < 1) {
       throw new Error("Invalid metric trigger patience: positive safe integer required")
     }
 
@@ -122,13 +125,13 @@ export function validateExplorationPolicyV2(value: unknown, plan: Readonly<Plan>
   const allowance = value.allowance as Record<string, unknown>
   const m = allowance.minimumRounds
   const b = allowance.rounds
-  if (!Number.isSafeInteger(m) || Number(m) < 1) {
+  if (typeof m !== "number" || !Number.isSafeInteger(m) || m < 1) {
     throw new Error("Invalid exploration allowance minimumRounds: positive safe integer required")
   }
-  if (!Number.isSafeInteger(b) || Number(b) < 1) {
+  if (typeof b !== "number" || !Number.isSafeInteger(b) || b < 1) {
     throw new Error("Invalid exploration allowance rounds: positive safe integer required")
   }
-  if (Number(m) > Number(b)) {
+  if (m > b) {
     throw new Error(`Invalid exploration allowance: minimumRounds (${m}) cannot exceed rounds (${b})`)
   }
 
@@ -137,13 +140,13 @@ export function validateExplorationPolicyV2(value: unknown, plan: Readonly<Plan>
   if (!Number.isSafeInteger(N) || N < 1) {
     throw new Error("Plan stop rounds must be a positive safe integer")
   }
-  if (!Number.isSafeInteger(h + Number(m))) {
+  if (!Number.isSafeInteger(h + m)) {
     throw new Error("Exploration window and allowance calculation exceeds safe integer limit")
   }
-  if (h + Number(m) > N) {
+  if (h + m > N) {
     throw new Error(`Exploration policy v2 window maximum (${h}) + allowance minimumRounds (${m}) exceeds plan stop rounds (${N})`)
   }
-  if (Number(b) > N - f) {
+  if (b > N - f) {
     throw new Error(`Exploration policy v2 allowance rounds (${b}) exceeds remaining rounds from window minimum (${N - f})`)
   }
 
