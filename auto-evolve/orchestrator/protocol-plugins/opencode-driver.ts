@@ -114,6 +114,7 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     const record = async (fields: Record<string, unknown>) => writeJsonAtomic(path.join(dir, "invocation.accounting.json"), {
       schema: "aev.backend-invocation-accounting.v1", host: frozen.key, requestFingerprint: fingerprint(request),
       requestedModel: request.model, startedAt, finishedAt: new Date().toISOString(),
+      role: request.requestBudget?.role ?? "tool-backend", gate: request.requestBudget?.gate ?? null,
       elapsedMs: Math.max(0, Math.round(performance.now() - clock)), reused: false,
       fee: null, ...fields,
     })

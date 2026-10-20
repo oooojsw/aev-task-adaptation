@@ -114,11 +114,13 @@ export async function toolSession(options: { evidenceRoot: string; backendImplem
     await writeJsonAtomic(path.join(dir, "request.json"), request)
     const abort = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
+    let usage: { inputTokens?: number; outputTokens?: number } | undefined
     try {
       const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => {
         abort.abort(); reject(new Error("Tool backend timeout"))
       }, cfg.timeoutMs) })
       const result = await Promise.race([options.invoke(request, abort.signal), timeout])
+      usage = result.usage
       await writeJsonAtomic(path.join(dir, "backend-result.json"), result)
       if (!result.completed || result.actualModel !== cfg.expectedModel) throw new Error("Tool backend incomplete or model mismatch")
       inside(await realpath(workspace), await realpath(output))
@@ -131,7 +133,9 @@ export async function toolSession(options: { evidenceRoot: string; backendImplem
       return { status: "completed", product: { kind: cfg.outputKind, bytes }, ...(result.usage ? { usage: result.usage } : {}) }
     } catch (err) {
       await writeJsonAtomic(path.join(dir, "failure.json"), { status: "execution_error", message: String(err) })
-      return { status: "execution_error", message: "Tool execution failed; inspect backend evidence" }
+      // 产物不合格不能抹掉已返回的实际调用用量。
+      return { status: "execution_error", message: "Tool execution failed; inspect backend evidence",
+        ...(usage ? { usage } : {}) }
     } finally {
       if (timer) clearTimeout(timer)
       abort.abort()

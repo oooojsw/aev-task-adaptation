@@ -49,6 +49,7 @@ test("trusted executor verifies two independent single-turn mock cases", async (
   expect(pre.status).toBe("passed")
   const res = await plugin.execute({ task: "merge", phase: "source", settings, skill, materials: [] })
   expect(res.status).toBe("completed")
+  expect(res.usage?.inputTokens).toBeGreaterThan(0)
   const product = JSON.parse(Buffer.from(res.product!.bytes).toString("utf8"))
   expect(product).toMatchObject({ total: 2, passed: 1, failed: 1, pass_rate: 0.5,
     candidate_sha256: digest(publication) })
@@ -255,6 +256,8 @@ test("T03: dual campaigns concurrent in same process with distinct budgets have 
 
     expect(resA.status).toBe("completed")
     expect(resB.status).toBe("completed")
+    expect(resA.usage).toEqual({ inputTokens: 20, outputTokens: 10 })
+    expect(resB.usage).toEqual({ inputTokens: 20, outputTokens: 10 })
     expect(dispatchesA).toBe(2)
     expect(dispatchesB).toBe(2)
 
@@ -263,6 +266,35 @@ test("T03: dual campaigns concurrent in same process with distinct budgets have 
   } finally {
     await server.stop(true)
   }
+})
+
+test("actual consolidation consumer missing usage remains unknown in adapter and wallet", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aev-consumer-usage-"))
+  const validator = path.join(dir, "validator.mjs")
+  await writeFile(validator, 'console.log(JSON.stringify({ passed: true }))\n')
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({
+    model: "fixture", choices: [{ message: { content: "42" } }],
+  }) })
+  try {
+    const data = path.join(dir, "cases.jsonl"), models = path.join(dir, "models.json")
+    await writeFile(data, JSON.stringify({ schema: "direct-chat-case/v1", caseID: "q", dataset: "fixture", split: "train",
+      question: { text: "Q", outputInstruction: "number" }, materials: [{ id: "m", title: "M", type: "text", content: "42" }],
+      materialAudit: { caseID: "q", expectedSources: [], includedMaterials: ["m"], omittedSources: [], warnings: [], tokenEstimate: 1, compressionPolicy: "none" },
+      privateOracle: { validatorID: "v", runner: "bun", scriptPath: validator, args: ["--candidate", ""], candidateArgName: "--candidate" } }) + "\n")
+    await writeFile(models, JSON.stringify({ models: { m: { transport: "openai-compatible", baseURL: server.url.toString(),
+      model: "fixture", apiKey: "synthetic", contextWindowTokens: 4096, maxOutputTokens: 64 } } }))
+    const config = { root: path.join(dir, "wallet"), scope: "audit", calls: 3, tokens: 20000 }
+    const plugin = await consolidationPlugins(path.join(dir, "plugin"), { budget: { config, tokenCeiling: 4096, role: "independent" } })
+    const bytes = Buffer.from("General rules")
+    const result = await plugin.execute({ task: "merge", phase: "source", materials: [],
+      skill: [{ id: "merged_skill", kind: "text", bytes, sha256: digest(bytes), length: bytes.length }],
+      settings: { candidateID: "merged_skill", maxChars: 5000, expectedCases: 1, modelID: "m",
+        datasetPath: data, datasetSHA256: digest(await readFile(data)), modelsPath: models,
+        modelsSHA256: digest(await readFile(models)), concurrency: 1 } })
+    expect(result.status).toBe("completed")
+    expect(result.usage).toEqual({})
+    expect(await inspectBudget(config)).toMatchObject({ admittedAttempts: 1, unknownAttempts: 1, outstandingTokens: 4160 })
+  } finally { await server.stop(true) }
 })
 
 test("T08: modifying validator script after execution causes evaluation dependency drift rejection", async () => {

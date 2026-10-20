@@ -188,6 +188,9 @@ export class Runtime {
     if (!result || !["completed", "execution_error", "interrupted"].includes(result.status)) {
       return receipt("execution_error", "Invalid execution receipt", false, true)
     }
+    // 失败或产物无效仍可能计费，先保留后端用量与复用标记。
+    usage = result.usage
+    reused = result.reused === true
     if (result.status !== "completed") return receipt(result.status, "Execution did not complete", false, true)
     if (!result.product || result.product.kind !== resolved.selection.run.productKind ||
         !(result.product.bytes instanceof Uint8Array) || !result.product.bytes.byteLength) {
@@ -196,8 +199,6 @@ export class Runtime {
     product = artifact("execution-product", result.product.kind, result.product.bytes)
     // 发布实际执行产物，不携带评分器私有输入。
     await hooks.onProduct?.({ ...product, bytes: new Uint8Array(product.bytes) })
-    usage = result.usage
-    reused = result.reused === true
     const post = await evaluate("after_execution")
     return receipt(post, post === "passed" ? "Declared execution and scoring passed" : "Post-execution checks did not pass", true, true)
   }

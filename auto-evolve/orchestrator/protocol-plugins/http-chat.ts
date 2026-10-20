@@ -8,6 +8,7 @@ import type { ExecutorPlugin, Settings } from "./contract"
 import type { Artifact, Execute } from "./runtime"
 import { reserveRequest, settleRequest, type RequestBudget } from "../task-adaptation/request-budget"
 import { validateRequestGate } from "../task-adaptation/budget-transport"
+import { parseRequestUsage, requestUsageTotal, type RequestUsage } from "../task-adaptation/request-usage"
 
 export interface HttpRequestBudget {
   config: RequestBudget
@@ -75,22 +76,6 @@ function text(input: Artifact) {
   return new TextDecoder("utf-8", { fatal: true }).decode(input.bytes).replace(/^\uFEFF/, "")
 }
 
-function usage(value: unknown) {
-  if (value === undefined) return undefined
-  if (!value || typeof value !== "object") throw new Error("Malformed provider usage")
-  const record = value as Record<string, unknown>
-  const result: { inputTokens?: number; outputTokens?: number } = {}
-  for (const [name, candidate] of [
-    ["inputTokens", record.input_tokens ?? record.prompt_tokens],
-    ["outputTokens", record.output_tokens ?? record.completion_tokens],
-  ] as const) {
-    if (candidate === undefined) continue
-    if (!Number.isSafeInteger(candidate) || Number(candidate) < 0) throw new Error("Invalid provider token count")
-    result[name] = Number(candidate)
-  }
-  return result
-}
-
 async function bounded(response: Response, limit: number) {
   if (!response.body) return ""
   const reader = response.body.getReader()
@@ -155,7 +140,9 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
     await claim.close()
     const startedAt = new Date().toISOString()
     const clock = performance.now()
-    let observedUsage: { inputTokens?: number; outputTokens?: number } | undefined
+    let observedUsage: RequestUsage | undefined
+    let httpStatus: number | undefined
+    let outcome: RequestUsage["outcome"] = "transport_error"
     let actualModel: string | null = null
     let dispatched = false
     const account = async (status: string) => {
@@ -168,6 +155,10 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
       requestedModel: cfg.model, actualModel, startedAt, finishedAt: new Date().toISOString(),
       elapsedMs: Math.max(0, Math.round(performance.now() - clock)), reused: false, fee: null, status,
       inputTokens: observedUsage?.inputTokens ?? null, outputTokens: observedUsage?.outputTokens ?? null,
+      cacheReadTokens: observedUsage?.cacheReadTokens ?? null, cacheWriteTokens: observedUsage?.cacheWriteTokens ?? null,
+      reasoningTokens: observedUsage?.reasoningTokens ?? null, totalTokens: observedUsage ? requestUsageTotal(observedUsage) ?? null : null,
+      role: options.budget?.role ?? "executor", phase: input.phase, gate: gate ?? null,
+      dialect: cfg.dialect, httpStatus: httpStatus ?? null,
       usageSource: observedUsage ? "provider_response" : "missing", errorKind: status === "completed" ? null : "http_or_persistence_error",
       })
     }
@@ -188,14 +179,17 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
         headers: cfg.dialect === "anthropic_messages"
           ? { "content-type": "application/json", "x-api-key": secret, "anthropic-version": "2023-06-01" }
           : { "content-type": "application/json", authorization: `Bearer ${secret}` }, body: wire } as RequestInit & { timeout: false })
+      httpStatus = response.status
+      outcome = response.ok ? "execution_error" : "http_error"
       const raw = await bounded(response, cfg.maxResponseBytes)
       await writeFileAtomic(path.join(dir, "response.raw.txt"), raw)
       await writeJsonAtomic(path.join(dir, "response.meta.json"), { status: response.status, requestFingerprint: key,
         responseSHA256: createHash("sha256").update(raw).digest("hex") })
-      if (!response.ok) throw new Error("Provider response was not successful")
       const data = JSON.parse(raw)
-      observedUsage = usage(data?.usage)
+      // 错误响应也可能计费，先留用量再判断产物是否有效。
+      observedUsage = parseRequestUsage(data?.usage, cfg.dialect)
       actualModel = typeof data?.model === "string" ? data.model : null
+      if (!response.ok) throw new Error("Provider response was not successful")
       if (!data || data.model !== cfg.expectedModel) throw new Error("Actual model differs from frozen expectation")
       let answer: string
       if (cfg.dialect === "anthropic_messages") {
@@ -213,13 +207,15 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
         answer = choice.message.content
       }
       if (!answer.trim()) throw new Error("No final answer")
-      const tokens = usage(data.usage)
+      const tokens = { ...(observedUsage.inputTokens !== undefined ? { inputTokens: observedUsage.inputTokens } : {}),
+        ...(observedUsage.outputTokens !== undefined ? { outputTokens: observedUsage.outputTokens } : {}) }
       if (tokens?.outputTokens !== undefined && tokens.outputTokens > cfg.maxTokens) {
         throw new Error("Provider exceeded frozen output token budget")
       }
       await writeJsonAtomic(path.join(dir, "completed.json"), { requestFingerprint: key, model: data.model,
         answerSHA256: createHash("sha256").update(answer).digest("hex"), ...(tokens ? { usage: tokens } : {}) })
       await account("completed")
+      outcome = "complete"
       return { status: "completed", product: { kind: "text", bytes: Buffer.from(answer) }, ...(tokens ? { usage: tokens } : {}) }
     } catch {
       // 保留原回复；不得把接口故障算为Skill拒绝或自动重试。
@@ -227,14 +223,16 @@ export async function httpChat(options: Options): Promise<{ descriptor: Executor
         status: "execution_error", outcome: "inspect_before_retry" })
       // 即使产物不合格，已报告用量仍属于实际调用消耗。
       await account("infrastructure_error")
-      return { status: "execution_error", message: "HTTP execution failed; raw evidence retained" }
+      return { status: "execution_error", message: "HTTP execution failed; raw evidence retained",
+        ...(observedUsage ? { usage: observedUsage } : {}) }
     } finally {
       clearTimeout(timer)
       if (reserved && options.budget) {
         // 缺少任一侧用量即保留整份预留，不把未知计费记作零。
-        const total = observedUsage?.inputTokens !== undefined && observedUsage.outputTokens !== undefined
-          ? observedUsage.inputTokens + observedUsage.outputTokens : undefined
-        await settleRequest(options.budget.config, key, total)
+        const total = observedUsage ? requestUsageTotal(observedUsage) : undefined
+        await settleRequest(options.budget.config, key, total, { ...observedUsage, dialect: cfg.dialect,
+          outcome: outcome === "complete" && total === undefined ? "incomplete_usage" : outcome,
+          ...(httpStatus !== undefined ? { httpStatus } : {}) })
       }
     }
   }

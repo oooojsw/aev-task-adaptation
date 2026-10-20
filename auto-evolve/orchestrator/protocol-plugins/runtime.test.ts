@@ -5,10 +5,47 @@ import path from "node:path"
 import { compile } from "./compile"
 import type { Selection } from "./contract"
 import { Runtime, type Evaluate, type Execute, type Task } from "./runtime"
+import { cachedExecution, cachedScoring } from "./cache"
+import { attemptAccounting } from "./attempt-accounting"
 
 const hash = "c".repeat(64)
 const execute: Execute = async () => ({ status: "completed", product: { kind: "text", bytes: Buffer.from("42") } })
 const score: Evaluate = async () => ({ status: "passed", message: "fixture pass" })
+
+test("failed or invalid product retains reported usage for attempt accounting", async () => {
+  for (const status of ["execution_error", "completed"] as const) {
+    const rt = runtime(async () => ({ status, usage: { inputTokens: 10, outputTokens: 2 } }))
+    const result = await rt.run(compile(selection(), rt.registry), "source", await task())
+    expect(result.status).toBe("execution_error")
+    expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 2 })
+    expect(result.executionAttempted).toBe(true)
+  }
+})
+
+test("actual cached runtime preserves historical usage but contributes zero new consumption", async () => {
+  const input = await task()
+  const root = path.join(input.allowedRoots[0], "cache")
+  let calls = 0
+  const rt = runtime()
+  const executor = rt.registry.executor({ id: "fixture-executor", version: "1" })
+  const checker = rt.registry.checker({ id: "fixture-checker", version: "1" })
+  const run = new Runtime().addExecutor(executor, cachedExecution(root, executor, async () => {
+    calls++
+    return { status: "completed", product: { kind: "text", bytes: Buffer.from("42") }, usage: { inputTokens: 10, outputTokens: 2 } }
+  })).addChecker(checker, cachedScoring(root, checker, async () => {
+    calls++
+    return { status: "passed", message: "fixture", usage: { inputTokens: 5, outputTokens: 1 } }
+  }))
+  const snapshot = compile(selection(), run.registry)
+  const first = await run.run(snapshot, "source", input)
+  expect(attemptAccounting(snapshot, "source", first, 1).input.knownTokens).toBe(15)
+  const second = await run.run(snapshot, "source", input)
+  const report = attemptAccounting(snapshot, "source", second, 1)
+  expect(calls).toBe(2)
+  expect(report.input).toEqual({ knownTokens: 0, unreportedInvocations: 0 })
+  expect(report.output.knownTokens).toBe(0)
+  expect(second.usage).toEqual({ inputTokens: 10, outputTokens: 2 })
+})
 function runtime(run: Execute = execute, check: Evaluate = score) {
   return new Runtime().addExecutor({ id: "fixture-executor", version: "1", implementation: hash,
     skillFormats: ["text"], productKinds: ["text"], materialKinds: ["text"], validate() {} }, run)

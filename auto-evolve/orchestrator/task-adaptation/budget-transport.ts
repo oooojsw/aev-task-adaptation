@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { reserveRequest, settleRequest, type RequestBudget } from "./request-budget"
 import { fingerprint } from "../protocol-plugins/identity"
 import { writeJsonAtomic } from "../atomic-write"
+import { parseRequestUsage, requestUsageTotal, type RequestUsage } from "./request-usage"
 
 export interface BudgetTransportConfig {
   schema: "aev.budget-transport.v1"
@@ -17,7 +18,6 @@ export interface BudgetTransportConfig {
 }
 
 const positive = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0
-const nonnegative = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0
 
 export function validateRequestGate(value: unknown, bounded: boolean): string | undefined {
   if (value === undefined) return undefined
@@ -63,32 +63,14 @@ export async function budgetTransportEnvironment(config: BudgetTransportConfig |
 }
 
 function meter(dialect: BudgetTransportConfig["dialect"], streaming: boolean) {
-  let input: number | undefined
-  let cacheCreation = 0
-  let cacheRead = 0
-  let output: number | undefined
+  let reported: RequestUsage = { dialect }
   let terminal = false
   let invalid = false
   let pending = ""
   let data: string[] = []
   const decoder = new TextDecoder("utf-8", { fatal: true })
-  const count = (value: unknown) => {
-    if (!nonnegative(value)) throw new Error("Invalid usage")
-    return Number(value)
-  }
-  function usage(value: any) {
-    if (!value || typeof value !== "object") return
-    if (dialect === "anthropic_messages") {
-      if (value.input_tokens !== undefined) input = count(value.input_tokens)
-      if (value.cache_creation_input_tokens !== undefined) cacheCreation = count(value.cache_creation_input_tokens)
-      if (value.cache_read_input_tokens !== undefined) cacheRead = count(value.cache_read_input_tokens)
-      if (value.output_tokens !== undefined) output = count(value.output_tokens)
-    } else {
-      const first = dialect === "openai_chat" ? value.prompt_tokens : value.input_tokens
-      const second = dialect === "openai_chat" ? value.completion_tokens : value.output_tokens
-      if (first !== undefined) input = count(first)
-      if (second !== undefined) output = count(second)
-    }
+  function usage(value: unknown) {
+    reported = { ...reported, ...parseRequestUsage(value, dialect) }
   }
   function value(text: string) {
     if (!text.trim()) return
@@ -132,9 +114,10 @@ function meter(dialect: BudgetTransportConfig["dialect"], streaming: boolean) {
     push(bytes: Uint8Array) { try { feed(decoder.decode(bytes, { stream: true }), false) } catch { invalid = true } },
     finish() {
       try { feed(decoder.decode(), true) } catch { invalid = true }
-      const total = input !== undefined && output !== undefined ? input + output + cacheCreation + cacheRead : undefined
-      return !invalid && terminal && Number.isSafeInteger(total) ? total : undefined
+      return { tokens: !invalid && terminal ? requestUsageTotal(reported) : undefined,
+        usage: reported }
     },
+    partial() { return structuredClone(reported) },
   }
 }
 
@@ -158,27 +141,34 @@ export async function budgetedProviderFetch(input: RequestInfo | URL, init: Requ
     ...(cfg.gate ? { gate: cfg.gate } : {}) })
   let response: Response
   try { response = await transport(input, init) }
-  catch (error) { await settleRequest(cfg.budget, id, undefined); throw error }
-  if (!response.body) { await settleRequest(cfg.budget, id, undefined); return response }
+  catch (error) { await settleRequest(cfg.budget, id, undefined, { dialect: cfg.dialect, outcome: "transport_error" }); throw error }
+  if (!response.body) { await settleRequest(cfg.budget, id, undefined, { dialect: cfg.dialect, outcome: "missing_body", httpStatus: response.status }); return response }
   const contentType = response.headers.get("content-type") ?? ""
   const streaming = contentType.includes("text/event-stream") || (body.stream === true && !contentType.includes("application/json"))
   const usage = meter(cfg.dialect, streaming)
   const reader = response.body.getReader()
   let settled: Promise<unknown> | undefined
-  const settle = (complete: boolean) => settled ??= settleRequest(cfg.budget, id, complete ? usage.finish() : undefined)
+  let cancelled = false
+  const settle = (outcome?: "cancelled" | "stream_error") => {
+    const result = outcome ? { tokens: undefined, usage: usage.partial() } : usage.finish()
+    return settled ??= settleRequest(cfg.budget, id, result.tokens, { ...result.usage,
+      httpStatus: response.status, outcome: outcome ?? (!response.ok ? "http_error" : result.tokens === undefined ? "incomplete_usage" : "complete") })
+  }
   // 在消费同一条流时旁路计量，不克隆响应或提前读取整份答案。
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const part = await reader.read()
-        if (part.done) { await settle(true); controller.close(); reader.releaseLock(); return }
+        // 取消会唤醒挂起读取，不能抢先结算成正常结束或流错误。
+        if (cancelled) return
+        if (part.done) { await settle(); controller.close(); reader.releaseLock(); return }
         usage.push(part.value)
         controller.enqueue(part.value)
       } catch (error) {
-        try { await settle(false) } finally { controller.error(error) }
+        try { await settle("stream_error") } finally { controller.error(error) }
       }
     },
-    async cancel(reason) { try { await reader.cancel(reason) } finally { await settle(false); reader.releaseLock() } },
+    async cancel(reason) { cancelled = true; try { await reader.cancel(reason) } finally { await settle("cancelled"); reader.releaseLock() } },
   })
   return new Response(stream, { status: response.status, statusText: response.statusText, headers: response.headers })
 }

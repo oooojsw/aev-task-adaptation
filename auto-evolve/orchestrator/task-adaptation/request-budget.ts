@@ -4,6 +4,7 @@ import { withFileLock } from "../jsonl"
 import { writeFileAtomic, writeJsonAtomic } from "../atomic-write"
 import { canonical, fingerprint } from "../protocol-plugins/identity"
 import { admission, nextAdmission, type Admission } from "./exploration/admission"
+import { validateRequestUsage, requestUsageTotal, type RequestUsage } from "./request-usage"
 
 export interface RequestBudget {
   root: string
@@ -21,6 +22,7 @@ interface Attempt {
   status: "reserved" | "settled" | "unknown" | "overrun"
   usedTokens?: number
   gate?: string
+  usage?: RequestUsage
 }
 
 export interface IntakePrefix {
@@ -123,6 +125,13 @@ async function transaction<T>(config: RequestBudget, apply: (state: State) => Pr
       }
     } else if (state.intakePrefix !== undefined || state.attempts.some(item => item.gate !== undefined)) throw new Error("Request stage policy missing")
     const marker = `${file}.stages.claim`
+    for (const attempt of state.attempts) {
+      if (attempt.usage === undefined) continue
+      validateRequestUsage(attempt.usage)
+      if (attempt.status === "reserved" || attempt.usedTokens !== undefined && requestUsageTotal(attempt.usage) !== attempt.usedTokens) {
+        throw new Error("Request usage evidence drift")
+      }
+    }
     const stageBinding = () => fingerprint({ binding, policy: state.gates![0].policy.policy,
       ...(state.intakePrefix ? { intakePrefix: state.intakePrefix } : {}) })
     const expected = state.gates ? stageBinding() : undefined
@@ -171,7 +180,7 @@ export function budgetTotals(attempts: ReadonlyArray<Attempt>) {
     overrunAttempts: attempts.filter(item => item.status === "overrun").length }
 }
 
-export async function reserveRequest(config: RequestBudget, attempt: Omit<Attempt, "status" | "usedTokens">) {
+export async function reserveRequest(config: RequestBudget, attempt: Omit<Attempt, "status" | "usedTokens" | "usage">) {
   if (!attempt || ![attempt.id, attempt.model, attempt.role].every(value => typeof value === "string" && value.trim()) ||
       !/^[a-f0-9]{64}$/.test(attempt.request) || !positive(attempt.reservationTokens)) throw new Error("Explicit request token ceiling required")
   const result = await transaction(config, state => {
@@ -291,19 +300,50 @@ export async function openRequestStage(config: RequestBudget, policy: Admission,
   })
 }
 
-export async function settleRequest(config: RequestBudget, id: string, tokens: number | undefined) {
+export async function settleRequest(config: RequestBudget, id: string, tokens: number | undefined, usage?: RequestUsage) {
   if (tokens !== undefined && (!Number.isSafeInteger(tokens) || tokens < 0)) throw new Error("Invalid reported request token count")
+  if (usage) {
+    validateRequestUsage(usage)
+    if (tokens !== undefined && requestUsageTotal(usage) !== tokens) throw new Error("Request usage total mismatch")
+  }
   return transaction(config, state => {
     const attempt = state.attempts.find(item => item.id === id)
     if (!attempt) throw new Error("Request settlement without reservation")
     const status = tokens === undefined ? "unknown" : tokens > attempt.reservationTokens ? "overrun" : "settled"
     if (attempt.status !== "reserved") {
-      if (attempt.status === status && attempt.usedTokens === tokens) return budgetTotals(state.attempts)
+      if (attempt.status === status && attempt.usedTokens === tokens && canonical(attempt.usage ?? null) === canonical(usage ?? null)) return budgetTotals(state.attempts)
       throw new Error("Conflicting request usage settlement")
     }
     attempt.status = status
     if (tokens !== undefined) attempt.usedTokens = tokens
+    if (usage) attempt.usage = structuredClone(usage)
     return budgetTotals(state.attempts)
+  })
+}
+
+export async function inspectRequestUsage(config: RequestBudget) {
+  return transaction(config, state => {
+    const attempts = state.attempts.map(item => {
+      const policy = state.gates?.find(gate => gate.id === item.gate)?.policy
+      return { ...structuredClone(item), stage: policy?.stage ?? (item.role === "intake" ? "intake" : "unscoped"),
+        round: policy?.round ?? null, pass: policy?.pass ?? null, generation: policy?.generation ?? null }
+    })
+    const keys = [...new Set(attempts.map(item => canonical([item.role, item.model, item.stage, item.generation])))]
+    const groups = keys.map(key => {
+      const rows = attempts.filter(item => canonical([item.role, item.model, item.stage, item.generation]) === key)
+      const first = rows[0]
+      const fields = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"] as const
+      const components = Object.fromEntries(fields.map(field => {
+        const knownTokens = rows.reduce((sum, item) => sum + (item.usage?.[field] ?? 0), 0)
+        if (!Number.isSafeInteger(knownTokens)) throw new Error("Request usage total overflow")
+        return [field, { knownTokens, unreportedAttempts: rows.filter(item => item.usage?.[field] === undefined).length }]
+      }))
+      return { role: first.role, model: first.model, stage: first.stage, generation: first.generation, ...budgetTotals(rows), components }
+    })
+    // 只汇总原钱包；适配器与会话账本不可再叠加成API消费。
+    return { schema: "aev.request-usage.v1", scope: config.scope, limits: { calls: config.calls, tokens: config.tokens },
+      ...budgetTotals(state.attempts), complete: attempts.every(item => item.status === "settled"), attempts, groups,
+      fee: null, feeStatus: "unpriced" }
   })
 }
 

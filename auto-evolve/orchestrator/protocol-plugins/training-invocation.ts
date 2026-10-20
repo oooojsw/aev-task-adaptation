@@ -48,7 +48,8 @@ export async function runProtocolTrainingTask(options: { enabled: boolean; stage
     ...(adapted ? { taskWindow: adapted.scope, allowShell: request.allowShell, isolateHostRuntime: request.isolateHostRuntime,
       infrastructureAttempts: request.infrastructureAttempts, permissionMode: request.config.permissionConfig.mode } : {}) })
   const identity = { schema: "aev.training-invocation-accounting.v1", role: options.role, requestFingerprint,
-    requestedModel: request.model ?? null, startedAt, reused: false, fee: null }
+    requestedModel: request.model ?? null, gate: request.requestBudget?.gate ?? null,
+    startedAt, reused: false, fee: null }
   await writeJsonAtomic(path.join(dir, "started.json"), identity)
   if (adapted) await writeJsonAtomic(path.join(dir, "task-window.json"), adapted.scope)
   const persist = async (fields: Record<string, unknown>) => writeJsonAtomic(path.join(dir, "accounting.json"), {

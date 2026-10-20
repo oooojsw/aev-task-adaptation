@@ -44,3 +44,26 @@ test("malformed accounting fails closed rather than disappearing from report", a
   await ledger(dir, "bad", { reused: true })
   await expect(summarizeResources(dir)).rejects.toThrow("identity")
 })
+
+test("resource groups separate requested/actual models, roles, gates and phase", async () => {
+  const dir = await root()
+  await ledger(dir, "one", { role: "lead", requestedModel: "alias", actualModel: "provider/one", gate: "a", phase: "source" })
+  await ledger(dir, "two", { role: "lead", requestedModel: "alias", actualModel: "provider/two", gate: "b", phase: "source", inputTokens: null })
+  const result = await summarizeResources(dir)
+  expect(result.groups).toHaveLength(2)
+  expect(result.groups[1]).toMatchObject({ actualModel: "provider/two", input: { knownTokens: 0, unreportedInvocations: 1 } })
+  expect(result.input.knownTokens).toBe(10)
+  expect(result.input.unreportedInvocations).toBe(1)
+})
+
+test("proven admission rejection is not a missing dispatched invocation", async () => {
+  const dir = await root()
+  const id = "a".repeat(64)
+  await mkdir(path.join(dir, id))
+  await writeFile(path.join(dir, id, "started.claim"), "")
+  await writeFile(path.join(dir, id, "budget.admission.json"), JSON.stringify({ status: "blocked_before_dispatch", requestFingerprint: id }))
+  const result = await summarizeResources(dir)
+  expect(result.invocations).toHaveLength(0)
+  expect(result.startedWithoutLedger).toHaveLength(0)
+  expect(result.blockedBeforeDispatch).toHaveLength(1)
+})

@@ -5,7 +5,7 @@ import { httpChat } from "./http-chat"
 import type { Settings } from "./contract"
 import type { Artifact, PublicInputs } from "./runtime"
 import { summarizeResources } from "./resource-summary"
-import { inspectBudget, openRequestStage } from "../task-adaptation/request-budget"
+import { inspectBudget, inspectRequestUsage, openRequestStage } from "../task-adaptation/request-budget"
 import type { Admission } from "../task-adaptation/exploration/admission"
 
 function settings(): Settings {
@@ -23,6 +23,24 @@ function request(): PublicInputs & { settings: Settings } {
 const root = () => path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
 const reply = () => ({ model: "fixture-model", choices: [{ finish_reason: "stop", message: { content: "42" } }],
   usage: { prompt_tokens: 10, completion_tokens: 2 } })
+
+test("HTTP failed answer retains billed usage and Anthropic cache is included once", async () => {
+  for (const failure of [false, true]) {
+    const config = { root: root(), scope: "audit", calls: 3, tokens: 1000 }
+    const plugin = await httpChat({ evidenceRoot: root(), budget: { config, role: "checker", tokenCeiling: 300 },
+      credential: () => "synthetic-fixture", transport: async () => Response.json({ model: "fixture-model",
+        stop_reason: "end_turn", content: [{ type: "text", text: "42" }],
+        usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 20, cache_creation_input_tokens: 30 } },
+        { status: failure ? 429 : 200 }) })
+    const input = request()
+    input.settings.dialect = "anthropic_messages"
+    const result = await plugin.execute(input)
+    expect(result.status).toBe(failure ? "execution_error" : "completed")
+    expect(result.usage).toMatchObject({ inputTokens: 10, outputTokens: 2 })
+    expect(await inspectRequestUsage(config)).toMatchObject({ reportedTokens: 62,
+      attempts: [{ usage: { cacheReadTokens: 20, cacheWriteTokens: 30, outcome: failure ? "http_error" : "complete" } }] })
+  }
+})
 
 test("dynamic gates preserve frozen HTTP identity and block stale dispatch", async () => {
   const config = { root: root(), scope: "staged-task", calls: 8, tokens: 4000 }

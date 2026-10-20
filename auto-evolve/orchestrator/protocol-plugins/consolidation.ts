@@ -252,10 +252,8 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
       dataset_sha256: s.datasetSHA256, dependencies_sha256: dependenciesSHA, model_id: s.modelID, skill_chars: pub.chars,
       ...metrics, evidence_sha256: digest(data),
     }
-    const tokens = result.results.reduce((acc, row) => ({
-      inputTokens: acc.inputTokens + (row.usage?.inputTokens ?? 0),
-      outputTokens: acc.outputTokens + (row.usage?.outputTokens ?? 0),
-    }), { inputTokens: 0, outputTokens: 0 })
+    // 任一题缺账就保持该侧未知，不能将部分用量冒充完整总量。
+    const tokens = completeUsage(result.results.map(row => row.usage))
     return { status: "completed", product: { kind: "json", bytes: Buffer.from(JSON.stringify(product)) }, usage: tokens }
   }
   const evaluate: Evaluate = async input => {
@@ -311,4 +309,14 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
     }
   }
   return { executor, execute, checker: checks, evaluate, preflight }
+}
+
+export function completeUsage(rows: ReadonlyArray<{ inputTokens?: number; outputTokens?: number } | undefined>) {
+  const sum = (key: "inputTokens" | "outputTokens") => {
+    if (!rows.length || rows.some(row => !Number.isSafeInteger(row?.[key]) || Number(row?.[key]) < 0)) return undefined
+    const total = rows.reduce((value, row) => value + row![key]!, 0)
+    return Number.isSafeInteger(total) ? total : undefined
+  }
+  const inputTokens = sum("inputTokens"), outputTokens = sum("outputTokens")
+  return { ...(inputTokens !== undefined ? { inputTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}) }
 }
