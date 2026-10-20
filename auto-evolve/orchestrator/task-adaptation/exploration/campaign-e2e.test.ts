@@ -155,3 +155,137 @@ for (const kind of ["report", "software"] as const) test(`${kind} exploration us
     Object.assign(process.env, saved)
   }
 }, 300000)
+
+test("report exploration with low-config manual_decision expands V1 and completes offline Campaign", async () => {
+  const cwd = path.resolve(import.meta.dir, "../../../..")
+  const root = path.join(testEvidenceRoot(), `report-lowconfig-${randomUUID()}`)
+  const source = path.join(root, "sources")
+  await mkdir(source, { recursive: true })
+  await writeFile(path.join(source, "candidate.txt"), "initial argument")
+  await writeFile(path.join(source, "source.txt"), "Public evidence supports result 42")
+  await writeFile(path.join(source, "rubric.txt"), "PRIVATE_FIXTURE_ORACLE")
+  const saved = { ...process.env }, key = `__exploration_${randomUUID().replaceAll("-", "")}`
+  const holder = globalThis as Record<string, unknown>
+  const calls: string[] = []
+  let leads = 0
+  try {
+    const profile = path.join(root, "profile")
+    await mkdir(profile)
+    await writeFile(path.join(profile, "opencode.json"), "{}")
+    Object.assign(process.env, {
+      AUTO_EVOLVE_RUNTIME_ROOT: path.join(root, "runtime"),
+      AUTO_EVOLVE_SKIP_STALE_HEAL: "1",
+      AUTO_EVOLVE_OPENCODE_PRIVATE_PROFILE_ROOT: profile,
+    })
+    const actual = await buildOfflineCampaign(root, key)
+    const config = structuredClone(DEFAULT_CONFIG)
+    config.monitorConfig.enabled = false
+    config.monitorConfig.autoStart = false
+    holder[key] = {
+      async loadConfig() { return config },
+      async runOpencodeTask(input: OpencodeTaskInput) {
+        calls.push(input.title)
+        await input.onSpawn?.()
+        if (input.title.startsWith("Campaign Lead")) {
+          leads++
+          const round = Number(input.title.match(/round-(\d+)/)?.[1])
+          const file = input.permissionEditPaths?.[0]
+          if (!file) throw new Error("Lead edit grant missing")
+          if (round === 3) expect(await readFile(file, "utf8")).toBe("initial argument")
+          await writeFile(file, round === 3 ? "accepted argument" : `rejected argument ${round}`)
+        }
+        const responseText = JSON.stringify(input.title.startsWith("Long Task Graph") ? {
+          planner_summary: "Inspect frozen sources", completion_validator_ids: [], units: [{ id: "inspect", operation: "author_work",
+            title: "Inspect sources", goal: "Inspect source evidence", inputs: [], depends_on: [], expected_artifacts: [],
+            claim: "Inspected", check_plan: "Formal acceptance follows", validator_ids: [], retry_budget: 1 }],
+        } : { claimed_success: true, claim_statement: "Source inspected", summary: "Offline actor", blockers: [], updated_files: [],
+          ready_for_final_acceptance: true, reasons: [], next_attention_areas: [], findings: [], memory_advice: [], package_advice: [],
+          exploration_advice: [], refs: [], package_highlights: [], tree_highlights: [], surface_precheck_passed: true, surface_precheck_details: [] })
+        return {
+          title: input.title, prompt: input.prompt, selectedModel: input.model, referencedPaths: input.referencePaths ?? [],
+          attachedFiles: [], promptInlineFiles: [], permissionReadPaths: input.permissionReadPaths ?? [], permissionEditPaths: input.permissionEditPaths ?? [],
+          result: { exitCode: 0, stdout: responseText, stderr: "", events: [], responseText, toolFailures: [] },
+        }
+      },
+    }
+    const cfg = catalogue(), choice = decision("report")
+    cfg.request = "Produce verified report"
+    cfg.stop = { rounds: 4, calls: 500, tokens: 20000000, stagnant: 4 }
+    cfg.resources = [
+      { id: "candidate", path: "candidate.txt", mutable: true, audience: "public" },
+      { id: "source", path: "source.txt", mutable: false, audience: "public" },
+      { id: "rubric", path: "rubric.txt", mutable: false, audience: "private" },
+    ]
+    cfg.entries = ["candidate"]
+    cfg.profiles = [{
+      id: "report", description: "Frozen local correctness", kinds: ["report"], requires: ["files"],
+      acceptance: { execution: "none", checks: [{ id: "quality", target: "candidate",
+        mechanism: "script", purpose: "Verify actual result", required: true, resources: ["candidate", "rubric"], feedback: "status_only" }] },
+      rejection: [{ check: "quality", actions: ["repair"] }], selection: { rule: "first_pass" },
+    }]
+    choice.profiles = ["report"]
+    choice.workers = [{ id: "sources", purpose: "Read source evidence", resources: ["source"], actions: ["read"] }]
+
+    const script = path.join(root, "check.mjs")
+    await writeFile(script, 'import {readFileSync} from "node:fs"; const p=JSON.parse(readFileSync(process.argv[2],"utf8")); const t=readFileSync(p.candidate[0].path,"utf8"); const ok=t==="accepted argument"; console.log(JSON.stringify({status:ok?"passed":"rejected",message:ok?"Accepted":"Revise candidate"}));')
+
+    // 使用 manual_decision + explorationRequest，系统自动展开 V1 策略
+    const input = {
+      intake: {
+        mode: "manual_decision" as const,
+        cwd,
+        root: source,
+        dir: path.join(root, "intake"),
+        catalogue: cfg,
+        decision: choice,
+      },
+      explorationRequest: { mode: "observations" as const, after: 2 },
+      execution: {
+        dir: path.join(root, "execution"),
+        skillFormat: "text" as const,
+        productKind: "json" as const,
+        resourceKinds: Object.fromEntries(cfg.resources.map(item => [item.id, "text" as const])),
+        checkers: [{ name: "quality", binding: { id: "script-json-checker", version: "1", settings: { command: process.execPath,
+          commandSHA256: await hash(process.execPath), script, scriptSHA256: await hash(script), timeoutMs: 10000, maxOutputBytes: 4096 } } }],
+        training: { schema: "aev.protocol-training.v1", roles: Object.fromEntries(TRAINING_ROLES.map(role => [role, { model: "fixture/actor", timeoutMs: 10000 }])) as TrainingConfig["roles"],
+          budgets: { maxAttemptsPerUnit: 1, maxTotalUnitAttempts: 4, maxGraphReplans: 1, maxValidatorCalls: 4, maxNoProgressCycles: 2, maxUnitsPerGraph: 4 } },
+        requestBudget: { schema: "aev.task-budget-policy.v1", root: path.join(root, "budget"), scope: "report",
+          models: [{ model: "fixture/actor", dialect: "openai_chat", expectedModels: ["actor"], maxInputTokens: 20000, maxOutputTokens: 4096 }] },
+        maxBundleBytes: 1000000,
+      },
+    }
+
+    const result = await actual.runTask(input)
+    expect(result.status).toBe("verified_success")
+
+    // 验证生成的 task-plan.json 包含由 resolveExploration 自动展开的 V1 策略
+    const generatedPlan = JSON.parse(await readFile(path.join(root, "intake/task-plan.json"), "utf8"))
+    expect(generatedPlan.exploration?.schema).toBe("aev.exploration-policy.v1")
+    expect(generatedPlan.exploration?.trigger).toEqual({ kind: "attempts", observations: 2 })
+
+    // 验证 exploration-resolution.json 存在且绑定了模板
+    const resolution = JSON.parse(await readFile(path.join(root, "intake/exploration-resolution.json"), "utf8"))
+    expect(resolution.schema).toBe("aev.exploration-resolution.v1")
+    expect(resolution.template.id).toBe("report-default-exploration")
+
+    // 验证经过 2 轮失败后成功在第 3 轮激活备用路线并通过
+    const state = JSON.parse(await readFile(path.join(result.campaignDir, "task-adaptation/exploration/host/state.json"), "utf8"))
+    expect(state.record.observations.map((item: { branch: string }) => item.branch)).toEqual(["original", "original", "alternative"])
+    expect(state.record.decision.reason).toBe("first_pass")
+
+    // 验证交付成果来自正式挑选的版本
+    const delivery = JSON.parse(await readFile(result.delivery.path, "utf8"))
+    expect(await readFile(path.join(path.dirname(result.delivery.path), delivery.files[0].path), "utf8")).toBe("accepted argument")
+
+    // 验证同目录恢复完全复用，零新增调用
+    const count = calls.length
+    const resumed = await actual.runTask(input)
+    expect(resumed.delivery).toEqual({ ...result.delivery, reused: true })
+    expect(calls).toHaveLength(count)
+    console.log(`Report low-config exploration E2E evidence: ${root}`)
+  } finally {
+    delete holder[key]
+    for (const name of Object.keys(process.env)) if (!(name in saved)) delete process.env[name]
+    Object.assign(process.env, saved)
+  }
+}, 300000)

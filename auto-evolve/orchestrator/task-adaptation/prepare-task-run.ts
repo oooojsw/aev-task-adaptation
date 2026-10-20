@@ -9,9 +9,14 @@ import type { Runtime } from "../protocol-plugins/runtime"
 import { preflightBindings } from "./preflight-bindings"
 import { taskRequestBudget, taskRuntimeBudgets } from "./budget-policy"
 
+import type { ExplorationRequest, HostExplorationTemplate } from "./exploration/templates"
+import type { ExplorationSupport } from "./exploration/resolve"
+
 export interface TaskRunPreparation {
   intake: IntakeInput
   execution: Omit<ExecutionPreparation, "root" | "plan" | "capabilities">
+  explorationRequest?: ExplorationRequest
+  explorationTemplates?: readonly HostExplorationTemplate[]
 }
 
 async function preparationRuntime(input: TaskRunPreparation) {
@@ -38,13 +43,31 @@ export async function prepareTaskRun(input: TaskRunPreparation, dependencies?: {
   }
   // 本地必需条件先检查，避免已知缺依赖仍付费理解任务。
   const runtime = await (dependencies?.createRuntime ?? preparationRuntime)(input)
+  const support: ExplorationSupport = {
+    ...(input.execution.checkers[0]?.binding ? { checker: input.execution.checkers[0].binding } : {}),
+    ...(input.execution.executor ? { executor: input.execution.executor } : {}),
+    capabilities: input.intake.catalogue.capabilities.filter(item => item.available).map(item => item.id),
+    budget: {
+      calls: input.intake.catalogue.stop.calls,
+      tokens: input.intake.catalogue.stop.tokens,
+    },
+  }
   // 手动轨道绝不生成 Intake 模型请求预算，也绝不调用 Intake 模型。
-  const intake = input.intake.mode === undefined || input.intake.mode === "auto"
+  const baseIntake = input.intake.mode === undefined || input.intake.mode === "auto"
     ? { ...input.intake, ...(input.execution.requestBudget ? { requestBudget: taskRequestBudget(
         input.execution.requestBudget, input.intake.catalogue.stop, "intake", input.intake.model) } : {}) }
     : input.intake
+  const intake: IntakeInput = {
+    ...baseIntake,
+    ...(input.explorationRequest !== undefined ? { explorationRequest: input.explorationRequest } : {}),
+    ...(input.explorationTemplates !== undefined ? { explorationTemplates: input.explorationTemplates } : {}),
+    explorationSupport: support,
+  } as IntakeInput
   const interpreted = await prepareTask(intake, dependencies?.intake)
   if (interpreted.status !== "ready") return interpreted
+  if (interpreted.plan.exploration) {
+    requireExplorationHost(interpreted.plan)
+  }
   // 同一入口贯通方案与配置；这里只准备，不隐式启动模型演化。
   return prepareExecution({ ...input.execution, root: input.intake.root, plan: structuredClone(interpreted.plan),
     capabilities: input.intake.catalogue.capabilities.filter(item => item.available).map(item => item.id) }, runtime.registry)

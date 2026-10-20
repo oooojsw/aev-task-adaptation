@@ -154,4 +154,121 @@ describe("three-track task intake", () => {
     expect(again.reused).toBe(true)
     expect(calls).toBe(1)
   })
+
+  test("manual_decision: resolves exploration V1 and writes resolution proof", async () => {
+    const ctx = await fixture()
+    const input: IntakeInput = {
+      ...ctx,
+      mode: "manual_decision",
+      decision,
+      explorationRequest: { mode: "observations", after: 2 },
+      explorationTemplates: [
+        {
+          schema: "aev.exploration-template.v1",
+          id: "fixture-report-template",
+          version: "1.0.0",
+          profiles: ["report"],
+          checker: { id: "judge" },
+          policy: {
+            origin: { kind: "initial" },
+            replace: ["deliverable"],
+            preserve: [],
+            dependencies: ["facts"],
+            defaultObservations: 1,
+            allowance: {
+              rounds: 1,
+              minimumRounds: 1,
+              authorCalls: 5,
+              authorTokens: 5000,
+              acceptanceCalls: 2,
+              acceptanceTokens: 2000,
+              deliveryCalls: 0,
+              deliveryTokens: 0,
+            },
+            bounds: { archiveBytes: 100000, candidateBytes: 5000, dependencyBytes: 10000 },
+            safety: { reset: "declared_entries", effects: "sandbox_only" },
+          },
+        },
+      ],
+      explorationSupport: {
+        checker: { id: "judge" },
+      },
+    }
+    const res = await prepareTask(input)
+    expect(res.status).toBe("ready")
+    expect(res.plan.exploration?.schema).toBe("aev.exploration-policy.v1")
+    expect(res.plan.exploration?.trigger).toEqual({ kind: "attempts", observations: 2 })
+
+    // Check exploration-resolution.json was written
+    const resFile = path.join(ctx.dir, "exploration-resolution.json")
+    const resJson = JSON.parse(await readFile(resFile, "utf8"))
+    expect(resJson.schema).toBe("aev.exploration-resolution.v1")
+    expect(resJson.template.id).toBe("fixture-report-template")
+
+    // Reuse check
+    const reused = await prepareTask(input)
+    expect(reused.reused).toBe(true)
+    expect(reused.plan.exploration?.trigger).toEqual({ kind: "attempts", observations: 2 })
+  })
+
+  test("auto: exploration resolution error does NOT retry model decision repairs", async () => {
+    const ctx = await fixture()
+    let calls = 0
+    const deps = {
+      createDriver: async () => ({
+        implementation: "b".repeat(64),
+        preflight: async () => {},
+        invoke: async (arg: { workDir: string }) => {
+          calls++
+          await writeFile(path.join(arg.workDir, "decision.json"), JSON.stringify(decision))
+          return { completed: true, actualModel: "fixture" }
+        },
+      }),
+    }
+    const input: IntakeInput = {
+      ...ctx,
+      mode: "auto",
+      model: "fixture",
+      expectedModel: "fixture",
+      timeoutMs: 5000,
+      maxInputBytes: 64000,
+      maxDecisionBytes: 16000,
+      maxDecisionRepairs: 2,
+      // Request unsupported window mode
+      explorationRequest: { mode: "window", afterRound: 3 } as any,
+    }
+    // Must throw immediately without retrying decision (calls strictly === 1)
+    await expect(prepareTask(input, deps as never)).rejects.toThrow("Unsupported exploration request mode")
+    expect(calls).toBe(1)
+  })
+
+  test("manual_plan: active exploration rejected and conflicts fail closed", async () => {
+    const ctx = await fixture()
+    const ready = compileTask(ctx.catalogue, decision)
+    if (ready.status !== "ready") throw new Error("Expected ready")
+    const planPath = path.join(ctx.base, "preset-plan.json")
+    await writeFile(planPath, JSON.stringify(ready.plan))
+
+    // Active exploration on manual_plan rejected
+    await expect(
+      prepareTask({
+        ...ctx,
+        mode: "manual_plan",
+        planPath,
+        catalogue: { ...ctx.catalogue, approvedPlans: [fingerprint(ready.plan)] },
+        explorationRequest: { mode: "auto" },
+      }),
+    ).rejects.toThrow(/Manual Plan cannot accept active exploration request/)
+
+    // off request with no exploration is valid
+    const res = await prepareTask({
+      ...ctx,
+      mode: "manual_plan",
+      planPath,
+      catalogue: { ...ctx.catalogue, approvedPlans: [fingerprint(ready.plan)] },
+      explorationRequest: { mode: "off" },
+    })
+    expect(res.status).toBe("ready")
+    expect(res.plan.exploration).toBeUndefined()
+  })
 })
