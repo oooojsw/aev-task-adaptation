@@ -82,6 +82,17 @@ function baseInput(overrides: Partial<DecisionV2Input> = {}): DecisionV2Input {
 }
 
 describe("Exploration Decision V2 Pure Function", () => {
+  for (const k of [1, 3, 5, 7]) test(`fixed round ${k} switches only at its declared boundary`, () => {
+    const policy = v2Policy({ window: { minimumRounds: k, maximumRounds: k } })
+    for (let count = 0; count <= k; count++) {
+      const result = decideV2(baseInput({ policy, effectiveMaxRounds: k + 2,
+        rounds: Array.from({ length: count }, (_, index) => closed(index + 1)),
+        remaining: { rounds: k + 2 - count, calls: 50, tokens: 5000 } }))
+      expect(result.action).toBe(count === k ? "activate" : "continue")
+      expect(result.reason).toBe(count === k ? "window_exhausted" : "original_minimum")
+    }
+  })
+
   test("D201: N=9、f=h=7，原路线关闭 1—6 -> continue，不提前换", () => {
     const rounds = [1, 2, 3, 4, 5, 6].map((r) => closed(r))
     const res = decideV2(baseInput({ rounds }))

@@ -678,3 +678,65 @@ Run `bun test auto-evolve/orchestrator/task-adaptation/intake-three-track.test.t
 and the existing full regression suite, then typecheck and exercise the real
 software/report/skill end-to-end jobs in an isolated new run directory before
 production promotion.
+
+## Low-configuration exploration and request accounting (2026-10-20)
+
+S1/S2 implementation and offline acceptance completed on
+`feat/20261020-exploration-v2-metric-usage` (2026-10-21).
+The controlling scope is the staged plan under `进度记录`; strict future-route
+reservation (S3 / `reserved`) is deferred by the user. Existing finite safety
+ceilings and the original shared wallet remain in force.
+
+Host integrations can pass approved templates through the existing `runTask` or
+`prepareTaskRun` dependency injection. Ordinary task JSON cannot publish templates.
+The built-in production template list remains empty until a host explicitly
+approves a task shape and allocations. Therefore `auto` without a matching
+template means exploration is not enabled, not an invisible default policy.
+
+Optional top-level requests include:
+
+```json
+{"explorationRequest":{"mode":"window","afterRound":5,"template":"host-approved-window"}}
+```
+
+```json
+{"explorationRequest":{"mode":"metric","patience":3,"template":"host-approved-metric"}}
+```
+
+These are request shapes, not runnable task configurations. A template must
+authorize each override and the full task must provide the original material,
+acceptance, model and request-budget bindings. V1 observation counts are not
+rounds. Metric mode uses formally checked execution results and the approved
+`best_pass` metric, not an author's claimed score. Old claimed runs must keep
+their matching source revision; do not delete claims or reset wallets to migrate.
+
+Each actual HTTP attempt remains in `<requestBudget.root>/budget.json` with
+role/model/gate and reported token components. Query with:
+
+```powershell
+bun run auto-evolve/scripts/report-task-usage.ts --budget E:/run/original-wallet-config.json
+```
+
+The config file must contain exactly the original `{root, scope, calls, tokens}`.
+The command rejects a missing wallet and sends no model requests. It prints
+per-attempt records and groups by role, model, stage and generation. Compare
+`reportedTokens` with `unresolvedAttempts`, `outstandingTokens` and component-level
+`unreportedAttempts`; reported partial totals are not a complete bill.
+
+Provider errors can still report billed usage. Missing or interrupted usage stays
+unknown, never zero. Cache replay does not create a new HTTP attempt. Session and
+acceptance accounting are supporting views, not extra expenses to add to the
+wallet. Fees remain `null/unpriced` without a frozen price source. This work does
+not retroactively fill missing historical records or prove real-model improvement.
+
+Final verification and remaining gaps are tracked in
+`进度记录/2026-10-20-S1S2可信评分与用量统计实施记录.md`.
+
+Final combined E2E: 14 passed, zero failures, exercising actual source SDK requests
+against a local fixed-response server and the common report/software/consolidation
+Campaign. The partitioned 98-file regression passed 724 tests with one live smoke
+intentionally skipped; the calculator test passed separately. A same-process Bun
+multi-build dependency-read failure was reproduced and retained, not hidden.
+The package typecheck still exits 2 with 97 diagnostics identical to the earlier
+record, not a green whole-repository check. No paid-model effect experiment,
+remote CI, push, main merge or production promotion was performed.
