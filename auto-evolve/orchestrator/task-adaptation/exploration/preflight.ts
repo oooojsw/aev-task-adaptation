@@ -10,7 +10,7 @@ import { verifyScriptChecker } from "../../protocol-plugins/script-checker"
 import { readCandidate } from "./archive"
 import { bindPlan } from "../binding"
 import { taskRequestBudget, taskRuntimeBudgets, type TaskBudgetPolicy } from "../budget-policy"
-import { requireExplorationHost } from "./entry"
+import { requireExplorationHost, ExplorationUnsupportedError } from "./entry"
 
 export async function preflightExploration(plan: Readonly<Plan>, input: {
   root: string; capabilities: string[]; executor?: Binding; checkers: Array<{ name: string; binding: Binding }>
@@ -38,7 +38,7 @@ export async function preflightExploration(plan: Readonly<Plan>, input: {
   const executor = input.executor
   if ((plan.acceptance.execution === "none") !== !executor) throw new Error("Exploration executor differs from Plan")
   if (executor && !["consolidation-direct-chat", "http-text-chat", "script-json-executor"].includes(executor.id))
-    throw new Error("Exploration executor has no replay-safe adapter")
+    throw new ExplorationUnsupportedError("Exploration executor has no replay-safe adapter")
   if (executor?.id === "script-json-executor") {
     const file = fileURLToPath(new URL("../../protocol-plugins/sandbox-js-runner.mjs", import.meta.url))
     const hash = createHash("sha256").update(await readFile(file)).digest("hex")
@@ -49,7 +49,7 @@ export async function preflightExploration(plan: Readonly<Plan>, input: {
   }
   for (const item of input.checkers) {
     if (!["script-json-checker", "http-model-judge", "consolidation-checker"].includes(item.binding.id))
-      throw new Error("Exploration checker has no bounded adapter")
+      throw new ExplorationUnsupportedError("Exploration checker has no bounded adapter")
     if (item.binding.id === "script-json-checker") await verifyScriptChecker(item.binding.settings)
   }
   const reviewer = taskRequestBudget(budget, plan.stop, "reviewer", input.training.roles.reviewer.model)

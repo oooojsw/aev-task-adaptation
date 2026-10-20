@@ -6,11 +6,11 @@ import { canonical, fingerprint } from "../protocol-plugins/identity"
 import { opencodeDriver } from "../protocol-plugins/opencode-driver"
 import { writeFileAtomic, writeJsonAtomic } from "../atomic-write"
 import { interpretationPrompt, validateCatalogue, type Decision, type TaskCatalogue, compileTask } from "./catalogue"
-import { validatePlan } from "./plan"
+import { validatePlan, type Plan } from "./plan"
 import { resolveResource } from "./binding"
 import { approvePresetPlan } from "./approved-plan"
 
-import { resolveExploration, type ExplorationSupport } from "./exploration/resolve"
+import { resolveExploration, explorationSummary, validateExplorationRequest, validateExplorationTemplates, type ExplorationSupport } from "./exploration/resolve"
 import { BUILTIN_EXPLORATION_TEMPLATES, type ExplorationRequest, type HostExplorationTemplate } from "./exploration/templates"
 
 type Driver = Awaited<ReturnType<typeof opencodeDriver>>
@@ -27,6 +27,7 @@ export interface IntakeCommon {
 export interface IntakeDependencies {
   createDriver?: (options: { cwd: string; evidenceRoot: string }) => Promise<Driver>
   templates?: readonly HostExplorationTemplate[]
+  preflightExploration?: (plan: Readonly<Plan>) => Promise<{ status: "supported" } | { status: "unsupported"; reason: string }>
 }
 
 // auto 延续原来的必填协议，兼容现有任务配置和模型调用回执。
@@ -66,6 +67,75 @@ export type IntakeInput = AutoIntakeInput | ManualDecisionInput | ManualPlanInpu
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 const json = (bytes: Buffer) => JSON.parse(bytes.toString("utf8").replace(/^\uFEFF/, ""))
 
+type Resolution = Awaited<ReturnType<typeof resolveIntake>>["proof"]
+
+function requested(request: ExplorationRequest | undefined) {
+  return !!request?.mode && request.mode !== "off"
+}
+
+async function check(plan: Readonly<Plan>, dependencies?: IntakeDependencies) {
+  if (!plan.exploration || !dependencies?.preflightExploration) return { status: "not_checked" as const }
+  const result = await dependencies.preflightExploration(plan)
+  if (!result || (result.status !== "supported" && result.status !== "unsupported") ||
+    (result.status === "unsupported" && (typeof result.reason !== "string" || !result.reason.trim())))
+    throw new Error("Invalid exploration Host preflight result")
+  return result
+}
+
+async function resolverIdentity() {
+  return fingerprint(await Promise.all(resolutionSources.map(async file => hash(await readFile(fileURLToPath(new URL(file, import.meta.url)))))))
+}
+
+async function resolveIntake(value: ReturnType<typeof compileTask>, request: ExplorationRequest | undefined,
+  templates: readonly HostExplorationTemplate[], support: ExplorationSupport | undefined, dependencies?: IntakeDependencies) {
+  if (value.status !== "ready" || !request || !request.mode || request.mode === "off") return { value }
+  let resolution = resolveExploration(value.plan, request, templates, support, value.profiles)
+  const preflight = await check(resolution.policy ? { ...value.plan, exploration: resolution.policy } : value.plan, dependencies)
+  if (preflight.status === "unsupported") {
+    if (request.mode !== "auto" || request.template) throw new Error(`Exploration Host unsupported: ${preflight.reason}`)
+    // 仅首次冻结前的普通 auto 可回退，故障和显式授权不能降级。
+    resolution = { enabled: false, template: resolution.template, reason: preflight.reason }
+  }
+  if (resolution.enabled && resolution.policy) value = { ...value, plan: { ...value.plan, exploration: resolution.policy } }
+  const summary = explorationSummary(value.plan, resolution)
+  const proof = {
+    schema: "aev.exploration-resolution.v1" as const,
+    ...resolution, reason: summary.reason, request, summary,
+    counting: summary.counting, budgetMode: summary.budgetMode,
+    ...(resolution.template ? { templateFingerprint: fingerprint(resolution.template) } : {}),
+    resolverFingerprint: await resolverIdentity(), preflight,
+    supportFingerprint: fingerprint(support ?? {}), planFingerprint: fingerprint(value.plan),
+  }
+  return { value, proof }
+}
+
+async function restore(value: ReturnType<typeof compileTask>, request: ExplorationRequest | undefined,
+  support: ExplorationSupport | undefined, proof: NonNullable<Resolution>, dependencies?: IntakeDependencies) {
+  if (canonical(proof.request) !== canonical(request) || value.status !== "ready")
+    throw new Error("Completed exploration resolution request drift")
+  if (proof.enabled) {
+    if (!proof.template || !proof.policy) throw new Error("Invalid frozen exploration template evidence")
+    // 恢复只重放冻结模板，发布新模板不得静默替换已批准 Plan。
+    const replay = resolveExploration(value.plan, request, [proof.template], support, value.profiles)
+    if (!replay.enabled || canonical(replay.policy) !== canonical(proof.policy))
+      throw new Error("Completed exploration resolution policy drift")
+    value = { ...value, plan: { ...value.plan, exploration: replay.policy } }
+  } else if (proof.policy) throw new Error("Invalid disabled exploration resolution evidence")
+  if (proof.template && proof.templateFingerprint !== fingerprint(proof.template)) throw new Error("Frozen exploration template fingerprint drift")
+  if (proof.resolverFingerprint !== await resolverIdentity()) throw new Error("Frozen exploration resolver identity drift")
+  const summary = explorationSummary(value.plan, proof)
+  if (canonical(summary) !== canonical(proof.summary) || canonical(summary.counting) !== canonical(proof.counting) ||
+    summary.budgetMode !== proof.budgetMode) throw new Error("Frozen exploration summary drift")
+  if (proof.enabled) {
+    const current = await check(value.plan, dependencies)
+    // 完成后能力漂移只能阻断，绝不重写已冻结 Plan。
+    if (current.status === "unsupported" || (proof.preflight.status === "supported" && current.status !== "supported"))
+      throw new Error("Frozen exploration Host no longer supported")
+  }
+  if (fingerprint(value.plan) !== proof.planFingerprint) throw new Error("Completed exploration resolution Plan drift")
+  return value
+}
+
 async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: IntakeDependencies) {
   if (![input.cwd, input.root, input.dir].every(file => typeof file === "string" && path.isAbsolute(file)) ||
     ![input.model, input.expectedModel].every(text => typeof text === "string" && text.trim()) ||
@@ -74,18 +144,7 @@ async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: IntakeDepe
     input.maxDecisionRepairs !== undefined && (!Number.isSafeInteger(input.maxDecisionRepairs) || input.maxDecisionRepairs < 0 || input.maxDecisionRepairs > 2)) throw new Error("Explicit bounded task intake required")
   const templates = dependencies?.templates ?? BUILTIN_EXPLORATION_TEMPLATES
   const cleanSupport = input.explorationSupport ? JSON.parse(JSON.stringify(input.explorationSupport)) : undefined
-
-  // 已知不支持且不依赖模型选 Profile 的检查先于模型调用执行
-  if (input.explorationRequest) {
-    if (input.explorationRequest.mode === "observations") {
-      if (!templates.length) {
-        throw new Error("No matching approved exploration template for explicit exploration request")
-      }
-      if (!Number.isSafeInteger(input.explorationRequest.after) || input.explorationRequest.after < 1) {
-        throw new Error("Exploration after observations must be a positive integer")
-      }
-    }
-  }
+  await available(input, templates)
 
   const catalogue = validateCatalogue(input.catalogue)
   const root = await realpath(input.root)
@@ -111,19 +170,21 @@ async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: IntakeDepe
   const driver = await (dependencies?.createDriver ?? opencodeDriver)({ cwd: input.cwd, evidenceRoot: path.join(dir, "backend") })
   if (!/^[a-f0-9]{64}$/.test(driver.implementation)) throw new Error("Frozen intake backend identity required")
   await driver.preflight()
-  const source = await Promise.all(["./intake.ts", "./catalogue.ts", "./plan.ts", "./binding.ts"].map(async file => hash(await readFile(fileURLToPath(new URL(file, import.meta.url))))))
+  const source = await Promise.all(["./intake.ts", "./catalogue.ts", "./plan.ts", "./binding.ts", ...resolutionSources].map(async file => hash(await readFile(fileURLToPath(new URL(file, import.meta.url))))))
   const binding = fingerprint({ catalogue, root, files, cwd: input.cwd, backend: driver.implementation, source,
     model: input.model, expectedModel: input.expectedModel, timeoutMs: input.timeoutMs,
     maxInputBytes: input.maxInputBytes, maxDecisionBytes: input.maxDecisionBytes, prompt,
     ...(input.maxDecisionRepairs !== undefined ? { maxDecisionRepairs: input.maxDecisionRepairs } : {}),
     ...(input.requestBudget ? { requestBudget: input.requestBudget } : {}),
     ...(input.explorationRequest ? { explorationRequest: input.explorationRequest } : {}),
-    ...(cleanSupport ? { explorationSupport: fingerprint(cleanSupport) } : {}) })
+    ...(cleanSupport ? { explorationSupport: fingerprint(cleanSupport) } : {}),
+    explorationPreflight: !!dependencies?.preflightExploration })
   const snapshot = path.join(dir, "intake.snapshot.json")
   const completed = path.join(dir, "intake.completed.json")
   const result = path.join(dir, "intake.result.json")
   const plan = path.join(dir, "task-plan.json")
   const resolutionFile = path.join(dir, "exploration-resolution.json")
+  let summary: ReturnType<typeof explorationSummary> | undefined
   let fresh = true
   try { const claim = await open(path.join(dir, "intake.started.claim"), "wx"); await claim.close() }
   catch (error) {
@@ -140,24 +201,24 @@ async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: IntakeDepe
     const decision = await readFile(await resolveResource(dir, "workspace/decision.json"))
     let value = compileTask(catalogue, json(decision) as Decision)
     let resolutionExists = false
-    try { await access(resolutionFile); resolutionExists = true } catch {}
+    try { await access(resolutionFile); resolutionExists = true }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
     if (resolutionExists) {
       const resData = json(await readFile(await resolveResource(dir, "exploration-resolution.json")))
       if (resData.schema !== "aev.exploration-resolution.v1") throw new Error("Invalid exploration resolution evidence")
       if (saved.resolutionSHA256 !== hash(await readFile(resolutionFile))) throw new Error("Completed exploration resolution evidence drift")
       if (resData.supportFingerprint !== fingerprint(cleanSupport ?? {})) throw new Error("Completed exploration resolution support drift")
-      if (resData.enabled) {
-        if (!resData.policy) throw new Error("Invalid exploration resolution evidence")
-        if (value.status === "ready") value = { ...value, plan: { ...value.plan, exploration: resData.policy } }
-      }
-    } else if (saved.resolutionSHA256) {
+      value = await restore(value, input.explorationRequest, cleanSupport, resData, dependencies)
+      summary = resData.summary
+    } else if (saved.resolutionSHA256 || (value.status === "ready" && requested(input.explorationRequest))) {
       throw new Error("Missing expected exploration resolution evidence")
     }
     if (saved.binding !== binding || saved.backend !== fingerprint(receipt) || !receipt.completed || receipt.actualModel !== input.expectedModel ||
       saved.decisionSHA256 !== hash(decision) || saved.result !== fingerprint(value) ||
       canonical(json(await readFile(await resolveResource(dir, "intake.result.json")))) !== canonical(value) ||
       (value.status === "ready" && saved.planSHA256 !== hash(await readFile(await resolveResource(dir, "task-plan.json"))))) throw new Error("Completed task intake evidence drift")
-    return { ...value, dir, ...(value.status === "ready" ? { planPath: plan } : {}), reused: true }
+    return { ...value, dir, ...(value.status === "ready" ? { planPath: plan } : {}),
+      ...(summary ? { explorationSummary: summary } : {}), reused: true }
   }
   for (const file of [snapshot, completed, result, plan, output, path.join(dir, "intake.backend-result.json"), path.join(dir, "intake.failure.json")]) {
     try { await access(file); throw new Error("Unclaimed task intake evidence exists") }
@@ -197,39 +258,12 @@ async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: IntakeDepe
         continue
       }
       let resolutionSHA256: string | undefined
-      if (value.status === "ready" && input.explorationRequest && input.explorationRequest.mode !== "off") {
-        const resolution = resolveExploration(
-          value.plan,
-          input.explorationRequest,
-          templates,
-          cleanSupport,
-          value.profiles,
-        )
-        if (resolution.enabled && resolution.policy) {
-          value = { ...value, plan: { ...value.plan, exploration: resolution.policy } }
-          const resolutionData = {
-            schema: "aev.exploration-resolution.v1" as const,
-            enabled: true,
-            request: input.explorationRequest,
-            template: resolution.template,
-            supportFingerprint: fingerprint(cleanSupport ?? {}),
-            planFingerprint: fingerprint(value.plan),
-            policy: resolution.policy,
-          }
-          await writeJsonAtomic(resolutionFile, resolutionData)
-          resolutionSHA256 = hash(await readFile(resolutionFile))
-        } else {
-          const resolutionData = {
-            schema: "aev.exploration-resolution.v1" as const,
-            enabled: false,
-            reason: resolution.reason,
-            request: input.explorationRequest,
-            supportFingerprint: fingerprint(cleanSupport ?? {}),
-            planFingerprint: fingerprint(value.plan),
-          }
-          await writeJsonAtomic(resolutionFile, resolutionData)
-          resolutionSHA256 = hash(await readFile(resolutionFile))
-        }
+      const resolved = await resolveIntake(value, input.explorationRequest, templates, cleanSupport, dependencies)
+      value = resolved.value
+      if (resolved.proof) {
+        summary = resolved.proof.summary
+        await writeJsonAtomic(resolutionFile, resolved.proof)
+        resolutionSHA256 = hash(await readFile(resolutionFile))
       }
       if (value.status === "ready") {
         await writeJsonAtomic(plan, value.plan)
@@ -238,7 +272,8 @@ async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: IntakeDepe
       await writeJsonAtomic(completed, { schema: "aev.task-intake-completed.v1", binding, decisionSHA256: hash(decision),
         result: fingerprint(value), backend: fingerprint(receipt), ...(value.status === "ready" ? { planSHA256: hash(await readFile(plan)) } : {}),
         ...(resolutionSHA256 ? { resolutionSHA256 } : {}) })
-      return { ...value, dir, ...(value.status === "ready" ? { planPath: plan } : {}), reused: false }
+      return { ...value, dir, ...(value.status === "ready" ? { planPath: plan } : {}),
+        ...(summary ? { explorationSummary: summary } : {}), reused: false }
     }
     throw new Error("Task decision repair limit reached")
   } catch (error) {
@@ -249,7 +284,9 @@ async function prepareTaskAuto(input: AutoIntakeInput, dependencies?: IntakeDepe
 
 // 原始 auto 分支保持单独的执行与恢复语义；手动分支不得构造伪造的 backend-result。
 export async function prepareTask(input: IntakeInput, dependencies?: IntakeDependencies) {
-  if ((input as Record<string, unknown>).explorationTemplates !== undefined) {
+  // 请求参数错误属于平台配置，必须先于任何模型请求拒绝。
+  validateExplorationRequest(input.explorationRequest)
+  if ("explorationTemplates" in input && input.explorationTemplates !== undefined) {
     throw new Error("Task intake rejects inline explorationTemplates; templates are host-managed")
   }
   if (input.mode === undefined || input.mode === "auto") return prepareTaskAuto(input, dependencies)
@@ -259,6 +296,23 @@ export async function prepareTask(input: IntakeInput, dependencies?: IntakeDepen
 
 const MAX_PRESET_BYTES = 1024 * 1024
 const MAX_MANUAL_MATERIAL_BYTES = 128 * 1024 * 1024
+const resolutionSources = ["./exploration/resolve.ts", "./exploration/templates.ts", "./exploration/policy.ts",
+  "./exploration/policy-reader.ts", "./exploration/policy-v2.ts"]
+
+async function available(input: IntakeCommon, templates: readonly HostExplorationTemplate[]) {
+  // 已认领任务走冻结证据核验，不要求旧模板仍在当前注册列表。
+  try { await lstat(path.join(input.dir, "intake.started.claim")); return }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
+  const request = input.explorationRequest
+  if (!request || request.mode === "off" || request.mode === undefined) return
+  // 模板损坏先于付费请求拒绝；恢复只核验已冻结模板。
+  validateExplorationTemplates(templates)
+  if (request.mode === "auto" && !request.template) return
+  const matches = templates.filter(t => (!request.template || t.id === request.template) &&
+    (request.mode === "observations" ? t.schema === "aev.exploration-template.v1"
+      : request.mode === "window" || request.mode === "metric" ? t.schema === "aev.exploration-template.v2" && t.policy.trigger.kind === request.mode : true))
+  if (!matches.length) throw new Error("No matching approved exploration template for explicit exploration request")
+}
 
 async function readTrustedJsonFile(file: string, maxBytes: number) {
   if (typeof file !== "string" || !path.isAbsolute(file)) throw new Error("Absolute manual source path required")
@@ -324,21 +378,23 @@ async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput, d
     : approvePresetPlan(source.value, catalogue)
 
   if (input.mode === "manual_plan" && value.status === "ready") {
-    if (input.explorationRequest && input.explorationRequest.mode !== "off") {
+    if (requested(input.explorationRequest)) {
       throw new Error("Manual Plan mode does not support active exploration requests")
     }
-    if (input.explorationRequest?.mode === "off" && value.plan.exploration) {
+    if (input.explorationRequest && !requested(input.explorationRequest) && value.plan.exploration) {
       throw new Error("Manual Plan exploration conflicts with explicit off request")
     }
   }
+  if (input.mode === "manual_decision") await available(input, templates)
 
-  const sourceFiles = ["./intake.ts", "./catalogue.ts", "./plan.ts", "./binding.ts", "./approved-plan.ts"]
+  const sourceFiles = ["./intake.ts", "./catalogue.ts", "./plan.ts", "./binding.ts", "./approved-plan.ts", ...resolutionSources]
   const implementation = await Promise.all(sourceFiles.map(async file =>
     hash(await readFile(fileURLToPath(new URL(file, import.meta.url))))))
   const sourceEvidence = { mode: input.mode, path: source.path, sha256: hash(source.bytes), bytes: source.bytes.length }
   const binding = fingerprint({ catalogue, root, files, cwd: input.cwd, source: implementation, sourceEvidence,
     ...(input.explorationRequest ? { explorationRequest: input.explorationRequest } : {}),
-    ...(cleanSupport ? { explorationSupport: fingerprint(cleanSupport) } : {}) })
+    ...(cleanSupport ? { explorationSupport: fingerprint(cleanSupport) } : {}),
+    explorationPreflight: !!dependencies?.preflightExploration })
 
   await mkdir(input.dir, { recursive: true })
   const dir = await realpath(input.dir)
@@ -358,6 +414,7 @@ async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput, d
   const savedRelative = `workspace/${evidenceName}`
   const planPath = path.join(dir, "task-plan.json")
   const resolutionFile = path.join(dir, "exploration-resolution.json")
+  let summary: ReturnType<typeof explorationSummary> | undefined
   const snapshot = path.join(dir, "intake.snapshot.json")
   const completed = path.join(dir, "intake.completed.json")
   const resultPath = path.join(dir, "intake.result.json")
@@ -384,17 +441,16 @@ async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput, d
       ? compileTask(catalogue, json(evidence) as Decision)
       : approvePresetPlan(json(evidence), catalogue)
     let resolutionExists = false
-    try { await access(resolutionFile); resolutionExists = true } catch {}
+    try { await access(resolutionFile); resolutionExists = true }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
     if (resolutionExists) {
       const resData = json(await readFile(await resolveResource(dir, "exploration-resolution.json")))
       if (resData.schema !== "aev.exploration-resolution.v1") throw new Error("Invalid exploration resolution evidence")
       if (receipt.resolutionSHA256 !== hash(await readFile(resolutionFile))) throw new Error("Completed exploration resolution evidence drift")
       if (resData.supportFingerprint !== fingerprint(cleanSupport ?? {})) throw new Error("Completed exploration resolution support drift")
-      if (resData.enabled) {
-        if (!resData.policy) throw new Error("Invalid exploration resolution evidence")
-        if (savedValue.status === "ready") savedValue = { ...savedValue, plan: { ...savedValue.plan, exploration: resData.policy } }
-      }
-    } else if (receipt.resolutionSHA256) {
+      savedValue = await restore(savedValue, input.explorationRequest, cleanSupport, resData, dependencies)
+      summary = resData.summary
+    } else if (receipt.resolutionSHA256 || (savedValue.status === "ready" && requested(input.explorationRequest))) {
       throw new Error("Missing expected exploration resolution evidence")
     }
     if (receipt.schema !== "aev.task-intake-completed.v1" || receipt.mode !== input.mode ||
@@ -408,7 +464,10 @@ async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput, d
     if (savedValue.status === "ready" && canonical(json(await readFile(await resolveResource(dir, "task-plan.json")))) !== canonical(savedValue.plan)) {
       throw new Error("Completed manual Plan differs from approved result")
     }
-    return { ...savedValue, dir, ...(savedValue.status === "ready" ? { planPath } : {}), reused: true }
+    if (input.mode === "manual_plan" && savedValue.status === "ready" && (await check(savedValue.plan, dependencies)).status === "unsupported")
+      throw new Error("Frozen approved exploration Host no longer supported")
+    return { ...savedValue, dir, ...(savedValue.status === "ready" ? { planPath } : {}),
+      ...(summary ? { explorationSummary: summary } : {}), reused: true }
   }
 
   // 新任务分支：首次认领成功，执行解析与冻结写入
@@ -429,39 +488,16 @@ async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput, d
     let finalValue = value
     let resolutionSHA256: string | undefined
 
-    if (input.mode === "manual_decision" && finalValue.status === "ready" && input.explorationRequest && input.explorationRequest.mode !== "off") {
-      const resolution = resolveExploration(
-        finalValue.plan,
-        input.explorationRequest,
-        templates,
-        cleanSupport,
-        finalValue.profiles,
-      )
-      if (resolution.enabled && resolution.policy) {
-        finalValue = { ...finalValue, plan: { ...finalValue.plan, exploration: resolution.policy } }
-        const resolutionData = {
-          schema: "aev.exploration-resolution.v1" as const,
-          enabled: true,
-          request: input.explorationRequest,
-          template: resolution.template,
-          supportFingerprint: fingerprint(cleanSupport ?? {}),
-          planFingerprint: fingerprint(finalValue.plan),
-          policy: resolution.policy,
-        }
-        await writeJsonAtomic(resolutionFile, resolutionData)
-        resolutionSHA256 = hash(await readFile(resolutionFile))
-      } else {
-        const resolutionData = {
-          schema: "aev.exploration-resolution.v1" as const,
-          enabled: false,
-          reason: resolution.reason,
-          request: input.explorationRequest,
-          supportFingerprint: fingerprint(cleanSupport ?? {}),
-          planFingerprint: fingerprint(finalValue.plan),
-        }
-        await writeJsonAtomic(resolutionFile, resolutionData)
+    if (input.mode === "manual_decision") {
+      const resolved = await resolveIntake(finalValue, input.explorationRequest, templates, cleanSupport, dependencies)
+      finalValue = resolved.value
+      if (resolved.proof) {
+        summary = resolved.proof.summary
+        await writeJsonAtomic(resolutionFile, resolved.proof)
         resolutionSHA256 = hash(await readFile(resolutionFile))
       }
+    } else if (finalValue.status === "ready" && (await check(finalValue.plan, dependencies)).status === "unsupported") {
+      throw new Error("Approved exploration Host unsupported")
     }
 
     await writeJsonAtomic(resultPath, finalValue)
@@ -471,7 +507,8 @@ async function prepareTaskManual(input: ManualDecisionInput | ManualPlanInput, d
       evidenceSHA256: hash(await readFile(evidencePath)), result: fingerprint(finalValue),
       ...(finalValue.status === "ready" ? { planSHA256: hash(await readFile(planPath)) } : {}),
       ...(resolutionSHA256 ? { resolutionSHA256 } : {}) })
-    return { ...finalValue, dir, ...(finalValue.status === "ready" ? { planPath } : {}), reused: false }
+    return { ...finalValue, dir, ...(finalValue.status === "ready" ? { planPath } : {}),
+      ...(summary ? { explorationSummary: summary } : {}), reused: false }
   } catch (error) {
     await writeJsonAtomic(path.join(dir, "intake.failure.json"), {
       status: "incomplete", mode: input.mode, binding, errorKind: "task_manual_intake_error" })

@@ -69,6 +69,15 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
     const processHelpers = await Promise.all(["../managed-process.ts", "../opencode-runtime-budget.ts", "../windows-no-console-process.ts", "../windows-no-console-wrapper.py"].map(async file => ({
       file, sha256: createHash("sha256").update(await readFile(fileURLToPath(new URL(file, import.meta.url)))).digest("hex"),
     })))
+    // 换路与计量规则变化也须阻断旧运行恢复，不能只冻结底层模型代码。
+    const taskControls = await Promise.all(["../task-adaptation/request-usage.ts",
+      "../task-adaptation/exploration/entry.ts", "../task-adaptation/exploration/preflight.ts",
+      "../task-adaptation/exploration/evaluation.ts", "../task-adaptation/exploration/metric-comparison.ts",
+      "../task-adaptation/exploration/lifecycle.ts", "../task-adaptation/exploration/decision-v2.ts",
+      "../task-adaptation/exploration/policy-reader.ts", "../task-adaptation/exploration/policy-v2.ts",
+      "../task-adaptation/exploration/resolve.ts", "../task-adaptation/exploration/templates.ts"].map(async file => ({
+      file, sha256: createHash("sha256").update(await readFile(fileURLToPath(new URL(file, import.meta.url)))).digest("hex"),
+    })))
     const key = fingerprint({ cwd, profile, files: files.sort((a, b) => a.path.localeCompare(b.path)),
       sourceHost: { kind: options.invoke ? "injected-test-boundary" : "bun-source", executable: process.execPath,
         version: typeof Bun === "undefined" ? null : Bun.version, files: hostFiles.sort((a, b) => a.path.localeCompare(b.path)) },
@@ -81,7 +90,7 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
       budgetLedger: createHash("sha256").update(budgetLedger).digest("hex"),
       readiness: createHash("sha256").update(readiness).digest("hex"),
       localSearch: createHash("sha256").update(localSearch).digest("hex"),
-      recompute: createHash("sha256").update(recompute).digest("hex"), processHelpers })
+      recompute: createHash("sha256").update(recompute).digest("hex"), processHelpers, taskControls })
     return { key, config: normalized }
   }
   const frozen = await identity()

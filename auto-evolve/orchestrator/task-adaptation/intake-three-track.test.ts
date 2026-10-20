@@ -2,10 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { prepareTask, type IntakeInput } from "./intake"
+import { prepareTask, type IntakeInput, type IntakeDependencies } from "./intake"
 import { compileTask, type TaskCatalogue, type Decision } from "./catalogue"
 import { fingerprint } from "../protocol-plugins/identity"
-import type { HostExplorationTemplate } from "./exploration/templates"
+import type { HostExplorationTemplate, HostExplorationTemplateV2 } from "./exploration/templates"
 
 const created: string[] = []
 afterEach(async () => { for (const dir of created.splice(0)) await rm(dir, { recursive: true, force: true }) })
@@ -64,6 +64,148 @@ const fixtureTemplate: HostExplorationTemplate = {
   },
 }
 
+async function preflightFixture(mode: "auto" | "manual_decision") {
+  const ctx = await fixture()
+  ctx.catalogue.stop.rounds = 2
+  let calls = 0
+  const common = { ...ctx, explorationRequest: { mode: "auto" as const },
+    explorationSupport: { checkers: [{ name: "review", id: "review" }] } }
+  const input: IntakeInput = mode === "manual_decision" ? { ...common, mode, decision }
+    : { ...common, mode, model: "fixture", expectedModel: "fixture", timeoutMs: 5000,
+        maxInputBytes: 64000, maxDecisionBytes: 16000, maxDecisionRepairs: 2 }
+  const deps: IntakeDependencies = { templates: [fixtureTemplate], createDriver: async () => ({
+    implementation: "e".repeat(64), preflight: async () => {},
+    invoke: async (arg: { workDir: string }) => {
+      calls++
+      await writeFile(path.join(arg.workDir, "decision.json"), JSON.stringify(decision))
+      return { completed: true, actualModel: "fixture" }
+    },
+  }) }
+  return { ctx, input, deps, calls: () => calls }
+}
+
+for (const mode of ["auto", "manual_decision"] as const) {
+  test(`${mode}: empty off and explicit off have no preflight, summary or resolution, including recovery`, async () => {
+    for (const request of [{}, { mode: "off" as const }]) {
+      const f = await preflightFixture(mode)
+      f.input.explorationRequest = request
+      f.deps.preflightExploration = async () => { throw new Error("Off must not preflight exploration") }
+      expect((await prepareTask(f.input, f.deps)).explorationSummary).toBeUndefined()
+      expect((await prepareTask(f.input, f.deps)).reused).toBe(true)
+      await expect(readFile(path.join(f.ctx.dir, "exploration-resolution.json"))).rejects.toThrow()
+    }
+  })
+
+  test(`${mode}: Host preflight precedes completion; summary freezes and recovery cannot downgrade`, async () => {
+    const f = await preflightFixture(mode)
+    let checks = 0
+    f.deps.preflightExploration = async plan => {
+      checks++
+      expect(plan.exploration?.schema).toBe("aev.exploration-policy.v1")
+      if (checks === 1) for (const file of ["intake.completed.json", "task-plan.json", "exploration-resolution.json"])
+        await expect(readFile(path.join(f.ctx.dir, file))).rejects.toThrow()
+      return { status: "supported" }
+    }
+    const first = await prepareTask(f.input, f.deps)
+    const file = path.join(f.ctx.dir, "exploration-resolution.json")
+    const bytes = await readFile(file)
+    const proof = JSON.parse(bytes.toString("utf8"))
+    expect(proof.summary).toEqual(first.explorationSummary)
+    expect(proof.summary.counting.unit).toBe("quality_observations")
+    expect(proof.summary.message).toContain("正常质量观察 1 次")
+    expect(proof.summary.message).toContain("届时余额")
+    expect(proof.templateFingerprint).toBe(fingerprint(fixtureTemplate))
+    expect(proof.resolverFingerprint).toMatch(/^[a-f0-9]{64}$/)
+    expect(proof.budgetMode).toBe("best_effort")
+    const again = await prepareTask(f.input, { ...f.deps, templates: [] })
+    expect(again.explorationSummary).toEqual(first.explorationSummary)
+    expect(checks).toBe(2)
+    f.deps.preflightExploration = async () => ({ status: "unsupported", reason: "Host changed" })
+    await expect(prepareTask(f.input, f.deps)).rejects.toThrow("Frozen exploration Host no longer supported")
+    f.deps.preflightExploration = async () => { throw new Error("hash mismatch") }
+    await expect(prepareTask(f.input, f.deps)).rejects.toThrow("hash mismatch")
+    await expect(prepareTask(f.input, { ...f.deps, preflightExploration: undefined })).rejects.toThrow("identity drift")
+    expect(await readFile(file)).toEqual(bytes)
+    expect(f.calls()).toBe(mode === "auto" ? 1 : 0)
+  })
+
+  test(`${mode}: only plain auto falls back before freezing and disabled recovery stays disabled`, async () => {
+    const f = await preflightFixture(mode)
+    let checks = 0
+    f.deps.preflightExploration = async () => { checks++; return { status: "unsupported", reason: "no replay-safe adapter" } }
+    const first = await prepareTask(f.input, f.deps)
+    if (first.status !== "ready") throw new Error("Expected ready")
+    const base = compileTask(f.ctx.catalogue, decision)
+    if (base.status !== "ready") throw new Error("Expected ready")
+    expect(first.plan).toEqual(base.plan)
+    expect(first.explorationSummary?.message).toContain("探索未启用，原任务流程保留")
+    const file = path.join(f.ctx.dir, "exploration-resolution.json")
+    const bytes = await readFile(file)
+    const proof = JSON.parse(bytes.toString("utf8"))
+    expect(proof.reason).toBe("no replay-safe adapter")
+    expect(proof.counting.unit).toBe("not_enabled")
+    expect(proof.budgetMode).toBe("best_effort")
+    expect(proof.preflight.status).toBe("unsupported")
+    f.deps.preflightExploration = async () => { checks++; return { status: "supported" } }
+    const again = await prepareTask(f.input, f.deps)
+    expect(again.explorationSummary).toEqual(first.explorationSummary)
+    expect(checks).toBe(1)
+    expect(await readFile(file)).toEqual(bytes)
+    expect(f.calls()).toBe(mode === "auto" ? 1 : 0)
+  })
+
+  test(`${mode}: explicit unsupported and ordinary faults never complete or repair Decision`, async () => {
+    for (const kind of ["explicit", "fault"] as const) {
+      const f = await preflightFixture(mode)
+      if (kind === "explicit") f.input.explorationRequest = { mode: "auto", template: fixtureTemplate.id }
+      f.deps.preflightExploration = async () => {
+        if (kind === "fault") throw new Error("permission/hash/ledger fault")
+        return { status: "unsupported", reason: "no adapter" }
+      }
+      await expect(prepareTask(f.input, f.deps)).rejects.toThrow(kind === "fault" ? "permission/hash/ledger fault" : "Host unsupported")
+      await expect(readFile(path.join(f.ctx.dir, "intake.completed.json"))).rejects.toThrow()
+      await expect(readFile(path.join(f.ctx.dir, "task-plan.json"))).rejects.toThrow()
+      expect(f.calls()).toBe(mode === "auto" ? 1 : 0)
+    }
+  })
+}
+
+test("summary is recomputed on recovery, not trusted merely because receipt hash was rewritten", async () => {
+  const f = await preflightFixture("manual_decision")
+  await prepareTask(f.input, f.deps)
+  const file = path.join(f.ctx.dir, "exploration-resolution.json")
+  const proof = JSON.parse(await readFile(file, "utf8"))
+  proof.summary.counting.unit = "closed_original_rounds"
+  await writeFile(file, JSON.stringify(proof))
+  const receipt = path.join(f.ctx.dir, "intake.completed.json")
+  const saved = JSON.parse(await readFile(receipt, "utf8"))
+  saved.resolutionSHA256 = new Bun.CryptoHasher("sha256").update(await readFile(file)).digest("hex")
+  await writeFile(receipt, JSON.stringify(saved))
+  await expect(prepareTask(f.input, f.deps)).rejects.toThrow("summary drift")
+})
+
+test("approved manual Plan is checked before completion and cannot fall back during recovery", async () => {
+  const f = await preflightFixture("manual_decision")
+  const ready = await prepareTask(f.input, f.deps)
+  if (ready.status !== "ready") throw new Error("Expected ready")
+  const planPath = path.join(f.ctx.base, "approved-plan.json")
+  await writeFile(planPath, JSON.stringify(ready.plan))
+  const input: IntakeInput = { ...f.ctx, dir: path.join(f.ctx.base, "manual-plan"), mode: "manual_plan", planPath,
+    catalogue: { ...f.ctx.catalogue, approvedPlans: [fingerprint(ready.plan)] } }
+  let supported = true
+  const deps: IntakeDependencies = { preflightExploration: async () => supported
+    ? { status: "supported" } : { status: "unsupported", reason: "missing Host" } }
+  const first = await prepareTask(input, deps)
+  expect(first.status).toBe("ready")
+  const bytes = await readFile(path.join(input.dir, "task-plan.json"))
+  supported = false
+  await expect(prepareTask(input, deps)).rejects.toThrow("Frozen approved exploration Host no longer supported")
+  expect(await readFile(path.join(input.dir, "task-plan.json"))).toEqual(bytes)
+  const fresh = { ...input, dir: path.join(f.ctx.base, "unsupported-plan") }
+  await expect(prepareTask(fresh, deps)).rejects.toThrow("Approved exploration Host unsupported")
+  await expect(readFile(path.join(fresh.dir, "intake.completed.json"))).rejects.toThrow()
+})
+
 describe("three-track task intake", () => {
   test("manual_decision: compiles, writes audit proof, and reuses with no driver", async () => {
     const ctx = await fixture()
@@ -72,6 +214,7 @@ describe("three-track task intake", () => {
     const first = await prepareTask(input, driver as never)
     expect(first.status).toBe("ready")
     expect(first.reused).toBe(false)
+    expect(first.explorationSummary).toBeUndefined()
     const again = await prepareTask(input, driver as never)
     expect(again.status).toBe("ready")
     expect(again.reused).toBe(true)
@@ -213,6 +356,7 @@ describe("three-track task intake", () => {
     const deps = { templates: [fixtureTemplate] }
     const res = await prepareTask(input, deps)
     expect(res.status).toBe("ready")
+    if (res.status !== "ready") throw new Error("Expected ready")
     expect(res.plan.exploration?.schema).toBe("aev.exploration-policy.v1")
     expect(res.plan.exploration?.trigger).toEqual({ kind: "attempts", observations: 1 })
 
@@ -226,6 +370,7 @@ describe("three-track task intake", () => {
     // Reuse check: even if host templates change to empty, recovery uses frozen evidence without error
     const emptyDeps = { templates: [] }
     const reused = await prepareTask(input, emptyDeps)
+    if (reused.status !== "ready") throw new Error("Expected ready")
     expect(reused.reused).toBe(true)
     expect(reused.plan.exploration?.trigger).toEqual({ kind: "attempts", observations: 1 })
   })
@@ -258,6 +403,7 @@ describe("three-track task intake", () => {
     }
     const res = await prepareTask(input, deps)
     expect(res.status).toBe("ready")
+    if (res.status !== "ready") throw new Error("Expected ready")
     expect(res.plan.exploration).toBeUndefined()
 
     // 检查 exploration-resolution.json 持久化 enabled: false 及原因
@@ -269,6 +415,7 @@ describe("three-track task intake", () => {
 
     // 恢复检查：零新增模型调用
     const again = await prepareTask(input, deps)
+    if (again.status !== "ready") throw new Error("Expected ready")
     expect(again.reused).toBe(true)
     expect(again.plan.exploration).toBeUndefined()
     expect(calls).toBe(1)
@@ -297,12 +444,127 @@ describe("three-track task intake", () => {
       maxInputBytes: 64000,
       maxDecisionBytes: 16000,
       maxDecisionRepairs: 2,
-      // Request unsupported window mode
+      // 未发布 V2 模板时拒绝，不进入模型纠错。
       explorationRequest: { mode: "window", afterRound: 3 } as any,
     }
-    // Must throw immediately without retrying decision (calls strictly === 1)
-    await expect(prepareTask(input, deps as never)).rejects.toThrow("Unsupported exploration request mode")
+    await expect(prepareTask(input, deps as never)).rejects.toThrow("No matching approved exploration template")
+    expect(calls).toBe(0)
+  })
+
+  for (const [mode, kind] of (["auto", "manual_decision"] as const).flatMap(mode =>
+    (["window", "metric"] as const).map(kind => [mode, kind] as const))) {
+    test(`${mode}/${kind}: V2 freezes approved template and replays it after registry upgrade`, async () => {
+      const ctx = await fixture()
+      ctx.catalogue.stop.rounds = 4
+      if (kind === "metric") ctx.catalogue.profiles[0].selection = { rule: "best_pass", metric: "score", direction: "min" }
+      const { defaultObservations, ...policy } = fixtureTemplate.policy
+      const template: HostExplorationTemplateV2 = {
+        ...fixtureTemplate, schema: "aev.exploration-template.v2", version: "2",
+        policy: { ...policy, schema: "aev.exploration-policy.v2", window: { minimumRounds: 2, maximumRounds: 2 },
+          trigger: kind === "window" ? { kind } : {
+            kind, name: "score", direction: "min", minimumDelta: 0.01, minimumObservations: 2, patience: 2,
+          }, budget: { mode: "best_effort" } },
+      }
+      let calls = 0
+      const createDriver = async () => ({
+        implementation: "a".repeat(64), preflight: async () => {},
+        invoke: async (arg: { workDir: string }) => {
+          calls++
+          await writeFile(path.join(arg.workDir, "decision.json"), JSON.stringify(decision))
+          return { completed: true, actualModel: "fixture" }
+        },
+      })
+      const common = { ...ctx, explorationRequest: kind === "window"
+          ? { mode: kind, afterRound: 2, template: template.id }
+          : { mode: kind, template: template.id },
+        explorationSupport: { checkers: [{ name: "review", id: "review" }] } }
+      const input: IntakeInput = mode === "auto"
+        ? { ...common, mode, model: "fixture", expectedModel: "fixture", timeoutMs: 5000, maxInputBytes: 64000, maxDecisionBytes: 16000 }
+        : { ...common, mode, decision }
+      const first = await prepareTask(input, { templates: [template], createDriver })
+      if (first.status !== "ready") throw new Error("Expected ready")
+      const file = path.join(ctx.dir, "exploration-resolution.json")
+      const bytes = await readFile(file)
+      const proof = JSON.parse(bytes.toString("utf8"))
+      expect(proof.template).toEqual(template)
+      expect(proof.policy).toEqual(template.policy)
+      expect(proof.summary.counting.unit).toBe("closed_original_rounds")
+      expect(proof.summary.window).toEqual(template.policy.window)
+      expect(proof.summary.budgetMode).toBe("best_effort")
+      if (kind === "metric") expect(proof.summary.counting.metricUnit).toBe("trusted_execution_measurements")
+      const upgraded = structuredClone(template)
+      upgraded.version = "3"
+      upgraded.policy.window = { minimumRounds: 3, maximumRounds: 3 }
+      const again = await prepareTask(input, { templates: [upgraded], createDriver })
+      if (again.status !== "ready") throw new Error("Expected ready")
+      expect(again.reused).toBe(true)
+      expect(again.plan).toEqual(first.plan)
+      expect(await readFile(file)).toEqual(bytes)
+      expect(calls).toBe(mode === "auto" ? 1 : 0)
+      const empty = await prepareTask(input, { templates: [], createDriver })
+      if (empty.status !== "ready") throw new Error("Expected ready")
+      expect(empty.plan).toEqual(first.plan)
+
+      // 即使回执 hash 同步改写，冻结模板与 policy 不一致仍拒绝。
+      proof.template.policy.window = { minimumRounds: 1, maximumRounds: 1 }
+      await writeFile(file, JSON.stringify(proof))
+      const receipt = path.join(ctx.dir, "intake.completed.json")
+      const saved = JSON.parse(await readFile(receipt, "utf8"))
+      saved.resolutionSHA256 = new Bun.CryptoHasher("sha256").update(await readFile(file)).digest("hex")
+      await writeFile(receipt, JSON.stringify(saved))
+      await expect(prepareTask(input, { templates: [], createDriver })).rejects.toThrow()
+      expect(calls).toBe(mode === "auto" ? 1 : 0)
+    })
+  }
+
+  test("auto: template/Host mismatch after Decision never invokes decision repair", async () => {
+    const ctx = await fixture()
+    ctx.catalogue.stop.rounds = 2
+    let calls = 0
+    const input: IntakeInput = { ...ctx, mode: "auto", model: "fixture", expectedModel: "fixture",
+      timeoutMs: 5000, maxInputBytes: 64000, maxDecisionBytes: 16000, maxDecisionRepairs: 2,
+      explorationRequest: { mode: "observations", after: 1 },
+      explorationSupport: { checkers: [{ name: "review", id: "wrong-checker" }] } }
+    const dependencies = { templates: [fixtureTemplate], createDriver: async () => ({
+      implementation: "d".repeat(64), preflight: async () => {},
+      invoke: async (arg: { workDir: string }) => {
+        calls++
+        await writeFile(path.join(arg.workDir, "decision.json"), JSON.stringify(decision))
+        return { completed: true, actualModel: "fixture" }
+      },
+    }) }
+    await expect(prepareTask(input, dependencies)).rejects.toThrow("No matching approved exploration template")
     expect(calls).toBe(1)
+  })
+
+  test("malformed trusted templates reject before the first Intake request", async () => {
+    const { defaultObservations, ...policy } = fixtureTemplate.policy
+    const template: HostExplorationTemplateV2 = {
+      ...fixtureTemplate, schema: "aev.exploration-template.v2",
+      policy: { ...policy, schema: "aev.exploration-policy.v2", window: { minimumRounds: 1, maximumRounds: 2 },
+        trigger: { kind: "window" }, budget: { mode: "best_effort" } },
+      overrides: { patience: { minimum: 3, maximum: 1 } },
+    }
+    for (const explorationRequest of [{ mode: "auto" as const }, { mode: "auto" as const, template: template.id }]) {
+      const ctx = await fixture()
+      let drivers = 0
+      const dependencies = { templates: [template], createDriver: async () => { drivers++; throw new Error("Unexpected driver") } }
+      await expect(prepareTask({ ...ctx, mode: "auto", model: "fixture", expectedModel: "fixture", timeoutMs: 5000,
+        maxInputBytes: 64000, maxDecisionBytes: 16000, explorationRequest }, dependencies)).rejects.toThrow("Invalid template override range")
+      expect(drivers).toBe(0)
+    }
+  })
+
+  test("malformed low-config requests reject before driver creation on every intake track", async () => {
+    for (const explorationRequest of [{ mode: "window", afterRound: 0 }, { mode: "metric", budgetMode: "reserved" }, { mode: "off", patience: 2 }]) {
+      const ctx = await fixture()
+      let drivers = 0
+      const dependencies = { createDriver: async () => { drivers++; throw new Error("Unexpected driver") } }
+      await expect(prepareTask({ ...ctx, mode: "auto", model: "fixture", expectedModel: "fixture", timeoutMs: 5000,
+        maxInputBytes: 64000, maxDecisionBytes: 16000, explorationRequest } as IntakeInput, dependencies)).rejects.toThrow()
+      await expect(prepareTask({ ...ctx, mode: "manual_decision", decision, explorationRequest } as IntakeInput, dependencies)).rejects.toThrow()
+      expect(drivers).toBe(0)
+    }
   })
 
   test("manual_plan: active exploration rejected and conflicts fail closed", async () => {
@@ -332,6 +594,7 @@ describe("three-track task intake", () => {
       explorationRequest: { mode: "off" },
     })
     expect(res.status).toBe("ready")
+    if (res.status !== "ready") throw new Error("Expected ready")
     expect(res.plan.exploration).toBeUndefined()
   })
 })

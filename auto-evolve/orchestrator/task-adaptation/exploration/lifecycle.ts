@@ -133,10 +133,6 @@ export async function closeTaskExplorationRound(
     if (h + m > limit || b > limit - f) {
       throw new Error("Exploration policy v2 window incompatible with effective max rounds")
     }
-    if (cfg.trigger.kind === "metric") {
-      throw new Error("Host V2 metric scoring binding not implemented")
-    }
-
     const closedRound: ClosedRoundV2 = {
       campaign: scope.campaign,
       round,
@@ -144,6 +140,9 @@ export async function closeTaskExplorationRound(
       closure: observed.observation.closure,
       receipt: observed.receipt,
       verdict: observed.observation.verdict,
+      ...(cfg.trigger.kind === "metric" && observed.observation.metric !== undefined
+        ? { metric: { value: observed.observation.metric, comparison: observed.comparison! } }
+        : {}),
     }
 
     const priorRounds = prior && prior.schema === "aev.exploration-campaign.v2" ? prior.rounds : []

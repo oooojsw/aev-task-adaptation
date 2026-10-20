@@ -1,6 +1,11 @@
 import path from "node:path"
+import { readFile } from "node:fs/promises"
+import { fileURLToPath } from "node:url"
 import { validatePlan } from "./plan"
-import { requireExplorationHost } from "./exploration/entry"
+import { requireExplorationHost, ExplorationUnsupportedError } from "./exploration/entry"
+import { preflightExploration } from "./exploration/preflight"
+import { fingerprint } from "../protocol-plugins/identity"
+import { validateTraining } from "../protocol-plugins/training"
 import { prepareTask, readPresetPlan, type IntakeInput, type IntakeDependencies } from "./intake"
 import { prepareExecution, type ExecutionPreparation } from "./prepare-execution"
 import { builtins } from "../protocol-plugins/builtins"
@@ -38,7 +43,7 @@ export async function prepareTaskRun(input: TaskRunPreparation, dependencies?: {
   templates?: readonly HostExplorationTemplate[]
 }) {
   // 顶层任务输入禁止随普通 JSON 提交模板；模板仅由 Host 批准列表或依赖注入提供。
-  if ((input as Record<string, unknown>).explorationTemplates !== undefined) {
+  if ("explorationTemplates" in input && input.explorationTemplates !== undefined) {
     throw new Error("Task run preparation rejects inline explorationTemplates; templates are host-managed")
   }
   // 受信预设先检查，不能等创建后端或付费理解任务之后才拒绝。
@@ -59,6 +64,10 @@ export async function prepareTaskRun(input: TaskRunPreparation, dependencies?: {
       calls: input.intake.catalogue.stop.calls,
       tokens: input.intake.catalogue.stop.tokens,
     },
+    // 冻结真实预检配置与实现，恢复不能换预算或绕过原 Host 检查。
+    preflightFingerprint: fingerprint({ root: input.intake.root, execution: input.execution,
+      source: await Promise.all(["./prepare-task-run.ts", "./exploration/entry.ts", "./exploration/preflight.ts"].map(async file =>
+        fingerprint(await readFile(fileURLToPath(new URL(file, import.meta.url)), "utf8")))) }),
   }
   // 手动轨道绝不生成 Intake 模型请求预算，也绝不调用 Intake 模型。
   const baseIntake = input.intake.mode === undefined || input.intake.mode === "auto"
@@ -73,6 +82,17 @@ export async function prepareTaskRun(input: TaskRunPreparation, dependencies?: {
   const intakeDeps: IntakeDependencies = {
     ...(dependencies?.intake ?? {}),
     ...(dependencies?.templates ? { templates: dependencies.templates } : {}),
+    preflightExploration: async plan => {
+      try {
+        await preflightExploration(plan, { ...input.execution, root: input.intake.root,
+          capabilities: support.capabilities ?? [], training: validateTraining(input.execution.training) })
+        return { status: "supported" }
+      } catch (error) {
+        // 只有明确的 Host 能力不足可回退，坏配置和证据故障照抛。
+        if (error instanceof ExplorationUnsupportedError) return { status: "unsupported", reason: error.message }
+        throw error
+      }
+    },
   }
   const interpreted = await prepareTask(intake, intakeDeps)
   if (interpreted.status !== "ready") return interpreted
@@ -80,6 +100,7 @@ export async function prepareTaskRun(input: TaskRunPreparation, dependencies?: {
     requireExplorationHost(interpreted.plan)
   }
   // 同一入口贯通方案与配置；这里只准备，不隐式启动模型演化。
-  return prepareExecution({ ...input.execution, root: input.intake.root, plan: structuredClone(interpreted.plan),
+  const prepared = await prepareExecution({ ...input.execution, root: input.intake.root, plan: structuredClone(interpreted.plan),
     capabilities: input.intake.catalogue.capabilities.filter(item => item.available).map(item => item.id) }, runtime.registry)
+  return { ...prepared, ...(interpreted.explorationSummary ? { explorationSummary: interpreted.explorationSummary } : {}) }
 }

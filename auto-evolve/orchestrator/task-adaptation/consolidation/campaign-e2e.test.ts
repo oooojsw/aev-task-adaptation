@@ -26,8 +26,8 @@ const testEvidenceRoot = () =>
     : path.join(tmpdir(), "aev-test-evidence"))
 
 // 只使用回环假服务，真实控制器、预算、判卷进程和受限工具不替换。
-for (const mode of ["original", "recovery", "exploration"] as const) test(`unified consolidation ${mode} runs real restricted tools and delivers best of three rounds`, async () => {
-  const recovery = mode === "recovery", exploration = mode === "exploration"
+for (const mode of ["original", "recovery", "exploration", "v2"] as const) test(`unified consolidation ${mode} runs real restricted tools and delivers best of three rounds`, async () => {
+  const recovery = mode === "recovery", exploration = mode === "exploration" || mode === "v2"
   const cwd = path.resolve(import.meta.dir, "../../../..")
   const root = path.join(testEvidenceRoot(), `consolidation-${randomUUID()}`)
   await mkdir(root, { recursive: true })
@@ -210,10 +210,16 @@ for (const mode of ["original", "recovery", "exploration"] as const) test(`unifi
         deliveryCalls: 0, deliveryTokens: 0 }, bounds: { archiveBytes: 20000000, candidateBytes: 10000, dependencyBytes: 100000 },
       safety: { reset: "declared_entries", effects: "sandbox_only" },
     } } : {}) }
+    const selected = mode === "v2" ? { ...preset, exploration: {
+      ...preset.exploration!, schema: "aev.exploration-policy.v2",
+      window: { minimumRounds: 1, maximumRounds: 2 },
+      trigger: { kind: "metric", name: compiled.plan.selection.metric, direction: compiled.plan.selection.direction,
+        minimumDelta: 0.2, minimumObservations: 2, patience: 1 }, budget: { mode: "best_effort" },
+    } } : preset
     const planPath = path.join(root, "exploration-plan.json")
-    if (exploration) await writeFile(planPath, JSON.stringify(preset))
+    if (exploration) await writeFile(planPath, JSON.stringify(selected))
     const launch = exploration ? { ...input, intake: { mode: "manual_plan", cwd, root: sources,
-      dir: input.intake.dir, catalogue: { ...catalogue, approvedPlans: [fingerprint(preset)] }, planPath } } : input
+      dir: input.intake.dir, catalogue: { ...catalogue, approvedPlans: [fingerprint(selected)] }, planPath } } : input
     let result = await actual.runTask(launch)
     let preserved: { path: string; manifest: string; file: string; content: string } | undefined
     if (recovery) {
@@ -266,7 +272,12 @@ for (const mode of ["original", "recovery", "exploration"] as const) test(`unifi
     if (exploration) {
       expect(origins).toBe(1)
       const saved = JSON.parse(await readFile(path.join(result.campaignDir, "task-adaptation/exploration/host/state.json"), "utf8"))
-      expect(saved.record.observations.map((item: { branch: string }) => item.branch)).toEqual(["original", "original", "alternative"])
+      expect((mode === "v2" ? saved.record.rounds : saved.record.observations).map((item: { branch: string }) => item.branch)).toEqual(["original", "original", "alternative"])
+      if (mode === "v2") {
+        expect(saved.record.rounds.slice(0, 2).map((item: { metric: { value: number } }) => item.metric.value)).toEqual([38 / 50, 43 / 50])
+        expect(saved.record.rounds[0].metric.comparison).toBe(saved.record.rounds[1].metric.comparison)
+        expect(saved.record.rounds[2].metric).toBeUndefined()
+      }
       expect(saved.record.decision.reason).toBe("global_limit")
       const targetRoot = path.join(root, "harvested")
       await harvest({ cwd, campaignRoot: result.campaignDir, taskID: compiled.plan.id, targetRoot })

@@ -8,25 +8,13 @@ const COMP_HASH = "c".repeat(64)
 
 function v2Policy(overrides: Partial<ExplorationPolicyV2> = {}): ExplorationPolicyV2 {
   return {
-    schema: "v2",
-    origin: {
-      partition: "prompt",
-      relativeRoot: "auto-evolve/prompts",
-      entry: "base.prompt.md",
-    },
-    composition: {
-      mode: "substitute",
-      substitutions: [
-        {
-          source: {
-            partition: "prompt",
-            relativeRoot: "auto-evolve/prompts",
-            entry: "alt.prompt.md",
-          },
-          target: "base.prompt.md",
-        },
-      ],
-    },
+    schema: "aev.exploration-policy.v2",
+    origin: { kind: "initial" },
+    replace: ["report", "facts"],
+    preserve: [],
+    dependencies: [],
+    bounds: { archiveBytes: 1000000, candidateBytes: 10000, dependencyBytes: 10000 },
+    safety: { reset: "declared_entries", effects: "sandbox_only" },
     window: {
       minimumRounds: 7,
       maximumRounds: 7,
@@ -186,6 +174,7 @@ describe("Exploration Decision V2 Pure Function", () => {
       window: { minimumRounds: 3, maximumRounds: 7 },
       trigger: {
         kind: "metric",
+        name: "score",
         direction: "max",
         minimumDelta: 3,
         patience: 2,
@@ -208,6 +197,7 @@ describe("Exploration Decision V2 Pure Function", () => {
       window: { minimumRounds: 3, maximumRounds: 7 },
       trigger: {
         kind: "metric",
+        name: "score",
         direction: "max",
         minimumDelta: 3,
         patience: 2,
@@ -231,6 +221,7 @@ describe("Exploration Decision V2 Pure Function", () => {
       window: { minimumRounds: 3, maximumRounds: 7 },
       trigger: {
         kind: "metric",
+        name: "score",
         direction: "max",
         minimumDelta: 3,
         patience: 2,
@@ -255,6 +246,7 @@ describe("Exploration Decision V2 Pure Function", () => {
       window: { minimumRounds: 3, maximumRounds: 7 },
       trigger: {
         kind: "metric",
+        name: "score",
         direction: "max",
         minimumDelta: 3,
         patience: 2,
@@ -285,6 +277,7 @@ describe("Exploration Decision V2 Pure Function", () => {
       window: { minimumRounds: 3, maximumRounds: 7 },
       trigger: {
         kind: "metric",
+        name: "score",
         direction: "max",
         minimumDelta: 3,
         patience: 2,
@@ -311,6 +304,7 @@ describe("Exploration Decision V2 Pure Function", () => {
       window: { minimumRounds: 3, maximumRounds: 7 },
       trigger: {
         kind: "metric",
+        name: "score",
         direction: "min",
         minimumDelta: 5,
         patience: 2,
@@ -500,16 +494,11 @@ describe("Exploration Decision V2 Pure Function", () => {
 
   test("D225: 旧 V1 decide 的原有测试 -> 必须原样通过，不能修改 V1 算法适配", () => {
     const policyV1 = {
-      origin: { partition: "prompt" as const, relativeRoot: "prompts", entry: "base.md" },
-      composition: {
-        mode: "substitute" as const,
-        substitutions: [
-          {
-            source: { partition: "prompt" as const, relativeRoot: "prompts", entry: "alt.md" },
-            target: "base.md",
-          },
-        ],
-      },
+      schema: "aev.exploration-policy.v1" as const,
+      origin: { kind: "initial" as const },
+      replace: ["report"], preserve: [], dependencies: [],
+      bounds: { archiveBytes: 1000000, candidateBytes: 10000, dependencyBytes: 10000 },
+      safety: { reset: "declared_entries" as const, effects: "sandbox_only" as const },
       allowance: {
         rounds: 2,
         minimumRounds: 2,
@@ -541,7 +530,7 @@ describe("Exploration Decision V2 Pure Function", () => {
     expect(resV1.reason).toBe("local_allowance")
   })
 
-  test("D226: 当前 validatePlan 直接接收 V2 -> 依然拒绝，证明本轮不是生产接线", () => {
+  test("D226: 当前 validatePlan 接受正式 V2 schema，旧草案缩写仍拒绝", () => {
     const plan = {
       schema: "aev.task-plan.v1",
       id: "exploration-local-fixture",
@@ -573,7 +562,8 @@ describe("Exploration Decision V2 Pure Function", () => {
       stop: { rounds: 10, calls: 100, tokens: 100000, stagnant: 2 },
       exploration: v2Policy(),
     }
-    expect(() => validatePlan(plan as any)).toThrow("Unsupported exploration policy schema: v2")
+    expect(validatePlan(plan).exploration).toEqual(plan.exploration)
+    expect(() => validatePlan({ ...plan, exploration: { ...plan.exploration, schema: "v2" } })).toThrow("Unsupported exploration policy schema: v2")
   })
 
   test("D227: 纯函数运行全程 -> 不生成文件、不请求模型、不新建 Campaign 钱包", () => {

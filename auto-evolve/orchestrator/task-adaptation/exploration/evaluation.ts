@@ -10,6 +10,9 @@ import {
 } from "../../protocol-plugins/campaign-acceptance"
 import { checkedPath } from "../../file-transaction"
 import { resolveResource } from "../binding"
+import { productEvidenceName } from "../../protocol-plugins/runtime"
+import type { Snapshot } from "../../protocol-plugins/contract"
+import { metricComparison } from "./metric-comparison"
 import { taskFeedback } from "../feedback"
 import { taskSelectionSource } from "../selection"
 import { taskRuntimeBudgets, validateTaskBudgetPolicy } from "../budget-policy"
@@ -132,6 +135,36 @@ export async function archiveRound(
     actual.view.status === "passed" && bound.plan.selection.rule === "best_pass"
       ? (await taskSelectionSource(spec, input.root, feedback)).metric!
       : undefined
+  let comparison: string | undefined
+  if (policy.schema === "aev.exploration-policy.v2" && policy.trigger.kind === "metric" && metric !== undefined) {
+    const receipt = JSON.parse((await readFile(await resolveResource(input.root,
+      path.relative(input.root, path.join(path.dirname(feedback), "protocol.receipt.json")).replaceAll("\\", "/")), "utf8")).replace(/^\uFEFF/, ""))
+    let product: unknown
+    const snapshot = JSON.parse((await readFile(await resolveResource(input.root,
+      "protocol-plugins/protocol.snapshot.json"), "utf8")).replace(/^\uFEFF/, "")) as Snapshot
+    const { fingerprint: protocolHash, ...protocolBody } = snapshot
+    if (protocolHash !== actual.view.protocolFingerprint || fingerprint(protocolBody) !== protocolHash)
+      throw new Error("Metric comparison protocol evidence drift")
+    const executor = snapshot.selection.protocol.phases[entry.phase]?.executor?.id
+    if (executor === "consolidation-direct-chat") {
+      if (!receipt.product) throw new Error("Metric comparison requires executed consolidation evidence")
+      const bytes = await readFile(await resolveResource(input.root, path.relative(input.root,
+        path.join(path.dirname(feedback), productEvidenceName(receipt.product.kind))).replaceAll("\\", "/")))
+      if (hash(bytes) !== receipt.product.sha256 || bytes.length !== receipt.product.length)
+        throw new Error("Metric comparison product evidence drift")
+      product = JSON.parse(bytes.toString("utf8").replace(/^\uFEFF/, ""))
+    }
+    comparison = metricComparison({
+      plan: bound.fingerprint,
+      protocol: actual.view.protocolFingerprint,
+      phase: entry.phase,
+      task: entry.taskID,
+      materials: receipt.evidence.materials,
+      privateInputs: receipt.evidence.privateInputs,
+      selection: bound.plan.selection,
+      executor, product,
+    })
+  }
   const closure = fingerprint({
     schema: "aev.exploration-round-closure.v1",
     scope: input.scope,
@@ -178,5 +211,6 @@ export async function archiveRound(
     verdict: actual.view.status as "passed" | "rejected",
     ...(metric === undefined ? {} : { metric }),
   }
-  return immutable({ candidate, observation, receipt: actual.view.receiptFingerprint })
+  return immutable({ candidate, observation, receipt: actual.view.receiptFingerprint,
+    ...(comparison === undefined ? {} : { comparison }) })
 }

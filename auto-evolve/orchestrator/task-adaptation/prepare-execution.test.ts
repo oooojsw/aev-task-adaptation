@@ -12,6 +12,9 @@ import { prepareEntry } from "../protocol-plugins/entry"
 import { authorContext } from "../protocol-plugins/author-context"
 import { loadTaskContext, taskInvocation, taskBudgetOptions } from "./context"
 import { prepareTaskRun } from "./prepare-task-run"
+import { FIXTURE_REPORT_EXPLORATION_TEMPLATE } from "./exploration/templates"
+import { scriptChecker } from "../protocol-plugins/script-checker"
+import { createHash } from "node:crypto"
 
 async function fixture(kind: "report" | "software" | "skill" = "report") {
   const parent = await mkdtemp(path.join(os.tmpdir(), "aev-execution-prep-"))
@@ -120,6 +123,82 @@ test("one task entry interprets once then prepares reusable executable configura
   expect(first.status).toBe("ready")
   const second = await prepareTaskRun(input, dependencies)
   expect(second.status).toBe("ready")
+  if (second.status !== "ready") throw new Error("Expected ready")
   expect(second.reused).toBe(true)
   expect(calls).toBe(1)
+})
+
+for (const mode of ["auto", "observations", "fault"] as const) test(`real preparation preflight ${mode}: typed unsupported only, before Intake completion`, async () => {
+  const f = await fixture()
+  const cat = catalogue()
+  const choice = decision()
+  if (mode === "fault") {
+    cat.profiles[0].requires = ["files"]
+    cat.profiles[0].rejection = [{ check: "support", actions: ["repair"] }]
+    choice.workers[0].actions = ["read"]
+  }
+  const template = structuredClone(FIXTURE_REPORT_EXPLORATION_TEMPLATE)
+  template.checker = { name: "support", id: "fixture-check" }
+  template.policy.defaultObservations = 1
+  template.policy.allowance = { ...template.policy.allowance, rounds: 1, minimumRounds: 1,
+    authorCalls: 5, authorTokens: 5000, acceptanceCalls: 2, acceptanceTokens: 2000 }
+  const { root, plan, capabilities, ...execution } = f.input
+  const input = { intake: { mode: "manual_decision" as const, root, cwd: f.parent, dir: path.join(f.parent, "intake"),
+    catalogue: cat, decision: choice }, execution,
+    explorationRequest: mode === "observations" ? { mode, after: 1 } : { mode: "auto" as const } }
+  const deps = { createRuntime: async () => f.rt, templates: [template] }
+  if (mode === "auto") {
+    const result = await prepareTaskRun(input, deps)
+    expect(result.status).toBe("ready")
+    expect(result.explorationSummary?.enabled).toBe(false)
+    expect(result.explorationSummary?.reason).toContain("external effects")
+    const saved = JSON.parse(await readFile(path.join(input.intake.dir, "task-plan.json"), "utf8"))
+    expect(saved.exploration).toBeUndefined()
+    expect((await prepareTaskRun(input, deps)).explorationSummary).toEqual(result.explorationSummary)
+  } else {
+    await expect(prepareTaskRun(input, deps)).rejects.toThrow(mode === "fault" ? "enforced request stages" : "Host unsupported")
+    await expect(readFile(path.join(input.intake.dir, "intake.completed.json"))).rejects.toThrow()
+    await expect(readFile(path.join(input.intake.dir, "task-plan.json"))).rejects.toThrow()
+  }
+})
+
+test("real supported preparation freezes summary; changed checker hash blocks recovery without rewriting Intake", async () => {
+  const f = await fixture()
+  const cat = catalogue()
+  cat.profiles[0].requires = ["files"]
+  cat.profiles[0].rejection = [{ check: "support", actions: ["repair"] }]
+  cat.profiles[0].acceptance.checks[0].mechanism = "script"
+  const choice = decision()
+  choice.workers[0].actions = ["read"]
+  const script = path.join(f.parent, "checker.mjs")
+  await writeFile(script, "throw new Error('Preparation must never execute a checker')")
+  const hash = async (file: string) => createHash("sha256").update(await readFile(file)).digest("hex")
+  const plugin = await scriptChecker(path.join(f.parent, "checks"))
+  f.rt.addChecker(plugin.descriptor, plugin.evaluate)
+  const template = structuredClone(FIXTURE_REPORT_EXPLORATION_TEMPLATE)
+  template.checker = { name: "support", id: "script-json-checker" }
+  template.policy.defaultObservations = 1
+  template.policy.allowance = { ...template.policy.allowance, rounds: 1, minimumRounds: 1,
+    authorCalls: 5, authorTokens: 5000, acceptanceCalls: 2, acceptanceTokens: 2000 }
+  const { root, plan, capabilities, ...execution } = f.input
+  execution.checkers = [{ name: "support", binding: { id: "script-json-checker", version: "1", settings: {
+    command: process.execPath, commandSHA256: await hash(process.execPath), script, scriptSHA256: await hash(script),
+    timeoutMs: 1000, maxOutputBytes: 1000,
+  } } }]
+  const input = { intake: { mode: "manual_decision" as const, root, cwd: f.parent, dir: path.join(f.parent, "intake"),
+    catalogue: cat, decision: choice }, execution: { ...execution,
+      requestBudget: { schema: "aev.task-budget-policy.v1" as const, root: path.join(f.parent, "budget"), scope: "task",
+        models: [{ model: "offline/author", dialect: "openai_chat" as const, expectedModels: ["author"], maxInputTokens: 1000, maxOutputTokens: 100 }] } },
+    explorationRequest: { mode: "observations" as const, after: 1 } }
+  const deps = { createRuntime: async () => f.rt, templates: [template] }
+  const first = await prepareTaskRun(input, deps)
+  expect(first.status).toBe("ready")
+  expect(first.explorationSummary?.enabled).toBe(true)
+  const file = path.join(input.intake.dir, "exploration-resolution.json")
+  const bytes = await readFile(file)
+  expect(JSON.parse(bytes.toString("utf8")).preflight.status).toBe("supported")
+  expect((await prepareTaskRun(input, { ...deps, templates: [] })).explorationSummary).toEqual(first.explorationSummary)
+  await writeFile(script, "changed checker")
+  await expect(prepareTaskRun(input, deps)).rejects.toThrow("fingerprint changed")
+  expect(await readFile(file)).toEqual(bytes)
 })

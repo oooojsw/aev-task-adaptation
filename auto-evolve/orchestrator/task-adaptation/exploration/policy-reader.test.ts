@@ -115,7 +115,7 @@ describe("Exploration Policy Reader", () => {
     expect(() => explorationPolicy(v2 as any, plan)).toThrow("Invalid exploration policy")
   })
 
-  test("3. V2 metric 通过独立 Schema 校验，但 Host preflight / requireExplorationHost 必须明确拒绝", () => {
+  test("3. V2 metric requires executed and formally checked product", () => {
     const plan = {
       ...fixturePlan(),
       selection: { rule: "best_pass" as const, metric: "score", direction: "max" as const },
@@ -135,11 +135,14 @@ describe("Exploration Policy Reader", () => {
     const valid = validateExplorationPolicyV2(v2Metric, plan)
     expect(valid.schema).toBe("aev.exploration-policy.v2")
 
-    // Host 准入必须明确拒绝
+    // 直接审阅正文仍不能取得执行指标资格。
     const planWithMetric = { ...plan, exploration: valid }
     expect(() => requireExplorationHost(planWithMetric)).toThrow(
-      "Host V2 metric scoring binding not implemented"
+      "Metric exploration requires executed product and required product checker"
     )
+    expect(() => requireExplorationHost({ ...planWithMetric, acceptance: {
+      execution: "script", checks: plan.acceptance.checks.map(check => ({ ...check, target: "product" })),
+    } })).not.toThrow()
   })
 
   test("4. 不存在 exploration 时旧 Plan identity、preflight 行为不变", () => {

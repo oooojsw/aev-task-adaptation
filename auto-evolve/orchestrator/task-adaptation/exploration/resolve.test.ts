@@ -7,6 +7,10 @@ import {
 } from "./templates"
 import { catalogue, decision } from "../intake-fixture"
 import { compileTask } from "../catalogue"
+import { explorationIdentity, type ExplorationPolicy } from "./policy"
+import { explorationIdentityAny } from "./policy-reader"
+import type { ExplorationPolicyV2 } from "./policy-v2"
+import type { ExplorationRequest, HostExplorationTemplateV2 } from "./templates"
 
 function fixturePlan(totalRounds = 4) {
   const cfg = catalogue()
@@ -140,7 +144,7 @@ test("A04: 多 Checker 顺序变化不影响匹配", () => {
         ...plan.acceptance.checks,
         {
           id: "trace",
-          target: "candidate",
+          target: "candidate" as const,
           mechanism: "script" as const,
           purpose: "Trace check",
           required: true,
@@ -178,7 +182,7 @@ test("A05: 缺第二个必需 Checker 时拒绝", () => {
         ...plan.acceptance.checks,
         {
           id: "trace",
-          target: "candidate",
+          target: "candidate" as const,
           mechanism: "script" as const,
           purpose: "Trace check",
           required: true,
@@ -425,4 +429,100 @@ test("B09: 整数边界极限组合拒绝非安全整数", () => {
       profiles,
     ),
   ).toThrow("Exploration observation window leaves fewer than minimum alternative rounds")
+})
+
+function v2(kind: "window" | "metric" = "window"): HostExplorationTemplateV2 {
+  const { defaultObservations, ...policy } = structuredClone(FIXTURE_REPORT_EXPLORATION_TEMPLATE.policy)
+  return {
+    ...structuredClone(FIXTURE_REPORT_EXPLORATION_TEMPLATE),
+    schema: "aev.exploration-template.v2",
+    id: `approved-${kind}`,
+    policy: {
+      ...policy, schema: "aev.exploration-policy.v2",
+      window: { minimumRounds: 2, maximumRounds: kind === "window" ? 2 : 5 },
+      trigger: kind === "window" ? { kind } : {
+        kind, name: "quality", direction: "max", minimumDelta: 0.1, minimumObservations: 3, patience: 2,
+      },
+      budget: { mode: "best_effort" },
+    },
+    overrides: kind === "window" ? { afterRound: { minimum: 1, maximum: 5 } } : {
+      minimumRounds: { minimum: 1, maximum: 4 }, maximumRounds: { minimum: 4, maximum: 5 },
+      patience: { minimum: 1, maximum: 4 },
+    },
+  }
+}
+
+test("V1 value and fingerprint remain identical; window never upgrades a V1 template", () => {
+  const { plan, profiles } = fixturePlan(7)
+  const template = FIXTURE_REPORT_EXPLORATION_TEMPLATE
+  const { defaultObservations, ...policy } = template.policy
+  const expected: ExplorationPolicy = { ...policy, schema: "aev.exploration-policy.v1", trigger: { kind: "attempts", observations: defaultObservations } }
+  const result = resolveExploration(plan, { mode: "auto" }, [template], standardSupport, profiles)
+  expect(result.policy).toEqual(expected)
+  expect(explorationIdentityAny(result.policy, plan)).toBe(explorationIdentity(expected, plan))
+  expect(() => resolveExploration(plan, { mode: "window", afterRound: 2 }, [template], standardSupport, profiles)).toThrow("No matching")
+})
+
+test("V2 window uses approved rounds, exact template ID, and best_effort without mutation", () => {
+  const { plan, profiles } = fixturePlan(7)
+  const template = v2()
+  const before = structuredClone(template)
+  const second = { ...v2(), id: "second" }
+  expect(resolveExploration(plan, { mode: "auto" }, [template, second], standardSupport, profiles).reason).toContain("Ambiguous")
+  const result = resolveExploration(plan, { mode: "window", afterRound: 5, template: template.id, budgetMode: "best_effort" },
+    [template, second], standardSupport, profiles)
+  expect(result.policy).toEqual({ ...template.policy, window: { minimumRounds: 5, maximumRounds: 5 } })
+  expect(template).toEqual(before)
+  expect(result.template).not.toBe(template)
+  expect(resolveExploration(plan, { mode: "auto", template: template.id }, [template, second], standardSupport, profiles).policy).toEqual(template.policy)
+  expect(() => resolveExploration(plan, { mode: "auto", template: "missing" }, [template], standardSupport, profiles)).toThrow("No matching")
+  expect(() => resolveExploration(plan, { mode: "window", afterRound: 6 }, [template], standardSupport, profiles)).toThrow("approved template range")
+  expect(() => resolveExploration(plan, { mode: "window", afterRound: 5 }, [template], standardSupport, profiles.slice(1))).toThrow("No trusted profiles")
+})
+
+test("V2 cannot enlarge window without approval or truncate a conflicting global limit", () => {
+  const { plan, profiles } = fixturePlan(7)
+  const template = v2()
+  delete template.overrides
+  expect(() => resolveExploration(plan, { mode: "window", afterRound: 3 }, [template], standardSupport, profiles)).toThrow("approved template range")
+  template.overrides = { afterRound: { minimum: 1, maximum: 7 } }
+  expect(() => resolveExploration(plan, { mode: "window", afterRound: 7 }, [template], standardSupport, profiles)).toThrow("exceeds plan stop rounds")
+})
+
+test("V2 metric inherits trusted metadata and matches formal best_pass metric/direction", () => {
+  const { plan, profiles } = fixturePlan(7)
+  const template = v2("metric")
+  const scored = { ...plan, selection: { rule: "best_pass" as const, metric: "quality", direction: "max" as const } }
+  const result = resolveExploration(scored, { mode: "metric", minimumRounds: 3, maximumRounds: 4, patience: 4 },
+    [template], standardSupport, profiles)
+  expect((result.policy as ExplorationPolicyV2).window).toEqual({ minimumRounds: 3, maximumRounds: 4 })
+  if (template.policy.trigger.kind !== "metric") throw new Error("Expected metric fixture")
+  expect(result.policy?.trigger).toEqual({ ...template.policy.trigger, patience: 4 })
+  for (const selection of [plan.selection, { ...scored.selection, metric: "other" }, { ...scored.selection, direction: "min" as const }]) {
+    expect(() => resolveExploration({ ...plan, selection }, { mode: "metric" }, [template], standardSupport, profiles)).toThrow()
+  }
+  expect(() => resolveExploration(scored, { mode: "metric", patience: 5 }, [template], standardSupport, profiles)).toThrow("approved template range")
+})
+
+test("request fields and numeric bounds are strict, including auto/off and reserved", () => {
+  const { plan, profiles } = fixturePlan(7)
+  const invalid: unknown[] = [null, [], { mode: null }, { mode: undefined }, { mode: "auto", typo: true }, { mode: "off", afterRound: 1 },
+    { mode: "auto", template: "" }, { mode: "metric", name: "untrusted" }, { mode: "metric", minimumDelta: 1 },
+    { mode: "metric", minimumRounds: 4, maximumRounds: 3 }, { mode: "window" },
+    ...[0, -1, 1.2, NaN, Infinity, "2", Number.MAX_SAFE_INTEGER + 1, undefined].map(afterRound => ({ mode: "window", afterRound })),
+    ...["auto", "observations", "window", "metric"].map(mode => ({ mode, budgetMode: "reserved" })),
+  ]
+  for (const request of invalid) expect(() => resolveExploration(plan, request as ExplorationRequest, [v2()], standardSupport, profiles)).toThrow()
+})
+
+test("V2 template unknown fields, invalid approvals, duplicate IDs and reserved are rejected", () => {
+  const { plan, profiles } = fixturePlan(7)
+  for (const template of [
+    { ...v2(), extra: true },
+    { ...v2(), policy: { ...v2().policy, budget: { mode: "reserved" } } },
+    { ...v2(), overrides: { afterRound: { minimum: 3, maximum: 2 } } },
+    { ...v2(), overrides: { allowance: { minimum: 1, maximum: 2 } } },
+    { ...v2(), policy: { ...v2().policy, extra: true } },
+  ]) expect(() => resolveExploration(plan, { mode: "auto" }, [template as HostExplorationTemplate], standardSupport, profiles)).toThrow()
+  expect(() => resolveExploration(plan, { mode: "auto" }, [v2(), v2()], standardSupport, profiles)).toThrow("Duplicate")
 })

@@ -1,5 +1,7 @@
 import type { Plan } from "../plan"
 import { explorationPolicy, type ExplorationPolicy } from "./policy"
+import { readExplorationPolicy, type AnyExplorationPolicy } from "./policy-reader"
+import type { ExplorationPolicyV2 } from "./policy-v2"
 import {
   BUILTIN_EXPLORATION_TEMPLATES,
   type ExplorationRequest,
@@ -12,13 +14,42 @@ export interface ExplorationSupport {
   resources?: Array<{ id: string; path: string; mutable: boolean; audience: string }>
   capabilities?: string[]
   budget?: { calls: number; tokens: number }
+  preflightFingerprint?: string
 }
 
 export interface ExplorationResolutionResult {
   enabled: boolean
   template?: HostExplorationTemplate
-  policy?: ExplorationPolicy
+  policy?: AnyExplorationPolicy
   reason?: string
+}
+
+export function explorationSummary(plan: Readonly<Plan>, resolution: ExplorationResolutionResult) {
+  const policy = resolution.policy
+  const reason = resolution.reason ?? "Approved template matched; exploration enabled"
+  const counting = !policy ? { unit: "not_enabled" as const }
+    : policy.schema === "aev.exploration-policy.v1"
+      ? { unit: "quality_observations" as const, trigger: structuredClone(policy.trigger) }
+      : { unit: "closed_original_rounds" as const, trigger: structuredClone(policy.trigger),
+          ...(policy.trigger.kind === "metric" ? { metricUnit: "trusted_execution_measurements" as const } : {}) }
+  // 摘要独立于 Plan，不能为了展示而改变旧策略指纹。
+  return {
+    enabled: resolution.enabled, reason,
+    message: !resolution.enabled ? `探索未启用，原任务流程保留：${reason}`
+      : policy?.schema === "aev.exploration-policy.v1" ?
+        `${policy.trigger.kind === "attempts" ? `正常质量观察 ${policy.trigger.observations} 次后考虑备用` : "按可信评分观察触发"}；备用按届时余额准入`
+      : `原路线正常闭合第 ${policy?.window.minimumRounds} 至 ${policy?.window.maximumRounds} 轮窗口；备用按届时余额准入`,
+    template: resolution.template ? { id: resolution.template.id, version: resolution.template.version } : null,
+    policySchema: policy?.schema ?? null,
+    counting,
+    window: policy?.schema === "aev.exploration-policy.v2" ? structuredClone(policy.window) : null,
+    alternative: policy ? { minimumRounds: policy.allowance.minimumRounds, maximumRounds: policy.allowance.rounds } : null,
+    budgetMode: "best_effort" as const,
+    total: { rounds: plan.stop.rounds, calls: plan.stop.calls, tokens: plan.stop.tokens },
+    origin: policy ? structuredClone(policy.origin) : null,
+    replace: policy ? [...policy.replace] : [], preserve: policy ? [...policy.preserve] : [],
+    dependencies: policy ? [...policy.dependencies] : [],
+  }
 }
 
 function sameSet(a: readonly string[], b: readonly string[]): boolean {
@@ -53,48 +84,69 @@ function exact(value: unknown, keys: string[], label: string): asserts value is 
   }
 }
 
-export function resolveExploration(
-  basePlan: Readonly<Plan>,
-  request: ExplorationRequest | undefined,
-  templates: readonly HostExplorationTemplate[] = BUILTIN_EXPLORATION_TEMPLATES,
-  support?: ExplorationSupport,
-  profiles?: readonly string[],
-): ExplorationResolutionResult {
-  if (request === undefined || request === null) {
-    return { enabled: false, reason: "Exploration not requested" }
-  }
-
-  if (typeof request !== "object" || Array.isArray(request)) {
+export function validateExplorationRequest(request: unknown): asserts request is ExplorationRequest | undefined {
+  if (request === undefined) return
+  if (!request || typeof request !== "object" || Array.isArray(request) || Object.getPrototypeOf(request) !== Object.prototype)
     throw new Error("Exploration request must be an object")
-  }
-
-  const mode = request.mode ?? "off"
-
-  if (mode === "off") {
-    const keys = Object.keys(request)
-    if (keys.length > 1 || (keys.length === 1 && keys[0] !== "mode")) {
-      throw new Error("Exploration off mode cannot include extra options")
+  const cfg = request as Record<string, unknown>
+  if (Object.hasOwn(cfg, "mode") && typeof cfg.mode !== "string") throw new Error("Invalid exploration request mode")
+  const mode = cfg.mode ?? "off"
+  const fields = mode === "off" ? ["mode"]
+    : mode === "auto" ? ["mode", "template", "budgetMode"]
+    : mode === "observations" ? ["mode", "after", "template", "budgetMode"]
+    : mode === "window" ? ["mode", "afterRound", "template", "budgetMode"]
+    : mode === "metric" ? ["mode", "minimumRounds", "maximumRounds", "patience", "template", "budgetMode"] : undefined
+  if (!fields) throw new Error(`Unsupported exploration request mode: ${String(mode)}`)
+  if (Object.keys(cfg).some(key => !fields.includes(key))) throw new Error(`Exploration ${mode} mode cannot include extra options`)
+  if (Object.hasOwn(cfg, "template") && (typeof cfg.template !== "string" || !cfg.template.trim()))
+    throw new Error("Existing trusted exploration template ID required")
+  if (Object.hasOwn(cfg, "budgetMode") && cfg.budgetMode !== "best_effort")
+    throw new Error("Unsupported exploration budget mode; reserved is not supported; only best_effort is supported")
+  for (const key of ["after", "afterRound", "minimumRounds", "maximumRounds", "patience"]) {
+    if (Object.hasOwn(cfg, key) || (mode === "observations" && key === "after") || (mode === "window" && key === "afterRound")) {
+      if (!Number.isSafeInteger(cfg[key]) || Number(cfg[key]) < 1)
+        throw new Error(`Exploration ${key} must be a positive safe integer`)
     }
-    return { enabled: false, reason: "Exploration explicitly disabled" }
   }
+  if (mode === "metric" && cfg.minimumRounds !== undefined && cfg.maximumRounds !== undefined &&
+    Number(cfg.minimumRounds) > Number(cfg.maximumRounds)) throw new Error("Invalid exploration metric window")
+}
 
-  if (mode !== "auto" && mode !== "observations") {
-    throw new Error(`Unsupported exploration request mode: ${String(mode)}`)
+function expand(template: Extract<HostExplorationTemplate, { schema: "aev.exploration-template.v2" }>,
+  request: ExplorationRequest, plan: Readonly<Plan>): ExplorationPolicyV2 {
+  // 先验证批准的原策略，禁止靠用户覆盖修好损坏模板。
+  readExplorationPolicy(template.policy, plan)
+  const policy = structuredClone(template.policy)
+  const override = (key: "afterRound" | "minimumRounds" | "maximumRounds" | "patience", value: number, original: number) => {
+    const range = template.overrides?.[key]
+    if (range ? value < range.minimum || value > range.maximum : value !== original)
+      throw new Error(`Exploration ${key} exceeds approved template range`)
+    return value
   }
-
-  let observations: number | undefined
-  if (mode === "observations") {
-    exact(request, ["mode", "after"], "exploration observations request")
-    if (!Number.isSafeInteger(request.after) || request.after < 1) {
-      throw new Error("Exploration after observations must be a positive integer")
+  if (request.mode === "window") {
+    if (policy.trigger.kind !== "window") throw new Error("Window request requires an approved window template")
+    const k = override("afterRound", request.afterRound, policy.window.maximumRounds)
+    if (!template.overrides?.afterRound && policy.window.minimumRounds !== k)
+      throw new Error("Fixed window requires explicit template approval")
+    policy.window = { minimumRounds: k, maximumRounds: k }
+  }
+  if (request.mode === "metric") {
+    if (policy.trigger.kind !== "metric") throw new Error("Metric request requires an approved metric template")
+    for (const key of ["minimumRounds", "maximumRounds"] as const) {
+      if (request[key] !== undefined) policy.window[key] = override(key, request[key], policy.window[key])
     }
-    observations = request.after
+    if (request.patience !== undefined) policy.trigger.patience = override("patience", request.patience, policy.trigger.patience)
   }
+  readExplorationPolicy(policy, plan)
+  return policy
+}
 
+export function validateExplorationTemplates(templates: readonly HostExplorationTemplate[]) {
   // 严格校验模板合法性（结构损坏属于配置错误）
   for (const t of templates) {
     if (
-      t.schema !== "aev.exploration-template.v1" ||
+      !t ||
+      (t.schema !== "aev.exploration-template.v1" && t.schema !== "aev.exploration-template.v2") ||
       !t.id ||
       !t.version ||
       !Array.isArray(t.profiles) ||
@@ -106,10 +158,48 @@ export function resolveExploration(
     ) {
       throw new Error("Invalid exploration template definition")
     }
+    if (t.schema === "aev.exploration-template.v2") {
+      exact(t, ["schema", "id", "version", "profiles", "checker", "policy",
+        ...(t.executor !== undefined ? ["executor"] : []), ...(t.overrides !== undefined ? ["overrides"] : [])], "exploration template v2")
+      if (t.policy.schema !== "aev.exploration-policy.v2" || t.policy.budget?.mode !== "best_effort")
+        throw new Error("V2 template requires explicit V2 best_effort policy; reserved is not supported")
+      if (![t.id, t.version, ...t.profiles].every(value => typeof value === "string" && value.trim()) ||
+        !t.profiles.length || new Set(t.profiles).size !== t.profiles.length) throw new Error("Invalid V2 template identity")
+      exact(t.checker, ["name", "id", ...(t.checker.version !== undefined ? ["version"] : [])], "template checker")
+      if (t.executor) exact(t.executor, ["id", ...(t.executor.version !== undefined ? ["version"] : [])], "template executor")
+      if (![t.checker.name, t.checker.id, ...(t.checker.version !== undefined ? [t.checker.version] : []),
+        ...(t.executor ? [t.executor.id, ...(t.executor.version !== undefined ? [t.executor.version] : [])] : [])]
+        .every(value => typeof value === "string" && value.trim())) throw new Error("Invalid V2 template binding")
+      if (t.overrides !== undefined) {
+        if (!t.overrides || typeof t.overrides !== "object" || Array.isArray(t.overrides)) throw new Error("Invalid template overrides")
+        for (const [key, range] of Object.entries(t.overrides)) {
+          if (!["afterRound", "minimumRounds", "maximumRounds", "patience"].includes(key)) throw new Error("Invalid template override key")
+          exact(range, ["minimum", "maximum"], "template override range")
+          if (!Number.isSafeInteger(range.minimum) || Number(range.minimum) < 1 || !Number.isSafeInteger(range.maximum) ||
+            Number(range.maximum) < Number(range.minimum)) throw new Error("Invalid template override range")
+        }
+      }
+    }
   }
+  if (new Set(templates.map(t => t.id)).size !== templates.length) throw new Error("Duplicate exploration template IDs")
+}
+
+export function resolveExploration(
+  basePlan: Readonly<Plan>,
+  request: ExplorationRequest | undefined,
+  templates: readonly HostExplorationTemplate[] = BUILTIN_EXPLORATION_TEMPLATES,
+  support?: ExplorationSupport,
+  profiles?: readonly string[],
+): ExplorationResolutionResult {
+  validateExplorationRequest(request)
+  if (request === undefined) return { enabled: false, reason: "Exploration not requested" }
+  const mode = request.mode ?? "off"
+  if (mode === "off") return { enabled: false, reason: "Exploration explicitly disabled" }
+  let observations = request.mode === "observations" ? request.after : undefined
+  validateExplorationTemplates(templates)
 
   if (!profiles || profiles.length === 0) {
-    if (mode === "auto") {
+    if (mode === "auto" && !request.template) {
       return {
         enabled: false,
         reason: "No trusted profiles provided for task exploration resolution",
@@ -121,6 +211,11 @@ export function resolveExploration(
 
   // 确定性精确匹配
   const matched = templates.filter((template) => {
+    if (request.template !== undefined && template.id !== request.template) return false
+    if (mode === "observations" && template.schema !== "aev.exploration-template.v1") return false
+    if ((mode === "window" || mode === "metric") && template.schema !== "aev.exploration-template.v2") return false
+    if (mode === "window" && template.schema === "aev.exploration-template.v2" && template.policy.trigger.kind !== "window") return false
+    if (mode === "metric" && template.schema === "aev.exploration-template.v2" && template.policy.trigger.kind !== "metric") return false
     // 1. Profile 严格集合相同
     if (!sameSet(template.profiles, selectedProfiles)) return false
 
@@ -191,7 +286,7 @@ export function resolveExploration(
   })
 
   if (matched.length === 0) {
-    if (mode === "auto") {
+    if (mode === "auto" && !request.template) {
       return {
         enabled: false,
         reason: "No matching approved exploration template found for task",
@@ -201,7 +296,7 @@ export function resolveExploration(
   }
 
   if (matched.length > 1) {
-    if (mode === "auto") {
+    if (mode === "auto" && !request.template) {
       return {
         enabled: false,
         reason: `Ambiguous exploration templates matched for task: ${matched.map((m) => m.id).join(", ")}`,
@@ -211,6 +306,9 @@ export function resolveExploration(
   }
 
   const template = matched[0]
+  if (template.schema === "aev.exploration-template.v2") {
+    return { enabled: true, template: structuredClone(template), policy: expand(template, request, basePlan) }
+  }
   if (mode === "auto") {
     observations = template.policy.defaultObservations
   }
@@ -224,7 +322,7 @@ export function resolveExploration(
   const m = template.policy.allowance.minimumRounds
   const t = basePlan.stop.rounds
   if (!validateObservationWindow(n, m, t)) {
-    if (mode === "auto") {
+    if (mode === "auto" && !request.template) {
       return {
         enabled: false,
         reason: `Exploration observation window leaves fewer than minimum alternative rounds: observations=${n}, minimumRounds=${m}, stopRounds=${t}`,
