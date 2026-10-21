@@ -167,8 +167,9 @@ export async function seedTaskCandidate(spec: LongTaskSpec, root: string) {
 }
 
 import type { LogicalResource } from "../task-profile-access/unified-access"
+import { REVIEW_OUTPUT } from "../long-task-campaign/review-answer"
 
-export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; feedbackPath?: string; feedbackResource?: LogicalResource; round?: number; passID?: string; requestGate?: string; advice?: Array<Omit<AdviceReference, "root">> } = {}): Invocation | undefined {
+export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidateRoot?: string; worker?: string; output?: string; requirements?: string[]; feedbackPath?: string; feedbackResource?: LogicalResource; round?: number; passID?: string; requestGate?: string; advice?: Array<Omit<AdviceReference, "root">> } = {}): Invocation | undefined {
   const gate = taskRequestGate(spec, input.requestGate)
   if (!spec.taskAdaptation) {
     return undefined
@@ -179,7 +180,7 @@ export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidat
   const output = role === "planner" ? 'Return JSON: {"planner_summary":"", "completion_validator_ids":[], "units":[{"id":"work", "operation":"author_work", "title":"", "goal":"", "inputs":[], "depends_on":[], "expected_artifacts":[], "claim":"", "check_plan":"", "validator_ids":[], "retry_budget":1}]}. Units must perform author work, not formal acceptance.'
     : role === "executor" ? 'Return JSON: {"claimed_success":true,"claim_statement":"","summary":"","blockers":[],"artifacts":[]} after completing the assigned work.'
     : role === "lead" ? 'Edit the declared candidate files. Return JSON: {"summary":"","updated_files":[],"package_highlights":[],"tree_highlights":[],"refs":[],"surface_precheck_passed":false,"surface_precheck_details":[]}.'
-    : role === "reviewer" ? 'Return JSON: {"ready_for_final_acceptance":false,"summary":"","reasons":[],"next_attention_areas":[],"refs":[]}.'
+    : role === "reviewer" ? REVIEW_OUTPUT
     : 'Return your complete final analysis for the Lead as ordinary text or Markdown, not a JSON schema. Include findings, supporting evidence, uncertainties and actionable recommendations. Do not include hidden reasoning, tool transcripts or context-compaction summaries. Finish the assigned analysis before your final answer.'
   const entries = spec.taskAdaptation.entries
   if (input.candidateRoot && !entries) throw new Error("Declared candidate entries missing")
@@ -190,6 +191,7 @@ export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidat
     ...(spec.taskAdaptationCampaignRoot ? { campaignID: path.basename(spec.taskAdaptationCampaignRoot), round: input.round ?? spec.taskAdaptationRound,
       ...(input.passID ? { passID: input.passID } : {}) } : {}),
     ...(input.worker ? { worker: input.worker } : {}), output: input.output ?? output, maxInlineBytes: 16000,
+    ...(input.requirements?.length ? { requirements: input.requirements } : {}),
     ...(spec.taskAdaptation.requestBudget ? { requestBudget: spec.taskAdaptation.requestBudget } : {}),
     ...(gate === undefined ? {} : { requestGate: gate }),
     ...(input.advice?.length ? { advice: input.advice.map(item => ({ ...item, root: spec.taskAdaptationCampaignRoot! })) } : {}),

@@ -19,7 +19,18 @@ function texts(value: unknown): string[] {
 }
 
 export async function taskAdvice(bound: BoundPlan, input: AdviceReference) {
+  return (await taskAdviceBatch(bound, [input]))[0]
+}
+
+export async function taskAdviceBatch(bound: BoundPlan, inputs: AdviceReference[]) {
+  // 同批建议共享一次材料核验；下一次授权仍重新核验。
   await verifyBinding(bound)
+  const results = []
+  for (const input of inputs) results.push(await loadAdvice(bound, input))
+  return results
+}
+
+async function loadAdvice(bound: BoundPlan, input: AdviceReference) {
   if (![input.root, input.path].every(file => typeof file === "string" && path.isAbsolute(file))) throw new Error("Absolute advice identity required")
   const root = await realpath(input.root)
   const relative = path.relative(root, input.path).replaceAll("\\", "/")
@@ -33,23 +44,27 @@ export async function taskAdvice(bound: BoundPlan, input: AdviceReference) {
   const value = JSON.parse(bytes.toString("utf8").replace(/^\uFEFF/, ""))
   if (!Number.isSafeInteger(value.roundNumber) || value.roundNumber < 1 || value.roundNumber !== Number(match[1])) throw new Error("Task advice round mismatch")
   let content: Record<string, unknown>
+  let body: string | undefined
+  if (value.finalAnswer) {
+    await resolveResource(root, path.posix.join(path.posix.dirname(relative), "final-answer.txt"))
+    body = await readWorkerAnswer(path.dirname(await resolveResource(root, relative)), value.finalAnswer as WorkerAnswer)
+  }
   if (input.kind === "analysis") {
     if (value.role !== match[2] || (value.role !== "blank_acceptance_diagnostician" &&
       !bound.plan.workers.some(worker => `task-${worker.id}` === value.role))) throw new Error("Task advice worker identity mismatch")
     if (value.finalAnswer) {
       const answer = value.finalAnswer as WorkerAnswer
-      // 正文只来自同角色目录，内容中的路径不授予额外权限。
-      await resolveResource(root, path.posix.join(path.posix.dirname(relative), "final-answer.txt"))
-      const body = await readWorkerAnswer(path.dirname(await resolveResource(root, relative)), answer)
-      content = { role: value.role, text: body, deliveryStatus: answer.status, ...(answer.reason ? { reason: answer.reason } : {}) }
+      // 正文引用仅作资料，不授予额外路径权限。
+      content = { role: value.role, answerSHA256: answer.sha256, deliveryStatus: answer.status, ...(answer.reason ? { reason: answer.reason } : {}) }
     } else {
-      content = { role: value.role, deliveryStatus: "unavailable", reason: "legacy_final_answer_identity_missing",
-        text: "Historical worker result has no verified final-answer artifact. Preserve it for audit; do not treat an empty JSON summary or mixed transcript as a final analysis. No automatic replay is authorized." }
+      body = "Historical worker result has no verified final-answer artifact. Preserve it for audit; do not treat an empty JSON summary or mixed transcript as a final analysis. No automatic replay is authorized."
+      content = { role: value.role, deliveryStatus: "unavailable", reason: "legacy_final_answer_identity_missing" }
     }
   } else {
     if (typeof value.readyForFinalAcceptance !== "boolean") throw new Error("Task review readiness missing")
-    content = { summary: text(value.summary), readinessAdvice: value.readyForFinalAcceptance,
+    content = body === undefined ? { summary: text(value.summary), readinessAdvice: value.readyForFinalAcceptance,
       reasons: texts(value.reasons), nextAttentionAreas: texts(value.nextAttentionAreas) }
+      : { answerSHA256: value.finalAnswer.sha256, deliveryStatus: value.finalAnswer.status, readinessAdvice: value.readyForFinalAcceptance }
   }
   // 发布完整最终正文，不包含工具轨迹，正文引用不扩权。
   const view = immutable({ schema: "aev.task-advice.v1", planFingerprint: bound.fingerprint,
@@ -66,8 +81,7 @@ export async function taskAdvice(bound: BoundPlan, input: AdviceReference) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
     await writeJsonAtomic(target, view)
   }
-  if (input.kind === "analysis") {
-    const body = content.text as string
+  if (body !== undefined) {
     const file = path.join(dir, `${fingerprint(view)}.txt`)
     try {
       const prior = await readFile(await resolveResource(root, path.relative(root, file).replaceAll("\\", "/")), "utf8")

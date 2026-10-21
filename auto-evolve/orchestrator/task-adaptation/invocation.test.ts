@@ -193,6 +193,37 @@ test("complete Worker prose reaches Lead across rounds, retry and candidate relo
   }
 })
 
+test("complete Reviewer prose and explicit controller repairs survive adapted invocation", async () => {
+  const f = await fixture()
+  f.plan.windows[0].runtime = ["review"]
+  f.input.bound = await f.bind()
+  const dir = path.join(f.root, "rounds/round-001/reviewer/pass-02")
+  await mkdir(dir, { recursive: true })
+  const body = "Evidence and recommendations.\n".repeat(3000) + 'AEV_REVIEW_CONTROL: {"ready_for_final_acceptance":false}'
+  const finalAnswer = await publishWorkerAnswer(dir, { exitCode: 0, sessionID: "s", events: [
+    { type: "assistant_message", message: { id: "final", role: "assistant" } },
+    { type: "text", sessionID: "s", part: { messageID: "final", text: body } },
+    { type: "step_finish", part: { messageID: "final", reason: "stop" } },
+  ] } as OpencodeTaskRun["result"])
+  const file = path.join(dir, "review-suggestion.json")
+  await writeFile(file, JSON.stringify({ roundNumber: 1, readyForFinalAcceptance: false, finalAnswer }))
+  f.input.advice = [{ root: f.root, path: file, kind: "review" }, { root: f.root, path: file, kind: "review" }]
+  f.input.requirements = ["Repair the length defect using the actual candidate."]
+  const result = await authorizeInvocation(f.input, f.request)
+  expect(result.scope.advice).toHaveLength(1)
+  expect(await readFile(result.scope.advice![0].path, "utf8")).toBe(body)
+  expect(result.request.prompt).toContain(f.input.requirements[0])
+  const views = await readdir(path.dirname(result.scope.advice![0].path))
+  const metadata = views.find(name => name.endsWith(".json"))!
+  expect(await readFile(path.join(path.dirname(result.scope.advice![0].path), metadata), "utf8")).not.toContain("Evidence and recommendations")
+  expect(result.request.prompt).toContain("complete declared Reviewer final answer")
+  await writeFile(path.join(dir, "final-answer.txt"), "TAMPERED")
+  await expect(authorizeInvocation(f.input, f.request)).rejects.toThrow("fingerprint drift")
+  await writeFile(path.join(dir, "final-answer.txt"), body)
+  await writeFile(path.join(f.root, "source.txt"), "DRIFTED")
+  await expect(authorizeInvocation(f.input, f.request)).rejects.toThrow("drift")
+})
+
 test("recompute action enables bounded arithmetic with persistent evidence, never shell or inherited grants", async () => {
   const f = await fixture()
   f.plan.windows[0].actions.push("recompute")

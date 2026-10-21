@@ -1,4 +1,5 @@
 import path from "node:path"
+import { REVIEW_OUTPUT } from "../long-task-campaign/review-answer"
 import type { LongTaskSpec } from "../long-task/contract"
 import type { LongTaskCampaignWorkerRole } from "../long-task-campaign/contract"
 import { compileRoleAccess } from "../task-profile-access/compiler"
@@ -360,17 +361,6 @@ export function buildMultiSkillMergeReviewerPrompt(input: {
     "Do not edit any file and do not declare product correctness beyond the supplied validators.",
     "Mark not ready when unique source coverage disappeared, a conflict was hidden rather than resolved, or case-specific answers leaked.",
     "",
-    "Return JSON only:",
-    JSON.stringify(
-      {
-        ready_for_final_acceptance: false,
-        summary: "one short sentence",
-        reasons: ["evidence-grounded risk"],
-        next_attention_areas: ["specific repair area"],
-        refs: ["source or replay evidence path"],
-      },
-      null,
-      2,
-    ),
+    REVIEW_OUTPUT,
   ].join("\n")
 }

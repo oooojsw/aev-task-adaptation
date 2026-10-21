@@ -67,6 +67,8 @@ export function protocolAuthorLines(context: AuthorContext, includeMaterialPaths
     "Private scoring inputs and task-specific answers must not be copied into deployable Skill."]
 }
 
+import { REVIEW_OUTPUT } from "../long-task-campaign/review-answer"
+
 export function protocolRolePrompt(role: "worker" | "lead" | "reviewer", input: {
   protocolContext: AuthorContext
   title: string
@@ -79,10 +81,8 @@ export function protocolRolePrompt(role: "worker" | "lead" | "reviewer", input: 
     "acceptanceExperiencePath", "finalAcceptanceFeedbackPath", "reviewerSuggestionPath", "workerSuggestionPaths", "protocolFeedbackPaths",
     "blankAgentEvidenceBundlePath", "blankAgentEvidenceReadPaths"]
   const inputs = Object.fromEntries(readableKeys.filter((key) => input[key] !== undefined).map((key) => [key, input[key]]))
-  const output = role === "worker" ? { summary: "", findings: [], memory_advice: [], package_advice: [], exploration_advice: [], refs: [] }
-    : role === "lead" ? { summary: "", updated_files: [], package_highlights: [], tree_highlights: [], refs: [],
-      surface_precheck_passed: false, surface_precheck_details: [] }
-    : { ready_for_final_acceptance: false, summary: "", reasons: [], next_attention_areas: [], refs: [] }
+  const output = { summary: "", updated_files: [], package_highlights: [], tree_highlights: [], refs: [],
+    surface_precheck_passed: false, surface_precheck_details: [] }
   return [ `You are the campaign ${role}. Campaign: ${input.title}. Round: ${input.roundNumber}.`,
     ...protocolAuthorLines(input.protocolContext),
     role === "worker" ? `Analysis role: ${String(input.role)}. Provide evidence-grounded suggestions; do not edit Skill.`
@@ -102,5 +102,6 @@ export function protocolRolePrompt(role: "worker" | "lead" | "reviewer", input: 
     "Every claim needs current evidence. Keep all JSON paths forward-slash normalized.",
     ...(role === "worker"
       ? ["Return your complete final analysis as ordinary text or Markdown, not JSON. Include evidence, uncertainties and recommendations; exclude hidden reasoning, tool transcripts and compaction summaries."]
+      : role === "reviewer" ? [REVIEW_OUTPUT]
       : ["Return JSON only, matching this shape:", JSON.stringify(output, null, 2)])].join("\n")
 }

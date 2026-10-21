@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 import { pathToFileURL } from "node:url"
+import { REVIEW_OUTPUT } from "../long-task-campaign/review-answer"
 
 const repo = path.resolve(import.meta.dir, "../../..")
 const baseline = "7d8b7d36d4f5357fb69b4079393cd4f3e28d2293"
@@ -121,7 +122,7 @@ for (const scenario of [{ name: "pass", rejects: 0, rounds: 1 }, { name: "reject
       expect(resumed.status).toBe(result.status)
       expect(requests).toHaveLength(callsBeforeResume.model)
       expect(blanks).toHaveLength(callsBeforeResume.blank)
-      // Worker正文合同有意升级；独立合同测试覆盖它，其余调度照旧比对。
+      // 正文交付合同有意升级；独立合同测试覆盖它，其余调度照旧比对。
       for (const request of requests) {
         if (request.title.startsWith("Campaign Worker") || request.title.startsWith("Blank Acceptance Diagnosis")) {
           request.prompt = "<WORKER_FINAL_PROSE_CONTRACT>"
@@ -129,13 +130,23 @@ for (const scenario of [{ name: "pass", rejects: 0, rounds: 1 }, { name: "reject
         if (request.title.startsWith("Campaign Lead")) {
           request.prompt = request.prompt.replace(/Worker suggestions:\r?\n[\s\S]*?\r?\n\r?\nEditable targets:/, "Worker suggestions: <DELIVERY_CONTRACT>\n\nEditable targets:")
           request.prompt = request.prompt.replace(/\nWorker delivery:.*$/, "")
-          for (const field of ["reads", "references"]) request[field] = request[field]?.filter((file: string) => !/[\\/]workers[\\/]/.test(file))
+          for (const field of ["reads", "references"]) request[field] = request[field]
+            ?.filter((file: string) => !/[\\/]workers[\\/]/.test(file))
+            .filter((file: string, _index: number, files: string[]) => !/[\\/]reviewer[\\/](?:pass-\d+[\\/])?final-answer\.txt$/.test(file) ||
+              !files.includes(file.replace(/final-answer\.txt$/, "review-suggestion.json")))
+            .map((file: string) => file.replace(/reviewer([\\/](?:pass-\d+[\\/])?)final-answer\.txt/g, "reviewer$1review-suggestion.json"))
         }
+        if (request.title.startsWith("Campaign Reviewer")) request.prompt = request.prompt
+          .replace(REVIEW_OUTPUT, "<REVIEW_FINAL_PROSE_CONTRACT>")
+          .replace(/Return JSON only, with this shape:\r?\n```json\r?\n\{\r?\n  "ready_for_final_acceptance"[\s\S]*?```/, "<REVIEW_FINAL_PROSE_CONTRACT>")
       }
       const normalize = (value: any) => JSON.parse(JSON.stringify(value, (name, item) => {
         if (["createdAt", "updatedAt", "heartbeatAt", "durationMs", "startedAt", "completedAt", "ownerPID", "ownerCreationTick"].includes(name)) return undefined
+        // 新增正文文件会进入后续证据清单，独立正文测试验证其身份。
+        if (Array.isArray(item)) return item.filter(value => typeof value !== "string" || !/[\\/]reviewer[\\/](?:pass-\d+[\\/])?final-answer\.txt$/.test(value))
         if (typeof item !== "string") return item
         return item.replaceAll(root, "<ROOT>").replaceAll(root.replaceAll("\\", "/"), "<ROOT>")
+          .replace(/reviewer([\\/](?:pass-\d+[\\/])?)final-answer\.txt/g, "reviewer$1review-suggestion.json")
           .replace(/\b\d{8}-\d{9}-[0-9a-f]{8}-/g, "<RUN-ID>-")
           .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, "<TIME>")
           .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, "<UUID>")

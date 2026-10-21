@@ -144,6 +144,8 @@ export interface LongTaskCampaignWorkerSuggestion {
 }
 
 export interface LongTaskCampaignReviewSuggestion {
+  finalAnswer?: import("./worker-answer").WorkerAnswer
+  controlStatus?: string
   id: string
   roundNumber: number
   createdAt: string

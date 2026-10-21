@@ -1,9 +1,9 @@
 import type {
-  LongTaskCampaignReviewSuggestion,
   LongTaskCampaignWorkerRole,
 } from "./contract"
 import type { BlankAcceptanceDiagnosisProfile } from "../schema"
 import { protocolRolePrompt, type AuthorContext } from "../protocol-plugins/author-context"
+import { REVIEW_OUTPUT } from "./review-answer"
 
 function bullet(items: string[]) {
   return items.length ? items.map((item) => `- ${item}`).join("\n") : "- none"
@@ -454,14 +454,7 @@ export function buildCampaignReviewerPrompt(input: {
     "- You may inspect expert_oracle_paths / private validation views (result.private.json, private-answers, ground-truth, answer-key) as open-book evidence when they are explicitly listed in your readable paths. Use them to verify that the package teaches how to derive answers from provided materials, not to embed oracle literals.",
     "- Do not leak hidden validator answers or protected reference-only truth.",
     "",
-    "Return JSON only, with this shape:",
-    jsonFence({
-      ready_for_final_acceptance: false,
-      summary: "one short sentence",
-      reasons: ["why it still looks risky"],
-      next_attention_areas: ["what campaign should look at next"],
-      refs: ["absolute/path/or/reference"],
-    } satisfies Omit<LongTaskCampaignReviewSuggestion, "id" | "roundNumber" | "createdAt" | "responsePath">),
+    REVIEW_OUTPUT,
     "",
   ].join("\n")
 }
