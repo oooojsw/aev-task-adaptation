@@ -3,6 +3,30 @@ import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { randomUUID, createHash } from "node:crypto"
 import { protocolFeedbackEvidence, previousProtocolFeedback } from "./feedback-evidence"
+import { fingerprint } from "./identity"
+
+test("configuration recovery never treats old unexecuted infrastructure failure as current scored feedback", async () => {
+  const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
+  const acceptance = path.join(root, "rounds/round-001/final-acceptance"), pass = path.join(acceptance, "pass-01")
+  await mkdir(pass, { recursive: true })
+  const file = path.join(pass, "result.json.training.json")
+  const result = { acceptanceMode: "protocol_plugins", roundNumber: 1, protocolTrainingResultPath: file, failureKind: "infrastructure_failure" }
+  const receipt = { task: "task", phase: "source", protocolFingerprint: "old", status: "execution_error", executed: false }
+  const save = async (body: object) => {
+    await writeFile(path.join(pass, "protocol.receipt.json"), JSON.stringify(body))
+    await writeFile(path.join(pass, "protocol.completed.json"), JSON.stringify({ receipt: fingerprint(body) }))
+  }
+  await writeFile(path.join(acceptance, "result.json"), JSON.stringify(result))
+  await writeFile(path.join(pass, "protocol.training-feedback.json"), JSON.stringify({ schema: "aev.training-feedback.v1", task: "task", phase: "source" }))
+  await save(receipt)
+  expect(await previousProtocolFeedback(root, 2, "task", "source", "new")).toBeUndefined()
+  expect(await previousProtocolFeedback(root, 2, "task", "source", "old")).toBe(file)
+  await save({ ...receipt, status: "passed", executed: true })
+  await expect(previousProtocolFeedback(root, 2, "task", "source", "new")).rejects.toThrow("protocol drift")
+  await save(receipt)
+  await writeFile(path.join(pass, "protocol.completed.json"), JSON.stringify({ receipt: "tampered" }))
+  await expect(previousProtocolFeedback(root, 2, "task", "source", "new")).rejects.toThrow("receipt drift")
+})
 
 test("training feedback grants only the exact real product, rejects drift and private path substitution", async () => {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())

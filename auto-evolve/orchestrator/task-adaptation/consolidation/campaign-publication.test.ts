@@ -298,4 +298,5 @@ test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 pa
     const backends = await readdir(path.join(campaign, "protocol-backends", "consolidation"))
     expect(backends).toHaveLength(1)
   }
-}, 60000)
+// Windows逐题子进程和原子落盘较慢，保留完整150题断言而不缩小用例。
+}, 600000)

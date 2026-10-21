@@ -5399,7 +5399,7 @@ export async function runLongTaskCampaign(input: {
           blankAgentAcceptanceDiagnosisPath: campaignPaths.blankAgentAcceptanceDiagnosisPath,
         })
         if (baseSpec.taskAdaptation && baseSpec.protocolPlugins && roundNumber > branchStart) generatedSpec.taskAdaptationFeedbackPath =
-          await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase)
+          await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase, baseSpec.protocolAuthorContext?.fingerprint)
         await writeJsonFile(roundPaths.generatedSpecPath, generatedSpec)
 
         await writeLongTaskCampaignState(campaignPaths, {
@@ -6439,7 +6439,7 @@ export async function resumeLongTaskCampaign(input: {
           blankAgentAcceptanceDiagnosisPath: campaignPaths.blankAgentAcceptanceDiagnosisPath,
         })
         if (baseSpec.taskAdaptation && baseSpec.protocolPlugins && roundNumber > branchStart) generatedSpec.taskAdaptationFeedbackPath =
-          await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase)
+          await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase, baseSpec.protocolAuthorContext?.fingerprint)
         await writeJsonFile(roundPaths.generatedSpecPath, generatedSpec)
 
         await writeLongTaskCampaignState(campaignPaths, {

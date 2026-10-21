@@ -4,6 +4,7 @@ import { createHash } from "node:crypto"
 import { productEvidenceName } from "./runtime"
 import type { Phase } from "./contract"
 import { verifyPublication } from "../task-adaptation/consolidation/publication-evidence"
+import { fingerprint } from "./identity"
 
 export async function protocolFeedbackEvidence(feedbackPath?: string) {
   if (!feedbackPath) return [] as string[]
@@ -40,7 +41,7 @@ export async function protocolFeedbackEvidence(feedbackPath?: string) {
   return paths
 }
 
-export async function previousProtocolFeedback(campaignRoot: string, roundNumber: number, taskID: string, phase: Phase) {
+export async function previousProtocolFeedback(campaignRoot: string, roundNumber: number, taskID: string, phase: Phase, protocol?: string) {
   if (!path.isAbsolute(campaignRoot) || !Number.isSafeInteger(roundNumber) || roundNumber < 1 || !taskID) {
     throw new Error("Explicit previous feedback identity required")
   }
@@ -55,6 +56,18 @@ export async function previousProtocolFeedback(campaignRoot: string, roundNumber
   const paths = await protocolFeedbackEvidence(file)
   const view = JSON.parse((await readFile(paths[0], "utf8")).replace(/^\uFEFF/, ""))
   if (view.task !== taskID || view.phase !== phase) throw new Error("Previous feedback task mismatch")
+  if (protocol) {
+    const receipt = JSON.parse((await readFile(path.join(path.dirname(file), "protocol.receipt.json"), "utf8")).replace(/^\uFEFF/, ""))
+    const checkpoint = JSON.parse((await readFile(path.join(path.dirname(file), "protocol.completed.json"), "utf8")).replace(/^\uFEFF/, ""))
+    if (checkpoint.receipt !== fingerprint(receipt) || receipt.task !== taskID || receipt.phase !== phase)
+      throw new Error("Previous feedback receipt drift")
+    if (receipt.protocolFingerprint !== protocol) {
+      // 迁移前无答卷的基础设施故障不是新协议的内容反馈，证据仍留原处。
+      if (result.failureKind === "infrastructure_failure" && receipt.status === "execution_error" &&
+          receipt.executed === false && !receipt.product) return undefined
+      throw new Error("Previous feedback protocol drift")
+    }
+  }
   // 跨轮继续使用真实公开答卷，不退回旧空白工具证据格式。
   return file as string
 }
