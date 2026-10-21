@@ -17,6 +17,11 @@ import { attemptAccounting } from "./attempt-accounting"
 import type { BuiltinOptions } from "./builtins"
 import { regular } from "../task-adaptation/consolidation/publication-evidence"
 
+function samePath(a: unknown, b: string) {
+  // JSON正斜杠与宿主路径同义；仍拒绝相对路径和不同目录。
+  return typeof a === "string" && path.isAbsolute(a) && path.isAbsolute(b) && path.resolve(a) === path.resolve(b)
+}
+
 export async function campaignAcceptance(input: {
   budgets?: Pick<BuiltinOptions, "httpBudgets" | "toolBudgets" | "requestGate">
   campaignRoot: string
@@ -167,8 +172,8 @@ export async function verifyCompletedCampaignAcceptance(input: {
   if (!path.isAbsolute(input.resultPath) || relative === ".." || relative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relative) || result.campaignID !== input.campaignID || result.roundNumber !== input.roundNumber ||
     result.runID !== input.runID || result.passed !== true || result.acceptanceMode !== "protocol_plugins" ||
-    result.protocolReceiptPath !== receiptPath || result.validationPackageRoot !== input.candidateRoot ||
-    result.protocolAuditResultPath !== input.resultPath || result.protocolTrainingResultPath !== `${input.resultPath}.training.json`) {
+    !samePath(result.protocolReceiptPath, receiptPath) || !samePath(result.validationPackageRoot, input.candidateRoot) ||
+    !samePath(result.protocolAuditResultPath, input.resultPath) || !samePath(result.protocolTrainingResultPath, `${input.resultPath}.training.json`)) {
     throw new Error("Completed Campaign acceptance identity drift")
   }
   const { protocolReceiptPath: _, protocolAuditResultPath: __, ...expectedTraining } = result
@@ -203,8 +208,8 @@ export async function readCompletedRejectedCampaignPass(input: {
   if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) ||
       result.campaignID !== input.campaignID || result.roundNumber !== input.roundNumber || result.runID !== input.runID ||
       result.passed !== false || result.failureKind !== "product_failure" || result.acceptanceMode !== "protocol_plugins" ||
-      result.protocolReceiptPath !== path.join(dir, "protocol.receipt.json") || result.protocolAuditResultPath !== input.resultPath ||
-      result.protocolTrainingResultPath !== `${input.resultPath}.training.json`) throw new Error("Historical rejected pass identity drift")
+      !samePath(result.protocolReceiptPath, path.join(dir, "protocol.receipt.json")) || !samePath(result.protocolAuditResultPath, input.resultPath) ||
+      !samePath(result.protocolTrainingResultPath, `${input.resultPath}.training.json`)) throw new Error("Historical rejected pass identity drift")
   const { protocolReceiptPath: _, protocolAuditResultPath: __, ...expected } = result
   const training = JSON.parse((await readFile(result.protocolTrainingResultPath, "utf8")).replace(/^\uFEFF/, ""))
   const receipt = JSON.parse((await readFile(result.protocolReceiptPath, "utf8")).replace(/^\uFEFF/, ""))

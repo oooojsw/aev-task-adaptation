@@ -4,7 +4,7 @@ import os from "node:os"
 import { mkdtemp, mkdir, readFile, writeFile, readdir, rename, lstat } from "node:fs/promises"
 import { selectedRuntime } from "../../protocol-plugins/selected-runtime"
 import { consolidationPlugins } from "../../protocol-plugins/consolidation"
-import { campaignAcceptance } from "../../protocol-plugins/campaign-acceptance"
+import { campaignAcceptance, verifyCompletedCampaignAcceptance } from "../../protocol-plugins/campaign-acceptance"
 import { digest } from "./contract"
 import { verifyPublication } from "./publication-evidence"
 import { bindPlan } from "../binding"
@@ -97,6 +97,9 @@ test("formal Campaign publishes exact 50-case mock executions at 0, 43 and 50 pa
       await expect(readFile(path.join(attempt, "training-feedback", ".published"))).rejects.toThrow()
     }
     const result = await campaignAcceptance({ ...options, ...(count === 43 ? { recoverPublication: true } : {}) }, runtime)
+    await verifyCompletedCampaignAcceptance({ ...options, budgets: taskRuntimeBudgets(requestBudget, plan.stop),
+      candidateRoot: candidate.replaceAll("\\", "/"), resultPath: options.resultPath.replaceAll("\\", "/") })
+    await expect(verifyCompletedCampaignAcceptance({ ...options, candidateRoot: path.join(candidate, "other") })).rejects.toThrow("identity drift")
     expect(executions).toBe(1)
     expect(result.passed).toBe(true)
     const feedback = JSON.parse(await readFile(path.join(attempt, "protocol.training-feedback.json"), "utf8"))
