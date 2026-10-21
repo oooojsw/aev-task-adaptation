@@ -218,13 +218,15 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
   ),
 )
 
-it.live("session.processor effect tests stop after token overflow requests compaction", () =>
+for (const finished of [false, true]) it.live(`session.processor overflow compacts unfinished work but not completed reply (${finished})`, () =>
   provideTmpdirServer(
     ({ dir, llm }) =>
       Effect.gen(function* () {
         const { processors, session, provider } = yield* boot()
 
-        yield* llm.text("after", { usage: { input: 100, output: 0 } })
+        yield* llm.push(finished
+          ? reply().text("after").usage({ input: 100, output: 0 }).stop()
+          : reply().text("after").usage({ input: 100, output: 0 }).toolCalls())
 
         const chat = yield* session.create({})
         const parent = yield* user(chat.id, "compact")
@@ -256,7 +258,7 @@ it.live("session.processor effect tests stop after token overflow requests compa
 
         const parts = MessageV2.parts(msg.id)
 
-        expect(value).toBe("compact")
+        expect(value).toBe(finished ? "continue" : "compact")
         expect(parts.some((part) => part.type === "text" && part.text === "after")).toBe(true)
         expect(parts.some((part) => part.type === "step-finish")).toBe(true)
       }),

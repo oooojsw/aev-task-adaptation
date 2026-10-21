@@ -30,7 +30,7 @@ import {
   type TaskArtifactStatus,
 } from "./task-artifacts"
 import { createTaskDescriptor } from "./task-model"
-import { activeCallbacks, readerRuntimeBudget } from "./opencode-runtime-budget"
+import { activeCallbacks, readerRuntimeBudget, convergenceWindows } from "./opencode-runtime-budget"
 import { completion } from "./opencode-completion"
 import type { OpencodeRuntimeBudget } from "./opencode-runtime-budget"
 export type { OpencodeRuntimeBudget, OpencodeRuntimeBudgetProfile } from "./opencode-runtime-budget"
@@ -849,6 +849,8 @@ function minutes(ms: number) {
 function buildRuntimeBudgetPromptPrefix(input: { runStart: Date; budget: Required<OpencodeRuntimeBudget> }) {
   const softMinutes = minutes(input.budget.softDeadlineMs)
   const softDeadline = new Date(input.runStart.getTime() + input.budget.softDeadlineMs)
+  const windows = convergenceWindows(input.budget.softDeadlineMs)
+  const seconds = (value: number) => Number((value / 1000).toFixed(3))
   return [
     "[Runtime Budget Contract | Mandatory]",
     "You must treat this as a hard working contract for the current session.",
@@ -862,13 +864,14 @@ function buildRuntimeBudgetPromptPrefix(input: { runStart: Date; budget: Require
     `- Soft deadline (ISO): ${softDeadline.toISOString()}`,
     "",
     "Mandatory execution policy:",
+    "Time checks never authorize new tools: use the commands below only if shell is already allowed; otherwise use available timing evidence and never invent current time.",
     "1. Maintain a tool_call_count counter starting from your first tool call.",
     "2. At every 25th tool call (25/50/75/...), run an immediate time checkpoint.",
     "3. Preferred checkpoint command: `Get-Date -Format o`.",
     '4. Fallback checkpoint command: `python -c \"from datetime import datetime; print(datetime.now().astimezone().isoformat())\"`.',
-    "5. If remaining time to the soft deadline is <= 15 minutes: do not open new branches; converge only on this session's required deliverable.",
-    "6. If remaining time <= 5 minutes: stop exploration; run only minimum required checks for this session and prepare structured output.",
-    "7. If remaining time <= 2 minutes: return structured result immediately. If incomplete, return explicit blockers. Never claim success with blockers.",
+    `5. If remaining time to the soft deadline is <= ${seconds(windows.converge)} seconds: do not open new branches; converge only on this session's required deliverable.`,
+    `6. If remaining time <= ${seconds(windows.prepare)} seconds: stop exploration; run only minimum required checks for this session and prepare structured output.`,
+    `7. If remaining time <= ${seconds(windows.finish)} seconds: return structured result immediately. If incomplete, return explicit blockers. Never claim success with blockers.`,
     "8. Never break output protocol (for example JSON-only sessions must still return JSON-only output).",
     "",
     "[运行时预算硬约束 | 必须遵守]",
@@ -883,13 +886,14 @@ function buildRuntimeBudgetPromptPrefix(input: { runStart: Date; budget: Require
     `- 软截止（ISO）：${softDeadline.toISOString()}`,
     "",
     "强制执行策略：",
+    "时间自检不授予新工具：下列命令仅在已有Shell权限时使用，否则使用已有时间证据，不伪造当前时间。",
     "1. 从第一次工具调用开始维护 tool_call_count。",
     "2. 每到第 25 次工具调用（25/50/75/...）必须立刻做时间自检。",
     "3. 优先命令：`Get-Date -Format o`。",
     '4. 备选命令：`python -c \"from datetime import datetime; print(datetime.now().astimezone().isoformat())\"`。',
-    "5. 距离软截止 <= 15 分钟：禁止开新分支，只允许收敛到本 session 必需产物。",
-    "6. 距离软截止 <= 5 分钟：停止探索，只做本 session 最小必要校验并准备结构化输出。",
-    "7. 距离软截止 <= 2 分钟：立即返回结构化结果；未完成必须明确 blockers，严禁伪成功。",
+    `5. 距离软截止 <= ${seconds(windows.converge)} 秒：禁止开新分支，只允许收敛到本 session 必需产物。`,
+    `6. 距离软截止 <= ${seconds(windows.prepare)} 秒：停止探索，只做最小必要校验并准备结构化输出。`,
+    `7. 距离软截止 <= ${seconds(windows.finish)} 秒：立即返回结构化结果；未完成必须明确 blockers。`,
     "8. 不能破坏输出协议（例如 JSON-only 场景必须继续 JSON-only）。",
   ].join("\n")
 }

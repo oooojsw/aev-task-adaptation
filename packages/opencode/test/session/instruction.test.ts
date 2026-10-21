@@ -48,6 +48,22 @@ function loaded(filepath: string): MessageV2.WithParts[] {
 }
 
 describe("Instruction.resolve", () => {
+  test("disabled project config also blocks implicit nearby instructions during tool reads", async () => {
+    const saved = process.env.OPENCODE_DISABLE_PROJECT_CONFIG
+    try {
+      process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "true"
+      await using tmp = await tmpdir({init: async dir => {
+        await Bun.write(path.join(dir, "sub", "AGENTS.md"), "Must not be injected")
+        await Bun.write(path.join(dir, "sub", "file.ts"), "export {}")
+      }})
+      await Instance.provide({directory: tmp.path, fn: async () => {
+        expect(await Instruction.resolve([], path.join(tmp.path, "sub", "file.ts"), MessageID.make("disabled-project-read"))).toEqual([])
+      }})
+    } finally {
+      if (saved === undefined) delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG
+      else process.env.OPENCODE_DISABLE_PROJECT_CONFIG = saved
+    }
+  })
   test("returns empty when AGENTS.md is at project root (already in systemPaths)", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {

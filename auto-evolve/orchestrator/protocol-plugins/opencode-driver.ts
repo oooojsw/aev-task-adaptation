@@ -70,7 +70,8 @@ export async function opencodeDriver(options: { cwd: string; evidenceRoot: strin
       file, sha256: createHash("sha256").update(await readFile(fileURLToPath(new URL(file, import.meta.url)))).digest("hex"),
     })))
     // 换路与计量规则变化也须阻断旧运行恢复，不能只冻结底层模型代码。
-    const taskControls = await Promise.all(["../opencode-completion.ts", "../task-adaptation/request-usage.ts",
+    const taskControls = await Promise.all(["../opencode-completion.ts", "./training.ts", "./training-invocation.ts",
+      "../long-task/runner.ts", "../task-adaptation/request-usage.ts",
       "../task-adaptation/exploration/entry.ts", "../task-adaptation/exploration/preflight.ts",
       "../task-adaptation/exploration/evaluation.ts", "../task-adaptation/exploration/metric-comparison.ts",
       "../task-adaptation/exploration/lifecycle.ts", "../task-adaptation/exploration/decision-v2.ts",

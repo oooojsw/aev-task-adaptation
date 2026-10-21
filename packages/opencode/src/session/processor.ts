@@ -303,6 +303,8 @@ export namespace SessionProcessor {
                 messageID: ctx.assistantMessage.parentID,
               })
               if (
+                // 正常交付后无需为下一步压缩，避免合成续行重开已完成任务。
+                value.finishReason !== "stop" &&
                 !ctx.assistantMessage.summary &&
                 isOverflow({ cfg: yield* config.get(), tokens: usage.tokens, model: ctx.model })
               ) {

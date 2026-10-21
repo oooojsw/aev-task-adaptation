@@ -16,6 +16,7 @@ import type {
 } from "./contract"
 import { DEFAULT_LONG_TASK_BUDGETS } from "./contract"
 import { trainingExecution, trainingRuntimeBudget, verifyTraining } from "../protocol-plugins/training"
+import { ProtocolTrainingIncompleteError } from "../protocol-plugins/training-invocation"
 import {
   appendArchiveRecord,
   appendFailurePacket,
@@ -2330,13 +2331,16 @@ async function continueLongTaskLoop(input: {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    return finalizeLongTaskRun({
+    const final = await finalizeLongTaskRun({
       cwd: input.cwd,
       run: input.run,
       spec: input.spec,
       status: "blocked_failure",
       summaryText: `Long-task aborted unexpectedly: ${short(message, 240)}`,
     })
+    // 保留轮内现场后传播故障，阻止Campaign继续分析和重试。
+    if (error instanceof ProtocolTrainingIncompleteError) throw error
+    return final
   } finally {
     await cleanupRuntimeScopeWithRetry(input.runtimeScope)
   }

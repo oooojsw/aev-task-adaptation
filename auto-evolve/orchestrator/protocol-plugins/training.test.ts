@@ -27,6 +27,22 @@ test("all training roles route independent explicit models and finite invocation
   expect(() => validateTraining({ ...training, budgets: { ...training.budgets, maxTotalUnitAttempts: Infinity } })).toThrow()
 })
 
+test("role deadlines stay independent, explicit overrides validate and do not leak into model selection", () => {
+  const training = config()
+  training.roles.lead.timeoutMs = 3 * 3600000
+  const spec = {protocolTraining: training} as LongTaskSpec
+  expect(trainingRuntimeBudget(spec, "lead")).toEqual({profile: "long", softDeadlineMs: 7200000,
+    hardTimeoutMs: 10800000, silentTimeoutMs: 1800000, silentTimeoutAfterActivityMs: 5400000})
+  training.roles.lead.runtimeBudget = {softDeadlineMs: 3600000, silentTimeoutMs: 600000}
+  expect(trainingRuntimeBudget(spec, "lead")?.softDeadlineMs).toBe(3600000)
+  expect(trainingExecution(spec, "lead")).toEqual({model: "fixture/lead"})
+  training.roles.lead.runtimeBudget.hardTimeoutMs = 1000
+  expect(() => validateTraining(training)).toThrow("Conflicting")
+  delete training.roles.lead.runtimeBudget.hardTimeoutMs
+  training.roles.lead.runtimeBudget.softDeadlineMs = 20000000
+  expect(() => validateTraining(training)).toThrow("exceeds")
+})
+
 test("frozen training blocks role/budget/host drift and removed configuration", async () => {
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
   await mkdir(root, { recursive: true })

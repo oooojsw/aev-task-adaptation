@@ -189,6 +189,8 @@ export namespace Instruction {
           filepath: string,
           messageID: MessageID,
         ) {
+          // 私有宿主禁用项目规则时，工具读取也不能旁路重新注入。
+          if (Flag.OPENCODE_DISABLE_PROJECT_CONFIG) return []
           const sys = yield* systemPaths()
           const already = extract(messages)
           const results: { filepath: string; content: string }[] = []

@@ -209,6 +209,7 @@ for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLe
   { rejectedLeads: 0, adapted: true, bootstrap: true }, { rejectedLeads: 1, adapted: true },
   { rejectedLeads: 2, adapted: true }, { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true },
   { rejectedLeads: 2, adapted: true, bootstrap: true, intake: true, parallelWorkers: true },
+  { rejectedLeads: 0, adapted: true, bootstrap: true, intake: true, backendIncomplete: true },
   { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true, program: true },
   { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true, program: true, bestPass: true },
   { rejectedLeads: 0, adapted: true, budget: "pre" }, { rejectedLeads: 0, adapted: true, budget: "mid" },
@@ -216,7 +217,7 @@ for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLe
   { rejectedLeads: 0, adapted: true, budget: "fault", fault: "scoring_error" },
   { rejectedLeads: 1, adapted: true, program: true, bestPass: true, budget: "unrelated" },
   { rejectedLeads: 1, adapted: true, program: true, bestPass: true, budget: "qualified" }])
-test(`actual Campaign learner ${scenario.parallelWorkers ? "three parallel workers " : ""}${scenario.budget ? `budget ${scenario.budget} ` : ""}${scenario.bestPass ? "best-pass selection " : ""}${scenario.intake ? "from task intake " : ""}${scenario.adapted ? scenario.program ? "adapted program " : "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
+test(`actual Campaign learner ${scenario.backendIncomplete ? "incomplete backend " : ""}${scenario.parallelWorkers ? "three parallel workers " : ""}${scenario.budget ? `budget ${scenario.budget} ` : ""}${scenario.bestPass ? "best-pass selection " : ""}${scenario.intake ? "from task intake " : ""}${scenario.adapted ? scenario.program ? "adapted program " : "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
   const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass, adapted, bootstrap, intake, program, bestPass, budget } = scenario
   const hasExecution = Boolean(execution || program)
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -362,7 +363,8 @@ test(`actual Campaign learner ${scenario.parallelWorkers ? "three parallel worke
     return { title: input.title, prompt: input.prompt, selectedModel: input.model,
       referencedPaths: input.referencePaths ?? [], attachedFiles: [], promptInlineFiles: [],
       permissionReadPaths: input.permissionReadPaths ?? [], permissionEditPaths: input.permissionEditPaths ?? [],
-      result: { exitCode: 0, stdout: responseText, stderr: "", events: [], responseText, toolFailures: [] } }
+      result: { exitCode: scenario.backendIncomplete && input.title.startsWith("Long Task Execute") ? 1 : 0,
+        stdout: responseText, stderr: "", events: [], responseText, toolFailures: [] } }
   } }
   const project = { id: "campaign-fixture", version: "1", skillFormats: ["text"], productKinds: [program ? "json" : "text"], materialKinds: ["text"] }
   const python = "C:/Users/ZhuanZ/miniconda3/python.exe"
@@ -514,6 +516,17 @@ test(`actual Campaign learner ${scenario.parallelWorkers ? "three parallel worke
         registered = true
       } })
     if (!budget) expect(registered).toBe(true)
+    if (scenario.backendIncomplete) {
+      expect(result.status).toBe("failed")
+      expect(calls.filter(title => title.startsWith("Long Task Execute"))).toHaveLength(1)
+      expect(calls.some(title => title.startsWith("Campaign Worker") || title.startsWith("Campaign Lead") || title.includes("Replan"))).toBe(false)
+      const runDirs = await readdir(path.join(root, "auto-evolve/runtime-state/long-task/runs"))
+      expect(runDirs).toHaveLength(1)
+      const summary = JSON.parse(await readFile(path.join(root, "auto-evolve/runtime-state/long-task/runs", runDirs[0], "summary.json"), "utf8"))
+      expect(summary.status).toBe("blocked_failure")
+      expect(summary.summary).toContain("Protocol training executor incomplete")
+      return
+    }
     if (budget) {
       await writeFile(path.join(root, "budget-observed.json"), JSON.stringify({ result, calls, ledger: await inspectBudget(fixtureBudget!) }, null, 2))
       if (budget === "fault") {

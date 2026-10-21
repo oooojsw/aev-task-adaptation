@@ -6,12 +6,13 @@ import { opencodeDriver } from "./opencode-driver"
 import type { LongTaskBudgets, LongTaskSpec } from "../long-task/contract"
 import type { AutoEvolveConfig, ExecutionSpec } from "../schema"
 import type { OpencodeRuntimeBudget } from "../opencode"
+import { resolveRuntimeBudget } from "../opencode-runtime-budget"
 
 export const TRAINING_ROLES = ["planner", "executor", "worker", "lead", "reviewer", "diagnostician"] as const
 export type TrainingRole = typeof TRAINING_ROLES[number]
 export interface TrainingConfig {
   schema: "aev.protocol-training.v1"
-  roles: Record<TrainingRole, { model: string; agent?: string; variant?: string; timeoutMs: number }>
+  roles: Record<TrainingRole, { model: string; agent?: string; variant?: string; timeoutMs: number; runtimeBudget?: OpencodeRuntimeBudget }>
   budgets: LongTaskBudgets
 }
 
@@ -23,10 +24,17 @@ export function validateTraining(value: unknown): TrainingConfig {
       Object.keys(cfg.roles).some((key) => !TRAINING_ROLES.includes(key as TrainingRole))) throw new Error("Invalid explicit training config")
   for (const role of TRAINING_ROLES) {
     const item = cfg.roles[role]
-    if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some((key) => !["model", "agent", "variant", "timeoutMs"].includes(key)) ||
+    if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some((key) => !["model", "agent", "variant", "timeoutMs", "runtimeBudget"].includes(key)) ||
         typeof item.model !== "string" || !item.model.trim() || /agt_codex_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}/.test(item.model) ||
         !Number.isSafeInteger(item.timeoutMs) || item.timeoutMs < 1 || item.timeoutMs > 43_200_000 ||
         [item.agent, item.variant].some((value) => value !== undefined && (typeof value !== "string" || !value.trim()))) throw new Error(`Explicit training role required: ${role}`)
+    if (item.runtimeBudget !== undefined) {
+      const value = item.runtimeBudget
+      if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key =>
+        !["profile", "softDeadlineMs", "hardTimeoutMs", "silentTimeoutMs", "silentTimeoutAfterActivityMs"].includes(key))) throw new Error("Invalid role runtime budget")
+      if (value.hardTimeoutMs !== undefined && value.hardTimeoutMs !== item.timeoutMs) throw new Error("Conflicting role hard timeout")
+      resolveRuntimeBudget({ ...value, hardTimeoutMs: item.timeoutMs }, false)
+    }
   }
   const keys = ["maxAttemptsPerUnit", "maxTotalUnitAttempts", "maxGraphReplans", "maxValidatorCalls", "maxNoProgressCycles", "maxUnitsPerGraph"]
   if (!cfg.budgets || typeof cfg.budgets !== "object" || Array.isArray(cfg.budgets) || Object.keys(cfg.budgets).some((key) => !keys.includes(key)) ||
@@ -36,14 +44,15 @@ export function validateTraining(value: unknown): TrainingConfig {
 
 export function trainingExecution(spec: LongTaskSpec, role: TrainingRole, fallback?: ExecutionSpec): ExecutionSpec | undefined {
   if (!spec.protocolTraining) return fallback
-  const { timeoutMs: _, ...selection } = validateTraining(spec.protocolTraining).roles[role]
+  const { timeoutMs: _, runtimeBudget: __, ...selection } = validateTraining(spec.protocolTraining).roles[role]
   return selection
 }
 
 export function trainingRuntimeBudget(spec: LongTaskSpec, role: TrainingRole): OpencodeRuntimeBudget | undefined {
   if (!spec.protocolTraining) return undefined
-  const timeout = validateTraining(spec.protocolTraining).roles[role].timeoutMs
-  return { profile: "long", softDeadlineMs: timeout, hardTimeoutMs: timeout, silentTimeoutMs: timeout, silentTimeoutAfterActivityMs: timeout }
+  const entry = validateTraining(spec.protocolTraining).roles[role]
+  // 角色硬期限不能抹平软收尾和静默监控，短角色同比缩放默认值。
+  return resolveRuntimeBudget({ profile: "long", ...entry.runtimeBudget, hardTimeoutMs: entry.timeoutMs }, false)
 }
 
 export async function freezeTraining(root: string, config: TrainingConfig | undefined, cwd: string,

@@ -48,10 +48,27 @@ test("missing usage and prereceipt failure remain unknown and sanitized", async 
   expect(accounting.inputTokens).toBeNull()
   expect(accounting.outputTokens).toBeNull()
   const incomplete = await fixture()
-  await runProtocolTrainingTask(incomplete, request, async () => result([], 1))
+  await expect(runProtocolTrainingTask(incomplete, request, async () => result([], 1))).rejects.toThrow("incomplete")
   const unknown = JSON.parse(await readFile(path.join(await ledgerDir(incomplete.stageDir), "accounting.json"), "utf8"))
   expect(unknown.status).toBe("incomplete")
   expect(unknown.inputTokens).toBeNull()
+})
+
+test("unfinished tool or truncated output never reaches callers as a normal result; usage survives rejection", async () => {
+  for (const reason of ["tool-calls", "length", "error"]) {
+    const f = await fixture()
+    let calls = 0
+    await expect(runProtocolTrainingTask(f, request, async () => {
+      calls++
+      return result([{type: "step_finish", part: {reason, tokens: {input: 17, output: 4}}}])
+    })).rejects.toThrow("inspect saved")
+    const accounting = JSON.parse(await readFile(path.join(await ledgerDir(f.stageDir), "accounting.json"), "utf8"))
+    expect(calls).toBe(1)
+    expect(accounting.status).toBe("incomplete")
+    expect(accounting.finishReason).toBe(reason)
+    expect(accounting.inputTokens).toBe(17)
+    expect(accounting.outputTokens).toBe(4)
+  }
 })
 test("legacy branch calls original backend without creating accounting artifacts", async () => {
   const f = await fixture()
