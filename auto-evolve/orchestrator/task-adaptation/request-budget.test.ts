@@ -9,6 +9,27 @@ async function budget(calls = 3, tokens = 100): Promise<RequestBudget> {
 }
 const attempt = (id: string, reservationTokens = 50) => ({ id, request: "a".repeat(64), role: "lead", model: "fixture/model", reservationTokens })
 
+test("explicit meter-only mode records actual consumption beyond nominal totals without clearing overruns", async () => {
+  const cfg = { ...await budget(1, 10), mode: "meter_only" as const }
+  await reserveRequest(cfg, attempt("1", 50))
+  await settleRequest(cfg, "1", 70)
+  await reserveRequest(cfg, attempt("2", 50))
+  await settleRequest(cfg, "2", 80)
+  expect(await inspectBudget(cfg)).toMatchObject({ mode: "meter_only", effectiveLimits: { calls: null, tokens: null },
+    admittedAttempts: 2, reportedTokens: 150, overrunAttempts: 2 })
+  await expect(reserveRequest(cfg, attempt("1"))).rejects.toThrow("inspect before retry")
+  const { mode: _, ...bounded } = cfg
+  await expect(inspectBudget(bounded)).rejects.toThrow("drift")
+})
+
+test("meter-only mode never interprets missing usage as zero or automatically retries it", async () => {
+  const cfg = { ...await budget(1, 10), mode: "meter_only" as const }
+  await reserveRequest(cfg, attempt("1"))
+  await settleRequest(cfg, "1", undefined)
+  await expect(reserveRequest(cfg, attempt("2"))).rejects.toThrow("inspection")
+  expect(await inspectBudget(cfg)).toMatchObject({ admittedAttempts: 1, unknownAttempts: 1 })
+})
+
 test("request admission reserves tokens before a call and reclaims only reported difference", async () => {
   const cfg = await budget()
   await reserveRequest(cfg, attempt("1", 80))

@@ -26,7 +26,7 @@ const testEvidenceRoot = () =>
     : path.join(tmpdir(), "aev-test-evidence"))
 
 // 只使用回环假服务，真实控制器、预算、判卷进程和受限工具不替换。
-for (const mode of ["original", "recovery", "exploration", "v2", "ten"] as const) test(`unified consolidation ${mode} runs real restricted tools and delivers best round`, async () => {
+for (const mode of ["original", "recovery", "exploration", "v2", "ten", "meter"] as const) test(`unified consolidation ${mode} runs real restricted tools and delivers best round`, async () => {
   const recovery = mode === "recovery", exploration = mode === "exploration" || mode === "v2"
   const targets = mode === "ten" ? [38, 43, 41, 45, 44, 46, 40, 47, 46, 44] : [38, 43, 41]
   const evaluationsExpected = exploration ? 100 : new Set(targets).size * 50
@@ -200,6 +200,7 @@ for (const mode of ["original", "recovery", "exploration", "v2", "ten"] as const
         training: { schema: "aev.protocol-training.v1", roles: Object.fromEntries(TRAINING_ROLES.map(role => [role, { model: "fixture/actor", timeoutMs: 120000 }])) as TrainingConfig["roles"],
           budgets: { maxAttemptsPerUnit: 1, maxTotalUnitAttempts: 4, maxGraphReplans: 1, maxValidatorCalls: 4, maxNoProgressCycles: 2, maxUnitsPerGraph: 4 } },
         requestBudget: { schema: "aev.task-budget-policy.v1", root: path.join(root, "budget"), scope: "offline-consolidation",
+          ...(mode === "meter" ? { mode: "meter_only" as const } : {}),
           models: [{ model: "fixture/actor", dialect: "openai_chat", expectedModels: ["actor"], maxInputTokens: 131072, maxOutputTokens: 4096 },
             { model: "consumer", dialect: "openai_chat", expectedModels: ["consumer"], maxInputTokens: 10000, maxOutputTokens: 128 }] }, maxBundleBytes: 1000000 } }
     const compiled = compileTask(catalogue, input.intake.decision)
@@ -263,8 +264,9 @@ for (const mode of ["original", "recovery", "exploration", "v2", "ten"] as const
     expect(calls.filter(item => item.cases === 50)).toHaveLength(mode === "ten" ? 0 : exploration ? 2 : 4)
     expect(calls.filter(item => item.title.startsWith("Campaign Lead") && item.round).every(item => item.pass === "pass-01")).toBe(true)
     const budget = { root: input.execution.requestBudget.root, scope: input.execution.requestBudget.scope,
-      calls: catalogue.stop.calls, tokens: catalogue.stop.tokens }
+      calls: catalogue.stop.calls, tokens: catalogue.stop.tokens, ...(mode === "meter" ? { mode: "meter_only" as const } : {}) }
     const before = await inspectBudget(budget)
+    if (mode === "meter") expect(before.effectiveLimits).toEqual({ calls: null, tokens: null })
     const resumed = await actual.runTask(launch)
     const after = await inspectBudget(budget)
     expect(resumed.delivery).toEqual({ ...result.delivery, reused: true })

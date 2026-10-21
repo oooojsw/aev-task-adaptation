@@ -38,7 +38,8 @@ export function validateBudgetTransport(value: unknown): BudgetTransportConfig {
       cfg.expectedModels.some(model => typeof model !== "string" || !model.trim()) || new Set(cfg.expectedModels).size !== cfg.expectedModels.length ||
       !cfg.budget || typeof cfg.budget !== "object" || !path.isAbsolute(cfg.budget.root) ||
       typeof cfg.budget.scope !== "string" || !cfg.budget.scope.trim() || !positive(cfg.budget.calls) || !positive(cfg.budget.tokens) ||
-      Object.keys(cfg.budget).some(key => !["root", "scope", "calls", "tokens"].includes(key))) throw new Error("Invalid explicit provider request budget")
+      cfg.budget.mode !== undefined && cfg.budget.mode !== "meter_only" ||
+      Object.keys(cfg.budget).some(key => !["root", "scope", "calls", "tokens", "mode"].includes(key))) throw new Error("Invalid explicit provider request budget")
   return structuredClone(cfg)
 }
 

@@ -10,6 +10,7 @@ export interface TaskBudgetPolicy {
   schema: "aev.task-budget-policy.v1"
   root: string
   scope: string
+  mode?: "meter_only"
   models: Array<{
     model: string
     dialect: BudgetTransportConfig["dialect"]
@@ -22,7 +23,8 @@ export interface TaskBudgetPolicy {
 export function validateTaskBudgetPolicy(value: unknown): TaskBudgetPolicy {
   const cfg = value as TaskBudgetPolicy
   if (!cfg || typeof cfg !== "object" || Array.isArray(cfg) ||
-    Object.keys(cfg).some(key => !["schema", "root", "scope", "models"].includes(key)) ||
+    Object.keys(cfg).some(key => !["schema", "root", "scope", "models", "mode"].includes(key)) ||
+    cfg.mode !== undefined && cfg.mode !== "meter_only" ||
     cfg.schema !== "aev.task-budget-policy.v1" || typeof cfg.root !== "string" || !path.isAbsolute(cfg.root) ||
     typeof cfg.scope !== "string" || !cfg.scope.trim() || !Array.isArray(cfg.models) || !cfg.models.length ||
     cfg.models.some(item => !item || typeof item.model !== "string" || !item.model.trim() ||
@@ -41,7 +43,7 @@ export function taskRequestBudget(value: TaskBudgetPolicy, stop: Plan["stop"], r
   // 角色仅改变请求绑定，所有角色共用方案中的同一总额。
   const gate = validateRequestGate(requestGate, true)
   return validateBudgetTransport({ ...wire, schema: "aev.budget-transport.v1", role, ...(gate ? { gate } : {}),
-    budget: { root: cfg.root, scope: cfg.scope, calls: stop.calls, tokens: stop.tokens } })
+    budget: { root: cfg.root, scope: cfg.scope, calls: stop.calls, tokens: stop.tokens, ...(cfg.mode ? { mode: cfg.mode } : {}) } })
 }
 
 export function taskRuntimeBudgets(policy: TaskBudgetPolicy | undefined, stop: Plan["stop"], requestGate?: string): Pick<BuiltinOptions, "httpBudgets" | "toolBudgets" | "requestGate"> {

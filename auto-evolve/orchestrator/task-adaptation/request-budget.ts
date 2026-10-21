@@ -11,6 +11,7 @@ export interface RequestBudget {
   scope: string
   calls: number
   tokens: number
+  mode?: "meter_only"
 }
 
 interface Attempt {
@@ -68,7 +69,7 @@ function group(state: State, policy: Admission) {
 
 async function location(config: RequestBudget) {
   if (!config || !path.isAbsolute(config.root) || typeof config.scope !== "string" || !config.scope.trim() ||
-      !positive(config.calls) || !positive(config.tokens)) throw new Error("Explicit finite request budget required")
+      !positive(config.calls) || !positive(config.tokens) || config.mode !== undefined && config.mode !== "meter_only") throw new Error("Explicit finite request budget or metering policy required")
   await mkdir(config.root, { recursive: true })
   const root = await realpath(config.root)
   if (root.toLowerCase() !== path.resolve(config.root).toLowerCase()) throw new Error("Linked request budget root rejected")
@@ -186,12 +187,15 @@ export async function reserveRequest(config: RequestBudget, attempt: Omit<Attemp
   const result = await transaction(config, state => {
     if (state.attempts.some(item => item.id === attempt.id)) throw new Error("Prior request reservation exists; inspect before retry")
     const gate = state.gates?.at(-1)
+    if (config.mode === "meter_only" && gate) throw new Error("Meter-only policy does not support protected stage allowances")
     if (gate ? attempt.gate !== gate.id || !gate.policy.roles.includes(attempt.role) : attempt.gate !== undefined)
       throw new Error("Request stage gate mismatch")
     const totals = budgetTotals(state.attempts)
     const local = gate ? group(state, gate.policy) : undefined
     // 未知计费不释放预留，不能以失败或重试偷偷扩大预算。
-    const reason = totals.unknownAttempts || totals.overrunAttempts ? "unresolved" as const
+    // 无总额限制仍阻断未知用量；已知超预留保留计量而不熔断。
+    const reason = totals.unknownAttempts || config.mode !== "meter_only" && totals.overrunAttempts ? "unresolved" as const
+      : config.mode === "meter_only" ? undefined
       : totals.admittedAttempts >= config.calls ? "calls" as const
       : totals.reportedTokens + totals.outstandingTokens + attempt.reservationTokens > config.tokens ? "tokens" as const
       : gate && local!.admittedAttempts >= gate.policy.calls ? "calls" as const
@@ -235,6 +239,7 @@ export async function inspectRequestStage(config: RequestBudget) {
 
 export async function openRequestStage(config: RequestBudget, policy: Admission, previous: string | null, prefix?: IntakePrefix,
   protection?: Admission[]) {
+  if (config.mode === "meter_only") throw new Error("Meter-only policy does not support protected stage allowances")
   admission(policy)
   if (protection) {
     const order = ["author", "acceptance", "delivery"]
@@ -341,7 +346,9 @@ export async function inspectRequestUsage(config: RequestBudget) {
       return { role: first.role, model: first.model, stage: first.stage, generation: first.generation, ...budgetTotals(rows), components }
     })
     // 只汇总原钱包；适配器与会话账本不可再叠加成API消费。
-    return { schema: "aev.request-usage.v1", scope: config.scope, limits: { calls: config.calls, tokens: config.tokens },
+    return { schema: "aev.request-usage.v1", scope: config.scope, ...(config.mode ? { mode: config.mode } : {}),
+      effectiveLimits: config.mode === "meter_only" ? { calls: null, tokens: null } : { calls: config.calls, tokens: config.tokens },
+      limits: { calls: config.calls, tokens: config.tokens },
       ...budgetTotals(state.attempts), complete: attempts.every(item => item.status === "settled"), attempts, groups,
       fee: null, feeStatus: "unpriced" }
   })
@@ -349,6 +356,8 @@ export async function inspectRequestUsage(config: RequestBudget) {
 
 export async function inspectBudget(config: RequestBudget) {
   return transaction(config, state => ({ ...budgetTotals(state.attempts), scope: config.scope,
+    ...(config.mode ? { mode: config.mode } : {}),
+    effectiveLimits: config.mode === "meter_only" ? { calls: null, tokens: null } : { calls: config.calls, tokens: config.tokens },
     limits: { calls: config.calls, tokens: config.tokens },
     ...(state.lastDenial && state.lastDenial.atState === fingerprint(state.attempts) &&
       (!state.lastDenial.gate || state.lastDenial.gate === state.gates?.at(-1)?.id) ?

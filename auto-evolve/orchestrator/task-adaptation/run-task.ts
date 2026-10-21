@@ -20,7 +20,7 @@ export async function runTask(input: TaskRunPreparation, dependencies?: {
   controller?: () => Promise<Controller>
   templates?: readonly import("./exploration/templates").HostExplorationTemplate[]
 }) {
-  // 新统一入口要求有限真实预算；旧准备入口仍可独立使用。
+  // 新入口必须共用真实请求账本；是否限额由冻结策略决定。
   if (!input.execution.requestBudget) throw new Error("Task launch requires an explicit shared request budget")
   const prepared = dependencies?.prepare
     ? await dependencies.prepare(input)

@@ -23,6 +23,19 @@ test("legacy and available task budgets do not invent a stop", async () => {
   expect(await requestBudgetStop((await fixture()).spec)).toBeUndefined()
 })
 
+test("meter-only controller ignores nominal caps and known overruns, not unknown requests", async () => {
+  const f = await fixture(1, 10)
+  f.spec.taskAdaptation!.requestBudget!.mode = "meter_only"
+  const policy = f.spec.taskAdaptation!.requestBudget!
+  const cfg = taskRequestBudget(policy, f.spec.taskAdaptationContext!.plan.stop, "lead", "fixture").budget
+  await reserveRequest(cfg, { id: "1", request: "a".repeat(64), role: "lead", model: "fixture", reservationTokens: 200 })
+  await settleRequest(cfg, "1", 300)
+  expect(await requestBudgetStop(f.spec)).toBeUndefined()
+  await reserveRequest(cfg, { id: "2", request: "b".repeat(64), role: "lead", model: "fixture", reservationTokens: 200 })
+  await settleRequest(cfg, "2", undefined)
+  expect(await requestBudgetStop(f.spec)).toMatchObject({ reason: "request_usage_unresolved", inspectionRequired: true })
+})
+
 test("normal calls/tokens stop only selects existing qualified versions", async () => {
   const f = await fixture(1)
   await f.reserve("one")

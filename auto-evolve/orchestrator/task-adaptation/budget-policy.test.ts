@@ -14,6 +14,18 @@ async function fixture() {
   return { root, policy, plan }
 }
 
+test("meter-only is explicit and propagates unchanged to author and consumer ledgers", async () => {
+  const f = await fixture()
+  f.policy.mode = "meter_only"
+  const cfg = taskRequestBudget(f.policy, f.plan.stop, "lead", "fixture/model")
+  expect(cfg.budget.mode).toBe("meter_only")
+  expect(taskRuntimeBudgets(f.policy, f.plan.stop).httpBudgets!.execution.config).toEqual(cfg.budget)
+  expect(() => validateTaskBudgetPolicy({ ...f.policy, mode: "unlimited_typo" })).toThrow()
+  await reserveRequest(cfg.budget, { id: "one", request: "a".repeat(64), role: "lead", model: "wire-model", reservationTokens: 3000 })
+  await settleRequest(cfg.budget, "one", 2500)
+  await reserveRequest(cfg.budget, { id: "two", request: "b".repeat(64), role: "lead", model: "wire-model", reservationTokens: 3000 })
+})
+
 test("stage gates are dynamic authorizations, not frozen backend mappings", async () => {
   const f = await fixture()
   const gate = "a".repeat(64)
