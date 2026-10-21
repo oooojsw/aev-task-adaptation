@@ -100,6 +100,8 @@ async function inputs(s: Execution) {
       cases.some(row => !safe(row.caseID) || !row.privateOracle?.scriptPath || row.materialAudit?.omittedSources?.length)) {
     throw new Error("Missing, duplicate or incomplete Direct Chat cases/oracles")
   }
+  // 先验证能否完整发布反馈，避免答题付费后才发现材料不兼容。
+  for (const task of cases) textualCase(task)
   const dependenciesSHA = await caseDependencies(cases)
   if (s.answerGuard) {
     const rows = await guardRows(s.answerGuard, s.expectedCases)
@@ -146,6 +148,13 @@ export async function preflightConsolidation(settings: Settings) {
   return inputs(execution(settings))
 }
 
+function textualCase(task: { question: { text: string }; materials: Array<{ type: string; content?: string }> }) {
+  if (!task.question.text.trim() || task.materials.some(item =>
+      !["text", "markdown", "table"].includes(item.type) || typeof item.content !== "string")) {
+    throw new Error("unsupported_media: full textual public materials required")
+  }
+}
+
 export async function loadVerifiedConsolidationEvidence(root: string, product: Record<string, unknown>, settings: Settings) {
   const s = common(settings)
   if (product.schema !== "aev.consolidation-eval.v1" || typeof product.runID !== "string" ||
@@ -184,9 +193,7 @@ export async function loadVerifiedConsolidationEvidence(root: string, product: R
         actual.passed !== result.passed || actual.score !== result.score || typeof actual.answer !== "string") {
       throw new Error("Direct Chat actual answer identity mismatch")
     }
-    if (!task.question.text.trim() || task.materials.some(item => item.type !== "text" || typeof item.content !== "string")) {
-      throw new Error("unsupported_media: full textual public materials required")
-    }
+    textualCase(task)
     rows.push({ caseID: task.caseID, prompt: [task.question.text, task.question.outputInstruction].filter(Boolean).join("\n"),
       materials: task.materials.map(item => ({ id: item.id, name: item.title ?? item.id, content: item.content })),
       modelResponse: actual.answer, score: result.score, passed: result.passed, diagnostics: [] as string[] })

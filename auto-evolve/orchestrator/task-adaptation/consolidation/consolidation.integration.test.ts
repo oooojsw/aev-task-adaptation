@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { consolidationPlugins, preflightConsolidation } from "../../protocol-plugins/consolidation"
+import { consolidationPlugins, preflightConsolidation, loadVerifiedConsolidationEvidence } from "../../protocol-plugins/consolidation"
 import { budgetedProviderFetch } from "../budget-transport"
 import { inspectBudget } from "../request-budget"
 import { digest } from "./contract"
@@ -21,7 +21,7 @@ test("trusted executor verifies two independent single-turn mock cases", async (
   const rows = ["q1", "q2"].map((caseID, index) => ({
     schema: "direct-chat-case/v1", caseID, dataset: "test", split: "train",
     question: { text: `What is the answer for ${caseID}?`, outputInstruction: "One number" },
-    materials: [{ id: "sample", title: "Visible evidence", type: "text", content: `Public material for ${caseID}` }],
+    materials: [{ id: "sample", title: "Visible evidence", type: index === 0 ? "markdown" : "table", content: `Public material for ${caseID}` }],
     materialAudit: { caseID, expectedSources: [], includedMaterials: ["sample"], omittedSources: [], warnings: [], tokenEstimate: 4, compressionPolicy: "none" },
     privateOracle: { validatorID: "fixture", runner: "bun", scriptPath: validator,
       args: ["--candidate", "", "--expected", index === 0 ? "42" : "43"], candidateArgName: "--candidate" },
@@ -59,6 +59,8 @@ test("trusted executor verifies two independent single-turn mock cases", async (
       sha256: digest(res.product!.bytes), length: res.product!.bytes.length }],
     check: { name: "consolidation_score", target: "product", stage: "after_execution", mechanism: "script" } })
   expect(post.status).toBe("passed")
+  const feedback = await loadVerifiedConsolidationEvidence(path.join(dir, "plugin"), product, gate)
+  expect(feedback.cases.map(row => row.materials[0].content)).toEqual(["Public material for q1", "Public material for q2"])
   const report = path.join(dir, "plugin", product.runID, "direct-chat")
   const results = JSON.parse(await readFile(path.join(report, "summary.json"), "utf8"))
   expect(results.results.map((x: any) => x.attempts)).toEqual([1, 1])
