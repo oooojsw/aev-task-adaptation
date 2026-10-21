@@ -208,6 +208,7 @@ for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLe
   { rejectedLeads: 0, execution: true, fault: "execution_error" }, { rejectedLeads: 0, adapted: true },
   { rejectedLeads: 0, adapted: true, bootstrap: true }, { rejectedLeads: 1, adapted: true },
   { rejectedLeads: 2, adapted: true }, { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true },
+  { rejectedLeads: 2, adapted: true, bootstrap: true, intake: true, parallelWorkers: true },
   { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true, program: true },
   { rejectedLeads: 1, adapted: true, bootstrap: true, intake: true, program: true, bestPass: true },
   { rejectedLeads: 0, adapted: true, budget: "pre" }, { rejectedLeads: 0, adapted: true, budget: "mid" },
@@ -215,7 +216,7 @@ for (const scenario of [{ rejectedLeads: 0 }, { rejectedLeads: 1 }, { rejectedLe
   { rejectedLeads: 0, adapted: true, budget: "fault", fault: "scoring_error" },
   { rejectedLeads: 1, adapted: true, program: true, bestPass: true, budget: "unrelated" },
   { rejectedLeads: 1, adapted: true, program: true, bestPass: true, budget: "qualified" }])
-test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` : ""}${scenario.bestPass ? "best-pass selection " : ""}${scenario.intake ? "from task intake " : ""}${scenario.adapted ? scenario.program ? "adapted program " : "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
+test(`actual Campaign learner ${scenario.parallelWorkers ? "three parallel workers " : ""}${scenario.budget ? `budget ${scenario.budget} ` : ""}${scenario.bestPass ? "best-pass selection " : ""}${scenario.intake ? "from task intake " : ""}${scenario.adapted ? scenario.program ? "adapted program " : "adapted report " : ""}${scenario.bootstrap ? "with planner " : ""}${scenario.executorPatch ? "executor-change " : ""}${scenario.recoverBeforeLead ? "recovery " : ""}${scenario.seeded ? "seeded " : ""}${scenario.execution ? "HTTP task execution " : ""}${scenario.fault ?? `accepts after ${scenario.rejectedLeads} rejected candidates`} with offline model receipts`, async () => {
   const { rejectedLeads, fault, execution, seeded, executorPatch, partialLead, recoverBeforeLead, recoverAfterPass, adapted, bootstrap, intake, program, bestPass, budget } = scenario
   const hasExecution = Boolean(execution || program)
   const root = path.join("E:/project/AEV-protocol-plugins-20261011/test-evidence", randomUUID())
@@ -231,6 +232,8 @@ test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` :
   let leads = 0
   let recoveryTriggered = false
   let fixtureBudget: RequestBudget | undefined
+  const workers = scenario.parallelWorkers ? ["sources", "coverage", "feedback"] : ["sources"]
+  const barriers = new Map<string, { started: number; finished: number; promise: Promise<void>; release: () => void }>()
   holder[key] = { async loadConfig() { return config }, async runOpencodeTask(input: any) {
     if (budget && input.requestBudget) {
       const id = randomUUID()
@@ -242,6 +245,22 @@ test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` :
       reads: [...(input.referencePaths ?? []), ...(input.permissionReadPaths ?? [])],
       edits: [...(input.permissionEditPaths ?? [])] })
     await input.onSpawn?.()
+    if (scenario.parallelWorkers && input.title.startsWith("Campaign Worker task-")) {
+      const round = input.title.split(" ").at(-1)!
+      if (!barriers.has(round)) {
+        let release!: () => void
+        const promise = new Promise<void>(resolve => { release = resolve })
+        barriers.set(round, { started: 0, finished: 0, promise, release })
+      }
+      const barrier = barriers.get(round)!
+      barrier.started++
+      if (barrier.started === 3) barrier.release()
+      // 串行实现无法通过该屏障，不能以三个调用记录冒充并行。
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([barrier.promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Workers were serialized")), 3000) })])
+      } finally { clearTimeout(timer) }
+    }
     if ((recoverBeforeLead || (recoverAfterPass && leads === 1)) && !recoveryTriggered && input.title.startsWith("Campaign Lead")) {
       recoveryTriggered = true
       throw new Error("Fixture interruption before Lead")
@@ -257,6 +276,11 @@ test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` :
     if (input.title.startsWith("Campaign Lead")) leads++
     if (budget === "unrelated" && leads === 3 && input.title.startsWith("Campaign Lead")) throw new Error("Fixture ordinary failure after qualification")
     if (input.title.startsWith("Campaign Lead")) {
+      if (scenario.parallelWorkers) {
+        const barrier = barriers.get(input.title.split(" ").at(-1)!)!
+        expect(barrier.started).toBe(3)
+        expect(barrier.finished).toBe(3)
+      }
       if (seeded && leads === 1) {
         const current = input.permissionReadPaths.find((file: string) => file.replaceAll("\\", "/").endsWith("/pending-expert-package/current"))
         expect(current).toBeDefined()
@@ -334,6 +358,7 @@ test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` :
         check_plan: "Formal protocol follows", validator_ids: [], retry_budget: 1 }] } : {
       claimed_success: true, claim_statement: "Fixture exploration complete",
       summary: "Fixture reusable rule", blockers: [], updated_files: [], suggestions: [] })
+    if (scenario.parallelWorkers && input.title.startsWith("Campaign Worker task-")) barriers.get(input.title.split(" ").at(-1)!)!.finished++
     return { title: input.title, prompt: input.prompt, selectedModel: input.model,
       referencedPaths: input.referencePaths ?? [], attachedFiles: [], promptInlineFiles: [],
       permissionReadPaths: input.permissionReadPaths ?? [], permissionEditPaths: input.permissionEditPaths ?? [],
@@ -410,7 +435,7 @@ test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` :
     if (program) windows.push({ role: "independent", stage: "accept", reads: ["rules", "public"], writes: [], inline: [], actions: ["read"], runtime: [] })
     await writeFile(path.join(root, "task-plan.json"), JSON.stringify({ schema: "aev.task-plan.v1", id: program ? "program" : "report", objective: program ? "Implement square function and measure runtime" : "Write an evidence-supported report",
       deliverable: { kind: program ? "software" : "report", entries: ["rules"] }, resources, windows, capabilities: ["file-read", "file-edit"],
-      workers: [{ id: "sources", purpose: "Inspect source support", resources: ["rules", "public"], actions: ["read"] }],
+      workers: workers.map(id => ({ id, purpose: `Inspect ${id} evidence; analysis only`, resources: ["rules", "public"], actions: ["read"] })),
       acceptance: { execution: program ? "script" : "none", checks: [{ id: "content", target: program ? "product" : "candidate", mechanism: "script", purpose: program ? "Check program outputs and timing" : "Check report", required: true, resources: ["rules", "gold"], feedback: "status_only" }] },
       rejection: [{ check: "content", actions: [program ? "repair" : "research"] }],
       selection: bestPass ? { rule: "best_pass", metric: "elapsed_ns", direction: "min" } : { rule: "first_pass" },
@@ -435,7 +460,7 @@ test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` :
     if (intake) {
       const initial = JSON.parse(await readFile(spec.taskAdaptation.planPath, "utf8"))
       const catalogue: TaskCatalogue = { id: initial.id, request: initial.objective, resources: initial.resources,
-        entries: ["rules"], maxWorkers: 2, stop: initial.stop,
+        entries: ["rules"], maxWorkers: Math.max(2, workers.length), stop: initial.stop,
         capabilities: [{ id: "file-read", version: "1", description: "Read declared files", actions: ["read"], available: true },
           { id: "file-edit", version: "1", description: "Edit declared candidate", actions: ["edit"], available: true }],
         profiles: [{ id: "task-content", description: "Check declared task content", kinds: [initial.deliverable.kind], requires: ["file-read", "file-edit"],
@@ -579,8 +604,8 @@ test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` :
     await writeFile(path.join(root, "resource-summary-audit.json"), JSON.stringify(resourceSummary, null, 2))
     expect(calls.some((title) => title.startsWith("Long Task Execute"))).toBe(true)
     if (bootstrap) expect(calls.some(title => title.startsWith("Long Task Graph"))).toBe(true)
-    if (adapted) expect(calls.filter(title => title.startsWith("Campaign Worker task-"))).toEqual([
-      "Campaign Worker task-sources round-001", ...(rejectedLeads === 2 || bestPass ? ["Campaign Worker task-sources round-002"] : [])])
+    if (adapted) expect(calls.filter(title => title.startsWith("Campaign Worker task-")).sort()).toEqual(
+      ["round-001", ...(rejectedLeads === 2 || bestPass ? ["round-002"] : [])].flatMap(round => workers.map(id => `Campaign Worker task-${id} ${round}`)).sort())
     for (const request of roleRequests) {
       if (!adapted && (request.title.startsWith("Long Task Graph") || request.title.startsWith("Long Task Execute"))) {
         expect(request.prompt).toContain("Selected-protocol training-side work boundary")

@@ -193,6 +193,52 @@ test("complete Worker prose reaches Lead across rounds, retry and candidate relo
   }
 })
 
+test("three analysis workers retain distinct scopes and authorship boundaries across candidate relocation", async () => {
+  const f = await fixture()
+  f.plan.objective = "Merge all source Skills into a complete Skill"
+  f.plan.deliverable.kind = "skill"
+  f.plan.resources.push({ id: "other", path: "other.txt", audience: "training", mutable: false })
+  await writeFile(path.join(f.root, "other.txt"), "SECOND_SOURCE")
+  f.plan.workers = [
+    { id: "sources", purpose: "Analyze first source only; no full draft", resources: ["source"], actions: ["read"] },
+    { id: "coverage", purpose: "Analyze second source only; no full draft", resources: ["other"], actions: ["read"] },
+    { id: "feedback", purpose: "Analyze candidate constraints; no full draft", resources: ["candidate"], actions: ["read"] },
+  ]
+  f.plan.windows.push({ role: "worker", stage: "explore", reads: ["candidate", "source", "other"], writes: [], inline: [], actions: ["read"] })
+  f.plan.windows[0].runtime = ["analysis"]
+  f.input.bound = await f.bind()
+  for (const round of [1, 8]) {
+    const candidate = path.join(f.root, `worker-candidate-${round}`)
+    await mkdir(candidate)
+    await writeFile(path.join(candidate, "report.md"), "CURRENT")
+    const advice = []
+    for (const worker of f.plan.workers) {
+      const prepared = await authorizeInvocation({ ...f.input, role: "worker", stage: "explore", worker: worker.id,
+        output: "Return complete analysis", candidate: { root: candidate, entries: [{ id: "candidate", path: "report.md" }] } }, f.request)
+      expect(prepared.request.prompt).toContain("You are not the final author")
+      expect(prepared.request.prompt).toContain(worker.purpose)
+      expect(prepared.request.prompt).not.toContain("Produce reusable guidance;")
+      expect(prepared.request.permissionEditPaths).toEqual([])
+      expect(prepared.request.permissionReadPaths).toHaveLength(1)
+      const dir = path.join(f.root, `rounds/round-${String(round).padStart(3, "0")}/workers/task-${worker.id}`)
+      await mkdir(dir, { recursive: true })
+      const body = `Complete ${worker.id} analysis for round ${round}`
+      const finalAnswer = await publishWorkerAnswer(dir, { exitCode: 0, sessionID: worker.id, events: [
+        { type: "assistant_message", message: { id: "final", role: "assistant", summary: false } },
+        { type: "text", sessionID: worker.id, part: { messageID: "final", text: body } },
+        { type: "step_finish", part: { messageID: "final", reason: "stop" } },
+      ] } as OpencodeTaskRun["result"])
+      const file = path.join(dir, "suggestion.json")
+      await writeFile(file, JSON.stringify({ roundNumber: round, role: `task-${worker.id}`, finalAnswer }))
+      advice.push({ root: f.root, path: file, kind: "analysis" as const })
+    }
+    const lead = await authorizeInvocation({ ...f.input, advice }, f.request)
+    expect(lead.scope.advice).toHaveLength(3)
+    for (const item of lead.scope.advice!) expect(await readFile(item.path, "utf8")).toContain(`round ${round}`)
+    expect(lead.request.prompt).not.toContain("You are not the final author")
+  }
+})
+
 test("complete Reviewer prose and explicit controller repairs survive adapted invocation", async () => {
   const f = await fixture()
   f.plan.windows[0].runtime = ["review"]
