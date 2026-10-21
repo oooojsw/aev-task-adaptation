@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
-import { mkdir, readFile, writeFile, readdir } from "node:fs/promises"
+import { mkdir, readFile, writeFile, readdir, rename } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { buildOfflineCampaign } from "../../protocol-plugins/offline-campaign-fixture"
 import { consolidationCatalogue } from "./profile"
@@ -243,6 +243,11 @@ for (const mode of ["original", "recovery", "exploration", "v2", "ten", "meter"]
         ownerCommandHint: undefined, ownerCreationTick: undefined, heartbeatAt: undefined,
         recovery: { action: "harvest_round_run", roundNumber: 2, runID: state.lastRunID,
           reason: "Offline audited interruption before request", detectedAt: new Date().toISOString() } }))
+      // 夹具在派发前显式抛错；恢复须保留新检查点，不能放松生产防重发。
+      const stage = path.join(result.campaignDir, "rounds/round-002/workers/task-sources")
+      expect(interrupted).toBe(true)
+      expect((await readdir(stage)).includes("suggestion.json")).toBe(false)
+      await rename(path.join(stage, "diagnosis.started.claim"), path.join(root, "audited-before-dispatch-worker.claim"))
       result = await actual.runTask(launch)
     }
     await writeFile(path.join(root, "outcome.json"), JSON.stringify(result, null, 2))
