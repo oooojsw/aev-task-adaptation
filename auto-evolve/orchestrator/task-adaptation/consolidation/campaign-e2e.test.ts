@@ -78,11 +78,11 @@ for (const mode of ["original", "recovery", "exploration", "v2", "ten"] as const
       const grant = item.input.resourceReaderGrant
       const tools = body.tools?.map(tool => tool.function?.name) ?? []
       if (Boolean(grant) !== tools.includes("aev_read_resource")) throw new Error("Reader tool grant mismatch")
-      if (grant && item.stage === 0) {
+      if (grant && item.stage === 0 && mode !== "ten") {
         item.stage++
         return reply(body, "", grant.allowedCaseIDs.map(caseID => ({ name: "aev_read_resource", args: { resourceID: grant.resourceID, caseID } })))
       }
-      if (grant && item.stage === 1) {
+      if (grant && item.stage === 1 && mode !== "ten") {
         const replies = body.messages.filter(message => message.role === "tool")
         if (replies.length !== 50 || replies.some(message => !JSON.stringify(message.content).includes('Synthetic question'))) throw new Error("Did not actually read all 50 feedback cases")
         item.reads = replies.length
@@ -194,7 +194,7 @@ for (const mode of ["original", "recovery", "exploration", "v2", "ten"] as const
       execution: { dir: path.join(root, "execution"), skillFormat: "text", productKind: "json",
         resourceKinds: Object.fromEntries(catalogue.resources.map(item => [item.id, "text"])),
         executor: { id: "consolidation-direct-chat", version: "1", settings: { ...common, datasetPath: dataset, modelsPath: models,
-          modelsSHA256: digest(await readFile(models)), concurrency: 2 } },
+          modelsSHA256: digest(await readFile(models)), concurrency: mode === "ten" ? 10 : 2 } },
         checkers: ["consolidation_surface", "consolidation_score"].map(name => ({ name, binding: { id: "consolidation-checker", version: "1", settings: common } })),
         training: { schema: "aev.protocol-training.v1", roles: Object.fromEntries(TRAINING_ROLES.map(role => [role, { model: "fixture/actor", timeoutMs: 120000 }])) as TrainingConfig["roles"],
           budgets: { maxAttemptsPerUnit: 1, maxTotalUnitAttempts: 4, maxGraphReplans: 1, maxValidatorCalls: 4, maxNoProgressCycles: 2, maxUnitsPerGraph: 4 } },
@@ -310,4 +310,4 @@ for (const mode of ["original", "recovery", "exploration", "v2", "ten"] as const
     for (const name of Object.keys(process.env)) if (!(name in saved)) delete process.env[name]
     Object.assign(process.env, saved)
   }
-}, 600000)
+}, mode === "ten" ? 1800000 : 600000)
