@@ -5608,7 +5608,7 @@ export async function runLongTaskCampaign(input: {
         const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths, Boolean(baseSpec.taskAdaptation), branchStart)
         // Step 10: workers need the latest blank-agent evidence from previous round's failure.
         const priorProtocolFeedback = baseSpec.protocolPlugins && roundNumber > branchStart
-          ? await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase) : undefined
+          ? await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase, baseSpec.protocolAuthorContext?.fingerprint) : undefined
         const latestBlankEvidence = baseSpec.protocolPlugins
           ? priorProtocolFeedback ? path.join(path.dirname(priorProtocolFeedback), "protocol.training-feedback.json") : undefined
           : await readLatestBlankAgentEvidenceBundlePath(campaignPaths.root)
@@ -6675,7 +6675,7 @@ export async function resumeLongTaskCampaign(input: {
 
         const latestReviewerSuggestionPath = await readLatestReviewerSuggestionPath(campaignPaths, Boolean(baseSpec.taskAdaptation), branchStart)
         const priorProtocolFeedback = baseSpec.protocolPlugins && roundNumber > branchStart
-          ? await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase) : undefined
+          ? await previousProtocolFeedback(campaignPaths.root, roundNumber, baseSpec.protocolPlugins.taskID, baseSpec.protocolPlugins.phase, baseSpec.protocolAuthorContext?.fingerprint) : undefined
         const latestBlankEvidence = baseSpec.protocolPlugins
           ? priorProtocolFeedback ? path.join(path.dirname(priorProtocolFeedback), "protocol.training-feedback.json") : undefined
           : await readLatestBlankAgentEvidenceBundlePath(campaignPaths.root)
