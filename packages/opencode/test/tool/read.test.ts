@@ -29,6 +29,25 @@ const full = (p: string) => (process.platform === "win32" ? Filesystem.normalize
 const glob = (p: string) =>
   process.platform === "win32" ? Filesystem.normalizePathPattern(p) : p.replaceAll("\\", "/")
 
+test("measurement uses normal read authorization and does not rewrite the candidate", async () => {
+  await using tmp = await tmpdir({ init: async dir => {
+    await Bun.write(path.join(dir, "candidate.md"), "e\u0301 中😀\r\n")
+  } })
+  await Instance.provide({ directory: tmp.path, fn: async () => {
+    const tool = await ReadTool.init()
+    const file = path.join(tmp.path, "candidate.md")
+    const before = await Bun.file(file).text()
+    const permissions: string[] = []
+    const result = await tool.execute({ filePath: file, measure: true }, { ...ctx,
+      ask: async request => { permissions.push(request.permission) } })
+    expect(permissions).toContain("read")
+    expect(JSON.parse(result.output).nfcNonWhitespaceCodepoints).toBe(3)
+    expect(await Bun.file(file).text()).toBe(before)
+    await expect(tool.execute({ filePath: file, measure: true }, { ...ctx,
+      ask: async () => { throw new Error("read denied") } })).rejects.toThrow("read denied")
+  } })
+})
+
 describe("tool.read external_directory permission", () => {
   test("allows reading absolute path inside project directory", async () => {
     await using tmp = await tmpdir({

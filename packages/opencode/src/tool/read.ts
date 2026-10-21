@@ -11,6 +11,7 @@ import { Instance } from "../project/instance"
 import { assertExternalDirectory } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { Filesystem } from "../util/filesystem"
+import { measure } from "./text-measure"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -24,6 +25,7 @@ export const ReadTool = Tool.define("read", {
     filePath: z.string().describe("The absolute path to the file or directory to read"),
     offset: z.coerce.number().describe("The line number to start reading from (1-indexed)").optional(),
     limit: z.coerce.number().describe("The maximum number of lines to read (defaults to 2000)").optional(),
+    measure: z.boolean().describe("Return exact full text file bytes, SHA256 and NFC non-whitespace Unicode codepoints only (<=1 MiB); not tokens or acceptance. Uses the same read permission.").optional(),
   }),
   async execute(params, ctx) {
     if (params.offset !== undefined && params.offset < 1) {
@@ -76,6 +78,11 @@ export const ReadTool = Tool.define("read", {
       throw new Error(`File not found: ${filepath}`)
     }
 
+    if (params.measure) {
+      if (!stat.isFile()) throw new Error("Text measurement requires a regular file")
+      const output = JSON.stringify(await measure(filepath))
+      return { title, output, metadata: { preview: output, truncated: false, loaded: [] as string[] } }
+    }
     if (stat.isDirectory()) {
       const dirents = await fs.readdir(filepath, { withFileTypes: true })
       const entries = await Promise.all(

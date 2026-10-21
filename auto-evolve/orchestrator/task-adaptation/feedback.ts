@@ -11,6 +11,7 @@ import { verifyPublication } from "./consolidation/publication-evidence"
 import { publicationResource } from "./consolidation/feedback-publisher"
 import { createHash } from "node:crypto"
 import { productEvidenceName } from "../protocol-plugins/runtime"
+import { feedbackProjection } from "./feedback-projection"
 
 export interface FeedbackReference { root: string; path: string; task: string; phase: Phase }
 
@@ -54,7 +55,16 @@ export async function taskFeedback(bound: BoundPlan, input: FeedbackReference, o
     protocolFingerprint: hash, round: result.roundNumber, receiptFingerprint: checkpoint.receipt,
     candidate: receipt.evidence.skill.map(({ id, sha256 }) => ({ id, sha256 })), status: receipt.status,
     disposition: ["passed", "rejected"].includes(receipt.status) ? "content" : "platform_fault", issues })
-  const target = path.join(dir, "task.feedback.json")
+  let target = path.join(dir, "task.feedback.json")
+  try {
+    const saved = JSON.parse((await readFile(await resolveResource(root, path.relative(root, target).replaceAll("\\", "/")), "utf8")).replace(/^\uFEFF/, ""))
+    if (saved.planFingerprint !== bound.fingerprint) target = await feedbackProjection(root, target, saved, view)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    // 缺Host迁移证明时仍拒绝，不借ENOENT覆盖旧计划视图。
+    try { await access(target); throw new Error("Published task feedback drift: explicit Host rebind required") }
+    catch (missing) { if ((missing as NodeJS.ErrnoException).code !== "ENOENT") throw missing }
+  }
   try {
     await access(target)
     const saved = JSON.parse((await readFile(await resolveResource(root, path.relative(root, target).replaceAll("\\", "/")), "utf8")).replace(/^\uFEFF/, ""))

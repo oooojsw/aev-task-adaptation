@@ -290,7 +290,17 @@ test(`actual Campaign learner ${scenario.budget ? `budget ${scenario.budget} ` :
       }
       if (adapted) {
         const advicePaths = input.permissionReadPaths.filter((file: string) => file.includes("/runtime-views/"))
-        const advice = await Promise.all(advicePaths.map(async (file: string) => JSON.parse(await readFile(file, "utf8"))))
+        // 全文交付使用文本；权限不依赖建议正文中的 JSON。
+        const advice = await Promise.all(advicePaths.map(async (file: string) => {
+          const metadata = file.endsWith(".txt") ? file.slice(0, -4) + ".json" : file
+          const view = JSON.parse(await readFile(metadata, "utf8"))
+          if (file.endsWith(".txt")) {
+            const body = await readFile(file, "utf8")
+            expect(body.length).toBeGreaterThan(0)
+            expect(body).not.toContain("PRIVATE_CAMPAIGN_LABEL")
+          }
+          return view
+        }))
         expect(advice.some(item => item.kind === "analysis" && item.content.role === "task-sources")).toBe(true)
         expect(advice.every(item => item.advisoryOnly === true)).toBe(true)
         if (leads > 1) expect(advice.some(item => item.kind === "review")).toBe(true)

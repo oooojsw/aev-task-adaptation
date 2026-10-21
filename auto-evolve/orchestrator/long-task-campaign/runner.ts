@@ -3652,6 +3652,10 @@ async function runCampaignSuggestionTask(input: {
   const artifactPaths = await writeTaskArtifacts(input.stageDir, task, {
     phase: input.phase,
   })
+  // 未完成建议留证后停止，不让部分写入被当作正式修订晋级。
+  if (input.baseSpec.protocolPlugins && task.result.exitCode !== 0) {
+    throw new Error(`Training role ${input.trainingRole ?? input.phase} incomplete (${task.result.finishReason ?? "backend failure"}); inspect ${artifactPaths.responsePath ?? input.stageDir}`)
+  }
   return {
     task,
     artifactPaths,

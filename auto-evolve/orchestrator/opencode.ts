@@ -31,6 +31,7 @@ import {
 } from "./task-artifacts"
 import { createTaskDescriptor } from "./task-model"
 import { activeCallbacks, readerRuntimeBudget } from "./opencode-runtime-budget"
+import { completion } from "./opencode-completion"
 import type { OpencodeRuntimeBudget } from "./opencode-runtime-budget"
 export type { OpencodeRuntimeBudget, OpencodeRuntimeBudgetProfile } from "./opencode-runtime-budget"
 
@@ -1318,14 +1319,16 @@ async function runOpencodeTaskOnce(
       `OpenCode task hit silent output timeout (${phaseText}) and the full process tree was terminated.`,
     )
   }
+  const ending = completion(events, Boolean(input.sourceHost))
   const normalizedStderr = [
     ...(timedOut ? timeoutNotes : []),
     ...eventErrors.map((item) => `OpenCode emitted error event: ${item}`),
+    ...(ending.incomplete ? [`OpenCode task incomplete: final finish reason ${ending.reason ?? "missing"}; inspect saved attempt before retry.`] : []),
     stderr,
   ]
     .filter(Boolean)
     .join("\n\n")
-  const normalizedExitCode = exitCode === 0 && eventErrors.length > 0 ? 1 : exitCode
+  const normalizedExitCode = exitCode === 0 && (eventErrors.length > 0 || ending.incomplete) ? 1 : exitCode
   stderrData = normalizedStderr
   await flush(normalizedExitCode)
 
@@ -1333,7 +1336,7 @@ async function runOpencodeTaskOnce(
     sessionID: events.find((event) => typeof event.sessionID === "string")?.sessionID,
     adaptiveFailureText: adaptiveFailureEvidence(eventErrors, [...timeoutNotes, stderr].filter(Boolean).join("\n")),
     exitCode: normalizedExitCode,
-    finishReason: undefined,
+    finishReason: ending.reason,
     stdout,
     stderr: normalizedStderr,
     events,
