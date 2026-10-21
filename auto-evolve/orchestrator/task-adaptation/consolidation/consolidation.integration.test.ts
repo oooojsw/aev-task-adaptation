@@ -86,7 +86,8 @@ test("trusted executor verifies two independent single-turn mock cases", async (
   await expect(preflightConsolidation(settings)).rejects.toThrow("changed")
 })
 
-test("G2: atomic pre-dispatch request budget limits concurrent HTTP dispatches and fails closed", async () => {
+for (const transport of ["openai-compatible", "anthropic-messages"] as const) {
+test(`G2 ${transport}: atomic pre-dispatch request budget limits concurrent HTTP dispatches and fails closed`, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "aev-consolidation-budget-"))
   const validator = path.join(dir, "validator.mjs")
   await writeFile(validator, [
@@ -102,7 +103,9 @@ test("G2: atomic pre-dispatch request budget limits concurrent HTTP dispatches a
       return Response.json({
         model: "mock-llm",
         choices: [{ message: { content: "answer is 42" } }],
-        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        content: [{ type: "text", text: "answer is 42" }],
+        stop_reason: "end_turn",
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, input_tokens: 10, output_tokens: 5 },
       })
     },
   })
@@ -123,7 +126,7 @@ test("G2: atomic pre-dispatch request budget limits concurrent HTTP dispatches a
     await writeFile(models, JSON.stringify({
       models: {
         "http-model": {
-          transport: "openai-compatible",
+          transport,
           baseURL: server.url.toString(),
           model: "mock-llm",
           apiKey: "sk-mock-key",
@@ -167,10 +170,12 @@ test("G2: atomic pre-dispatch request budget limits concurrent HTTP dispatches a
 
     // Key assertion: server must have received AT MOST 3 HTTP dispatches!
     expect(httpDispatches).toBe(3)
+    expect((await inspectBudget(budgetConfig)).reportedTokens).toBe(45)
   } finally {
     await server.stop(true)
   }
 })
+}
 
 test("T03: dual campaigns concurrent in same process with distinct budgets have zero crosstalk", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "aev-consolidation-dual-"))

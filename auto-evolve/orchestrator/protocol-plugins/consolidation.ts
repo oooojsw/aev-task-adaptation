@@ -239,7 +239,8 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
         ...(gate ? { gate } : {}),
         budget: options.budget.config,
         role: options.budget.role || "independent",
-        dialect: "openai_chat",
+        // 计量协议跟随实际接口，不能把原生答题误判为配置失败。
+        dialect: selectedModel?.transport === "anthropic-messages" ? "anthropic_messages" : "openai_chat",
         expectedModels: Array.from(new Set([s.modelID, wireModel])),
         maxInputTokens: options.budget.tokenCeiling,
         maxOutputTokens: selectedModel?.maxOutputTokens ?? 2048,

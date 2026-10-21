@@ -6786,7 +6786,14 @@ export async function resumeLongTaskCampaign(input: {
           campaignPaths,
           history,
         })
-        const workerSuggestions = restored && (restored.stage !== "author" || restored.pass > 1)
+        // 验收已完整落盘时沿用本轮分析，不能用修订后正文重跑旧分析。
+        const completedPass = baseSpec.protocolPlugins && await pathExists(path.join(roundPaths.finalAcceptanceRoot, "pass-01", "result.json"))
+          ? await readCompletedCampaignPass({ campaignRoot: campaignPaths.root, budgets: await taskBudgetOptions(baseSpec),
+              cwd: input.cwd, campaignID: input.campaignID, roundNumber, runID: runResult.runID,
+              entry: baseSpec.protocolPlugins, candidateRoot: campaignPaths.pendingCurrentRoot,
+              resultPath: path.join(roundPaths.finalAcceptanceRoot, "pass-01", "result.json") })
+          : undefined
+        const workerSuggestions = completedPass || restored && (restored.stage !== "author" || restored.pass > 1)
           ? await readCampaignWorkerSuggestions(baseSpec, roundPaths, roundNumber)
           : shouldRunCampaignWorkers(roundNumber, baseSpec)
           ? await runCampaignWorkers({
