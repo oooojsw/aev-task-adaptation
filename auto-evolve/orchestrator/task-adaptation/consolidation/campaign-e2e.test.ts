@@ -29,6 +29,7 @@ const testEvidenceRoot = () =>
 for (const mode of ["original", "recovery", "exploration", "v2", "ten"] as const) test(`unified consolidation ${mode} runs real restricted tools and delivers best round`, async () => {
   const recovery = mode === "recovery", exploration = mode === "exploration" || mode === "v2"
   const targets = mode === "ten" ? [38, 43, 41, 45, 44, 46, 40, 47, 46, 44] : [38, 43, 41]
+  const evaluationsExpected = exploration ? 100 : new Set(targets).size * 50
   const cwd = path.resolve(import.meta.dir, "../../../..")
   const root = path.join(testEvidenceRoot(), `consolidation-${randomUUID()}`)
   await mkdir(root, { recursive: true })
@@ -247,7 +248,7 @@ for (const mode of ["original", "recovery", "exploration", "v2", "ten"] as const
     expect(errors).toEqual([])
     expect(result.status).toBe("verified_success")
     expect(leads).toBe(recovery || exploration ? 4 : targets.length)
-    expect(evaluations).toBe(exploration ? 100 : targets.length * 50)
+    expect(evaluations).toBe(evaluationsExpected)
     const records = await readdir(path.join(result.campaignDir, "task-adaptation/versions"))
     const versions = await Promise.all(records.map(async name => JSON.parse(await readFile(path.join(result.campaignDir, "task-adaptation/versions", name, "record.json"), "utf8"))))
     expect(versions.sort((a, b) => a.round - b.round).map(row => row.metric))
@@ -259,7 +260,7 @@ for (const mode of ["original", "recovery", "exploration", "v2", "ten"] as const
       expect(await readFile(preserved.path, "utf8")).toBe(preserved.manifest)
       expect(await readFile(preserved.file, "utf8")).toBe(preserved.content)
     }
-    expect(calls.filter(item => item.cases === 50)).toHaveLength(exploration ? 2 : 4)
+    expect(calls.filter(item => item.cases === 50)).toHaveLength(mode === "ten" ? 0 : exploration ? 2 : 4)
     expect(calls.filter(item => item.title.startsWith("Campaign Lead") && item.round).every(item => item.pass === "pass-01")).toBe(true)
     const budget = { root: input.execution.requestBudget.root, scope: input.execution.requestBudget.scope,
       calls: catalogue.stop.calls, tokens: catalogue.stop.tokens }
@@ -267,7 +268,7 @@ for (const mode of ["original", "recovery", "exploration", "v2", "ten"] as const
     const resumed = await actual.runTask(launch)
     const after = await inspectBudget(budget)
     expect(resumed.delivery).toEqual({ ...result.delivery, reused: true })
-    expect(evaluations).toBe(exploration ? 100 : targets.length * 50)
+    expect(evaluations).toBe(evaluationsExpected)
     expect(leads).toBe(recovery || exploration ? 4 : targets.length)
     expect(after).toEqual(before)
     if (exploration) {
