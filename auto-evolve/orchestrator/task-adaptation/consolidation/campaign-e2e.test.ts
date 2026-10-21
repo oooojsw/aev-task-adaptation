@@ -26,8 +26,9 @@ const testEvidenceRoot = () =>
     : path.join(tmpdir(), "aev-test-evidence"))
 
 // 只使用回环假服务，真实控制器、预算、判卷进程和受限工具不替换。
-for (const mode of ["original", "recovery", "exploration", "v2"] as const) test(`unified consolidation ${mode} runs real restricted tools and delivers best of three rounds`, async () => {
+for (const mode of ["original", "recovery", "exploration", "v2", "ten"] as const) test(`unified consolidation ${mode} runs real restricted tools and delivers best round`, async () => {
   const recovery = mode === "recovery", exploration = mode === "exploration" || mode === "v2"
+  const targets = mode === "ten" ? [38, 43, 41, 45, 44, 46, 40, 47, 46, 44] : [38, 43, 41]
   const cwd = path.resolve(import.meta.dir, "../../../..")
   const root = path.join(testEvidenceRoot(), `consolidation-${randomUUID()}`)
   await mkdir(root, { recursive: true })
@@ -137,7 +138,7 @@ for (const mode of ["original", "recovery", "exploration", "v2"] as const) test(
       if (input.title.startsWith("Campaign Lead") || input.resourceReaderGrant) {
         const id = randomUUID()
         const round = Number(input.title.match(/round-(\d+)/)?.[1])
-        const item = { input, target: [38, 43, 41][round - 1], stage: 0, reads: 0,
+        const item = { input, target: targets[round - 1], stage: 0, reads: 0,
           oversized: recovery && leads === 1 || exploration && round === 3 }
         invocations.set(id, item)
         const result = await runOpencodeTask({ ...input, cwd, prompt: input.prompt + `\nOFFLINE_INVOCATION:${id}`,
@@ -174,7 +175,7 @@ for (const mode of ["original", "recovery", "exploration", "v2"] as const) test(
     await writeFile(path.join(sources, "source-manifest.json"), JSON.stringify({ schema: "aev.consolidation-sources.v1", sources: rows }))
     await writeFile(path.join(sources, "DIRECT_CHAT.md"), "Initial reusable guidance. ROUND_TARGET=1")
     const catalogue = await consolidationCatalogue({ root: sources, manifest: "source-manifest.json", cases: ids,
-      id: "offline-consolidation", objective: "Consolidate frozen Skills into reusable guidance", stop: { rounds: 3, calls: 1000, tokens: exploration ? 50000000 : 10000000, stagnant: 3 } })
+      id: "offline-consolidation", objective: "Consolidate frozen Skills into reusable guidance", stop: { rounds: targets.length, calls: 2000, tokens: exploration || mode === "ten" ? 50000000 : 10000000, stagnant: targets.length } })
     const validator = path.join(root, "validator.mjs")
     await writeFile(validator, 'import {readFileSync} from "node:fs"; const file=process.argv[process.argv.indexOf("--candidate")+1]; console.log(JSON.stringify({passed:readFileSync(file,"utf8").trim()==="42"}));')
     const dataset = path.join(root, "cases.jsonl")
@@ -245,14 +246,14 @@ for (const mode of ["original", "recovery", "exploration", "v2"] as const) test(
     await writeFile(path.join(root, "outcome.json"), JSON.stringify(result, null, 2))
     expect(errors).toEqual([])
     expect(result.status).toBe("verified_success")
-    expect(leads).toBe(recovery || exploration ? 4 : 3)
-    expect(evaluations).toBe(exploration ? 100 : 150)
+    expect(leads).toBe(recovery || exploration ? 4 : targets.length)
+    expect(evaluations).toBe(exploration ? 100 : targets.length * 50)
     const records = await readdir(path.join(result.campaignDir, "task-adaptation/versions"))
     const versions = await Promise.all(records.map(async name => JSON.parse(await readFile(path.join(result.campaignDir, "task-adaptation/versions", name, "record.json"), "utf8"))))
     expect(versions.sort((a, b) => a.round - b.round).map(row => row.metric))
-      .toEqual(exploration ? [38 / 50, 43 / 50] : [38 / 50, 43 / 50, 41 / 50])
+      .toEqual(exploration ? [38 / 50, 43 / 50] : targets.map(value => value / 50))
     const delivery = JSON.parse(await readFile(result.delivery.path, "utf8"))
-    expect(await readFile(path.join(path.dirname(result.delivery.path), delivery.files[0].path), "utf8")).toContain("ROUND_TARGET=43")
+    expect(await readFile(path.join(path.dirname(result.delivery.path), delivery.files[0].path), "utf8")).toContain(`ROUND_TARGET=${Math.max(...targets)}`)
     if (preserved) {
       expect(result.delivery.path).not.toBe(preserved.path)
       expect(await readFile(preserved.path, "utf8")).toBe(preserved.manifest)
@@ -266,8 +267,8 @@ for (const mode of ["original", "recovery", "exploration", "v2"] as const) test(
     const resumed = await actual.runTask(launch)
     const after = await inspectBudget(budget)
     expect(resumed.delivery).toEqual({ ...result.delivery, reused: true })
-    expect(evaluations).toBe(exploration ? 100 : 150)
-    expect(leads).toBe(recovery || exploration ? 4 : 3)
+    expect(evaluations).toBe(exploration ? 100 : targets.length * 50)
+    expect(leads).toBe(recovery || exploration ? 4 : targets.length)
     expect(after).toEqual(before)
     if (exploration) {
       expect(origins).toBe(1)

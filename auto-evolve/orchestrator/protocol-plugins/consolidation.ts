@@ -10,6 +10,7 @@ import { fingerprint } from "./identity"
 import { readDirectChatDatasetBundle } from "../direct-chat/dataset-bundler"
 import { runDirectChatEvaluation } from "../direct-chat/runner"
 import type { DirectChatModelsConfig } from "../direct-chat/contract"
+import { answerLeak, guardRows, type AnswerGuard } from "../task-adaptation/consolidation/answer-guard"
 import {
   CONSOLIDATION_CHECKER_ID, CONSOLIDATION_EXECUTOR_ID,
   buildConsolidationFeedback,
@@ -22,6 +23,7 @@ interface Common {
   expectedCases: number
   modelID: string
   datasetSHA256: string
+  answerGuard?: AnswerGuard
 }
 interface Execution extends Common {
   datasetPath: string
@@ -39,13 +41,15 @@ function common(raw: Settings): Common {
       !Number.isSafeInteger(s.expectedCases) || s.expectedCases < 1 || s.expectedCases > 500) {
     throw new Error("Invalid consolidation acceptance settings")
   }
+  if (s.answerGuard && (!path.isAbsolute(s.answerGuard.path) || !sha(s.answerGuard.sha256) ||
+      Object.keys(s.answerGuard).sort().join(",") !== "path,sha256")) throw new Error("Invalid host answer guard settings")
   return s
 }
 function execution(raw: Settings): Execution {
   const s = raw as unknown as Execution
   common(raw)
   if (Object.keys(raw).sort().join(",") !==
-      ["candidateID", "concurrency", "datasetPath", "datasetSHA256", "expectedCases", "maxChars", "modelID", "modelsPath", "modelsSHA256"].sort().join(",") ||
+      ["candidateID", "concurrency", "datasetPath", "datasetSHA256", "expectedCases", "maxChars", "modelID", "modelsPath", "modelsSHA256", ...(s.answerGuard ? ["answerGuard"] : [])].sort().join(",") ||
       !path.isAbsolute(s.datasetPath) || !path.isAbsolute(s.modelsPath) || !sha(s.modelsSHA256) ||
       !Number.isSafeInteger(s.concurrency) || s.concurrency < 1 || s.concurrency > 32) {
     throw new Error("Invalid host-owned consolidation executor binding")
@@ -55,7 +59,7 @@ function execution(raw: Settings): Execution {
 function checker(raw: Settings): Common {
   common(raw)
   if (Object.keys(raw).sort().join(",") !==
-      ["candidateID", "datasetSHA256", "expectedCases", "maxChars", "modelID"].sort().join(",")) {
+      ["candidateID", "datasetSHA256", "expectedCases", "maxChars", "modelID", ...(raw.answerGuard ? ["answerGuard"] : [])].sort().join(",")) {
     throw new Error("Invalid consolidation checker binding")
   }
   return raw as unknown as Common
@@ -97,6 +101,10 @@ async function inputs(s: Execution) {
     throw new Error("Missing, duplicate or incomplete Direct Chat cases/oracles")
   }
   const dependenciesSHA = await caseDependencies(cases)
+  if (s.answerGuard) {
+    const rows = await guardRows(s.answerGuard, s.expectedCases)
+    if (rows.some(row => !cases.some(item => item.caseID === row.caseID))) throw new Error("Answer guard cohort mismatch")
+  }
   const config = JSON.parse(models.toString("utf8")) as DirectChatModelsConfig
   if (config.models?.[s.modelID]?.id && config.models[s.modelID].id !== s.modelID) throw new Error("Model identity mismatch")
   const selected = frozenModels(config, s.modelID)
@@ -190,7 +198,8 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
   if (!path.isAbsolute(root)) throw new Error("Consolidation evidence root must be absolute")
   const gate = validateRequestGate(options.requestGate, Boolean(options.budget))
   await mkdir(root, { recursive: true })
-  const baseImplementation = createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex")
+  const baseImplementation = createHash("sha256").update(await readFile(fileURLToPath(import.meta.url)))
+    .update(await readFile(new URL("../task-adaptation/consolidation/answer-guard.ts", import.meta.url))).digest("hex")
   const implementation = options.budget ? fingerprint({ source: baseImplementation, budget: options.budget.config }) : baseImplementation
   const executor: ExecutorPlugin = {
     id: CONSOLIDATION_EXECUTOR_ID, version: "1", implementation,
@@ -209,6 +218,10 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
       throw new Error("Consolidation requires exactly one candidate publication entry")
     }
     const pub = publication(input.skill[0].bytes, s.maxChars)
+    if (s.answerGuard) {
+      const found = answerLeak(Buffer.from(input.skill[0].bytes).toString("utf8"), await guardRows(s.answerGuard, s.expectedCases))
+      if (found) throw new Error(`Answer leakage: rule=${found.rule}, case=${found.caseID}`)
+    }
     const { cases, models, dependenciesSHA } = await preflight(input.settings)
     const id = randomUUID()
     const dir = path.join(root, id)
@@ -265,6 +278,14 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
     try { pub = publication(input.skill[0].bytes, s.maxChars) }
     catch (error) { return { status: "rejected", message: error instanceof Error ? error.message : String(error) } }
     if (input.check.target === "skill") {
+      if (s.answerGuard) {
+        try {
+          const found = answerLeak(Buffer.from(input.skill[0].bytes).toString("utf8"), await guardRows(s.answerGuard, s.expectedCases))
+          if (found) return { status: "rejected", message: `Answer leakage: rule=${found.rule}, case=${found.caseID}` }
+        } catch (error) {
+          return { status: "scoring_error", message: error instanceof Error ? error.message : String(error) }
+        }
+      }
       return { status: "passed", message: `Published Skill surface passed (${pub.chars}/${s.maxChars})` }
     }
     try {
