@@ -1,6 +1,6 @@
 import type { BudgetTransportConfig } from "../task-adaptation/budget-transport"
 
-export type DirectChatTransport = "openai-compatible" | "mock"
+export type DirectChatTransport = "openai-compatible" | "anthropic-messages" | "mock"
 export type DirectChatImageInputMode = "none" | "openai-image-url"
 export type DirectChatFileInputMode = "none" | "openai-file-data" | "siliconflow-image-url-pdf"
 export type DirectChatErrorCategory =

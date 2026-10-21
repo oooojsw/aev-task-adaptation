@@ -16,7 +16,7 @@ export async function requestBudgetStop(spec: LongTaskSpec) {
   // 控制器安全点仍有未结算请求时须核查，不能当正常耗尽交付成功。
   // 只计量策略无总额停止，但无法确认的调用仍须人工核查。
   const reason: RequestStopReason | undefined = evidence.mode === "meter_only"
-    ? evidence.unresolvedAttempts ? "request_usage_unresolved" : undefined
+    ? evidence.blockingAttempts ? "request_usage_unresolved" : undefined
     : evidence.overrunAttempts ? "request_budget_overrun"
     : evidence.unresolvedAttempts ? "request_usage_unresolved"
     : evidence.admittedAttempts >= evidence.limits.calls || evidence.denial?.reason === "calls" ? "request_call_budget"

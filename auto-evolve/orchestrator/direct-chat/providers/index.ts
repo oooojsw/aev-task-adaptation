@@ -3,10 +3,12 @@ import { DirectChatProviderError } from "./errors"
 import { mockProvider } from "./mock"
 import { openAICompatibleProvider } from "./openai-compatible"
 import { siliconFlowProvider } from "./siliconflow"
+import { anthropicMessagesProvider } from "./anthropic-messages"
 import type { DirectChatProviderAdapter } from "./types"
 
 const directChatProviderRegistry: DirectChatProviderAdapter[] = [
   mockProvider,
+  anthropicMessagesProvider,
   siliconFlowProvider,
   openAICompatibleProvider,
 ]

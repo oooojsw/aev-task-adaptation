@@ -5,7 +5,7 @@ import os from "node:os"
 import type { LongTaskSpec } from "../long-task/contract"
 import { taskRequestBudget } from "./budget-policy"
 import { requestBudgetStop } from "./budget-stop"
-import { reserveRequest, settleRequest } from "./request-budget"
+import { reserveRequest, reviewUnknownRequest, settleRequest } from "./request-budget"
 import { chooseTaskVersion, type readTaskVersions } from "./selection"
 
 async function fixture(calls = 2, tokens = 2000) {
@@ -34,6 +34,8 @@ test("meter-only controller ignores nominal caps and known overruns, not unknown
   await reserveRequest(cfg, { id: "2", request: "b".repeat(64), role: "lead", model: "fixture", reservationTokens: 200 })
   await settleRequest(cfg, "2", undefined)
   expect(await requestBudgetStop(f.spec)).toMatchObject({ reason: "request_usage_unresolved", inspectionRequired: true })
+  await reviewUnknownRequest(cfg, "2", { reason: "Explicit Host audit of terminal failure", evidenceSHA256: "c".repeat(64) })
+  expect(await requestBudgetStop(f.spec)).toBeUndefined()
 })
 
 test("normal calls/tokens stop only selects existing qualified versions", async () => {

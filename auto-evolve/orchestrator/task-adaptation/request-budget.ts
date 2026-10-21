@@ -24,6 +24,7 @@ interface Attempt {
   usedTokens?: number
   gate?: string
   usage?: RequestUsage
+  review?: { reason: string; evidenceSHA256: string; at: string }
 }
 
 export interface IntakePrefix {
@@ -127,6 +128,9 @@ async function transaction<T>(config: RequestBudget, apply: (state: State) => Pr
     } else if (state.intakePrefix !== undefined || state.attempts.some(item => item.gate !== undefined)) throw new Error("Request stage policy missing")
     const marker = `${file}.stages.claim`
     for (const attempt of state.attempts) {
+      if (attempt.review && (attempt.status !== "unknown" || !attempt.review.reason?.trim() ||
+          !/^[a-f0-9]{64}$/.test(attempt.review.evidenceSHA256) || !Number.isFinite(Date.parse(attempt.review.at))))
+        throw new Error("Request usage review evidence drift")
       if (attempt.usage === undefined) continue
       validateRequestUsage(attempt.usage)
       if (attempt.status === "reserved" || attempt.usedTokens !== undefined && requestUsageTotal(attempt.usage) !== attempt.usedTokens) {
@@ -178,10 +182,12 @@ export function budgetTotals(attempts: ReadonlyArray<Attempt>) {
       .reduce((sum, item) => sum + item.reservationTokens, 0),
     unresolvedAttempts: attempts.filter(item => item.status === "reserved" || item.status === "unknown").length,
     unknownAttempts: attempts.filter(item => item.status === "unknown").length,
+    reviewedUnknownAttempts: attempts.filter(item => item.status === "unknown" && item.review).length,
+    blockingAttempts: attempts.filter(item => item.status === "reserved" || item.status === "unknown" && !item.review).length,
     overrunAttempts: attempts.filter(item => item.status === "overrun").length }
 }
 
-export async function reserveRequest(config: RequestBudget, attempt: Omit<Attempt, "status" | "usedTokens" | "usage">) {
+export async function reserveRequest(config: RequestBudget, attempt: Omit<Attempt, "status" | "usedTokens" | "usage" | "review">) {
   if (!attempt || ![attempt.id, attempt.model, attempt.role].every(value => typeof value === "string" && value.trim()) ||
       !/^[a-f0-9]{64}$/.test(attempt.request) || !positive(attempt.reservationTokens)) throw new Error("Explicit request token ceiling required")
   const result = await transaction(config, state => {
@@ -193,8 +199,8 @@ export async function reserveRequest(config: RequestBudget, attempt: Omit<Attemp
     const totals = budgetTotals(state.attempts)
     const local = gate ? group(state, gate.policy) : undefined
     // 未知计费不释放预留，不能以失败或重试偷偷扩大预算。
-    // 无总额限制仍阻断未知用量；已知超预留保留计量而不熔断。
-    const reason = totals.unknownAttempts || config.mode !== "meter_only" && totals.overrunAttempts ? "unresolved" as const
+    // 无限额仅放行Host已核查的未知请求；未知用量不清零。
+    const reason = (config.mode === "meter_only" ? totals.unknownAttempts - totals.reviewedUnknownAttempts : totals.unknownAttempts) || config.mode !== "meter_only" && totals.overrunAttempts ? "unresolved" as const
       : config.mode === "meter_only" ? undefined
       : totals.admittedAttempts >= config.calls ? "calls" as const
       : totals.reportedTokens + totals.outstandingTokens + attempt.reservationTokens > config.tokens ? "tokens" as const
@@ -220,6 +226,23 @@ export async function reserveRequest(config: RequestBudget, attempt: Omit<Attemp
   })
   if (result.reason) throw new Error(result.reason === "unresolved" ? "Request budget needs unresolved usage inspection" : "Request budget exhausted")
   return result.totals
+}
+
+export async function reviewUnknownRequest(config: RequestBudget, id: string, review: { reason: string; evidenceSHA256: string }) {
+  // 仅Host显式核查可解锁无限额任务；未知费用仍原样保留。
+  if (config.mode !== "meter_only" || !review.reason?.trim() || !/^[a-f0-9]{64}$/.test(review.evidenceSHA256))
+    throw new Error("Explicit meter-only usage review required")
+  return transaction(config, state => {
+    const attempt = state.attempts.find(item => item.id === id)
+    if (state.gates || attempt?.status !== "unknown") throw new Error("Only terminal unknown requests can be reviewed")
+    if (attempt.review) {
+      if (attempt.review.reason !== review.reason || attempt.review.evidenceSHA256 !== review.evidenceSHA256)
+        throw new Error("Conflicting request usage review")
+      return budgetTotals(state.attempts)
+    }
+    attempt.review = { ...review, at: new Date().toISOString() }
+    return budgetTotals(state.attempts)
+  })
 }
 
 export async function inspectIntakePrefix(config: RequestBudget): Promise<IntakePrefix> {
