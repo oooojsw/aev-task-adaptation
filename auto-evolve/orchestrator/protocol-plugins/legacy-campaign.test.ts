@@ -66,13 +66,22 @@ for (const scenario of [{ name: "pass", rejects: 0, rounds: 1 }, { name: "reject
       if (input.title.startsWith("Campaign Lead")) for (const dir of input.permissionEditPaths ?? []) {
         if (!dir.endsWith(".json")) { await mkdir(dir, { recursive: true }); await writeFile(path.join(dir, "README.md"), "Reusable procedure") }
       }
+      if (!old && input.title.startsWith("Campaign Lead")) {
+        for (const file of input.permissionReadPaths ?? []) {
+          if (file.endsWith("final-answer.txt")) expect(await readFile(file, "utf8")).toBe("Complete worker analysis, including the final recommendation.")
+        }
+      }
       const responseText = JSON.stringify(input.title.startsWith("Long Task Graph") ? { completion_validator_ids: [],
         units: [{ id: "reexplore", title: "Reexplore", goal: "Revise procedure", inputs: [], depends_on: [], expected_artifacts: [],
           claim: "Explored", check_plan: "Host acceptance", validator_ids: [], retry_budget: 1 }] }
         : { claimed_success: true, claim_statement: "Fixture work complete", summary: "Reusable procedure", blockers: [] })
       return { title: input.title, prompt: input.prompt, selectedModel: input.model, referencedPaths: input.referencePaths ?? [],
         attachedFiles: [], promptInlineFiles: [], permissionReadPaths: input.permissionReadPaths ?? [], permissionEditPaths: input.permissionEditPaths ?? [],
-        result: { exitCode: 0, stdout: responseText, stderr: "", events: [], responseText, toolFailures: [] } }
+        result: { exitCode: 0, stdout: responseText, stderr: "", events: [
+          { type: "assistant_message", message: { id: "final", role: "assistant", summary: false } },
+          { type: "text", part: { id: "body", messageID: "final", text: "Complete worker analysis, including the final recommendation." } },
+          { type: "step_finish", part: { messageID: "final", reason: "stop" } },
+        ], responseText, toolFailures: [] } }
     }, async runBlankEval(input: any) {
       blanks.push({ ...input, spec: JSON.parse(await readFile(input.specPath, "utf8")) })
       const passed = blanks.length > scenario.rejects
@@ -112,6 +121,17 @@ for (const scenario of [{ name: "pass", rejects: 0, rounds: 1 }, { name: "reject
       expect(resumed.status).toBe(result.status)
       expect(requests).toHaveLength(callsBeforeResume.model)
       expect(blanks).toHaveLength(callsBeforeResume.blank)
+      // Worker正文合同有意升级；独立合同测试覆盖它，其余调度照旧比对。
+      for (const request of requests) {
+        if (request.title.startsWith("Campaign Worker") || request.title.startsWith("Blank Acceptance Diagnosis")) {
+          request.prompt = "<WORKER_FINAL_PROSE_CONTRACT>"
+        }
+        if (request.title.startsWith("Campaign Lead")) {
+          request.prompt = request.prompt.replace(/Worker suggestions:\r?\n[\s\S]*?\r?\n\r?\nEditable targets:/, "Worker suggestions: <DELIVERY_CONTRACT>\n\nEditable targets:")
+          request.prompt = request.prompt.replace(/\nWorker delivery:.*$/, "")
+          for (const field of ["reads", "references"]) request[field] = request[field]?.filter((file: string) => !/[\\/]workers[\\/]/.test(file))
+        }
+      }
       const normalize = (value: any) => JSON.parse(JSON.stringify(value, (name, item) => {
         if (["createdAt", "updatedAt", "heartbeatAt", "durationMs", "startedAt", "completedAt", "ownerPID", "ownerCreationTick"].includes(name)) return undefined
         if (typeof item !== "string") return item

@@ -1,7 +1,6 @@
 import type {
   LongTaskCampaignReviewSuggestion,
   LongTaskCampaignWorkerRole,
-  LongTaskCampaignWorkerSuggestion,
 } from "./contract"
 import type { BlankAcceptanceDiagnosisProfile } from "../schema"
 import { protocolRolePrompt, type AuthorContext } from "../protocol-plugins/author-context"
@@ -202,7 +201,7 @@ export function buildCampaignWorkerPrompt(input: {
     "- Do not rewrite the pending expert package directly.",
     "- Do not output a generic summary report.",
     "- Read the full exploration tree first, then use role_positions.campaign_worker as your own position.",
-    "- Focus on structured suggestions that a campaign lead can assemble into the next pending expert package.",
+    "- Give the lead a complete final analysis with evidence and actionable recommendations in ordinary text or Markdown.",
     "- Ground every important claim in the run-trace digest, working memory, routing control, or the current pending package.",
     "- Distinguish verified infrastructure blockers from agent-side inference. Do not treat 'stale heartbeat' wording alone as a confirmed blocker.",
     "- A missing execute/ directory for an in-flight attempt is not by itself proof of no-spawn; mark uncertain runtime diagnostics as tentative, not final.",
@@ -230,15 +229,8 @@ export function buildCampaignWorkerPrompt(input: {
     ...blankAcceptanceDiagnosisProfileRules(input.blankAcceptanceDiagnosisProfile),
     ...roleSpecificRules(input.role),
     "",
-    "Return JSON only, with this shape:",
-    jsonFence({
-      summary: "one short sentence",
-      findings: ["key finding"],
-      memory_advice: ["what durable lesson should be promoted and where it should live"],
-      package_advice: ["what the pending expert package should add, remove, or clarify"],
-      exploration_advice: ["what should change in the exploration tree"],
-      refs: ["absolute/path/or/reference"],
-    } satisfies Omit<LongTaskCampaignWorkerSuggestion, "id" | "roundNumber" | "role" | "createdAt" | "responsePath">),
+    "Return your complete final analysis, not JSON. Include findings, evidence, uncertainties and proposed changes.",
+    "Do not include hidden reasoning, tool transcripts or context-compaction summaries in your final answer.",
     "",
   ].join("\n")
 }

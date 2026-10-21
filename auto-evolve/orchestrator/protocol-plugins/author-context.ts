@@ -100,5 +100,7 @@ export function protocolRolePrompt(role: "worker" | "lead" | "reviewer", input: 
       "Inspect the declared actual product and public materials before proposing a reusable correction.",
       "surface_precheck fields describe your Skill self-review only; do not populate them with product-check failures."] : []),
     "Every claim needs current evidence. Keep all JSON paths forward-slash normalized.",
-    "Return JSON only, matching this shape:", JSON.stringify(output, null, 2)].join("\n")
+    ...(role === "worker"
+      ? ["Return your complete final analysis as ordinary text or Markdown, not JSON. Include evidence, uncertainties and recommendations; exclude hidden reasoning, tool transcripts and compaction summaries."]
+      : ["Return JSON only, matching this shape:", JSON.stringify(output, null, 2)])].join("\n")
 }

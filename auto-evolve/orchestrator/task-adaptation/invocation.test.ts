@@ -11,6 +11,7 @@ import { searchLocalFiles } from "./local-search"
 import { recompute } from "./recompute"
 import { taskInvocation } from "./context"
 import type { LongTaskSpec } from "../long-task/contract"
+import { publishWorkerAnswer } from "../long-task-campaign/worker-answer"
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "aev-task-invocation-"))
@@ -142,6 +143,54 @@ test("review advice is opt-in, on-demand and never grants its embedded reference
   expect(prepared.request.permissionEditPaths).not.toContain(advice.path)
   await writeFile(advice.path, JSON.stringify({ ...view, advisoryOnly: false }))
   await expect(authorizeInvocation(f.input, f.request)).rejects.toThrow("Published task advice drift")
+})
+
+test("complete Worker prose reaches Lead across rounds, retry and candidate relocation without JSON extraction", async () => {
+  const f = await fixture()
+  f.plan.workers = [{ id: "sources", purpose: "Analyze", resources: ["source"], actions: ["read"] }]
+  f.plan.windows.push({ role: "worker", stage: "explore", reads: ["source"], writes: [], inline: [], actions: ["read"] })
+  f.plan.windows[0].runtime = ["analysis"]
+  f.input.bound = await f.bind()
+  const body = '# Full analysis\n{"summary":""}\n' + "Evidence, uncertainty and advice.\n".repeat(3000)
+  for (const round of [1, 7]) {
+    const dir = path.join(f.root, `rounds/round-${String(round).padStart(3, "0")}/workers/task-sources`)
+    await mkdir(dir, { recursive: true })
+    const finalAnswer = await publishWorkerAnswer(dir, { exitCode: 0, sessionID: "s", events: [
+      { type: "assistant_message", message: { id: "final", role: "assistant", summary: false } },
+      { type: "text", sessionID: "s", part: { messageID: "final", text: body } },
+      { type: "step_finish", part: { messageID: "final", reason: "stop" } },
+    ] } as OpencodeTaskRun["result"])
+    const file = path.join(dir, "suggestion.json")
+    await writeFile(file, JSON.stringify({ roundNumber: round, role: "task-sources", finalAnswer,
+      summary: "EMPTY_JSON_MUST_NOT_REPLACE_PROSE", refs: [path.join(f.root, "private.txt")] }))
+    f.input.advice = [{ root: f.root, path: file, kind: "analysis" }]
+    for (const pass of [1, 2]) {
+      f.input.passID = `pass-${pass}`
+      const candidate = path.join(f.root, `candidate-${round}-${pass}`)
+      await mkdir(candidate)
+      await writeFile(path.join(candidate, "report.md"), "NEW_BRANCH_CANDIDATE")
+      f.input.candidate = { root: candidate, entries: [{ id: "candidate", path: "report.md" }] }
+      const prepared = await authorizeInvocation(f.input, f.request)
+      const advice = prepared.scope.advice![0]
+      expect(advice.path.endsWith(".txt")).toBe(true)
+      expect(await readFile(advice.path, "utf8")).toBe(body)
+      expect(prepared.request.permissionReadPaths).toContain(advice.path)
+      expect(prepared.request.permissionReadPaths).not.toContain(path.join(f.root, "private.txt"))
+      expect(prepared.request.permissionEditPaths).not.toContain(advice.path)
+      expect(prepared.request.prompt).toContain("complete final Worker answers")
+    }
+    const diagnosis = path.join(f.root, `rounds/round-${String(round).padStart(3, "0")}/workers/blank_acceptance_diagnostician/previous-pass-02`)
+    await mkdir(diagnosis, { recursive: true })
+    await writeFile(path.join(diagnosis, "final-answer.txt"), body)
+    const metadata = path.join(diagnosis, "suggestion.json")
+    await writeFile(metadata, JSON.stringify({ roundNumber: round, role: "blank_acceptance_diagnostician", finalAnswer }))
+    f.input.advice = [{ root: f.root, path: metadata, kind: "analysis" }]
+    const restored = await authorizeInvocation(f.input, f.request)
+    expect(await readFile(restored.scope.advice![0].path, "utf8")).toBe(body)
+    f.input.advice = [{ root: f.root, path: file, kind: "analysis" }]
+    await writeFile(path.join(dir, "final-answer.txt"), "TAMPERED")
+    await expect(authorizeInvocation(f.input, f.request)).rejects.toThrow("fingerprint drift")
+  }
 })
 
 test("recompute action enables bounded arithmetic with persistent evidence, never shell or inherited grants", async () => {

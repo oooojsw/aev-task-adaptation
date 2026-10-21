@@ -445,6 +445,12 @@ export const RunCommand = cmd({
         const toggles = new Map<string, boolean>()
 
         for await (const event of events.stream) {
+          // 交付层区分正式回答和压缩总结，不输出模型思考。
+          if (event.type === "message.updated" && event.properties.info.role === "assistant" &&
+              event.properties.info.sessionID === sessionID && args.format === "json") {
+            const info = event.properties.info
+            emit("assistant_message", { message: { id: info.id, role: info.role, summary: info.summary === true } })
+          }
           if (
             event.type === "message.updated" &&
             event.properties.info.role === "assistant" &&

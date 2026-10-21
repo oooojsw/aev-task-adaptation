@@ -40,6 +40,7 @@ const OPENCODE_PROMPT_STDIN_THRESHOLD_CHARS = 500
 
 export interface OpencodeEvent {
   type: string
+  message?: { id: string; role: string; summary?: boolean }
   timestamp?: number
   sessionID?: string
   part?: any

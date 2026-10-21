@@ -3,7 +3,8 @@ import { readFile, mkdir, realpath } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { resolveResource, verifyBinding, type BoundPlan } from "./binding"
 import { fingerprint, canonical, immutable } from "../protocol-plugins/identity"
-import { writeJsonAtomic } from "../atomic-write"
+import { writeFileAtomic, writeJsonAtomic } from "../atomic-write"
+import { readWorkerAnswer, type WorkerAnswer } from "../long-task-campaign/worker-answer"
 
 export interface AdviceReference { root: string; path: string; kind: "analysis" | "review" }
 
@@ -23,7 +24,7 @@ export async function taskAdvice(bound: BoundPlan, input: AdviceReference) {
   const root = await realpath(input.root)
   const relative = path.relative(root, input.path).replaceAll("\\", "/")
   const pattern = input.kind === "analysis"
-    ? /^rounds\/round-(\d+)\/workers\/(task-[a-zA-Z0-9_-]+|blank_acceptance_diagnostician)\/(?:pass-\d+\/)?suggestion\.json$/
+    ? /^rounds\/round-(\d+)\/workers\/(task-[a-zA-Z0-9_-]+|blank_acceptance_diagnostician)\/(?:(?:pass-\d+|previous-pass-\d+)\/)?suggestion\.json$/
     : /^rounds\/round-(\d+)\/reviewer\/(?:pass-\d+\/)?review-suggestion\.json$/
   const match = pattern.exec(relative)
   if (!match) throw new Error("Unexpected task advice source")
@@ -35,14 +36,22 @@ export async function taskAdvice(bound: BoundPlan, input: AdviceReference) {
   if (input.kind === "analysis") {
     if (value.role !== match[2] || (value.role !== "blank_acceptance_diagnostician" &&
       !bound.plan.workers.some(worker => `task-${worker.id}` === value.role))) throw new Error("Task advice worker identity mismatch")
-    content = { role: value.role, summary: text(value.summary), findings: texts(value.findings),
-      memoryAdvice: texts(value.memoryAdvice), packageAdvice: texts(value.packageAdvice), explorationAdvice: texts(value.explorationAdvice) }
+    if (value.finalAnswer) {
+      const answer = value.finalAnswer as WorkerAnswer
+      // 正文只来自同角色目录，内容中的路径不授予额外权限。
+      await resolveResource(root, path.posix.join(path.posix.dirname(relative), "final-answer.txt"))
+      const body = await readWorkerAnswer(path.dirname(await resolveResource(root, relative)), answer)
+      content = { role: value.role, text: body, deliveryStatus: answer.status, ...(answer.reason ? { reason: answer.reason } : {}) }
+    } else {
+      content = { role: value.role, deliveryStatus: "unavailable", reason: "legacy_final_answer_identity_missing",
+        text: "Historical worker result has no verified final-answer artifact. Preserve it for audit; do not treat an empty JSON summary or mixed transcript as a final analysis. No automatic replay is authorized." }
+    }
   } else {
     if (typeof value.readyForFinalAcceptance !== "boolean") throw new Error("Task review readiness missing")
     content = { summary: text(value.summary), readinessAdvice: value.readyForFinalAcceptance,
       reasons: texts(value.reasons), nextAttentionAreas: texts(value.nextAttentionAreas) }
   }
-  // 仅发布建议正文，排除原始回复、任意引用和内部路径授权。
+  // 发布完整最终正文，不包含工具轨迹，正文引用不扩权。
   const view = immutable({ schema: "aev.task-advice.v1", planFingerprint: bound.fingerprint,
     kind: input.kind, round: value.roundNumber, advisoryOnly: true,
     sourceSHA256: createHash("sha256").update(bytes).digest("hex"), content })
@@ -56,6 +65,18 @@ export async function taskAdvice(bound: BoundPlan, input: AdviceReference) {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
     await writeJsonAtomic(target, view)
+  }
+  if (input.kind === "analysis") {
+    const body = content.text as string
+    const file = path.join(dir, `${fingerprint(view)}.txt`)
+    try {
+      const prior = await readFile(await resolveResource(root, path.relative(root, file).replaceAll("\\", "/")), "utf8")
+      if (prior !== body) throw new Error("Published worker final answer drift")
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      await writeFileAtomic(file, body)
+    }
+    return { path: file.replaceAll("\\", "/"), fingerprint: fingerprint(view), view }
   }
   return { path: target.replaceAll("\\", "/"), fingerprint: fingerprint(view), view }
 }

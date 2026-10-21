@@ -180,7 +180,7 @@ export function taskInvocation(spec: LongTaskSpec, role: Role, input: { candidat
     : role === "executor" ? 'Return JSON: {"claimed_success":true,"claim_statement":"","summary":"","blockers":[],"artifacts":[]} after completing the assigned work.'
     : role === "lead" ? 'Edit the declared candidate files. Return JSON: {"summary":"","updated_files":[],"package_highlights":[],"tree_highlights":[],"refs":[],"surface_precheck_passed":false,"surface_precheck_details":[]}.'
     : role === "reviewer" ? 'Return JSON: {"ready_for_final_acceptance":false,"summary":"","reasons":[],"next_attention_areas":[],"refs":[]}.'
-    : 'Return JSON: {"summary":"","findings":[],"memory_advice":[],"package_advice":[],"exploration_advice":[],"refs":[]}.'
+    : 'Return your complete final analysis for the Lead as ordinary text or Markdown, not a JSON schema. Include findings, supporting evidence, uncertainties and actionable recommendations. Do not include hidden reasoning, tool transcripts or context-compaction summaries. Finish the assigned analysis before your final answer.'
   const entries = spec.taskAdaptation.entries
   if (input.candidateRoot && !entries) throw new Error("Declared candidate entries missing")
   const feedback = input.feedbackPath ?? spec.taskAdaptationFeedbackPath

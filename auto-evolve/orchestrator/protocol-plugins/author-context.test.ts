@@ -74,15 +74,19 @@ test("plugin role prompts use declared entry and do not demand tool evidence or 
   }
 })
 
-test("legacy role prompts remain byte-identical to pre-wiring Git baseline", async () => {
+test("non-worker legacy role prompts remain byte-identical to pre-wiring Git baseline", async () => {
   const result = Bun.spawnSync(["git", "show", "f9b080a:auto-evolve/orchestrator/long-task-campaign/prompts.ts"], { cwd: import.meta.dir })
   expect(result.exitCode).toBe(0)
   const source = new Bun.Transpiler({ loader: "ts" }).transformSync(result.stdout.toString())
   const baseline = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`)
-  for (const [name, current] of [["buildCampaignWorkerPrompt", buildCampaignWorkerPrompt],
-    ["buildCampaignLeadPrompt", buildCampaignLeadPrompt], ["buildCampaignReviewerPrompt", buildCampaignReviewerPrompt]] as const) {
+  for (const [name, current] of [["buildCampaignLeadPrompt", buildCampaignLeadPrompt],
+    ["buildCampaignReviewerPrompt", buildCampaignReviewerPrompt]] as const) {
     expect(current(common)).toBe(baseline[name](common))
     expect(current({ ...common, blankEvalExecutorKind: "single_turn_http" })).toBe(baseline[name]({ ...common, blankEvalExecutorKind: "single_turn_http" }))
     expect(current({ ...common, protocolContext: context })).toContain("Frozen acceptance contract")
+  }
+  for (const args of [common, { ...common, blankEvalExecutorKind: "single_turn_http" }, { ...common, protocolContext: context }]) {
+    expect(buildCampaignWorkerPrompt(args)).toContain("final analysis")
+    expect(buildCampaignWorkerPrompt(args)).not.toContain('"memoryAdvice"')
   }
 })

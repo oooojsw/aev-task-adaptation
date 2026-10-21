@@ -128,6 +128,7 @@ export type LongTaskCampaignWorkerRole =
   | `task-${string}`
 
 export interface LongTaskCampaignWorkerSuggestion {
+  finalAnswer?: import("./worker-answer").WorkerAnswer
   id: string
   roundNumber: number
   role: LongTaskCampaignWorkerRole

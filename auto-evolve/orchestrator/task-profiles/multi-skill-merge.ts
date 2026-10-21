@@ -302,19 +302,8 @@ export function buildMultiSkillMergeWorkerPrompt(input: {
     "Translate case evidence into general workflow guidance or a clearly bounded casebook entry.",
     "Use forward slashes in every path reference.",
     "",
-    "Return JSON only:",
-    JSON.stringify(
-      {
-        summary: "one short sentence",
-        findings: ["evidence-grounded finding"],
-        memory_advice: ["durable merge lesson"],
-        package_advice: ["specific change for the merge lead"],
-        exploration_advice: ["coverage/conflict/replay region update"],
-        refs: ["exact readable evidence path"],
-      },
-      null,
-      2,
-    ),
+    "Return your complete final analysis in ordinary text or Markdown, not JSON. Include findings, evidence, uncertainties and actionable recommendations.",
+    "Exclude hidden reasoning, tool transcripts and context-compaction summaries.",
   ].join("\n")
 }
 
