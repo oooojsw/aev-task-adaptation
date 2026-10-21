@@ -23,9 +23,12 @@ export async function preflightSourceHost(input: { cwd: string; evidenceRoot: st
   if (!path.isAbsolute(input.cwd) || !path.isAbsolute(input.evidenceRoot)) throw new Error("Absolute host readiness paths required")
   const root = path.join(input.evidenceRoot, "source-host-readiness")
   await mkdir(root, { recursive: true })
+  // 并行角色各自初始化SQLite，不能共享首次迁移目录。
+  const attempt = randomUUID()
+  const work = path.join(root, `runtime-${attempt}`)
   const command = [process.execPath, "run", "--cwd", "packages/opencode", "--conditions=browser", "src/index.ts", "--help"]
-  const env = readinessEnvironment(root)
-  for (const name of ["home", "config", "data", "cache"]) await mkdir(path.join(root, name), { recursive: true })
+  const env = readinessEnvironment(work)
+  for (const name of ["home", "config", "data", "cache"]) await mkdir(path.join(work, name), { recursive: true })
   const startedAt = new Date().toISOString()
   const result = await run({ title: "AEV source host readiness (no model)", command, cwd: input.cwd,
     inheritEnv: false, env, timeoutMs: 60000, silentTimeoutMs: 60000 })
@@ -41,8 +44,8 @@ export async function preflightSourceHost(input: { cwd: string; evidenceRoot: st
     environmentPolicy: "explicit-os-allowlist-and-isolated-config",
   }
   // 重启后的预检留新记录，不覆盖上一轮启动故障证据。
-  const receipt = path.join(root, `attempt-${randomUUID()}.json`)
+  const receipt = path.join(root, `attempt-${attempt}.json`)
   await writeJsonAtomic(receipt, evidence)
   await writeJsonAtomic(path.join(root, "result.json"), { ...evidence, receipt })
-  if (!ready) throw new Error("Source host readiness failed before model request; inspect source-host-readiness/result.json")
+  if (!ready) throw new Error(`Source host readiness failed before model request; inspect ${receipt}`)
 }

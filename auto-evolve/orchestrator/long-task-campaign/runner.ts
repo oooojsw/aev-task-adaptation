@@ -3921,6 +3921,19 @@ async function runCampaignWorkers(input: {
     workerRoles.map(async (role) => {
       const stageDir = path.join(input.roundPaths.workersRoot, role)
       const suggestionPath = path.join(stageDir, "suggestion.json")
+      const reuseIdentity = input.baseSpec.taskAdaptationContext ? await diagnosisIdentity({
+        kind: "campaign_worker", campaign: input.campaignID, round: input.roundNumber, role,
+        bound: input.baseSpec.taskAdaptationContext.fingerprint, training: input.baseSpec.protocolTraining,
+      }, [...input.baseSpec.taskAdaptationContext.resources.map(item => item.path), input.pendingPackageRoot,
+        ...presentPaths([input.finalAcceptanceFeedbackPath])]) : undefined
+      // 同轮同输入只复用完整分析；中断或输入变化必须先核查。
+      if (reuseIdentity && await claimDiagnosis(stageDir, reuseIdentity)) {
+        const suggestion = await readJsonFile<LongTaskCampaignWorkerSuggestion>(suggestionPath)
+        if (suggestion.roundNumber !== input.roundNumber || suggestion.role !== role || suggestion.finalAnswer?.status !== "complete")
+          throw new Error("Recovered worker identity/delivery mismatch")
+        await readWorkerAnswer(stageDir, suggestion.finalAnswer)
+        return suggestion
+      }
       const profileAccess = isMultiSkillMergeProfile(input.baseSpec)
         ? await buildMultiSkillMergeRoleAccess({
             role,
@@ -4035,6 +4048,7 @@ async function runCampaignWorkers(input: {
       suggestion.summary = suggestion.finalAnswer.status === "complete" ? "Read the complete worker final answer."
         : `Worker final answer unavailable: ${suggestion.finalAnswer.reason}`
       await writeLongTaskCampaignWorkerSuggestion(suggestionPath, suggestion)
+      if (reuseIdentity && suggestion.finalAnswer.status === "complete") await completeDiagnosis(stageDir, reuseIdentity)
       return suggestion
     }),
   )

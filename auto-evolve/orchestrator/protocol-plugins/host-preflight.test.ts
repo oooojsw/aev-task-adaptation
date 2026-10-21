@@ -89,3 +89,21 @@ test("managed process isolation actually strips inherited environment; default i
     else process.env.AEV_READINESS_TEST_SENTINEL = prior
   }
 })
+
+test("parallel readiness uses different database roots and errors retain their own receipt", async () => {
+  const f = await fixture()
+  const homes: string[] = []
+  let count = 0
+  const results = await Promise.allSettled(Array.from({length: 3}, () => preflightSourceHost(f, async input => {
+    homes.push(input.env!.HOME!)
+    const fail = count++ === 0
+    await new Promise(resolve => setTimeout(resolve, fail ? 5 : 20))
+    return reply(fail ? {exitCode: 1, stderr: "fixture database collision"} : {})
+  })))
+  expect(new Set(homes).size).toBe(3)
+  const failure = results.find(item => item.status === "rejected") as PromiseRejectedResult
+  const file = failure.reason.message.split("inspect ")[1]
+  expect(file).toContain("attempt-")
+  expect(JSON.parse(await readFile(file, "utf8")).ready).toBe(false)
+  expect(JSON.parse(await readFile(path.join(f.evidenceRoot, "source-host-readiness/result.json"), "utf8")).ready).toBe(true)
+})
