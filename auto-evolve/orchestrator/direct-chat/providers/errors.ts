@@ -21,7 +21,7 @@ export function classifyDirectChatError(error: unknown): DirectChatErrorCategory
   if (message.includes("quota") || message.includes("budget") || message.includes("insufficient balance")) return "quota"
   if (message.includes("rate") || message.includes("429")) return "rate_limit"
   if (message.includes("context") || message.includes("token") || message.includes("too long")) return "context_length"
-  if (message.includes("abort") || message.includes("timeout")) return "timeout"
+  if (message.includes("abort") || message.includes("timeout") || message.includes("timed out")) return "timeout"
   if (message.includes("fetch") || message.includes("network") || message.includes("econn")) return "network"
   return "unknown"
 }

@@ -3,6 +3,25 @@ import { randomUUID } from "node:crypto"
 import { anthropicMessagesProvider } from "./anthropic-messages"
 import { resolveDirectChatProvider } from "./index"
 import { inspectBudget } from "../../task-adaptation/request-budget"
+import { classifyDirectChatError } from "./errors"
+
+test("explicit request deadline is retained without Bun's implicit idle deadline", async () => {
+  const saved = globalThis.fetch
+  const captures: RequestInit[] = []
+  globalThis.fetch = (async (_url, init) => {
+    captures.push(init!)
+    return Response.json({ model:"MiniMax-M2.7", content:[{type:"text",text:"42"}],
+      stop_reason:"end_turn",usage:{input_tokens:1,output_tokens:1} })
+  }) as typeof fetch
+  try {
+    await anthropicMessagesProvider.call({id:"consumer",transport:"anthropic-messages",model:"MiniMax-M2.7",
+      apiKey:"fixture",baseURL:"http://127.0.0.1:1",timeoutMs:600000},[])
+    expect((captures[0] as RequestInit & {timeout:boolean}).timeout).toBe(false)
+    expect(captures[0].signal).toBeInstanceOf(AbortSignal)
+    expect(captures[0].signal!.aborted).toBe(false)
+    expect(classifyDirectChatError(new Error("The operation timed out."))).toBe("timeout")
+  } finally {globalThis.fetch=saved}
+})
 
 test("native Anthropic direct chat preserves one text request, final answer and shared usage", async () => {
   let count = 0

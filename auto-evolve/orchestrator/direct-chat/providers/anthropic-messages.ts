@@ -14,7 +14,8 @@ export const anthropicMessagesProvider: DirectChatProviderAdapter = {
       system: messages.filter(item => item.role === "system").map(item => item.content).join("\n\n"),
       messages: messages.filter(item => item.role !== "system").map(item => ({ role: item.role, content: item.content })) }
     const init = { method: "POST", headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify(body), signal: AbortSignal.timeout(model.timeoutMs ?? 120000) }
+      // 统一由声明期限终止，避免Bun默认五分钟空闲超时抢先中断。
+      body: JSON.stringify(body), timeout: false, signal: AbortSignal.timeout(model.timeoutMs ?? 120000) }
     const url = `${model.baseURL.replace(/\/+$/g, "")}/messages`
     const file = process.env.OPENCODE_AEV_REQUEST_BUDGET_FILE
     let cfg = input?.requestBudgetTransport

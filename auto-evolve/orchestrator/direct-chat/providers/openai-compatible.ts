@@ -64,6 +64,8 @@ export async function callOpenAICompatibleChatCompletions(
     const reqUrl = `${baseURL.replace(/\/+$/g, "")}/chat/completions`
     const reqInit: RequestInit = {
       method: "POST",
+      // 禁用隐含空闲期限，保留上层显式AbortController硬期限。
+      timeout: false,
       signal: controller.signal,
       headers: {
         "content-type": "application/json",
