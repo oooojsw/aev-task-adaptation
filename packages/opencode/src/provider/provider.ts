@@ -12,7 +12,6 @@ import { NamedError } from "@opencode-ai/util/error"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
 import { ModelsDev } from "./models"
 import { fetchWithTaskBudget, taskBudgetIdentity } from "./aev-request-budget"
-import { diagnosedFetch } from "./transport-diagnostics"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { Instance } from "../project/instance"
@@ -1382,7 +1381,7 @@ export namespace Provider {
               // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
               timeout: false,
             }
-            const res = await fetchWithTaskBudget(input, requestOptions, model.limit.context, diagnosedFetch(fetchFn))
+            const res = await fetchWithTaskBudget(input, requestOptions, model.limit.context, fetchFn)
 
             if (!chunkAbortCtl) return res
             return wrapSSE(res, chunkTimeout, chunkAbortCtl)
