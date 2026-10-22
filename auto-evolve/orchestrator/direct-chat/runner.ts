@@ -687,6 +687,18 @@ async function runOneCase(input: {
     await writeResultAndUsage(result)
     return result
   } catch (error) {
+    const received = error instanceof DirectChatProviderError ? error.received : undefined
+    if (received) {
+      providerResponsePath = path.join(caseDir, "provider-response.json")
+      await writeTextFile(path.join(caseDir, "response.txt"), received.response.content)
+      await writeJsonFile(providerResponsePath, {
+        schema: "direct-chat-provider-response/v1",
+        resolvedModel: received.response.resolvedModel ?? null,
+        finishReason: received.response.finishReason ?? null,
+        usage: received.response.usage ?? null,
+        raw: received.response.raw ?? null,
+      })
+    }
     const result: DirectChatCaseResult = {
       schema: "direct-chat-result/v1",
       caseID: input.testCase.caseID,
@@ -697,7 +709,12 @@ async function runOneCase(input: {
       answer: "",
       rawResponsePath: path.join(caseDir, "response.txt"),
       latencyMs: Date.now() - started,
-      attempts: 0,
+      attempts: received?.attempts ?? 0,
+      ...(received ? { usage: received.response.usage, resolvedModel: received.response.resolvedModel,
+        finishReason: received.response.finishReason, responseAuditPath: providerResponsePath,
+        requestAuditPath: path.join(caseDir, "request-audit.json"),
+        // 预算耗尽仍保留失败分类，绝不把思考文本当答案。
+        outputBudgetExceeded: received.response.finishReason === "length" } : {}),
       error: error instanceof Error ? error.message : String(error),
       errorCategory: classifyDirectChatError(error),
       skillMode: input.skillMode,

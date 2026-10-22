@@ -49,5 +49,16 @@ test("native Anthropic surfaces HTTP failure, output caps and missing final answ
     await expect(anthropicMessagesProvider.call(model, [])).rejects.toThrow("HTTP 429")
     mode = "empty"
     await expect(anthropicMessagesProvider.call(model, [])).rejects.toThrow("thinking is not an answer")
+    try {
+      await anthropicMessagesProvider.call(model, [], { attempt: 2 })
+      throw new Error("Expected missing-answer failure")
+    } catch (error) {
+      const received = (error as import("./errors").DirectChatProviderError).received
+      expect(received?.attempts).toBe(2)
+      expect(received?.response.content).toBe("")
+      expect(received?.response.finishReason).toBe("length")
+      expect(received?.response.usage?.outputTokens).toBe(20)
+      expect(received?.response.raw).toMatchObject({content: [{type:"thinking",thinking:"reasoning"}]})
+    }
   } finally { server.stop(true) }
 })

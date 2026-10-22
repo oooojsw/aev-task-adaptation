@@ -34,13 +34,16 @@ export const anthropicMessagesProvider: DirectChatProviderAdapter = {
     const json = JSON.parse(text)
     const content = Array.isArray(json.content) ? json.content.filter((item: {type?: string}) => item.type === "text")
       .map((item: {text: string}) => item.text).join("\n") : ""
-    if (!content.trim()) throw new DirectChatProviderError("No Anthropic final text; thinking is not an answer", "parse", undefined, false)
     const usage = json.usage ?? {}
     const fields = [usage.input_tokens, usage.output_tokens]
     const total = fields.every(value => typeof value === "number")
       ? usage.input_tokens + usage.output_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) : undefined
-    return { content, resolvedModel: json.model, raw: json,
+    const response = { content, resolvedModel: json.model, raw: json,
       finishReason: json.stop_reason === "max_tokens" ? "length" : json.stop_reason,
       usage: { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens, totalTokens: total } }
+    // 已收到的原始回复与用量必须留证，不能因无答案而丢失。
+    if (!content.trim()) throw new DirectChatProviderError("No Anthropic final text; thinking is not an answer", "parse", undefined, false,
+      { response, attempts: input?.attempt ?? 1 })
+    return response
   },
 }

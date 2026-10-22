@@ -1,4 +1,4 @@
-import type { DirectChatErrorCategory } from "../contract"
+import type { DirectChatErrorCategory, DirectChatCallResult } from "../contract"
 
 export class DirectChatProviderError extends Error {
   constructor(
@@ -6,6 +6,7 @@ export class DirectChatProviderError extends Error {
     readonly category: DirectChatErrorCategory,
     readonly status?: number,
     readonly retryable = false,
+    readonly received?: { response: DirectChatCallResult; attempts: number },
   ) {
     super(message)
     this.name = "DirectChatProviderError"
