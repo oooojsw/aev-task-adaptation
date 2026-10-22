@@ -112,17 +112,8 @@ export async function callOpenAICompatibleChatCompletions(
     const json = JSON.parse(text)
     const message = json?.choices?.[0]?.message
     const content = typeof message?.content === "string" && message.content.trim() ? message.content : undefined
-    if (typeof content !== "string" || !content.trim()) {
-      const hadReasoning = typeof message?.reasoning_content === "string" && message.reasoning_content.trim()
-      throw new DirectChatProviderError(
-        `No assistant final content returned by ${model.id}${hadReasoning ? "; reasoning content was present but is never scored as an answer" : ""}`,
-        "parse",
-        undefined,
-        false,
-      )
-    }
-    return {
-      content,
+    const result: DirectChatCallResult = {
+      content: content ?? "",
       usage: {
         inputTokens: json?.usage?.prompt_tokens,
         outputTokens: json?.usage?.completion_tokens,
@@ -133,6 +124,18 @@ export async function callOpenAICompatibleChatCompletions(
       finishReason: typeof json?.choices?.[0]?.finish_reason === "string" ? json.choices[0].finish_reason : undefined,
       raw: json,
     }
+    if (typeof content !== "string" || !content.trim()) {
+      const hadReasoning = typeof message?.reasoning_content === "string" && message.reasoning_content.trim()
+      throw new DirectChatProviderError(
+        `No assistant final content returned by ${model.id}${hadReasoning ? "; reasoning content was present but is never scored as an answer" : ""}`,
+        "parse",
+        undefined,
+        false,
+        // 解析失败不等于未调用；保留实际响应和计量。
+        { response: result, attempts: _input?.attempt ?? 1 },
+      )
+    }
+    return result
   } finally {
     clearTimeout(timeout)
   }

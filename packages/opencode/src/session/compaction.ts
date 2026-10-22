@@ -320,6 +320,11 @@ When constructing the summary, try to stick to this template:
               time: { created: Date.now() },
               agent: userMessage.agent,
               model: userMessage.model,
+              // 压缩续写只缩减历史，不改变原角色约束和工具权限。
+              format: userMessage.format,
+              tools: userMessage.tools,
+              system: userMessage.system,
+              variant: userMessage.variant,
             })
             const text =
               (input.overflow

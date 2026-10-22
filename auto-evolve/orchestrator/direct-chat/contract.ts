@@ -16,6 +16,7 @@ export type DirectChatErrorCategory =
   | "parse"
   | "answer_extraction"
   | "validation"
+  | "validator_infrastructure"
   | "config"
   | "unknown"
 
@@ -176,6 +177,7 @@ export interface DirectChatValidatorOracle {
   answerPath?: string
   rewardPath?: string
   tolerance?: number
+  timeoutMs?: number
 }
 
 export interface DirectChatCaseBundle {

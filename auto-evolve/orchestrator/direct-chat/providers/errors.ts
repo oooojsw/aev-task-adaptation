@@ -7,6 +7,7 @@ export class DirectChatProviderError extends Error {
     readonly status?: number,
     readonly retryable = false,
     readonly received?: { response: DirectChatCallResult; attempts: number },
+    readonly attempts = 0,
   ) {
     super(message)
     this.name = "DirectChatProviderError"

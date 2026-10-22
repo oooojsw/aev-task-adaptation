@@ -7,6 +7,7 @@ import type { BudgetTransportConfig } from "../task-adaptation/budget-transport"
 import type {
   DirectChatCaseBundle,
   DirectChatCaseResult,
+  DirectChatCallResult,
   DirectChatModelConfig,
   DirectChatModelsConfig,
   DirectChatPromptAudit,
@@ -17,6 +18,8 @@ import { DirectChatProviderError, classifyDirectChatError, retryDirectChatCall, 
 import { buildBudgetedPrompt, estimateDirectChatTokens } from "./material-budget"
 import { prepareDirectChatMaterialsForModel } from "./ocr-fallback"
 import { recordDirectChatResourceUsage } from "../resource-audit/recorder"
+import { dependencies, freezeResume, withEvaluationLock } from "./resume-identity"
+import { terminateProcessTree } from "../runtime-process-registry"
 
 function sha256(input: string) {
   return crypto.createHash("sha256").update(input).digest("hex")
@@ -52,6 +55,7 @@ class Semaphore {
 function normalizeModelConfigs(config: DirectChatModelsConfig, modelIDs?: string[]) {
   const entries = Object.entries(config.models).map(([id, value]) => ({ ...value, id: value.id || id }))
   const selected = modelIDs?.length ? entries.filter((item) => modelIDs.includes(item.id)) : entries
+  if (modelIDs?.some(id => !selected.some(item => item.id === id))) throw new Error("Unknown requested Direct Chat model")
   if (selected.length === 0) throw new Error("No direct-chat models selected")
   return selected as DirectChatModelConfig[]
 }
@@ -365,19 +369,29 @@ async function assertPromptDoesNotLeak(testCase: DirectChatCaseBundle, messages:
   }
 }
 
-async function runProcess(command: string, args: string[]) {
-  return await new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve, reject) => {
+async function runProcess(command: string, args: string[], timeoutMs = 120000) {
+  return await new Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean }>((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true })
     let stdout = ""
     let stderr = ""
+    let timedOut = false
+    // 判卷程序卡死不能无限占住整轮；超时保留输出并终止子树。
+    const timer = setTimeout(() => {
+      timedOut = true
+      if (child.exitCode === null && child.signalCode === null) {
+        void terminateProcessTree(child.pid).catch(() => child.kill()).finally(() => {
+          resolve({ exitCode: -1, stdout, stderr, timedOut })
+        })
+      }
+    }, timeoutMs)
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString()
     })
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString()
     })
-    child.on("error", reject)
-    child.on("close", (exitCode) => resolve({ exitCode: exitCode ?? -1, stdout, stderr }))
+    child.on("error", error => { clearTimeout(timer); reject(error) })
+    child.on("close", (exitCode) => { clearTimeout(timer); resolve({ exitCode: exitCode ?? -1, stdout, stderr, timedOut }) })
   })
 }
 
@@ -391,7 +405,7 @@ async function runProductValidator(testCase: DirectChatCaseBundle, answerPath: s
       error: "Missing direct-chat private oracle or validator details",
     }
     await writeJsonFile(validatorResultPath, result)
-    return { passed: false, score: 0, validatorResultPath, error: result.error }
+    return { passed: false, score: 0, validatorResultPath, error: result.error, infrastructure: true }
   }
   const rawArgs = oracle.args?.length
     ? [...oracle.args]
@@ -411,24 +425,30 @@ async function runProductValidator(testCase: DirectChatCaseBundle, answerPath: s
   else rawArgs.push(candidateArgName, answerPath)
   const command = oracle.runner === "bun" ? process.execPath : "python"
   const args = oracle.runner === "bun" ? [oracle.scriptPath, ...rawArgs] : [oracle.scriptPath, ...rawArgs]
-  const processResult = await runProcess(command, args)
+  const processResult = await runProcess(command, args, oracle.timeoutMs)
   let parsed: any
   try {
     parsed = JSON.parse(processResult.stdout.trim())
   } catch {
     parsed = undefined
   }
-  const passed = typeof parsed?.passed === "boolean" ? parsed.passed : processResult.exitCode === 0
+  // 退出成功不是判卷通过；损坏或自相矛盾的判决必须阻断。
+  const trusted = !processResult.timedOut && typeof parsed?.passed === "boolean" && [0, 1].includes(processResult.exitCode) &&
+    (!parsed.passed || processResult.exitCode === 0)
+  const passed = trusted && parsed.passed
   const result = {
     passed,
     score: passed ? 1 : 0,
     exitCode: processResult.exitCode,
     stdout: processResult.stdout,
     stderr: processResult.stderr,
+    timedOut: processResult.timedOut,
     parsed,
   }
   await writeJsonFile(validatorResultPath, result)
-  return { passed, score: passed ? 1 : 0, validatorResultPath, error: passed ? null : processResult.stderr || processResult.stdout }
+  return { passed, score: passed ? 1 : 0, validatorResultPath,
+    error: passed ? null : trusted ? processResult.stderr || processResult.stdout : "Untrustworthy validator verdict",
+    infrastructure: !trusted }
 }
 
 async function preflightDirectChatRun(input: {
@@ -541,6 +561,8 @@ async function runOneCase(input: {
   let promptAudit: DirectChatPromptAudit | undefined
   let promptAuditPath: string | undefined
   let providerResponsePath: string | undefined
+  let received: { response: DirectChatCallResult; attempts: number } | undefined
+  let checking = false
   const writeResultAndUsage = async (result: DirectChatCaseResult) => {
     await writeJsonFile(path.join(caseDir, "result.json"), result)
     await recordDirectChatResourceUsage({
@@ -614,6 +636,8 @@ async function runOneCase(input: {
       // 同题不同候选属不同评测；原目录重发仍由同一账本拒绝。
       stableRequestID: sha256(path.resolve(caseDir).replaceAll("\\", "/")),
     })
+    // 判卷或落盘故障也不能抹去此前已经付费的模型调用。
+    received = { response: callResult, attempts }
     const responsePath = path.join(caseDir, "response.txt")
     await writeTextFile(responsePath, callResult.content)
     providerResponsePath = path.join(caseDir, "provider-response.json")
@@ -626,7 +650,7 @@ async function runOneCase(input: {
     })
     const outputBudgetExceeded =
       typeof callResult.usage?.outputTokens === "number" &&
-      callResult.usage.outputTokens > (input.model.maxOutputTokens ?? 2048)
+      callResult.usage.outputTokens > (input.model.maxOutputTokens ?? 2048) || callResult.finishReason === "length"
     const extraction = extractAnswerDetailed(callResult.content)
     const answer = extraction.answer
     const answerPath = path.join(caseDir, answerFileNameForCase(input.testCase))
@@ -659,6 +683,7 @@ async function runOneCase(input: {
       return result
     }
     await writeTextFile(answerPath, answer)
+    checking = true
     const validator = await runProductValidator(input.testCase, answerPath, caseDir)
     const result: DirectChatCaseResult = {
       schema: "direct-chat-result/v1",
@@ -679,7 +704,7 @@ async function runOneCase(input: {
       latencyMs: Date.now() - started,
       attempts,
       error: validator.error,
-      errorCategory: validator.passed ? "none" : "validation",
+      errorCategory: validator.passed ? "none" : validator.infrastructure ? "validator_infrastructure" : "validation",
       skillMode: input.skillMode,
       skillTier: input.skillTier,
       skillHash: input.skillMode === "no-skill" ? "NO_SKILL" : sha256(input.skillBundle),
@@ -687,7 +712,7 @@ async function runOneCase(input: {
     await writeResultAndUsage(result)
     return result
   } catch (error) {
-    const received = error instanceof DirectChatProviderError ? error.received : undefined
+    received = (error instanceof DirectChatProviderError ? error.received : undefined) ?? received
     if (received) {
       providerResponsePath = path.join(caseDir, "provider-response.json")
       await writeTextFile(path.join(caseDir, "response.txt"), received.response.content)
@@ -709,14 +734,14 @@ async function runOneCase(input: {
       answer: "",
       rawResponsePath: path.join(caseDir, "response.txt"),
       latencyMs: Date.now() - started,
-      attempts: received?.attempts ?? 0,
+      attempts: received?.attempts ?? (error instanceof DirectChatProviderError ? error.attempts : 0),
       ...(received ? { usage: received.response.usage, resolvedModel: received.response.resolvedModel,
         finishReason: received.response.finishReason, responseAuditPath: providerResponsePath,
         requestAuditPath: path.join(caseDir, "request-audit.json"),
         // 预算耗尽仍保留失败分类，绝不把思考文本当答案。
         outputBudgetExceeded: received.response.finishReason === "length" } : {}),
       error: error instanceof Error ? error.message : String(error),
-      errorCategory: classifyDirectChatError(error),
+      errorCategory: checking ? "validator_infrastructure" : classifyDirectChatError(error),
       skillMode: input.skillMode,
       skillTier: input.skillTier,
       skillHash: input.skillMode === "no-skill" ? "NO_SKILL" : sha256(input.skillBundle),
@@ -748,6 +773,9 @@ async function writeSummary(
     avgLatencyMs: items.length ? Math.round(items.reduce((sum, item) => sum + item.latencyMs, 0) / items.length) : 0,
   }))
   const validityReasons: string[] = []
+  // 请求、解析及判卷故障不能混入完整有效成绩。
+  const invalid = results.filter(result => !["none", "validation"].includes(result.errorCategory ?? "unknown"))
+  if (invalid.length) validityReasons.push(`${invalid.length} cases lack a valid execution and validator verdict`)
   if (results.length !== integrity.expectedResultCount) {
     validityReasons.push(`Expected ${integrity.expectedResultCount} results but found ${results.length}`)
   }
@@ -818,6 +846,11 @@ async function updateMasterReport(outDir: string) {
 }
 
 export async function runDirectChatEvaluation(config: DirectChatRunConfig) {
+  await ensureDirectory(path.resolve(config.outDir))
+  return withEvaluationLock(path.resolve(config.outDir), () => evaluate(config))
+}
+
+async function evaluate(config: DirectChatRunConfig) {
   const outDir = path.resolve(config.outDir)
   const cwd = path.resolve(import.meta.dir, "..", "..", "..")
   await ensureDirectory(outDir)
@@ -833,6 +866,36 @@ export async function runDirectChatEvaluation(config: DirectChatRunConfig) {
     if (missing.length) throw new Error(`Direct-chat case IDs not found in dataset bundle: ${missing.join(", ")}`)
   }
   const models = normalizeModelConfigs(config.models, config.modelIDs)
+  // 非法并发会让信号量永久等待；调用前统一检查容量参数。
+  const capacities = [config.globalConcurrency, config.models.concurrency?.global,
+    ...models.flatMap(model => [model.concurrency, model.maxOutputTokens, model.contextWindowTokens, model.promptBudgetTokens, model.timeoutMs]),
+    ...cases.map(task => task.privateOracle?.timeoutMs)]
+  if (capacities.some(value => value !== undefined && (!Number.isSafeInteger(value) || value <= 0))) {
+    throw new Error("Invalid Direct Chat capacity or timeout")
+  }
+  // 重复或越界身份会导致写盘覆盖，必须在模型调用前拒绝。
+  for (const ids of [cases.map(item => item.caseID), models.map(item => item.id)]) {
+    if (new Set(ids).size !== ids.length || ids.some(id => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(id))) {
+      throw new Error("Unsafe or duplicate Direct Chat case/model identity")
+    }
+  }
+  const file = process.env.OPENCODE_AEV_REQUEST_BUDGET_FILE
+  const { readBudgetTransport, validateBudgetTransport } = await import("../task-adaptation/budget-transport")
+  const budget = config.requestBudgetTransport ? validateBudgetTransport(config.requestBudgetTransport)
+    : file ? await readBudgetTransport(file, process.env.OPENCODE_AEV_REQUEST_BUDGET_SHA256) : undefined
+  for (const model of models.filter(item => item.transport !== "mock")) {
+    if (!budget && (config.enforceRequestBudget || process.env.AEV_CONSOLIDATION_ENFORCE_BUDGET === "1")) {
+      throw new Error("Direct Chat requires explicit request budget before dispatch")
+    }
+    // 模型容量与预约必须先一致，不能付费执行后才发现接线冲突。
+    if (budget && (budget.dialect !== (model.transport === "anthropic-messages" ? "anthropic_messages" : "openai_chat") ||
+        !budget.expectedModels.includes(model.model ?? "") || (model.maxOutputTokens ?? 2048) > budget.maxOutputTokens)) {
+      throw new Error("Direct Chat model and request budget mismatch before dispatch")
+    }
+  }
+  if (config.includeNoSkillBaseline && models.some(model => models.some(other => model.id === `${other.id}__no-skill`))) {
+    throw new Error("Direct Chat baseline model identity collision")
+  }
   const globalSemaphore = new Semaphore(config.globalConcurrency || config.models.concurrency?.global || 4)
   const modelSemaphores = new Map(models.map((model) => [model.id, new Semaphore(model.concurrency || 1)]))
   const modelRequestSpacing = new Map(models.map((model) => [model.id, Math.max(0, Math.floor(model.minIntervalMs || 0))]))
@@ -870,6 +933,27 @@ export async function runDirectChatEvaluation(config: DirectChatRunConfig) {
       headRatio: configuredMode === "head-tail" ? headRatio : null,
     })
   }
+  const executions = models.flatMap(model => cases.flatMap(testCase =>
+    (modelVariants.get(model.id) ?? []).map(variant => ({ model, testCase, variant }))))
+  // 批量先检查旧结果，避免遇到冲突时其它题已经开始付费。
+  for (const execution of executions) {
+    const result = directChatResultPath(outDir, execution.model, execution.testCase.caseID, execution.variant.skillMode)
+    if (await pathExists(result)) {
+      if (!config.resumeExisting) throw new Error("Direct Chat result already exists; resume instead of overwriting")
+      continue
+    }
+    if (await pathExists(path.join(path.dirname(result), "request-audit.json"))) {
+      throw new Error("Incomplete Direct Chat request requires evidence review before retry")
+    }
+  }
+  await freezeResume(outDir, {
+    datasetHash: sha256(datasetBundleText), caseIDs: cases.map(item => item.caseID),
+    models: models.map(redactModelConfig), variants: [...modelVariants.entries()],
+    dependencies: await dependencies(cases),
+    includeNoSkillBaseline: Boolean(config.includeNoSkillBaseline), noSkillOnly: Boolean(config.noSkillOnly),
+    allowOmittedMaterials: Boolean(config.allowOmittedMaterials), ocrFallback: config.models.ocrFallback ?? null,
+    retry: config.models.retry ?? null, transientRecovery: config.models.transientRecovery ?? null,
+  })
   const preflight = await preflightDirectChatRun({
     outDir,
     skillBundle,
@@ -901,18 +985,6 @@ export async function runDirectChatEvaluation(config: DirectChatRunConfig) {
   })
   if (config.preflightOnly) return { outDir, results: [], preflight }
 
-  const executions: Array<{
-    model: DirectChatModelConfig
-    testCase: DirectChatCaseBundle
-    variant: SkillVariant
-  }> = []
-  for (const model of models) {
-    for (const testCase of cases) {
-      for (const variant of modelVariants.get(model.id) || []) {
-        executions.push({ model, testCase, variant })
-      }
-    }
-  }
   async function executeOne(
     execution: (typeof executions)[number],
     options: { reuseExisting: boolean },
@@ -928,6 +1000,10 @@ export async function runDirectChatEvaluation(config: DirectChatRunConfig) {
       const expectedSkillHash =
         execution.variant.skillMode === "no-skill" ? "NO_SKILL" : sha256(execution.variant.skillBundle)
       if (existing.skillTier === execution.variant.skillTier && existing.skillHash === expectedSkillHash) return existing
+      throw new Error("Direct Chat stored result identity mismatch; preserve and inspect before retry")
+    }
+    if (options.reuseExisting === false && await pathExists(resultPath) && !recoveryActive) {
+      throw new Error("Direct Chat result already exists; resume instead of overwriting")
     }
     const modelSemaphore = modelSemaphores.get(execution.model.id)!
     return await globalSemaphore.run(() =>
@@ -965,6 +1041,7 @@ export async function runDirectChatEvaluation(config: DirectChatRunConfig) {
     )
   }
 
+  let recoveryActive = false
   const results = await Promise.all(
     executions.map((execution) => executeOne(execution, { reuseExisting: Boolean(config.resumeExisting) })),
   )
@@ -1009,6 +1086,7 @@ export async function runDirectChatEvaluation(config: DirectChatRunConfig) {
     if (recoveryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, recoveryDelayMs))
     const before = targetIndexes.map((index) => results[index])
     await Promise.all(before.map((result) => archiveRecoveryAttempt(outDir, result, round)))
+    recoveryActive = true
     const rerun = await Promise.all(
       targetIndexes.map((index) => executeOne(executions[index], { reuseExisting: false })),
     )

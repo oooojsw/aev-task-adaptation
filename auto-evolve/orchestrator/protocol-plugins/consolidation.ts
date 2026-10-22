@@ -205,8 +205,15 @@ export async function consolidationPlugins(root: string, options: { budget?: Htt
   if (!path.isAbsolute(root)) throw new Error("Consolidation evidence root must be absolute")
   const gate = validateRequestGate(options.requestGate, Boolean(options.budget))
   await mkdir(root, { recursive: true })
-  const baseImplementation = createHash("sha256").update(await readFile(fileURLToPath(import.meta.url)))
-    .update(await readFile(new URL("../task-adaptation/consolidation/answer-guard.ts", import.meta.url))).digest("hex")
+  const hash = createHash("sha256").update(await readFile(fileURLToPath(import.meta.url)))
+  // 答题和判卷实现变化也必须使旧缓存失效，不能只冻插件入口。
+  for (const file of ["../task-adaptation/consolidation/answer-guard.ts", "../task-adaptation/consolidation/contract.ts",
+    "../direct-chat/runner.ts", "../direct-chat/contract.ts", "../direct-chat/resume-identity.ts",
+    "../direct-chat/provider-client.ts", "../direct-chat/providers/index.ts", "../direct-chat/providers/types.ts",
+    "../direct-chat/providers/errors.ts", "../direct-chat/providers/openai-compatible.ts", "../direct-chat/providers/anthropic-messages.ts",
+    "../direct-chat/providers/mock.ts", "../direct-chat/providers/siliconflow.ts", "../direct-chat/material-budget.ts", "../direct-chat/dataset-bundler.ts",
+    "../direct-chat/ocr-fallback.ts"]) hash.update(file).update(await readFile(new URL(file, import.meta.url)))
+  const baseImplementation = hash.digest("hex")
   const implementation = options.budget ? fingerprint({ source: baseImplementation, budget: options.budget.config }) : baseImplementation
   const executor: ExecutorPlugin = {
     id: CONSOLIDATION_EXECUTOR_ID, version: "1", implementation,

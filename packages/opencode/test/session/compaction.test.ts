@@ -638,6 +638,8 @@ describe("session.compaction.process", () => {
       fn: async () => {
         const session = await Session.create({})
         const msg = await user(session.id, "hello")
+        const policy = { tools: { write: false, read: true }, system: "Frozen author role", variant: "fixture", format: { type: "text" as const } }
+        await Session.updateMessage({ ...msg, ...policy })
         const rt = runtime("continue", Plugin.defaultLayer, wide())
         try {
           const msgs = await Session.messages({ sessionID: session.id })
@@ -657,6 +659,7 @@ describe("session.compaction.process", () => {
 
           expect(result).toBe("continue")
           expect(last?.info.role).toBe("user")
+          expect(last?.info).toMatchObject(policy)
           expect(last?.parts[0]).toMatchObject({
             type: "text",
             synthetic: true,

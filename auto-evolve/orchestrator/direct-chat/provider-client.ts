@@ -30,7 +30,11 @@ export async function retryDirectChatCall(
       const result = await callDirectChatModel(model, messages, { ...input, attempt })
       return { result, attempts: attempt }
     } catch (error) {
-      lastError = error
+      // 请求失败也保留尝试次数，不能统一报为未调用。
+      lastError = error instanceof DirectChatProviderError
+        ? new DirectChatProviderError(error.message, error.category, error.status, error.retryable, error.received,
+          error.status === undefined && ["config", "auth"].includes(error.category) ? 0 : attempt)
+        : new DirectChatProviderError(error instanceof Error ? error.message : String(error), classifyDirectChatError(error), undefined, true, undefined, attempt)
       if (attempt >= Math.max(1, options.maxAttempts)) break
       if (error instanceof DirectChatProviderError && !error.retryable) break
       await sleep(options.backoffMs * attempt)
